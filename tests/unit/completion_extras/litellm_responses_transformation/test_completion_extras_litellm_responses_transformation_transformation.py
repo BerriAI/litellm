@@ -34,6 +34,98 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelResponse
 
 
+def test_responses_message_phase_is_exposed_on_chat_message():
+    handler = LiteLLMResponsesTransformationHandler()
+    choice, _ = handler._handle_raw_dict_response_item(
+        {
+            "type": "message",
+            "role": "assistant",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "Here is a preamble."}],
+        },
+        0,
+    )
+    assert choice is not None
+    assert choice.message.provider_specific_fields == {"phase": "commentary"}
+
+
+def test_typed_responses_message_phase_survives_nonstreaming_fold():
+    message = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_phase",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": "The answer.", "annotations": []}],
+        }
+    )
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices((message,))
+    assert choices[0].message.provider_specific_fields == {"phase": "final_answer"}
+
+
+def test_chat_assistant_phase_is_replayed_to_responses_input():
+    handler = LiteLLMResponsesTransformationHandler()
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(
+        [{"role": "assistant", "content": "The final answer.",
+          "provider_specific_fields": {"phase": "final_answer"}}],
+        replay_openai_history=True,
+    )
+    assert response == [
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "input_text", "text": "The final answer."}],
+            "phase": "final_answer",
+        }
+    ]
+
+
+def test_streaming_responses_message_phase_is_retained_for_text_deltas():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    added_commentary = iterator.chunk_parser({
+        "type": "response.output_item.added", "output_index": 2,
+        "item": {"type": "message", "role": "assistant", "phase": "commentary", "content": []},
+    })
+    added_final = iterator.chunk_parser({
+        "type": "response.output_item.added", "output_index": 4,
+        "item": {"type": "message", "role": "assistant", "phase": "final_answer", "content": []},
+    })
+    commentary_delta = iterator.chunk_parser({
+        "type": "response.output_text.delta", "output_index": 2, "delta": "Preamble",
+    })
+    final_delta = iterator.chunk_parser({
+        "type": "response.output_text.delta", "output_index": 4, "delta": "Answer",
+    })
+    assert added_commentary.choices[0].delta.provider_specific_fields == {"phase": "commentary"}
+    assert added_final.choices[0].delta.provider_specific_fields == {"phase": "final_answer"}
+    assert commentary_delta.choices[0].delta.content == "Preamble"
+    assert commentary_delta.choices[0].delta.provider_specific_fields == {"phase": "commentary"}
+    assert final_delta.choices[0].delta.content == "Answer"
+    assert final_delta.choices[0].delta.provider_specific_fields == {"phase": "final_answer"}
+
+
+def test_fold_does_not_invent_one_phase_for_mixed_responses_messages():
+    commentary = ResponseOutputMessage.model_validate({
+        "id": "msg_commentary", "type": "message", "role": "assistant",
+        "status": "completed", "phase": "commentary",
+        "content": [{"type": "output_text", "text": "Preamble.", "annotations": []}],
+    })
+    final_answer = ResponseOutputMessage.model_validate({
+        "id": "msg_final", "type": "message", "role": "assistant",
+        "status": "completed", "phase": "final_answer",
+        "content": [{"type": "output_text", "text": "Answer.", "annotations": []}],
+    })
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (commentary, final_answer)
+    )
+    assert choices[0].message.provider_specific_fields is None
+
+
+
 def test_completion_over_responses_maps_anthropic_search_tool_to_openai_tool_search() -> None:
     response_body: Final = {
         "id": "resp_tool_search_bridge",
