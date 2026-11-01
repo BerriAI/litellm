@@ -33,7 +33,13 @@ from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.integrations.otel.plumbing.context import set_request_destinations
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import Choices, Message, ModelResponse, StandardCallbackDynamicParams
+from litellm.types.utils import (
+    Choices,
+    Message,
+    ModelResponse,
+    StandardCallbackDynamicParams,
+    TranscriptionResponse,
+)
 
 CHAT_MESSAGE_DICTS: Final = ({"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi back"})
 CHAT_MESSAGE_OBJECTS: Final = tuple(
@@ -1377,6 +1383,25 @@ class TestDerivedTraceFields:
                 "arguments": {"city": "sf"},
             }
         ]
+
+    def test_transcription_text_is_observation_output(self) -> None:
+        attributes: Final = _emitted(
+            {"call_type": "atranscription", "litellm_params": {"metadata": {}}},
+            TranscriptionResponse(text="hello world"),
+        )
+
+        assert json.loads(str(attributes["langfuse.observation.output"])) == {
+            "role": "assistant",
+            "content": "hello world",
+        }
+
+    def test_empty_transcription_text_sets_no_observation_output(self) -> None:
+        attributes: Final = _emitted(
+            {"call_type": "atranscription", "litellm_params": {"metadata": {}}},
+            TranscriptionResponse(text=""),
+        )
+
+        assert "langfuse.observation.output" not in attributes
 
     def test_tags_merge_caller_request_and_default_tags_in_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(litellm, "langfuse_default_tags", ["cache_hit", "user_api_key_alias"])
