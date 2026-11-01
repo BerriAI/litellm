@@ -856,6 +856,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
             for index in choice_indices
         )
+        if not rebuilt_by_index:
+            whole: Final = stream_chunk_builder(chunks=list(responses_so_far), logging_obj=litellm_logging_obj)
+            return cast(ModelResponse, whole) if whole is not None else ModelResponse(choices=[])
         (_, base_response), *_ = rebuilt_by_index
         stitched_choices: Final = [
             rebuilt.choices[0].model_copy(update=MappingProxyType({"index": index}))

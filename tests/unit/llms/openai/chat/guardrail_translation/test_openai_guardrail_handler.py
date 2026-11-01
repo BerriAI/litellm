@@ -1670,6 +1670,22 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert [c["function"]["arguments"] for c in sent] == ['{"city": "Paris"}', '{"city": "Rome"}']
 
     @pytest.mark.asyncio
+    async def test_a_buffered_stream_that_carried_no_choices_is_not_an_error(self) -> None:
+        """A stream can end carrying only usage, and a policy step still runs over it."""
+        from litellm.types.utils import ModelResponseStream
+
+        chunks: Final = [ModelResponseStream(choices=[], usage={"prompt_tokens": 3, "completion_tokens": 0,
+                                                                "total_tokens": 3})]
+        result: Final = await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MockGuardrail(guardrail_name="test"),
+            litellm_logging_obj=None,
+            request_data={},
+            deliver_ended_stream_rewrites=True,
+        )
+        assert result is chunks
+
+    @pytest.mark.asyncio
     async def test_a_round_with_nothing_to_judge_costs_one_call_at_n2(self) -> None:
         """Per-choice rounds buy tool-call context. While no call is complete there is none to buy,
         and charging a vendor once per choice for every sampled round buys nothing."""
