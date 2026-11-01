@@ -115,6 +115,8 @@ class Cache:
         default_in_redis_ttl: float | None = None,
         similarity_threshold: float | None = None,
         supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
+        excluded_call_types: list[CachingSupportedCallTypes] | None = None,
+        call_type_ttl: dict[str, float] | None = None,
         # s3 Bucket, boto3 configuration
         azure_account_url: str | None = None,
         azure_blob_container: str | None = None,
@@ -320,9 +322,17 @@ class Cache:
             litellm.logging_callback_manager.add_litellm_success_callback("cache")
         if "cache" not in litellm._async_success_callback:
             litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
-        self.supported_call_types = (
-            supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
-        )
+        if excluded_call_types and supported_call_types is not None:
+            excluded_set: Final = set(excluded_call_types)
+            self.supported_call_types: list[CachingSupportedCallTypes] | None = [
+                ct for ct in supported_call_types if ct not in excluded_set
+            ]
+        else:
+            self.supported_call_types = (
+                supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
+            )
+        self.excluded_call_types: list[CachingSupportedCallTypes] | None = excluded_call_types
+        self.call_type_ttl: dict[str, float] | None = call_type_ttl
         self.type = type
         self.namespace = namespace
         self.redis_flush_size = redis_flush_size
@@ -734,6 +744,18 @@ class Cache:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
 
+    def _get_ttl_for_call_type(self, kwargs: Mapping[str, object]) -> float | None:
+        if self.call_type_ttl:
+            call_type: Final = kwargs.get("call_type") or ("embedding" if kwargs.get("embedding") is True else None)
+            if isinstance(call_type, str):
+                if call_type in self.call_type_ttl:
+                    return self.call_type_ttl[call_type]
+                if call_type in ("embedding", "aembedding"):
+                    emb_ttl: Final = self.call_type_ttl.get("embedding") or self.call_type_ttl.get("aembedding")
+                    if emb_ttl is not None:
+                        return emb_ttl
+        return self.ttl
+
     def _add_cache_logic(self, result, **kwargs):
         """
         Common implementation across sync + async add_cache functions
@@ -748,8 +770,9 @@ class Cache:
                     result = result.model_dump_json(exclude_unset=True)
 
                 ## DEFAULT TTL ##
-                if self.ttl is not None:
-                    kwargs["ttl"] = self.ttl
+                resolved_ttl: Final = self._get_ttl_for_call_type(kwargs)
+                if resolved_ttl is not None:
+                    kwargs["ttl"] = resolved_ttl
                 ## Get Cache-Controls ##
                 _cache_kwargs: Final = kwargs.get("cache", None)
                 if isinstance(_cache_kwargs, dict):
@@ -938,6 +961,8 @@ class Cache:
             prompt_tokens_details=prompt_tokens_details,
         )
 
+        if "call_type" not in kwargs and "embedding" not in kwargs:
+            kwargs["embedding"] = True
         cache_key, cached_data, kwargs = self._add_cache_logic(
             result=embedding_dict,
             **kwargs,
@@ -965,8 +990,9 @@ class Cache:
                     return
 
                 # set default ttl if not set
-                if self.ttl is not None:
-                    kwargs["ttl"] = self.ttl
+                pipeline_ttl: Final = self._get_ttl_for_call_type({**kwargs, "embedding": True})
+                if pipeline_ttl is not None:
+                    kwargs["ttl"] = pipeline_ttl
 
                 cache_list: Final = []
                 if isinstance(kwargs["input"], list):

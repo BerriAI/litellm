@@ -1608,3 +1608,66 @@ def test_cache_key_separates_model_ids_unless_a_model_group_owns_the_key() -> No
     assert key_a != bare
     assert key_a == key_a_again
     assert grouped_a == grouped_b
+
+
+def test_cache_excluded_call_types_filters_defaults() -> None:
+    cache: Final = Cache(
+        type=LiteLLMCacheType.LOCAL,
+        excluded_call_types=["embedding", "aembedding"],
+    )
+    assert cache.supported_call_types is not None
+    assert "embedding" not in cache.supported_call_types
+    assert "aembedding" not in cache.supported_call_types
+    assert "completion" in cache.supported_call_types
+    assert "acompletion" in cache.supported_call_types
+
+
+@pytest.mark.asyncio
+async def test_cache_call_type_ttl_overrides_default_ttl_for_embeddings() -> None:
+    from litellm.types.utils import EmbeddingResponse
+
+    cache: Final = Cache(
+        type=LiteLLMCacheType.LOCAL,
+        ttl=3600,
+        call_type_ttl={"embedding": 60},
+    )
+    response: Final = EmbeddingResponse(
+        model="text-embedding-3-small",
+        data=[{"embedding": [0.1, 0.2], "index": 0, "object": "embedding"}],
+    )
+    _, _, updated_kwargs = cache.add_embedding_response_to_cache(
+        result=response,
+        input="hello world",
+        kwargs={"model": "text-embedding-3-small"},
+        idx_in_result_data=0,
+    )
+    assert updated_kwargs["ttl"] == 60
+
+    # Explicit per-request cache={"ttl": ...} still overrides call_type_ttl
+    _, _, override_kwargs = cache.add_embedding_response_to_cache(
+        result=response,
+        input="hello world",
+        kwargs={"model": "text-embedding-3-small", "cache": {"ttl": 15}},
+        idx_in_result_data=0,
+    )
+    assert override_kwargs["ttl"] == 15
+
+    # Pipeline bulk write also forwards call_type_ttl
+    mock_backend: Final = AsyncMock()
+    await cache.async_add_cache_pipeline(
+        result=response,
+        dynamic_cache_object=mock_backend,
+        model="text-embedding-3-small",
+        input=["hello world"],
+    )
+    mock_backend.async_set_cache_pipeline.assert_awaited_once()
+    assert mock_backend.async_set_cache_pipeline.call_args.kwargs["ttl"] == 60
+
+    # Non-embedding calls still use default ttl (3600)
+    _, _, completion_kwargs = cache._add_cache_logic(
+        result="cached-completion",
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        call_type="completion",
+    )
+    assert completion_kwargs["ttl"] == 3600
