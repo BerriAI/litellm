@@ -24,7 +24,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 MARKER: Final = re.compile(rb"traceresp-[0-9a-f]{32}")
-TRACERESPONSE: Final = re.compile(r"00-([0-9a-f]{32})-([0-9a-f]{16})-01")
+TRACERESPONSE: Final = re.compile(r"00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})")
+SAMPLED: Final = 0x01
 SERVER: Final = 2
 CALL_ID: Final = "litellm.call_id"
 ANSWER: Final = "trace ok"
@@ -134,8 +135,13 @@ def _query(request: Request) -> Mapping[str, str]:
     return MappingProxyType({name: values[0] for name, values in parse_qs(urlsplit(request.target).query).items()})
 
 
+def _sampled(value: str) -> re.Match[str] | None:
+    match: Final = TRACERESPONSE.fullmatch(value)
+    return match if match is not None and int(match.group(3), 16) & SAMPLED else None
+
+
 def _continued_traceresponse(request: Request) -> Reply:
-    incoming: Final = TRACERESPONSE.fullmatch(request.headers.get("traceparent", ""))
+    incoming: Final = _sampled(request.headers.get("traceparent", ""))
     if incoming is None:
         return Reply(status=400, body=b'{"error":"no sampled traceparent reached the upstream"}')
     return Reply(body=b'{"case":"continued"}', headers={"traceresponse": f"00-{incoming.group(1)}-{_span_id()}-01"})
@@ -372,7 +378,7 @@ def control(factory: Callable[[bool], RigFactory]) -> Iterator[Rig]:
 def _named(headers: httpx.Headers) -> tuple[str, str]:
     values: Final = headers.get_list("traceresponse")
     assert len(values) == 1, values
-    match: Final = TRACERESPONSE.fullmatch(values[0])
+    match: Final = _sampled(values[0])
     assert match is not None, values
     return match.group(1), match.group(2)
 
