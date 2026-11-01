@@ -21,6 +21,7 @@ from botocore.credentials import Credentials
 from respx.models import Call
 
 import litellm
+from litellm._version import version as litellm_version
 from litellm.constants import AWS_SIGNING_MAX_THREADS
 from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
@@ -4814,3 +4815,36 @@ def test_nace_refuses_a_ninth_image_before_http(respx_mock: respx.MockRouter) ->
 
     assert caught.value.status_code == 400
     assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("nace_account")
+async def test_nace_requests_identify_the_litellm_version(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_NACE_SYSTEMONE_URL).respond(json=_DREX_MAX_RESPONSE)
+
+    await litellm.adecisions(
+        model="nace/drex-max",
+        input="Order 1234.",
+        questions=_PREDICATE_QUESTIONS,
+        extra_headers={"X-Nace-Client": "caller/9", "X-Other": "kept"},
+    )
+
+    sent: Final = route.calls[0].request.headers
+    assert sent["x-nace-client"] == f"litellm/{litellm_version}"
+    assert re.fullmatch(r"litellm/[A-Za-z0-9 ._@+-]+", sent["x-nace-client"])
+    assert len(sent["x-nace-client"]) <= 64
+    assert sent["x-other"] == "kept"
+
+
+@pytest.mark.asyncio
+async def test_other_decisions_providers_do_not_get_the_nace_client_header(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+
+    await litellm.adecisions(
+        model="openrouter/nace/drex-test-alias", input="Order 1234.", questions=_PREDICATE_QUESTIONS
+    )
+
+    assert "x-nace-client" not in route.calls[0].request.headers

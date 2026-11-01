@@ -13,6 +13,7 @@ import tiktoken
 
 import litellm
 from litellm._logging import verbose_router_logger
+from litellm._version import version as litellm_version
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -23,6 +24,7 @@ from litellm.router_strategy.complexity_router.complexity_router import Complexi
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig, JevClassifierConfig
 from litellm.router_strategy.complexity_router.jev_classifier import (
     DEFAULT_JEV_INSTRUCTIONS,
+    ClassifierProvider,
     HttpJevClassifierClient,
     JevChoiceAnswer,
     JevSystemOneRequest,
@@ -1488,3 +1490,35 @@ async def test_nace_routes_through_its_console_with_its_own_key_and_accounts_the
     assert json.loads(sent.content)["model"] == "drex-max"
     assert len(recorder.calls) == 1
     assert recorder.calls[0]["response_cost"] == pytest.approx(0.31)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["nace", "typesafe"])
+async def test_only_the_nace_classifier_sends_the_client_header(provider: ClassifierProvider) -> None:
+    seen: Final[list[httpx.Headers]] = []
+
+    def respond(http_request: httpx.Request) -> httpx.Response:
+        seen.append(http_request.headers)
+        return httpx.Response(
+            200,
+            json={
+                "model": "drex-max",
+                "answers": {
+                    "tier": {
+                        "type": "choice",
+                        "choice": "SIMPLE",
+                        "probabilities": {"SIMPLE": 1.0},
+                        "confidence": 1.0,
+                    }
+                },
+            },
+        )
+
+    handler: Final = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client: Final = HttpJevClassifierClient("secret", "https://classifier.test", handler, provider)
+    await client.evaluate(
+        build_jev_request("Hello", None, "drex-max", DEFAULT_JEV_INSTRUCTIONS, {"SIMPLE": "facts"}), 1.0
+    )
+
+    assert seen[0].get("x-nace-client") == (f"litellm/{litellm_version}" if provider == "nace" else None)

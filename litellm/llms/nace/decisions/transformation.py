@@ -1,7 +1,9 @@
+import re
 from collections.abc import Mapping
 from dataclasses import replace
 from typing import Final
 
+from litellm._version import version as _litellm_version
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 from litellm.types.decisions import (
     DecisionsBase64Image,
@@ -10,6 +12,15 @@ from litellm.types.decisions import (
     DecisionsIRState,
     UnsupportedDecisionsRequest,
 )
+
+NACE_CLIENT_HEADER: Final = "X-Nace-Client"
+_NACE_CLIENT_DISALLOWED: Final = re.compile(r"[^A-Za-z0-9 ._@+-]")
+_NACE_CLIENT_MAX_LENGTH: Final = 64
+
+
+def nace_client_header() -> Mapping[str, str]:
+    version: Final = _NACE_CLIENT_DISALLOWED.sub("-", _litellm_version)
+    return {NACE_CLIENT_HEADER: f"litellm/{version}"[:_NACE_CLIENT_MAX_LENGTH]}
 
 
 def _data_url(image: DecisionsImage) -> DecisionsImage:
@@ -34,6 +45,19 @@ class NaceDecisionsConfig(BaseDecisionsConfig):
 
     def get_default_api_base(self) -> str | None:
         return "https://console.nace.ai"
+
+    def validate_environment(
+        self,
+        headers: Mapping[str, str],
+        model: str,
+        api_key: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, str]:
+        base: Final = super().validate_environment(headers, model, api_key, litellm_params)
+        return {
+            **{name: value for name, value in base.items() if name.lower() != NACE_CLIENT_HEADER.lower()},
+            **nace_client_header(),
+        }
 
     def transform_decisions_request(
         self,
