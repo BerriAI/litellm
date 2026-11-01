@@ -484,6 +484,11 @@ def _terminal_blocks(frame: str) -> tuple[tuple[tuple[str, ...], _StreamEvent], 
     return tuple((lines, event) for lines, event in read if event.type in _TERMINAL_EVENT_TYPES)
 
 
+def frame_payloads(frame: str) -> tuple[tuple[str, ...], bool]:
+    payloads: Final = tuple(_block_data(lines).strip() for lines in _blocks(frame) if _field_values(lines, "data"))
+    return tuple(takewhile(lambda payload: payload != "[DONE]", payloads)), payloads[:1] == ("[DONE]",)
+
+
 def frame_error_data(frame: str) -> str | None:
     terminal: Final = _terminal_blocks(frame)
     if not terminal:

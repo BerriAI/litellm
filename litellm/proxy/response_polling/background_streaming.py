@@ -12,7 +12,6 @@ import asyncio
 import json
 from collections.abc import AsyncIterable, Callable, Mapping, Sequence
 from http import HTTPStatus
-from itertools import takewhile
 from time import perf_counter
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, runtime_checkable
 
@@ -21,12 +20,12 @@ from starlette.types import Message
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import RESPONSES_SSE_FRAMING, ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.responses_stream_errors import (
     event_error_object,
     frame_error_data,
+    frame_payloads,
     responses_error_fields,
     sse_error_object,
 )
@@ -89,11 +88,6 @@ class _StreamEventParser:
 class _StreamsBody(Protocol):
     @property
     def body_iterator(self) -> AsyncIterable[str | bytes | memoryview]: ...
-
-
-def _payloads_before_done(frame: str) -> tuple[tuple[str, ...], bool]:
-    payloads: Final = tuple(line[6:].strip() for line in split_sse_lines(frame) if line.startswith("data: "))
-    return tuple(takewhile(lambda payload: payload != "[DONE]", payloads)), "[DONE]" in payloads
 
 
 def _terminal_response(event: _StreamEvent) -> _TerminalResponse:
@@ -289,7 +283,7 @@ async def background_streaming_task(
                 ):
                     frame_failure = responses_error_fields(_event_error(_StreamEventParser.parse(error_data)))
 
-                payloads, stream_done = _payloads_before_done(chunk) if isinstance(chunk, str) else ((), False)
+                payloads, stream_done = frame_payloads(chunk) if isinstance(chunk, str) else ((), False)
                 for chunk_data in payloads:
                     try:
                         event: _StreamEvent = _StreamEventParser.parse(chunk_data)
@@ -312,7 +306,7 @@ async def background_streaming_task(
                         # Process different event types based on OpenAI streaming spec
                         if event_type == "response.output_item.added":
                             # New output item added
-                            item = event.get("item", {})
+                            item = event.get("item", _OutputItem())
                             item_id = item.get("id")
                             if item_id:
                                 output_items[item_id] = item
@@ -379,7 +373,7 @@ async def background_streaming_task(
 
                         elif event_type == "response.output_item.done":
                             # Output item completed - use final item data
-                            item = event.get("item", {})
+                            item = event.get("item", _OutputItem())
                             item_id = item.get("id")
                             if item_id:
                                 output_items[item_id] = item
@@ -443,10 +437,12 @@ async def background_streaming_task(
                                             continue
                                 state_dirty = True
 
-                    except (json.JSONDecodeError, AttributeError, TypeError) as e:
+                    except (ValueError, AttributeError, TypeError) as e:
                         verbose_proxy_logger.warning("Failed to parse streaming chunk: %s", e)
                     else:
                         await flush_state_if_needed()
+                        if event_type in _event_to_status:
+                            break
                 if stream_done:
                     break
 

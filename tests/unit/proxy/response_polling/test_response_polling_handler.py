@@ -1701,6 +1701,41 @@ class TestBackgroundStreamingTerminalEvents:
                 None,
                 {"input_tokens": 3},
             ),
+            (
+                (
+                    'data: {"type": "response.output_text.delta", "delta": "hi"}\n\n'
+                    'data: {"type": "hook.huge", "n": ' + "9" * 4400 + "}\n\n",
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data: {"type": "response.output_text.delta", "delta": "hi"}\n\ndata: [DONE]\n\n',
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n'
+                    'data: {"type": "response.failed", "response": {"status": "failed", '
+                    '"error": {"code": "server_error", "message": "late"}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                ('data: event: response.incomplete\ndata: {"type": "response.incomplete", "response": {"status": "incomplete"}}\n\n',),
+                "completed",
+                None,
+                None,
+            ),
         ],
         ids=[
             "error_frame_after_a_delta",
@@ -1714,6 +1749,10 @@ class TestBackgroundStreamingTerminalEvents:
             "failed_event_whose_response_is_null",
             "error_frame_and_incomplete_in_one_chunk",
             "error_frame_then_completed_behind_a_delta_in_one_chunk",
+            "frame_past_the_int_digit_limit_behind_a_delta_then_completed",
+            "done_behind_a_delta_in_one_chunk_then_completed",
+            "completed_then_failed_in_one_chunk",
+            "event_line_sent_as_a_data_line_of_one_event",
         ],
     )
     async def test_a_poll_stores_what_its_stream_ended_with(
