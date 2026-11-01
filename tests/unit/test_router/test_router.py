@@ -31882,3 +31882,22 @@ def test_image_routing_inspects_native_request_content_without_translation(reque
     original: Final = copy.deepcopy(request_kwargs)
     assert _candidate_ids(router, request_kwargs=request_kwargs) == ["vision"]
     assert request_kwargs == original
+
+
+def test_registry_finds_a_team_deployment_by_public_and_internal_name_for_its_team_only():
+    internal_name = "model_name_team-a_row"
+    router = Router(
+        model_list=[
+            {
+                "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "x"},
+                "model_info": {"id": "team-row", "team_id": "team-a", "team_public_model_name": "public-chat"},
+            }
+        ]
+    )
+    registry = router.registry()
+
+    assert [row["model_info"]["id"] for row in registry.deployments("public-chat", team_id="team-a")] == ["team-row"]
+    assert [row["model_info"]["id"] for row in registry.deployments(internal_name, team_id="team-a")] == ["team-row"]
+    assert list(registry.deployments("public-chat", team_id="team-b")) == []
+    assert list(registry.deployments("public-chat")) == []

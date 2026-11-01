@@ -13983,7 +13983,7 @@ class PythonCore(DeprecatedRouterMembers):
         `team_model_to_deployment_indices` only applies when `model_name` is the
         team public model name. If a caller passes an internal deployment model
         name (for example, `model_name_<team_id>_<uuid>`), this method falls back
-        to the standard model-name index / scan path.
+        to the standard model-name index.
         """
         returned_models: Final[list[DeploymentTypedDict]] = []
 
@@ -14013,19 +14013,6 @@ class PythonCore(DeprecatedRouterMembers):
                     if model_alias is not None:
                         # Optimized: Use shallow copy since we only modify top-level model_name
                         # This is much faster than deepcopy for nested dict structures
-                        alias_model = model.copy()
-                        alias_model["model_name"] = model_alias
-                        returned_models.append(alias_model)
-                    else:
-                        returned_models.append(model)
-        elif team_id is not None:
-            # Fallback: if team_id is provided and model_name not in index,
-            # check if model_name matches any team_public_model_name
-            # O(n) scan but only when team_id lookup fails
-            for _idx, model in enumerate(self._core_model_list):
-                if self._core_should_include_deployment(model_name=model_name, model=model, team_id=team_id):
-                    if model_alias is not None:
-                        # Optimized: Use shallow copy since we only modify top-level model_name
                         alias_model = model.copy()
                         alias_model["model_name"] = model_alias
                         returned_models.append(alias_model)

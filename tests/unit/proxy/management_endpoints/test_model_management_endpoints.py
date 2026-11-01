@@ -4860,6 +4860,146 @@ class TestModelInfoCostMapEchoFilter:
             "cost-map metadata must not be persisted from an unchanged /model/info echo"
         )
 
+    def test_echo_of_an_expanded_wildcard_row_is_not_persisted_on_the_wildcard(self):
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "my-openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "x"},
+                    "model_info": {"id": "dep-echo-wildcard"},
+                }
+            ]
+        )
+        entry: Final = litellm.get_model_info("openai/gpt-5.6")
+        echo: Final = {**entry, "id": "dep-echo-wildcard", "db_model": True, "access_groups": ["prod"]}
+        db_model: Final = Deployment(
+            model_name="my-openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-echo-wildcard"),
+        )
+
+        result: Final = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_name="my-openai/gpt-5.6", model_info=ModelInfo(**echo)),
+            llm_router=router,
+        )
+
+        info: Final = json.loads(result["model_info"])
+        assert info["access_groups"] == ["prod"]
+        assert set(info).isdisjoint(entry), "one listed model's metadata must not be saved onto the whole wildcard"
+
+    def test_echo_saved_on_a_worker_that_has_not_loaded_the_wildcard_is_not_persisted(self):
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router_without_the_wildcard: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "openai-mini",
+                    "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "x"},
+                    "model_info": {"id": "dep-other"},
+                }
+            ]
+        )
+        entry: Final = litellm.get_model_info("openai/gpt-5.6")
+        db_model: Final = Deployment(
+            model_name="my-openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-echo-wildcard"),
+        )
+
+        result: Final = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                model_name="my-openai/gpt-5.6",
+                model_info=ModelInfo(**{**entry, "id": "dep-echo-wildcard", "access_groups": ["prod"]}),
+            ),
+            llm_router=router_without_the_wildcard,
+        )
+
+        info: Final = json.loads(result["model_info"])
+        assert info["access_groups"] == ["prod"]
+        assert set(info).isdisjoint(entry), "one listed model's metadata must not be saved onto the whole wildcard"
+
+    def test_legacy_update_echo_of_an_expanded_wildcard_row_is_not_persisted_on_the_wildcard(self):
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _ListedRow,
+            legacy_update_model_info_changes,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "my-openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "x"},
+                    "model_info": {"id": "dep-echo-wildcard"},
+                }
+            ]
+        )
+        entry: Final = litellm.get_model_info("openai/gpt-5.6")
+        db_model: Final = Deployment(
+            model_name="my-openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-echo-wildcard"),
+        )
+
+        changes: Final = legacy_update_model_info_changes(
+            db_model,
+            ModelInfo(**{**entry, "id": "dep-echo-wildcard", "access_groups": ["prod"]}),
+            loaded_catalog=lambda: {},
+            listed_row=_ListedRow("my-openai/gpt-5.6", router),
+        )
+
+        assert dict(changes) == {"access_groups": ["prod"]}
+
+    @pytest.mark.asyncio
+    async def test_echo_of_a_team_wildcard_row_is_not_persisted_on_the_wildcard(self):
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import _update_team_model_in_db
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "team-openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "x"},
+                    "model_info": {"id": "dep-team-wildcard", "team_id": "team-a"},
+                }
+            ]
+        )
+        entry: Final = litellm.get_model_info("openai/gpt-5.6")
+        echo: Final = {**entry, "id": "dep-team-wildcard", "team_id": "team-a", "access_groups": ["prod"]}
+        db_model: Final = Deployment(
+            model_name="team-openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-team-wildcard", team_id="team-a"),
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"),
+            patch("litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"),
+        ):
+            result: Final = await _update_team_model_in_db(
+                db_model=db_model,
+                patch_data=updateDeployment(model_name="team-openai/gpt-5.6", model_info=ModelInfo(**echo)),
+                user_api_key_dict=UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.PROXY_ADMIN),
+                prisma_client=MockPrismaClient(team_exists=True),
+                write_row=_passthrough_row,
+                llm_router=router,
+            )
+
+        info: Final = json.loads(result["model_info"])
+        assert info["access_groups"] == ["prod"]
+        assert set(info).isdisjoint(entry), "one listed model's metadata must not be saved onto a team's wildcard"
+
     def test_an_edited_value_survives_the_echo_filter(self):
         import litellm
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
