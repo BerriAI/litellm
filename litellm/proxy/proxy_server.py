@@ -5656,6 +5656,14 @@ def _reload_settings_store(section: Section, store: SettingsStore, section_confi
         store["pass_through_endpoints"] = serving_pass_throughs
 
 
+def _general_settings_row_is_readable(row: _ConfigParamValueRow | None) -> bool:
+    return row is None or row.param_value is None or isinstance(row.param_value, Mapping)
+
+
+def _db_managed_general_settings_keys() -> frozenset[str]:
+    return frozenset((*ConfigGeneralSettings.model_fields, *_CLEANUP_SCHEDULE_KEYS, "allowed_ips", "email_settings"))
+
+
 def _bind_general_settings_store(settings: SettingsStore) -> None:
     global general_settings
     general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
@@ -5806,7 +5814,9 @@ class ProxyConfig:
         # whether an existing request predates the prices it just fetched, and re-serving one
         # costs a single fetch where skipping one leaves it priced wrong indefinitely
         self.model_cost_map_applied_revision: int = 0
-        self.settings: Final[SettingsStore] = SettingsStore("general_settings")
+        self.settings: Final[SettingsStore] = SettingsStore(
+            "general_settings", managed_db_keys=_db_managed_general_settings_keys()
+        )
         self.router_settings: Final[SettingsStore] = SettingsStore("router_settings")
         self.litellm_settings: Final[SettingsStore] = SettingsStore("litellm_settings")
         self.environment_variables: Final[SettingsStore] = SettingsStore("environment_variables")
@@ -5817,6 +5827,8 @@ class ProxyConfig:
         self._db_environment_keys: frozenset[str] = frozenset()
         self._sso_environment_removals: frozenset[str] = frozenset()
         self._warned_shadowed_keys: frozenset[tuple[Section, str]] = frozenset()
+        self._warned_unmanaged_keys: frozenset[str] = frozenset()
+        self._warned_unreadable_db_general_settings: bool = False
         self._db_config_callback_entries: Mapping[tuple[str, str], _DbCallbackRegistration] = MappingProxyType({})
         self._settings_stores: Final[Mapping[Section, SettingsStore]] = MappingProxyType(
             {
@@ -8340,15 +8352,20 @@ class ProxyConfig:
             general_settings.get("maximum_spend_logs_retention_interval", "1d"),
         )
 
-    async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | None) -> None:
+    async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | str | None) -> None:
         global general_settings
         if db_general_settings is None:
             return
+        if not isinstance(db_general_settings, Mapping):
+            self._warn_about_unreadable_db_general_settings()
+            return
+        self._warned_unreadable_db_general_settings = False
         if not isinstance(general_settings, SettingsStore):
             self.settings.load_yaml(_as_settings_mapping(general_settings))
         cache_size_was_db: Final = self.settings.source("user_api_key_cache_max_size") == "db"
         previous_cleanup_schedule: Final = self._resolved_cleanup_schedule()
         self.settings.apply_db_row("general_settings", db_general_settings)
+        self._warn_about_unmanaged_db_settings()
         _bind_general_settings_store(self.settings)
         await self._apply_general_settings_side_effects(
             db_general_settings,
@@ -8566,6 +8583,7 @@ class ProxyConfig:
                 )
 
         self._warn_about_shadowed_db_settings()
+        self._warn_about_unmanaged_db_settings()
         return self._config_with_resolved_settings(config)
 
     async def _apply_db_environment_variables_row(
@@ -8623,6 +8641,30 @@ class ProxyConfig:
                 "%s", config_ownership_message(section=section, key=key, shadows_db_value=True)
             )
         self._warned_shadowed_keys = shadowed
+
+    def _warn_about_unmanaged_db_settings(self) -> None:
+        unmanaged: Final = frozenset(
+            key for key in self.settings.unmanaged_db_keys() if key not in _GENERAL_SETTINGS_UI_LITELLM_FIELDS
+        )
+        for key in sorted(unmanaged - self._warned_unmanaged_keys):
+            verbose_proxy_logger.warning(
+                "general_settings.%s is stored in the database, but the proxy does not apply that stored value, so it "
+                "is ignored. %s",
+                key,
+                "The config file's value applies. Remove the stored copy with POST /config/field/delete."
+                if self.settings.owned_by_config(key)
+                else "Set it in the config file to use it, or remove it with POST /config/field/delete.",
+            )
+        self._warned_unmanaged_keys = unmanaged
+
+    def _warn_about_unreadable_db_general_settings(self) -> None:
+        if self._warned_unreadable_db_general_settings:
+            return
+        verbose_proxy_logger.warning(
+            "general_settings is stored in the database as something other than a JSON object, so the proxy "
+            "ignores every stored general setting."
+        )
+        self._warned_unreadable_db_general_settings = True
 
     def _prepared_db_settings_values(self, section: Section, value: object) -> Mapping[str, SettingsJsonValue]:
         scrubbed: Final = _scrub_db_overlay_remote_module_loads(section=section, db_value=value)
@@ -8791,7 +8833,10 @@ class ProxyConfig:
                 )
 
             # initialize vector stores, guardrails, etc. table in db
-            await self._init_non_llm_objects_in_db(prisma_client=prisma_client)
+            await self._init_non_llm_objects_in_db(
+                prisma_client=prisma_client,
+                refresh_pass_through_endpoints=_general_settings_row_is_readable(db_general_settings),
+            )
 
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - %s", e)
@@ -8860,7 +8905,9 @@ class ProxyConfig:
         except Exception as e:  # noqa: BLE001  # best-effort: a failing stop must not break proxy shutdown
             verbose_proxy_logger.error("Error stopping auth cache invalidation subscriber: %s", e)
 
-    async def _init_non_llm_objects_in_db(self, prisma_client: PrismaClient):
+    async def _init_non_llm_objects_in_db(
+        self, prisma_client: PrismaClient, *, refresh_pass_through_endpoints: bool = True
+    ):
         """
         Use this to read non-llm objects from the db and initialize them
 
@@ -8884,7 +8931,7 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="agents"):
             await self._init_agents_in_db(prisma_client=prisma_client)
 
-        if self._should_load_db_object(object_type="pass_through_endpoints"):
+        if refresh_pass_through_endpoints and self._should_load_db_object(object_type="pass_through_endpoints"):
             await self._init_pass_through_endpoints_in_db()
 
         if self._should_load_db_object(object_type="prompts"):
@@ -20792,53 +20839,56 @@ async def delete_config_general_settings(
     if data.field_name in _GENERAL_SETTINGS_UI_LITELLM_FIELDS:
         return await _reset_general_settings_ui_litellm_field(data.field_name, user_api_key_dict)
 
-    if data.field_name not in ConfigGeneralSettings.model_fields:
+    config_table: Final[TableActions[_ConfigParamValueRow]] = _config_param_table(prisma_client)
+    stored_row: Final = await config_table.find_first(where={"param_name": "general_settings"})
+    stored: Final = (
+        _SETTINGS_MAPPING.validate_python(stored_row.param_value)
+        if stored_row is not None and isinstance(stored_row.param_value, Mapping)
+        else None
+    )
+
+    if not _general_settings_row_is_readable(stored_row):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "general_settings is stored in the database as something other than a JSON object, so no "
+                "field can be removed from it"
+            },
+        )
+
+    if data.field_name not in ConfigGeneralSettings.model_fields and (stored is None or data.field_name not in stored):
         raise HTTPException(
             status_code=400,
             detail={"error": f"Invalid field={data.field_name} passed in."},
         )
 
-    proxy_config.reject_config_owned_deletes(section_name="general_settings", keys=(data.field_name,))
+    if data.field_name in _db_managed_general_settings_keys():
+        proxy_config.reject_config_owned_deletes(section_name="general_settings", keys=(data.field_name,))
 
-    ## get general settings from db
-    db_general_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
-        where={"param_name": "general_settings"}
-    )
-    ### pop the value
-
-    if db_general_settings is None or db_general_settings.param_value is None:
+    if stored is None:
         raise HTTPException(
             status_code=400,
             detail={"error": f"Field name={data.field_name} not in config"},
         )
-    else:
-        general_settings = dict(db_general_settings.param_value)
 
-    before_general_settings: Final = copy.deepcopy(general_settings)
-
-    ## update db
-
-    general_settings.pop(data.field_name, None)
-
+    remaining: Final = {key: value for key, value in stored.items() if key != data.field_name}
     response: Final = await ConfigRepository(prisma_client).table.upsert(
         where={"param_name": "general_settings"},
         data={
             "create": {
                 "param_name": "general_settings",
-                "param_value": json.dumps(general_settings),
+                "param_value": json.dumps(remaining),
             },
-            "update": {"param_value": json.dumps(general_settings)},
+            "update": {"param_value": json.dumps(remaining)},
         },
     )
     await invalidate_config_param("general_settings")
-    proxy_config.settings.apply_db_row("general_settings", general_settings)
+    proxy_config.settings.apply_db_row("general_settings", remaining)
     if is_resource_list("general_settings", data.field_name):
-        stored_endpoints: Final = general_settings.get("pass_through_endpoints")
+        stored_endpoints: Final = remaining.get("pass_through_endpoints")
         await proxy_config.serve_pass_through_endpoints(stored_endpoints if isinstance(stored_endpoints, list) else ())
     asyncio.create_task(
-        create_config_audit_log(
-            "general_settings", "deleted", before_general_settings, general_settings, user_api_key_dict
-        )
+        create_config_audit_log("general_settings", "deleted", dict(stored), remaining, user_api_key_dict)
     )
 
     return response

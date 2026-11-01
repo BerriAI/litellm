@@ -471,3 +471,34 @@ def test_settings_store_truthiness_matches_emptiness() -> None:
     assert bool(store) is True
     del store["max_parallel_requests"]
     assert bool(store) is False
+
+
+def test_settings_store_ignores_stored_keys_outside_its_managed_db_keys_and_still_applies_them_from_yaml() -> None:
+    store: Final = SettingsStore("general_settings", managed_db_keys=frozenset({"max_parallel_requests"}))
+    stored_row: Final[dict[str, JsonValue]] = {"enforce_user_param": True, "max_parallel_requests": 5}
+
+    store.apply_db_row("general_settings", stored_row)
+
+    assert dict(store) == {"max_parallel_requests": 5}
+    assert store.source("enforce_user_param") == "unset"
+    assert store.unmanaged_db_keys() == ("enforce_user_param",)
+
+    store.load_yaml({"enforce_user_param": True})
+    store.apply_db_row("general_settings", stored_row)
+
+    assert dict(store) == {"enforce_user_param": True, "max_parallel_requests": 5}
+    assert store.source("enforce_user_param") == "config"
+    assert store.unmanaged_db_keys() == ("enforce_user_param",)
+
+
+def test_settings_store_managed_db_keys_leave_other_rows_and_unrestricted_stores_whole() -> None:
+    restricted: Final = SettingsStore("general_settings", managed_db_keys=frozenset())
+    unrestricted: Final = SettingsStore("general_settings")
+
+    restricted.apply_db_row("ui_settings", {"disable_custom_api_keys": True})
+    unrestricted.apply_db_row("general_settings", {"enforce_user_param": True})
+
+    assert dict(restricted) == {"disable_custom_api_keys": True}
+    assert restricted.unmanaged_db_keys() == ()
+    assert dict(unrestricted) == {"enforce_user_param": True}
+    assert unrestricted.unmanaged_db_keys() == ()
