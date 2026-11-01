@@ -4,6 +4,7 @@ This file contains common utils for anthropic calls.
 
 import copy
 import json
+import os
 import re
 from collections.abc import Container, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
+    ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH,
+    ANTHROPIC_MAX_USER_ID_LENGTH,
     DEFAULT_MODEL_CREATED_AT_TIME,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
@@ -176,6 +179,40 @@ def _tool_without_custom_field(tool: object, hoist_defer_loading: bool, drop_cus
 
 def tools_without_custom_field(tools: Sequence[object], hoist_defer_loading: bool, drop_custom: bool) -> list[object]:
     return [_tool_without_custom_field(tool, hoist_defer_loading, drop_custom) for tool in tools]
+
+
+def anthropic_pass_through_api_base() -> str:
+    return os.getenv("ANTHROPIC_API_BASE") or os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
+
+
+def _same_host_and_port(url: httpx.URL, other: str) -> bool:
+    try:
+        other_url: Final = httpx.URL(other)
+    except httpx.InvalidURL:
+        return False
+    return (url.host, url.port) == (other_url.host, other_url.port)
+
+
+def anthropic_upstream_user_id_limit(url: str) -> int | None:
+    upstream: Final = httpx.URL(url)
+    if not upstream.path.removesuffix("/").endswith("/v1/messages"):
+        return None
+    if upstream.host == "api.anthropic.com":
+        return ANTHROPIC_MAX_USER_ID_LENGTH
+    return (
+        ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH
+        if _same_host_and_port(upstream, anthropic_pass_through_api_base())
+        else None
+    )
+
+
+def _has_email_shape(token: str) -> bool:
+    at_sign: Final = token.find("@", 1)
+    return at_sign != -1 and token.find(".", at_sign + 2, -1) != -1
+
+
+def anthropic_accepts_user_id(user_id: str, max_length: int) -> bool:
+    return len(user_id) <= max_length and user_id.isprintable() and not any(map(_has_email_shape, user_id.split()))
 
 
 def is_anthropic_messages_url(url: str) -> bool:
@@ -2481,7 +2518,7 @@ def create_anthropic_model_list_response(
     }
 
 
-class RefusalStopFields(TypedDict, total=False):
+class StopReasonFields(TypedDict, total=False):
     stop_reason: ReadOnly[object]
     stop_details: ReadOnly[object]
 
@@ -2498,16 +2535,38 @@ def _dict_or_empty(value: object) -> object:
     return value if _is_dict(value) else _no_stop_fields()
 
 
-REFUSAL_STOP_FIELDS: Final[TypeAdapter[RefusalStopFields]] = TypeAdapter(
-    Annotated[RefusalStopFields, BeforeValidator(_dict_or_empty)]
+STOP_REASON_FIELDS: Final[TypeAdapter[StopReasonFields]] = TypeAdapter(
+    Annotated[StopReasonFields, BeforeValidator(_dict_or_empty)]
 )
 
+_STOP_REASONS_KEPT_RAW: Final = frozenset({"refusal", "pause_turn"})
 
-def refusal_provider_specific_fields(message: Mapping[str, object]) -> Mapping[str, object]:
+
+def stop_reason_provider_specific_fields(message: Mapping[str, object]) -> Mapping[str, object]:
     stop_reason: Final = message.get("stop_reason")
     stop_details: Final = message.get("stop_details")
     if stop_details is not None:
         return {"stop_reason": stop_reason, "stop_details": stop_details}
-    if stop_reason == "refusal":
+    if stop_reason in _STOP_REASONS_KEPT_RAW:
         return {"stop_reason": stop_reason}
     return {}
+
+
+class _RefusalStopDetails(TypedDict, total=False):
+    explanation: ReadOnly[object]
+
+
+_REFUSAL_STOP_DETAILS: Final[TypeAdapter[_RefusalStopDetails]] = TypeAdapter(
+    Annotated[_RefusalStopDetails, BeforeValidator(_dict_or_empty)]
+)
+
+
+class RefusalParams(TypedDict, total=False):
+    refusal: ReadOnly[str]
+
+
+def refusal_params(message: Mapping[str, object]) -> RefusalParams:
+    if message.get("stop_reason") != "refusal":
+        return {}
+    explanation: Final = _REFUSAL_STOP_DETAILS.validate_python(message.get("stop_details")).get("explanation")
+    return {"refusal": explanation} if isinstance(explanation, str) and explanation else {}

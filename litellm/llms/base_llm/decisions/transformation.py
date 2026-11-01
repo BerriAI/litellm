@@ -12,6 +12,7 @@ from pydantic_core import ErrorDetails
 from typing_extensions import assert_never
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -297,13 +298,7 @@ def _systemone_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
             assert_never(question)
 
 
-def ir_to_systemone_request(
-    model: str, request: DecisionsIRRequest, *, supports_audio: bool = False, supports_video: bool = False
-) -> Mapping[str, object] | UnsupportedDecisionsRequest:
-    if request.audio and not supports_audio:
-        return UnsupportedDecisionsRequest(reason="audio input is not supported by this Decisions model")
-    if request.videos and not supports_video:
-        return UnsupportedDecisionsRequest(reason="video input is not supported by this Decisions model")
+def ir_to_systemone_request(model: str, request: DecisionsIRRequest) -> Mapping[str, object]:
     state: Final = _systemone_state(request.input)
     keyed_questions: Final = zip(systemone_keys(request.questions), request.questions, strict=True)
     images: Final = input_images(request.input)
@@ -503,6 +498,16 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
     )
 
 
+def catalog_mode(model: str, custom_llm_provider: str) -> str | None:
+    try:
+        key: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)["key"]
+    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which the catalog does not list
+        return None
+    entry: Final = GetModelCostMap.loaded_model_cost_map().get(key)
+    mode: Final = entry.get("mode") if entry is not None else None
+    return mode if isinstance(mode, str) else None
+
+
 def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
     try:
         model_mode: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get("mode")
@@ -640,12 +645,16 @@ class BaseDecisionsConfig(ABC):
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-    def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
+    def supports_audio_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
+        if deployment_flag is not None:
+            return deployment_flag
         return _is_decisions_model(model, custom_llm_provider) and litellm.supports_audio_input(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-    def supports_video_input(self, model: str, custom_llm_provider: str) -> bool:
+    def supports_video_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
+        if deployment_flag is not None:
+            return deployment_flag
         return _is_decisions_model(model, custom_llm_provider) and litellm.supports_video_input(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -656,12 +665,7 @@ class BaseDecisionsConfig(ABC):
         request: DecisionsIRRequest,
         custom_llm_provider: str,
     ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
-        return ir_to_systemone_request(
-            self.request_model(model),
-            request,
-            supports_audio=self.supports_audio_input(model, custom_llm_provider),
-            supports_video=self.supports_video_input(model, custom_llm_provider),
-        )
+        return ir_to_systemone_request(self.request_model(model), request)
 
     def unwrap_response(self, payload: object) -> object:
         return payload

@@ -70,6 +70,7 @@ from pydantic import (
     FieldSerializationInfo,
     NonNegativeInt,
     PrivateAttr,
+    SerializeAsAny,
     SerializerFunctionWrapHandler,
     field_serializer,
     field_validator,
@@ -402,7 +403,7 @@ class OpenAIFileObject(LiteLLMBaseModel):
     filename: str
     """The name of the file."""
 
-    object: Literal["file"]
+    object: Literal["file"] = "file"
     """The object type, which is always `file`."""
 
     purpose: OpenAIFilesPurpose
@@ -439,6 +440,11 @@ class OpenAIFileObject(LiteLLMBaseModel):
     """Set by the LiteLLM proxy on a saved batch output file entry built without provider metadata; stripped from API responses."""
 
     _hidden_params: dict = PrivateAttr(default={"response_cost": 0.0})  # no cost for writing a file
+
+    @field_validator("object", mode="before")
+    @classmethod
+    def _default_missing_object_type(cls, value: _JsonValue) -> _JsonValue:
+        return "file" if value is None else value
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
@@ -1850,7 +1856,7 @@ class ContentPartAddedEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
     output_index: int
     content_index: int
-    part: BaseLiteLLMOpenAIResponseObject
+    part: SerializeAsAny[BaseLiteLLMOpenAIResponseObject]
 
 
 class ContentPartDonePartOutputText(BaseLiteLLMOpenAIResponseObject):

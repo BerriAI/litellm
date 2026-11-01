@@ -1182,7 +1182,7 @@ def test_deployment_callback_respects_cooldown_time(model_list):
         },
     }
 
-    with patch("litellm.router.set_cooldown_deployments") as mock_set:
+    with patch("litellm.router_python_core.set_cooldown_deployments") as mock_set:
         router.deployment_callback_on_failure(
             kwargs=kwargs,
             completion_response=None,
@@ -1554,7 +1554,7 @@ def _rpm_tpm_router(model_id: str) -> Router:
 
 
 def _pin_router_clock(monkeypatch: pytest.MonkeyPatch, pinned: datetime) -> None:
-    monkeypatch.setattr("litellm.router.get_utc_datetime", lambda: pinned)
+    monkeypatch.setattr("litellm.router_python_core.get_utc_datetime", lambda: pinned)
     monkeypatch.setattr(
         "litellm.router_utils.pre_call_checks.io_token_rate_limit_check.get_utc_datetime", lambda: pinned
     )
@@ -2398,10 +2398,10 @@ def _routers_seen_in_success_loop_discarding_first(first: Router, second: Router
     for callback in litellm.success_callback:
         if not isinstance(callback, MethodType):
             continue
-        if callback.__self__ is first:
+        if callback.__self__ is first._core:
             first.discard()
             yield first
-        if callback.__self__ is second:
+        if callback.__self__ is second._core:
             yield second
 
 

@@ -751,7 +751,9 @@ class AnthropicOutputTokensDetails(LiteLLMBaseModel):
     thinking_tokens: int | None = None
 
 
-AnthropicFinishReason = Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal", "compaction"]
+AnthropicFinishReason = Literal[
+    "end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal", "pause_turn", "compaction"
+]
 
 
 class AnthropicResponse(LiteLLMBaseModel):

@@ -71,7 +71,11 @@ from litellm.litellm_core_utils.litellm_logging import get_masked_values
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.llms.anthropic.common_utils import is_anthropic_messages_url
+from litellm.llms.anthropic.common_utils import (
+    anthropic_accepts_user_id,
+    anthropic_upstream_user_id_limit,
+    is_anthropic_messages_url,
+)
 from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
 )
@@ -148,6 +152,8 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     EndpointType,
     PassthroughStandardLoggingPayload,
+    WebSocketSessionMeter,
+    WebSocketSessionUsage,
 )
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, CallTypes, Usage
 
@@ -501,7 +507,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         url: httpx.URL,
         headers: dict,
         requested_query_params: dict | None = None,
-        _parsed_body: dict | None = None,
+        _parsed_body: Mapping[str, object] | None = None,
         forward_multipart: bool = False,
     ) -> httpx.Response:
         """
@@ -715,8 +721,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # unenforced. Set after the client merge so a request body cannot supply its own budget.
         #
         # Only for the built-in provider routes. `get_model_from_request` returns
-        # None for a user-defined pass-through, deliberately: its body is forwarded
-        # verbatim, so `model` there names an UPSTREAM model rather than a
+        # None for a user-defined pass-through, deliberately: the client's `model`
+        # goes upstream unchanged, so it names an UPSTREAM model rather than a
         # LiteLLM-managed one. Enforcement is therefore skipped on those routes, and
         # charging a counter anyway would track spend that nothing can refuse, and
         # would attribute it to a budget the operator scoped to a LiteLLM model that
@@ -1185,6 +1191,36 @@ def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     return headers
 
 
+def _json_object(value: object) -> Mapping[str, object]:
+    return cast("Mapping[str, object]", value) if isinstance(value, Mapping) else MappingProxyType({})  # cast-ok: json
+
+
+def _anthropic_user_id_to_forward(
+    body: Mapping[str, object],
+    url: str,
+    has_pre_call_guardrails: Callable[[Mapping[str, object]], bool],
+) -> str | None:
+    user_id: Final = _json_object(body.get("metadata")).get("user_id")
+    if not isinstance(user_id, str):
+        return None
+    max_length: Final = anthropic_upstream_user_id_limit(url)
+    if max_length is None:
+        return None
+    if not anthropic_accepts_user_id(user_id, max_length):
+        verbose_proxy_logger.warning("Not forwarding metadata.user_id because the upstream would refuse it")
+        return None
+    if has_pre_call_guardrails(body):
+        verbose_proxy_logger.debug("Not forwarding metadata.user_id because a pre-call guardrail cannot scan it")
+        return None
+    return user_id
+
+
+def _with_anthropic_user_id(body: Mapping[str, object] | None, user_id: str | None) -> Mapping[str, object] | None:
+    if body is None or user_id is None:
+        return body
+    return {**body, "metadata": {"user_id": user_id}}
+
+
 def _eu_jev_client_body(custom_llm_provider: str | None, body: Mapping[str, object]) -> Mapping[str, object] | None:
     return MappingProxyType(dict(body)) if custom_llm_provider == "eu_jev" else None
 
@@ -1421,6 +1457,10 @@ async def pass_through_request(
             request_method=getattr(request, "method", None),
             cost_per_request=cost_per_request,
         )
+        hooked_body: Final = _json_object(_parsed_body)
+        client_user_id: Final = _anthropic_user_id_to_forward(
+            hooked_body, str(url), proxy_logging_obj.request_has_pre_call_guardrails
+        )
         kwargs = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(  # rebind-ok: pre-existing rebinding on a rename-only line
             user_api_key_dict=user_api_key_dict,
             _parsed_body=_parsed_body,
@@ -1588,11 +1628,13 @@ async def pass_through_request(
             else:
                 logging_url = str(url) + "?" + requested_query_params_str
 
+        outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
+        upstream_body: Final = _with_anthropic_user_id(outgoing_body, client_user_id)
         logging_obj.pre_call(
             input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             api_key="",
             additional_args={
-                "complete_input_dict": _parsed_body,
+                "complete_input_dict": upstream_body,
                 "api_base": str(logging_url),
                 "headers": redact_credential_headers(upstream_headers),
             },
@@ -1632,7 +1674,7 @@ async def pass_through_request(
                         url,
                         params=requested_query_params,
                         headers=upstream_headers,
-                        json=_parsed_body,
+                        json=upstream_body,
                     )
                 )
 
@@ -1731,7 +1773,7 @@ async def pass_through_request(
                 url=url,
                 headers=upstream_headers,
                 requested_query_params=requested_query_params,
-                _parsed_body=_parsed_body,
+                _parsed_body=upstream_body,
                 forward_multipart=is_multipart,
             )
         verbose_proxy_logger.debug("response.headers= %s", response.headers)
@@ -2542,7 +2584,7 @@ def _json_object_frame(frame: str | bytes) -> dict[str, object] | None:
     return decoded if isinstance(decoded, dict) else None
 
 
-def _truncated_close_reason(reason: str) -> str:
+def truncated_close_reason(reason: str) -> str:
     """
     Fit a close reason inside the byte budget a WebSocket close frame allows, without splitting a character
     """
@@ -2595,6 +2637,13 @@ def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict
     return inject_trace_context(headers, parent_span=parent_span)
 
 
+def _log_session_usage(logging_obj: LiteLLMLoggingObj, usage: WebSocketSessionUsage) -> None:
+    logging_obj.model = usage.model  # rebind-ok: the spend logger reads model and cost off the shared logging object
+    logging_obj.model_call_details["model"] = usage.model  # rebind-ok: same shared logging object
+    logging_obj.model_call_details["custom_llm_provider"] = usage.custom_llm_provider  # rebind-ok: same
+    logging_obj.model_call_details["response_cost"] = usage.response_cost  # rebind-ok: same
+
+
 async def websocket_passthrough_request(
     websocket: WebSocket,
     target: str,
@@ -2607,6 +2656,7 @@ async def websocket_passthrough_request(
     setup_model_rewriter: Callable[[str], str] | None = None,
     builtin_provider_route: bool = False,
     model: str | None = None,
+    meter: WebSocketSessionMeter | None = None,
 ):
     """
     WebSocket passthrough request handler.
@@ -2622,6 +2672,7 @@ async def websocket_passthrough_request(
         setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
         builtin_provider_route: Whether a built-in provider route serves the connection, so its URL names the provider
         model: The model the caller named before connecting, logged on a failure before the setup frame arrives
+        meter: Prices the session from the client text frames delivered upstream, for an upstream that reports no usage
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
@@ -2632,6 +2683,7 @@ async def websocket_passthrough_request(
     # Initialize tracking variables
     start_time: Final = datetime.now()
     websocket_messages: Final[list[dict[str, object]]] = []
+    metered_total = 0  # rebind-ok: forward_client_to_upstream adds the measure of each client text frame it delivers
     litellm_call_id: Final = str(uuid.uuid4())
 
     verbose_proxy_logger.info("WebSocket passthrough (%s): Starting WebSocket connection to %s", endpoint, target)
@@ -2750,6 +2802,7 @@ async def websocket_passthrough_request(
 
             async def forward_client_to_upstream() -> None:
                 """Forward messages from client to upstream WebSocket"""
+                nonlocal metered_total
                 try:
                     while True:
                         message = await websocket.receive()
@@ -2819,6 +2872,8 @@ async def websocket_passthrough_request(
                                     # Not a JSON message or doesn't contain setup data
 
                             await upstream_ws.send(_rewrite_vertex_live_setup_model(text_data, setup_model_rewriter))
+                            if meter is not None:
+                                metered_total += meter.measure(text_data)
                         elif bytes_data is not None:
                             await upstream_ws.send(bytes_data)
                 except asyncio.CancelledError:
@@ -2903,7 +2958,7 @@ async def websocket_passthrough_request(
             if upstream_close is not None and _client_socket_is_open(websocket):
                 await websocket.close(
                     code=upstream_close.code,
-                    reason=_truncated_close_reason(upstream_close.reason),
+                    reason=truncated_close_reason(upstream_close.reason),
                 )
 
             end_time: Final = datetime.now()
@@ -2945,6 +3000,8 @@ async def websocket_passthrough_request(
                     self.url = target_url
 
             mock_response: Final = MockWebSocketResponse(target)
+            if meter is not None:
+                _log_session_usage(logging_obj, meter.price(metered_total))
 
             # Use the same success handler as HTTP passthrough endpoints
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
