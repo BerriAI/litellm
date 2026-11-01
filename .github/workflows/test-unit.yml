@@ -42,7 +42,7 @@ jobs:
         id: rust-bridge-key
         if: steps.changes.outputs.decision != 'skip'
         env:
-          RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm-rust/Cargo.lock', 'litellm-rust/Cargo.toml', 'litellm-rust/crates/**', 'model_prices_and_context_window.json', 'pyproject.toml') }}
+          RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm-rust/Cargo.lock', 'litellm-rust/Cargo.toml', 'litellm-rust/crates/**', 'model_prices_and_context_window.json', 'pyproject.toml', 'packaging/litellm-gateway/pyproject.toml') }}
         run: echo "key=$RUST_BRIDGE_CACHE_KEY" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
@@ -94,6 +94,18 @@ jobs:
           strip --strip-debug litellm/rust_bridge/_native.abi3.so
           mkdir -p rust-bridge-dist/litellm/rust_bridge
           cp litellm/rust_bridge/_native.abi3.so rust-bridge-dist/litellm/rust_bridge/_native.abi3.so
+
+      - name: Build the gateway wheel once for test shards
+        if: steps.changes.outputs.decision != 'skip' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 15
+        working-directory: packaging/litellm-gateway
+        env:
+          RUSTC_WRAPPER: sccache
+          SCCACHE_GHA_ENABLED: "true"
+          SCCACHE_GHA_VERSION: litellm-ci-v1
+          SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
+          CARGO_INCREMENTAL: "0"
+        run: uv run --no-project --with maturin==1.15.0 maturin build --profile dev --strip --out ../../rust-bridge-dist
 
       - name: Upload Rust bridge artifact
         if: steps.changes.outputs.decision != 'skip'
@@ -1020,7 +1032,7 @@ jobs:
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
             .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
           else
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project --no-install-package litellm-gateway
             uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
             cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
             uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
@@ -1470,7 +1482,7 @@ jobs:
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
             .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
           else
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project --no-install-package litellm-gateway
             uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
             cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
           fi

@@ -352,6 +352,7 @@ exclude = [
 ]
 
 [tool.uv]
+concurrent-builds = 1
 cache-keys = [
     { file = "pyproject.toml" },
     { file = "rust-toolchain.toml" },

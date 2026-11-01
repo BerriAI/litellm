@@ -74,6 +74,7 @@ ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
 COPY pyproject.toml uv.lock ./
 COPY enterprise/pyproject.toml enterprise/
 COPY litellm-proxy-extras/pyproject.toml litellm-proxy-extras/
+COPY packaging/litellm-gateway/pyproject.toml packaging/litellm-gateway/
 
 # Install third-party dependencies (cached unless pyproject.toml/uv.lock change)
 RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
@@ -99,7 +100,8 @@ COPY --from=ui-builder /ui/out/. litellm/proxy/_experimental/out/
 RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Install project and workspace packages (fast - deps already cached)
-RUN uv sync --frozen --no-default-groups --no-editable \
+RUN uv build --package litellm-gateway --wheel --out-dir /wheels
+RUN uv sync --frozen --no-install-package litellm-gateway --no-default-groups --no-editable \
     --extra proxy \
     --extra proxy-runtime \
     --group admin-mcp \
@@ -108,6 +110,8 @@ RUN uv sync --frozen --no-default-groups --no-editable \
     --extra saml \
     --extra bedrock-realtime \
     --python python3.13
+
+RUN uv pip install --python /app/.venv/bin/python --no-deps /wheels/litellm_gateway-*.whl
 
 RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     npm_config_cache=/root/.npm \

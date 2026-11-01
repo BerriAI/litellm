@@ -41,10 +41,14 @@ COPY pyproject.toml README.md rust-toolchain.toml ./
 COPY .cargo ./.cargo
 COPY litellm-rust ./litellm-rust
 COPY model_prices_and_context_window.json ./
+COPY packaging/litellm-gateway/pyproject.toml packaging/litellm-gateway/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     mkdir -p litellm/rust_bridge /wheels && \
     touch litellm/__init__.py litellm/rust_bridge/__init__.py && \
+    uvx --python python3.13 --from maturin==1.15.0 --with puccinialin==0.1.14 \
+        python -c "import maturin; maturin.build_wheel('/wheels')" && \
+    cd packaging/litellm-gateway && \
     uvx --python python3.13 --from maturin==1.15.0 --with puccinialin==0.1.14 \
         python -c "import maturin; maturin.build_wheel('/wheels')"
 
@@ -85,6 +89,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=enterprise/pyproject.toml,target=enterprise/pyproject.toml \
     --mount=type=bind,source=litellm-proxy-extras/pyproject.toml,target=litellm-proxy-extras/pyproject.toml \
+    --mount=type=bind,source=packaging/litellm-gateway/pyproject.toml,target=packaging/litellm-gateway/pyproject.toml \
     uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
         --extra proxy \
         --extra proxy-runtime \
@@ -98,7 +103,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY . .
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-default-groups --no-editable \
+    uv sync --frozen --no-install-project --no-install-package litellm-gateway --no-default-groups --no-editable \
         --extra proxy \
         --extra proxy-runtime \
         --group admin-mcp \
@@ -108,7 +113,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --python python3.13
 
 RUN --mount=type=bind,from=rust-native,source=/wheels,target=/wheels \
-    uv pip install --python /app/.venv/bin/python --no-deps /wheels/litellm-*.whl
+    uv pip install --python /app/.venv/bin/python --no-deps /wheels/litellm-*.whl /wheels/litellm_gateway-*.whl
 
 # PYTHONPATH=/app makes the source tree shadow the installed package, so the
 # compiled Rust extension must live next to the source or it is never imported.
