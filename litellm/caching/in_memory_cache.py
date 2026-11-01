@@ -277,7 +277,9 @@ class InMemoryCache(BaseCache):
     ) -> list[float] | None:
         results: Final = []
         for increment in increment_list:
-            result = await self.async_increment(increment["key"], increment["increment_value"], **kwargs)
+            result = await self.async_increment(
+                increment["key"], increment["increment_value"], ttl=increment["ttl"], **kwargs
+            )
             results.append(result)
         return results
 

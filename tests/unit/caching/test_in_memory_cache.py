@@ -432,3 +432,20 @@ def test_in_memory_cache_injected_clock_controls_expiry_and_eviction() -> None:
     assert cache.get_cache("second") is None
     assert cache.get_cache("third") == "replacement"
     assert cache.get_cache("fourth") == "new"
+
+
+@pytest.mark.asyncio
+async def test_async_increment_pipeline_keeps_each_key_for_its_own_ttl() -> None:
+    now: Final = {"t": 1_000.0}
+    cache: Final = InMemoryCache(default_ttl=600, clock=lambda: now["t"])
+
+    await cache.async_increment_pipeline(
+        increment_list=[
+            {"key": "minute", "increment_value": 1, "ttl": 60},
+            {"key": "day", "increment_value": 1, "ttl": 86400},
+        ]
+    )
+    now["t"] += 601
+
+    assert cache.get_cache("minute") is None
+    assert cache.get_cache("day") == 1

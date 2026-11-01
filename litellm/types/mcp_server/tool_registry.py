@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from pydantic import ConfigDict, Field
 
@@ -10,7 +10,7 @@ class MCPTool(LiteLLMBaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
     name: str
     description: str
-    input_schema: dict[str, Any]
+    input_schema: dict[str, object]
     handler: Callable
     server_id: str | None = Field(default=None, frozen=True)
 
@@ -18,18 +18,18 @@ class MCPTool(LiteLLMBaseModel):
 class ToolSchema(LiteLLMBaseModel):
     name: str
     description: str
-    inputSchema: dict[str, Any]
+    inputSchema: dict[str, object]
 
 
 class ListToolsResponse(LiteLLMBaseModel):
     tools: list[ToolSchema]
     nextCursor: str | None = None
-    _meta: dict[str, Any] | None = None
+    _meta: dict[str, object] | None = None
 
 
 class CallToolRequest(LiteLLMBaseModel):
     method: str = "tools/call"
-    params: dict[str, Any]
+    params: dict[str, object]
 
 
 class ContentItem(LiteLLMBaseModel):

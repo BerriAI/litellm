@@ -11,6 +11,7 @@ from pydantic import JsonValue
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountFields,
@@ -26,6 +27,9 @@ anthropic_count_tokens_handler: Final = AnthropicCountTokensHandler()
 
 class AnthropicTokenCounter(BaseTokenCounter):
     """Token counter implementation for Anthropic provider using the CountTokens API."""
+
+    def __init__(self, client_oauth_token: str | None = None) -> None:
+        self.client_oauth_token: Final = client_oauth_token
 
     def should_use_token_counting_api(
         self,
@@ -95,11 +99,16 @@ class AnthropicTokenCounter(BaseTokenCounter):
         api_base: Final = litellm_params.get("api_base")
 
         try:
-            auth_header: Final = await AnthropicModelInfo.aget_auth_header(
+            configured_auth_header: Final = await AnthropicModelInfo.aget_auth_header(
                 api_key=litellm_params.get("api_key") or litellm.anthropic_key or litellm.api_key,
                 api_base=api_base,
                 litellm_params=litellm_params,
                 allow_workload_identity=True,
+            )
+            auth_header: Final = (
+                configured_auth_header
+                if configured_auth_header is not None or self.client_oauth_token is None
+                else AnthropicModelInfo.get_auth_header(api_key=self.client_oauth_token, api_base=api_base)
             )
             if auth_header is None:
                 return TokenCountResponse(
@@ -123,6 +132,8 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 tools=tools,
                 system=system,
                 optional_params=count_options,
+                context_management=context_management.spec if context_management is not None else None,
+                drop_params=drops_unsupported_params(litellm_params.get("drop_params")),
             )
 
             if result is not None:

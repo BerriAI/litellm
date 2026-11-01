@@ -3,20 +3,28 @@
 import asyncio
 import copy
 import inspect
+import logging
 import os
 import tempfile
 import warnings
 from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError
 
 import litellm
 import litellm.proxy.proxy_server
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    InitPassThroughEndpointHelpers,
+    _registered_pass_through_routes,
+)
 from litellm._service_logger import ServiceTypes
 from litellm.integrations.otel.model.payloads import ServiceSpanData
 from litellm.integrations.otel.model.spans import service_span_name
@@ -237,6 +245,40 @@ def secret_vault_factory() -> type[FakeSecretVault]:
     return FakeSecretVault
 
 
+@contextmanager
+def _eu_jev_route_configured_at(path: str) -> Iterator[None]:
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    InitPassThroughEndpointHelpers.add_exact_path_route(
+        app=FastAPI(),
+        path=path,
+        target="https://operator.example/decide",
+        custom_headers=None,
+        forward_headers=None,
+        merge_query_params=None,
+        dependencies=None,
+        cost_per_request=None,
+        endpoint_id="operator-eu-jev",
+        methods=["POST"],
+    )
+    try:
+        yield
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+
+
+@pytest.fixture
+def configured_eu_jev_route() -> Iterator[None]:
+    with _eu_jev_route_configured_at("/eu_jev/v1/systemone"):
+        yield
+
+
+@pytest.fixture
+def configured_eu_jev_route_with_trailing_slash() -> Iterator[None]:
+    with _eu_jev_route_configured_at("/eu_jev/v1/systemone/"):
+        yield
+
+
 @pytest.fixture
 def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -422,6 +464,31 @@ def fresh_agent_read_through(monkeypatch):
     )
     monkeypatch.setattr(registry_read_through, "agent_registry_read_through", read_through)
     return read_through
+
+
+TOKEN_COUNT_LOG_FIELDS: Final = (
+    "litellm_call_id",
+    "request_model",
+    "model_id",
+    "model_used",
+    "input_tokens",
+    "count_source",
+    "status_code",
+)
+
+
+@pytest.fixture
+def token_count_log_lines(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Callable[[], tuple[dict[str, object], ...]]]:
+    """The structured fields of every INFO token count line the proxy logger writes while the test runs."""
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    with caplog.at_level(logging.INFO, logger=verbose_proxy_logger.name):
+        yield lambda: tuple(
+            {field: record.__dict__[field] for field in TOKEN_COUNT_LOG_FIELDS}
+            for record in caplog.records
+            if record.levelno == logging.INFO and "count_source" in record.__dict__
+        )
 
 
 @pytest.fixture

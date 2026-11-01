@@ -4,8 +4,11 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+import functools
+import re
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -22,7 +25,20 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from openai import Timeout as SDKTimeout
-from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, StrictInt, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StrictInt,
+    ValidationError,
+    ValidationInfo,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
@@ -34,7 +50,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
 
 if TYPE_CHECKING:
-    from litellm.router import Router
+    from litellm.router_api import RoutingContext as RouterContext
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
@@ -64,6 +80,10 @@ from .utils import (
 )
 
 AllowedModelRegion: TypeAlias = Literal["eu", "us"]
+
+
+class SilentExperimentFlag(TypedDict, total=False):
+    is_silent_experiment: ReadOnly[bool]
 
 
 class FallbackSkipReason(str, enum.Enum):
@@ -185,6 +205,11 @@ OptionalPreCallChecks = list[
 ]
 
 
+FallbackTargets: TypeAlias = Sequence[str | Mapping[str, JsonValue]]
+ContentPolicyFallbackRule: TypeAlias = Annotated[Mapping[str, FallbackTargets], Field(min_length=1, max_length=1)]
+ContentPolicyFallbackRules: TypeAlias = Sequence[ContentPolicyFallbackRule]
+
+
 class UpdateRouterConfig(LiteLLMBaseModel):
     """
     Set of params that you can modify via `router.update_settings()`.
@@ -204,6 +229,7 @@ class UpdateRouterConfig(LiteLLMBaseModel):
     retry_after: float | None = None
     fallbacks: list[dict] | None = None
     context_window_fallbacks: list[dict] | None = None
+    content_policy_fallbacks: ContentPolicyFallbackRules | None = None
     model_group_alias: dict[str, str | dict] | None = Field(default={})
     enable_tag_filtering: bool | None = None
     weights: RouterWeights | None = None
@@ -265,6 +291,7 @@ def _whole_float_as_int(value: object) -> object:
 
 
 class ModelInfo(MirroredPricingParams):
+    enforce_supported_endpoints: bool | None = None
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
     updated_at: datetime.datetime | None = None
@@ -517,6 +544,40 @@ def holds_secret_pointer(param_name: str) -> bool:
 
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
+_STRICT_LITELLM_PARAMS: Final = MappingProxyType({"strict_litellm_params": True})
+
+_StrictlyValidatedParams: Final = TypeVar("_StrictlyValidatedParams", bound=BaseModel)
+
+
+def validate_litellm_params_strictly(
+    params_model: type[_StrictlyValidatedParams], params: Mapping[str, object]
+) -> _StrictlyValidatedParams:
+    return params_model.model_validate(params, context=_STRICT_LITELLM_PARAMS)
+
+
+def _none_when_malformed_outside_strict_validation(
+    value: object, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
+) -> object:
+    try:
+        return handler(value)
+    except ValidationError:
+        if info.context is _STRICT_LITELLM_PARAMS:
+            raise
+        return None
+
+
+_DAILY_RESET_TIME_PATTERN: Final = re.compile(r"\d{2}:\d{2}")
+
+
+def parse_daily_reset_time(value: str | None) -> datetime.timedelta:
+    """`daily_reset_time` is "HH:MM" in UTC, when the rpd/tpd window starts over; unset means midnight UTC."""
+    if value is None:
+        return datetime.timedelta(0)
+    if _DAILY_RESET_TIME_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"daily_reset_time must be HH:MM in UTC, got {value!r}")
+    parsed: Final = datetime.time.fromisoformat(value)
+    return datetime.timedelta(hours=parsed.hour, minutes=parsed.minute)
+
 
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
@@ -533,6 +594,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     rpm: int | None = None
     itpm: int | None = None
     otpm: int | None = None
+    tpd: int | None = None
+    rpd: int | None = None
+    daily_reset_time: str | None = None
     timeout: float | str | httpx.Timeout | SDKTimeout | None = None  # if str, pass in as os.environ/
     # read timeout of a live stream, a faked stream takes the longer of this and timeout. If str, pass in as os.environ/
     stream_timeout: float | str | None = None
@@ -572,12 +636,19 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         default=False,
         description="Use stored xAI OAuth credentials when no xAI API key is configured.",
     )
+    chatgpt_auth_file: str | None = Field(
+        default=None,
+        description="Path to a ChatGPT OAuth auth.json for this deployment.",
+    )
     fireworks_forward_user_id: bool | None = Field(
         default=None,
         description="Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.",
     )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
+    thought_signature_in_tool_call_id: Annotated[
+        bool | None, WrapValidator(_none_when_malformed_outside_strict_validation)
+    ] = None
     model_info: dict | None = None
     mock_response: str | ModelResponse | Exception | object | None = None
 
@@ -619,6 +690,13 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     valkey_ssl: bool | None = None
     valkey_text_field: str | None = None
     valkey_embedding_field: str | None = None
+
+    @field_validator("daily_reset_time")
+    @classmethod
+    def _daily_reset_time_is_utc_hh_mm(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_daily_reset_time(value)
+        return value
 
     @field_validator("timeout")
     @classmethod
@@ -734,6 +812,9 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     rpm: int | None
     itpm: int | None
     otpm: int | None
+    tpd: ReadOnly[int | None]
+    rpd: ReadOnly[int | None]
+    daily_reset_time: ReadOnly[str | None]
     order: int | None
     weight: int | None
     max_parallel_requests: int | None
@@ -953,9 +1034,10 @@ class AlertingConfig(LiteLLMBaseModel):
     alerting_threshold: float | None = 300
 
 
+@functools.cache
 def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
     """Resolve a class's annotations, keeping each resolved annotation opaque."""
-    return get_type_hints(model_class)
+    return MappingProxyType(get_type_hints(model_class))
 
 
 class ModelGroupInfo(LiteLLMBaseModel):
@@ -1231,7 +1313,7 @@ class FallbackAccessCheck(Protocol):
     rejects, so a fallback can never reach a model the caller could not have requested directly.
     """
 
-    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
 
 
 class FallbackBudgetCheck(Protocol):
@@ -1244,7 +1326,7 @@ class FallbackBudgetCheck(Protocol):
     and skips targets it rejects, leaving the free attempt itself untouched.
     """
 
-    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
 
 
 class AutoRouterCapabilityLimit(Protocol):

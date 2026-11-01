@@ -1,11 +1,12 @@
 import copy
 import json
 import time
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, cast, get_args
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -48,12 +49,29 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
 _GUARDRAIL_CONFIG_VALIDATOR: Final["TypeAdapter[GuardrailConfigBlock]"] = TypeAdapter(GuardrailConfigBlock)
 
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _CohereGeneration(TypedDict):
+    text: ReadOnly[str | None]
+    finish_reason: ReadOnly[str | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _CohereInvokeResponse(TypedDict):
+    text: NotRequired[ReadOnly[str | None]]
+    generations: NotRequired[ReadOnly[Sequence[_CohereGeneration]]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _LlamaInvokeResponse(TypedDict):
+    generation: ReadOnly[str | None]
+
+
+_COHERE_INVOKE_RESPONSE: Final = TypeAdapter(_CohereInvokeResponse)
+_LLAMA_INVOKE_RESPONSE: Final = TypeAdapter(_LlamaInvokeResponse)
+
 _GUARDRAIL_CONFIG_EXPECTED_FORMAT: Final = (
     "{'guardrailIdentifier': str, 'guardrailVersion': str, 'trace': 'enabled'|'disabled'|'enabled_full'}"
-)
-
-_INVOKE_PROVIDERS: Final = TypeAdapter(tuple[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, ...]).validate_python(
-    get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL)
 )
 
 
@@ -310,12 +328,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         outputText: str | None = None
         try:
             if provider == "cohere":
-                if "text" in completion_response:
-                    outputText = completion_response["text"]
-                elif "generations" in completion_response:
-                    outputText = completion_response["generations"][0]["text"]
+                cohere_response: Final = _COHERE_INVOKE_RESPONSE.validate_python(completion_response)
+                if "text" in cohere_response:
+                    outputText = cohere_response["text"]
+                elif "generations" in cohere_response:
+                    outputText = cohere_response["generations"][0]["text"]
                     model_response.choices[0].finish_reason = map_finish_reason(
-                        completion_response["generations"][0]["finish_reason"]
+                        cohere_response["generations"][0]["finish_reason"] or "stop"
                     )
             elif provider == "anthropic":
                 return litellm.AmazonAnthropicClaudeConfig().transform_response(
@@ -361,7 +380,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             elif provider == "ai21":
                 outputText = completion_response.get("completions")[0].get("data").get("text")
             elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
-                outputText = completion_response["generation"]
+                outputText = _LLAMA_INVOKE_RESPONSE.validate_python(completion_response)["generation"]
             elif provider == "mistral":
                 outputText = litellm.AmazonMistralConfig.get_outputText(completion_response, model_response)
             else:  # amazon titan
@@ -538,62 +557,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         Bedrock invoke does not allow passing `stream` in the request body.
         """
         return False
-
-    @staticmethod
-    def get_bedrock_invoke_provider(
-        model: str,
-    ) -> litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None:
-        """
-        Helper function to get the bedrock provider from the model
-
-        handles 4 scenarios:
-        1. model=invoke/anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
-        2. model=anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
-        3. model=llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n -> Returns `llama`
-        4. model=us.amazon.nova-pro-v1:0 -> Returns `nova`
-        """
-        if model.startswith("invoke/"):
-            model = model.replace("invoke/", "", 1)
-
-        # Special case: Check for "nova" in model name first (before "amazon")
-        # This handles amazon.nova-* models which would otherwise match "amazon" (Titan)
-        if "nova" in model.lower():
-            if "nova" in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
-                return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, "nova")
-
-        _split_model: Final = model.split(".")[0]
-        if _split_model in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
-            return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
-
-        # If not a known provider, check for pattern with two slashes
-        provider = AmazonInvokeConfig._get_provider_from_model_path(model)
-        if provider is not None:
-            return provider
-
-        for provider in _INVOKE_PROVIDERS:
-            if provider in model:
-                return provider
-        return None
-
-    @staticmethod
-    def _get_provider_from_model_path(
-        model_path: str,
-    ) -> litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None:
-        """
-        Helper function to get the provider from a model path with format: provider/model-name
-
-        Args:
-            model_path (str): The model path (e.g., 'llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n' or 'anthropic/model-name')
-
-        Returns:
-            Optional[str]: The provider name, or None if no valid provider found
-        """
-        parts: Final = model_path.split("/")
-        if len(parts) >= 1:
-            provider: Final = parts[0]
-            if provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
-                return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
-        return None
 
     def convert_messages_to_prompt(self, model: str, messages, provider, custom_prompt_dict) -> tuple[str, list | None]:
         # handle anthropic prompts and amazon titan prompts

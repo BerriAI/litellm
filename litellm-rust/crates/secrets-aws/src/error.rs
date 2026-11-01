@@ -11,7 +11,7 @@ pub enum Error {
     #[error("KMS response has no plaintext")]
     MissingPlaintext,
     #[error("AWS request timed out")]
-    Timeout,
+    Timeout(#[source] #[redact] Box<SdkError<aws_sdk_secretsmanager::operation::get_secret_value::GetSecretValueError>>),
     #[error("AWS KMS decrypt failed")]
     Decrypt(#[from] #[redact] Box<SdkError<aws_sdk_kms::operation::decrypt::DecryptError>>),
     #[error("AWS Secrets Manager read failed")]
@@ -33,7 +33,7 @@ pub enum Error {
     #[error("AWS Secrets Manager response has no string payload")]
     MissingString,
     #[error("primary secret is not a JSON object")]
-    PrimarySecret,
+    PrimarySecret(#[source] #[redact] Option<serde_json::Error>),
     #[error(transparent)]
     Operation(#[from] litellm_secrets_types::Error),
 }

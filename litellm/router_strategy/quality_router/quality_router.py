@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
 from litellm.router_strategy.complexity_router.complexity_router import (
     ComplexityRouter,
 )
@@ -29,10 +30,10 @@ from litellm.types.utils import StandardLoggingRoutingDecision
 from .config import QualityRouterConfig, RoutingPreferences
 
 if TYPE_CHECKING:
-    from litellm.router import Router
+    from litellm.router_api import RoutingContext
     from litellm.types.router import PreRoutingHookResponse
 else:
-    Router = Any
+    RoutingContext = Any
     PreRoutingHookResponse = Any
 
 
@@ -42,18 +43,21 @@ class QualityRouter(CustomLogger):
     keyword override.
     """
 
+    litellm_router_instance: Final = RenamedRouterAttribute()  # deprecated: the router attribute before ``ctx``
+
+    @renamed_router_param("litellm_router_instance")
     def __init__(
         self,
         model_name: str,
-        litellm_router_instance: "Router",
+        ctx: "RoutingContext",
         default_model: str | None = None,
-        quality_router_config: dict[str, Any] | None = None,
+        quality_router_config: Mapping[str, object] | None = None,
     ):
         self.model_name = model_name
-        self.litellm_router_instance = litellm_router_instance
+        self.ctx: Final = ctx
 
         if quality_router_config:
-            self.config = QualityRouterConfig(**quality_router_config)
+            self.config = QualityRouterConfig.model_validate(dict(**quality_router_config))
         else:
             self.config = QualityRouterConfig()
 
@@ -64,7 +68,7 @@ class QualityRouter(CustomLogger):
         # Internal scorer — re-use the existing rule-based classifier.
         self._scorer = ComplexityRouter(
             model_name=f"{model_name}::scorer",
-            litellm_router_instance=litellm_router_instance,
+            ctx=ctx,
         )
 
         # Per-model indices populated alongside the tier index. `_model_keywords`
@@ -158,7 +162,7 @@ class QualityRouter(CustomLogger):
         `_model_quality`, and `_model_cost`. Raises if any listed model is
         missing `litellm_routing_preferences`.
         """
-        model_list: Final = getattr(self.litellm_router_instance, "model_list", None) or []
+        model_list: Final = self.ctx.registry().all() or []
         available: Final = set(self.config.available_models)
 
         # Track which available models we've matched so we can error on missing.
@@ -185,7 +189,7 @@ class QualityRouter(CustomLogger):
                 if isinstance(raw_prefs, RoutingPreferences):
                     prefs = raw_prefs
                 elif isinstance(raw_prefs, dict):
-                    prefs = RoutingPreferences(**raw_prefs)
+                    prefs = RoutingPreferences.model_validate(dict(**raw_prefs))
                 else:
                     # A Pydantic object of some other shape — coerce via its dict.
                     prefs = RoutingPreferences(

@@ -1,62 +1,137 @@
-use std::{
-    io,
-    sync::{Arc, OnceLock},
-};
+use std::time::Duration;
 
-use rustls::{ClientConfig, RootCertStore};
-use tokio::net::TcpStream;
+use http::{
+    HeaderMap, HeaderValue, StatusCode,
+    header::{
+        CONNECTION, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_PROTOCOL,
+        SEC_WEBSOCKET_VERSION, UPGRADE,
+    },
+};
+use reqwest::Url;
 use tokio_tungstenite::{
-    Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
-    tungstenite::{client::IntoClientRequest, error::TlsError, handshake::client::Response},
+    WebSocketStream,
+    tungstenite::{
+        handshake::{client::generate_key, derive_accept_key},
+        protocol::Role,
+    },
 };
 
-pub type UpstreamWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+use crate::{
+    client::Client,
+    error::{Error, HandshakeFault, Repr},
+};
 
-static TLS_CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
-
-fn build_tls_config() -> Result<ClientConfig, Box<tokio_tungstenite::tungstenite::Error>> {
-    let native = rustls_native_certs::load_native_certs();
-    let mut store = RootCertStore::empty();
-    let (added, _ignored) = store.add_parsable_certificates(native.certs);
-    if added == 0 {
-        return Err(Box::new(tokio_tungstenite::tungstenite::Error::Io(
-            io::Error::other(format!(
-                "no usable native root certificates: {:?}",
-                native.errors
-            )),
-        )));
-    }
-    ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-        .with_safe_default_protocol_versions()
-        .map(|builder| builder.with_root_certificates(store).with_no_client_auth())
-        .map_err(|error| {
-            Box::new(tokio_tungstenite::tungstenite::Error::Tls(
-                TlsError::Rustls(error),
-            ))
-        })
-}
-
-fn tls_config() -> Result<Arc<ClientConfig>, Box<tokio_tungstenite::tungstenite::Error>> {
-    if let Some(config) = TLS_CONFIG.get() {
-        return Ok(Arc::clone(config));
-    }
-    let built = Arc::new(build_tls_config()?);
-    Ok(Arc::clone(TLS_CONFIG.get_or_init(|| built)))
-}
+pub type UpstreamWebSocket = WebSocketStream<reqwest::Upgraded>;
 
 #[tracing::instrument(name = "litellm.websocket.handshake", level = "debug", skip_all)]
-pub async fn connect_upstream<R>(
-    request: R,
-) -> Result<(UpstreamWebSocket, Response), Box<tokio_tungstenite::tungstenite::Error>>
-where
-    R: IntoClientRequest + Unpin,
-{
-    let request = request.into_client_request().map_err(Box::new)?;
-    let connector = match request.uri().scheme_str() {
-        Some("wss") => Some(Connector::Rustls(tls_config()?)),
-        _ => None,
+pub async fn connect(
+    client: &Client,
+    url: &str,
+    headers: HeaderMap,
+    timeout: Option<Duration>,
+) -> Result<UpstreamWebSocket, Error> {
+    match timeout {
+        Some(timeout) => tokio::time::timeout(timeout, handshake(client, url, headers))
+            .await
+            .map_err(Repr::HandshakeTimeout)?,
+        None => handshake(client, url, headers).await,
+    }
+}
+
+async fn handshake(
+    client: &Client,
+    url: &str,
+    headers: HeaderMap,
+) -> Result<UpstreamWebSocket, Error> {
+    let offered_protocols = headers.get(SEC_WEBSOCKET_PROTOCOL).cloned();
+    let key = generate_key();
+    let response = client
+        .get(http_url(url)?)
+        .headers(handshake_headers(headers, &key)?)
+        .send()
+        .await?;
+    let status = response.status();
+    if status != StatusCode::SWITCHING_PROTOCOLS {
+        return Err(Error::upstream(
+            status.as_u16(),
+            response.text().await.unwrap_or_default(),
+        ));
+    }
+    let expected = derive_accept_key(key.as_bytes());
+    if response
+        .headers()
+        .get(SEC_WEBSOCKET_ACCEPT)
+        .map(HeaderValue::as_bytes)
+        != Some(expected.as_bytes())
+    {
+        return Err(Repr::Handshake(HandshakeFault::Accept).into());
+    }
+    validate_response_headers(response.headers(), offered_protocols.as_ref())?;
+    let upgraded = response.upgrade().await?;
+    Ok(WebSocketStream::from_raw_socket(upgraded, Role::Client, None).await)
+}
+
+fn validate_response_headers(
+    headers: &HeaderMap,
+    offered_protocols: Option<&HeaderValue>,
+) -> Result<(), Error> {
+    if !headers
+        .get(UPGRADE)
+        .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"websocket"))
+    {
+        return Err(Repr::Handshake(HandshakeFault::Upgrade).into());
+    }
+    if !headers.get_all(CONNECTION).iter().any(|value| {
+        value.to_str().is_ok_and(|value| {
+            value
+                .split(',')
+                .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+        })
+    }) {
+        return Err(Repr::Handshake(HandshakeFault::Connection).into());
+    }
+    let protocol_matches = match (offered_protocols, headers.get(SEC_WEBSOCKET_PROTOCOL)) {
+        (_, None) => true,
+        (Some(offered), Some(selected)) => offered
+            .to_str()
+            .ok()
+            .zip(selected.to_str().ok())
+            .is_some_and(|(offered, selected)| {
+                offered
+                    .split(',')
+                    .any(|protocol| protocol.trim() == selected)
+            }),
+        _ => false,
     };
-    connect_async_tls_with_config(request, None, false, connector)
-        .await
-        .map_err(Box::new)
+    if !protocol_matches {
+        return Err(Repr::Handshake(HandshakeFault::Subprotocol).into());
+    }
+    Ok(())
+}
+
+fn http_url(url: &str) -> Result<Url, Error> {
+    let mut url = Url::parse(url).map_err(Repr::WebSocketUrl)?;
+    let scheme = match url.scheme() {
+        "ws" | "http" => "http",
+        "wss" | "https" => "https",
+        other => return Err(Repr::WebSocketScheme(other.to_owned()).into()),
+    };
+    url.set_scheme(scheme)
+        .map_err(|()| Repr::WebSocketSchemeRewrite(scheme))?;
+    Ok(url)
+}
+
+fn handshake_headers(headers: HeaderMap, key: &str) -> Result<HeaderMap, Error> {
+    let key = HeaderValue::from_str(key).map_err(|error| Repr::Request(error.into()))?;
+    Ok([
+        (CONNECTION, HeaderValue::from_static("Upgrade")),
+        (UPGRADE, HeaderValue::from_static("websocket")),
+        (SEC_WEBSOCKET_VERSION, HeaderValue::from_static("13")),
+        (SEC_WEBSOCKET_KEY, key),
+    ]
+    .into_iter()
+    .fold(headers, |mut headers, (name, value)| {
+        headers.insert(name, value);
+        headers
+    }))
 }

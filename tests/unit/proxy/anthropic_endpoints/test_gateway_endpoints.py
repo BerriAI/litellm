@@ -20,27 +20,28 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from litellm.caching.dual_cache import DualCache
-from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
-    MintedProxyCredential,
-    ProxyCredentialMintFailure,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
-    SessionRefreshOpened,
-    open_session_refresh_bearer,
-    session_keys_from_master_key,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
-    SESSION_REFRESH_PREFIX,
-    MintedSessionToken,
-    SessionPrincipal,
-    mint_session_refresh_token,
-)
 from litellm.proxy._types import ProxyException
 from litellm.proxy.anthropic_endpoints import gateway_endpoints
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 from litellm.proxy.management_endpoints.ui_sso import (
     _get_cli_sso_flow_cache_key,
     _hash_cli_sso_secret,
     _set_cli_sso_flow,
+)
+from litellm.proxy.mcp_server.gateway_dcr_flow import (
+    MintedProxyCredential,
+    ProxyCredentialMintFailure,
+)
+from litellm.proxy.mcp_server.outbound_credentials.session_credentials import (
+    SessionRefreshOpened,
+    open_session_refresh_bearer,
+    session_keys_from_master_key,
+)
+from litellm.proxy.mcp_server.outbound_credentials.session_token import (
+    SESSION_REFRESH_PREFIX,
+    MintedSessionToken,
+    SessionPrincipal,
+    mint_session_refresh_token,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 
@@ -272,6 +273,33 @@ def _login_id(device_code: str) -> str:
     return device_code.partition(".")[0]
 
 
+def _request_token_after_browser_choice(
+    client: TestClient, cache: DualCache, chosen_team_id: str | None
+) -> httpx.Response:
+    device_code: Final = _start_device_flow(client)
+    _complete_flow(
+        cache,
+        device_code,
+        session_data={
+            **_COMPLETED_SESSION,
+            "teams": ["team-a", "team-b"],
+            "team_details": [
+                *_COMPLETED_SESSION["team_details"],
+                {
+                    "team_id": "team-b",
+                    "team_alias": "Team B",
+                    "team_models": ["claude-opus-4-5"],
+                    "team_model_aliases": None,
+                },
+            ],
+        },
+    )
+    flow_key: Final = _get_cli_sso_flow_cache_key(_login_id(device_code))
+    flow: Final = cache.get_cache(key=flow_key)
+    cache.set_cache(key=flow_key, value={**flow, "chosen_team_id": chosen_team_id}, ttl=600)
+    return _request_token(client, device_code)
+
+
 def _complete_flow(cache: DualCache, device_code: str, session_data: Mapping[str, object] = _COMPLETED_SESSION) -> None:
     key: Final = _get_cli_sso_flow_cache_key(_login_id(device_code))
     flow: Final = cache.get_cache(key=key)
@@ -395,6 +423,33 @@ def test_token_success_mints_bearer_and_is_single_use():
             replay = _request_token(client, device_code)
     assert replay.status_code == 400
     assert replay.json()["error"] == "expired_token"
+
+
+@pytest.mark.parametrize(
+    ("chosen_team_id", "minted_team_id", "minted_alias"),
+    [("team-b", "team-b", "Team B"), (None, "team-a", "Team A")],
+    ids=["chosen_in_browser", "no_choice_recorded"],
+)
+def test_token_mints_for_the_team_chosen_in_the_browser(
+    chosen_team_id: str | None, minted_team_id: str, minted_alias: str
+):
+    with _gateway_env() as (client, cache):
+        resp: Final = _request_token_after_browser_choice(client, cache, chosen_team_id)
+        session: Final = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(resp.json()["access_token"])
+    assert resp.status_code == 200
+    assert session is not None
+    assert (session.team_id, session.team_alias) == (minted_team_id, minted_alias)
+    assert _opened_refresh(resp.json()["refresh_token"]).team_id == minted_team_id
+
+
+def test_token_refuses_a_browser_choice_that_is_no_longer_one_of_the_session_teams():
+    with _gateway_env() as (client, cache):
+        resp: Final = _request_token_after_browser_choice(client, cache, "team-gone")
+    assert resp.status_code == 400
+    assert resp.json() == {
+        "error": "invalid_grant",
+        "error_description": "The team picked at sign-in is no longer one of your teams; sign in again",
+    }
 
 
 def test_token_teamless_user_mints_without_a_team():
@@ -813,3 +868,95 @@ def test_messages_gated_by_enable_flag():
     with _gateway_env(enabled=False) as (client, _):
         resp = client.post("/claude_code_gateway/v1/messages", json={"model": "claude-sonnet-4-5", "messages": []})
     assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("headers", [{}, {"anthropic-version": "2023-06-01"}])
+def test_gateway_model_discovery_preserves_grants_and_format(
+    monkeypatch: pytest.MonkeyPatch, headers: dict[str, str]
+) -> None:
+    from litellm import Router
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+    model_router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": f"openai/{name}", "api_key": "local-placeholder"},
+            }
+            for name in ("discovery-example", "restricted-example")
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", model_router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_router.model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_claude_code_gateway": True})
+    caller: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=["discovery-example"],
+    )
+    app: Final = FastAPI()
+    app.include_router(proxy_server.router)
+    app.include_router(gateway_endpoints.router)
+    app.dependency_overrides[gateway_endpoints.user_api_key_auth] = lambda: caller
+    with TestClient(app) as client:
+        standard: Final = client.get("/v1/models", headers=headers)
+        gateway: Final = client.get("/claude_code_gateway/v1/models", headers=headers)
+        assert standard.status_code == 200, standard.text
+        assert gateway.status_code == 200, gateway.text
+        assert gateway.json() == standard.json()
+        assert [model["id"] for model in gateway.json()["data"]] == ["discovery-example"]
+        invalid_scope: Final = client.get("/claude_code_gateway/v1/models?scope=invalid", headers=headers)
+        assert invalid_scope.status_code == 400
+
+
+def test_gateway_model_discovery_requires_authentication() -> None:
+    with _gateway_env(real_auth=True) as (client, _), pytest.raises(ProxyException) as exc_info:
+        client.get("/claude_code_gateway/v1/models")
+    assert exc_info.value.code == "401"
+
+
+@pytest.mark.parametrize("settings", [{}, {"enable_claude_code_gateway": False}])
+def test_gateway_model_discovery_disabled(monkeypatch: pytest.MonkeyPatch, settings: dict[str, bool]) -> None:
+    from litellm.proxy import proxy_server
+
+    with _gateway_env(real_auth=True) as (client, _):
+        monkeypatch.setattr(proxy_server, "general_settings", settings)
+        response: Final = client.get(
+            "/claude_code_gateway/v1/models", headers={"Authorization": f"Bearer {_MASTER_KEY}"}
+        )
+        assert response.status_code == 404, response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/models", "/v1/models", "/claude_code_gateway/v1/models"])
+async def test_gateway_model_discovery_preserves_route_exemptions(monkeypatch: pytest.MonkeyPatch, route: str) -> None:
+    from litellm_enterprise.proxy.auth.route_checks import EnterpriseRouteChecks
+
+    import litellm
+    from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    monkeypatch.setattr(litellm, "max_budget", 1.0)
+    result: Final = await common_checks(
+        request_body={},
+        team_object=LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0),
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=2.0,
+        general_settings={},
+        route=route,
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=UserAPIKeyAuth(team_id="test-team"),
+        request=MagicMock(),
+    )
+    assert result is True
+    assert RouteChecks.is_unbilled_route(route)
+    assert RouteChecks.is_llm_api_route(route)
+    monkeypatch.setenv("DISABLE_LLM_API_ENDPOINTS", "true")
+    monkeypatch.setenv("DISABLE_ADMIN_ENDPOINTS", "true")
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    EnterpriseRouteChecks.should_call_route(route)

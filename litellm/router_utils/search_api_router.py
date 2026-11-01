@@ -10,16 +10,15 @@ import traceback
 from collections.abc import Callable
 from functools import partial
 from types import MappingProxyType
-from typing import Any, Final, Protocol
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_router_logger
+from litellm.router_api import ChangeSet
+from litellm.router_deprecated import renamed_router_param
 from litellm.types.router import SearchToolLiteLLMParams, SearchToolTypedDict
 
-
-class _SearchToolsRouter(Protocol):
-    """The one router attribute the search-tool helpers read and replace."""
-
-    search_tools: list[SearchToolTypedDict]
+if TYPE_CHECKING:
+    from litellm.router_api import RoutingContext
 
 
 class SearchAPIRouter:
@@ -52,14 +51,15 @@ class SearchAPIRouter:
         return resolved_api_key, resolved_api_base
 
     @staticmethod
-    async def update_router_search_tools(router_instance: _SearchToolsRouter, search_tools: list):
+    @renamed_router_param("router_instance")
+    async def update_router_search_tools(ctx: "RoutingContext", search_tools: list):
         """
         Update the router with search tools from the database.
 
         This method is called by a cron job to sync search tools from DB to router.
 
         Args:
-            router_instance: The Router instance to update
+            ctx: The routing context of the router to update
             search_tools: List of search tool configurations from the database
         """
         try:
@@ -78,7 +78,7 @@ class SearchAPIRouter:
                 router_search_tools.append(router_search_tool)
 
             # Update the router's search_tools list
-            router_instance.search_tools = router_search_tools
+            ctx.apply(ChangeSet(assign={"search_tools": router_search_tools}))
 
             verbose_router_logger.info("Successfully updated router with %s search tool(s)", len(router_search_tools))
 
@@ -87,15 +87,16 @@ class SearchAPIRouter:
             raise e
 
     @staticmethod
+    @renamed_router_param("router_instance")
     def get_matching_search_tools(
-        router_instance: _SearchToolsRouter,
+        ctx: "RoutingContext",
         search_tool_name: str,
     ) -> list:
         """
         Get all search tools matching the given name.
 
         Args:
-            router_instance: The Router instance
+            ctx: The routing context of the router
             search_tool_name: Name of the search tool to find
 
         Returns:
@@ -105,7 +106,7 @@ class SearchAPIRouter:
             ValueError: If no matching search tools are found
         """
         matching_tools: Final = [
-            tool for tool in router_instance.search_tools if tool.get("search_tool_name") == search_tool_name
+            tool for tool in ctx.settings().search_tools if tool.get("search_tool_name") == search_tool_name
         ]
 
         if not matching_tools:
@@ -114,8 +115,9 @@ class SearchAPIRouter:
         return matching_tools
 
     @staticmethod
+    @renamed_router_param("router_instance", new="litellm_routing_ctx")
     async def async_search_with_fallbacks(
-        router_instance: Any,
+        litellm_routing_ctx: "RoutingContext",
         original_function: Callable,
         **kwargs,
     ):
@@ -124,13 +126,14 @@ class SearchAPIRouter:
         Reuses the router's retry/fallback infrastructure.
 
         Args:
-            router_instance: The Router instance
+            litellm_routing_ctx: The routing context of the router
             original_function: The original litellm.asearch function
             **kwargs: Search parameters including search_tool_name, query, etc.
 
         Returns:
             SearchResponse from the search API
         """
+        ctx: Final = litellm_routing_ctx
         try:
             search_tool_name: Final = kwargs.get("search_tool_name", kwargs.get("model"))
 
@@ -140,29 +143,28 @@ class SearchAPIRouter:
             # Set up kwargs for the fallback system
             kwargs["model"] = search_tool_name  # Use model field for compatibility with fallback system
             kwargs["original_generic_function"] = original_function
-            # Bind router_instance to the helper method using partial
+            # Bind ctx to the helper method using partial
             kwargs["original_function"] = partial(
                 SearchAPIRouter.async_search_with_fallbacks_helper,
-                router_instance=router_instance,
+                litellm_routing_ctx=ctx,
             )
 
             # Update kwargs before fallbacks (for logging, metadata, etc)
-            router_instance._update_kwargs_before_fallbacks(
+            ctx.update_kwargs_before_fallbacks(
                 model=search_tool_name,
                 kwargs=kwargs,
                 metadata_variable_name="litellm_metadata",
             )
 
-            available_search_tool_names: Final = [tool.get("search_tool_name") for tool in router_instance.search_tools]
+            available_search_tool_names: Final = [tool.get("search_tool_name") for tool in ctx.settings().search_tools]
             verbose_router_logger.debug(
-                "Inside SearchAPIRouter.async_search_with_fallbacks() - search_tool_name: %s, Available Search Tools: %s, kwargs: %s",
+                "Inside SearchAPIRouter.async_search_with_fallbacks() - search_tool_name: %s, Available Search Tools: %s",
                 search_tool_name,
                 available_search_tool_names,
-                kwargs,
             )
 
             # Use the existing retry/fallback infrastructure
-            response: Final = await router_instance.async_function_with_fallbacks(**kwargs)
+            response: Final = await ctx.with_fallbacks(**kwargs)
             return response
 
         except Exception as e:
@@ -170,7 +172,7 @@ class SearchAPIRouter:
 
             asyncio.create_task(
                 send_llm_exception_alert(
-                    litellm_router_instance=router_instance,
+                    ctx=ctx,
                     request_kwargs=kwargs,
                     error_traceback_str=traceback.format_exc(),
                     original_exception=e,
@@ -179,8 +181,9 @@ class SearchAPIRouter:
             raise e
 
     @staticmethod
+    @renamed_router_param("router_instance", new="litellm_routing_ctx")
     async def async_search_with_fallbacks_helper(
-        router_instance: _SearchToolsRouter,
+        litellm_routing_ctx: "RoutingContext",
         model: str,
         original_generic_function: Callable,
         **kwargs,
@@ -190,7 +193,7 @@ class SearchAPIRouter:
         Called by async_function_with_fallbacks for each retry attempt.
 
         Args:
-            router_instance: The Router instance
+            litellm_routing_ctx: The routing context of the router
             model: The search tool name (passed as model for compatibility)
             original_generic_function: The original litellm.asearch function
             **kwargs: Search parameters
@@ -198,12 +201,13 @@ class SearchAPIRouter:
         Returns:
             SearchResponse from the selected search provider
         """
+        ctx: Final = litellm_routing_ctx
         search_tool_name: Final = model  # model field contains the search_tool_name
 
         try:
             # Find matching search tools
             matching_tools: Final = SearchAPIRouter.get_matching_search_tools(
-                router_instance=router_instance,
+                ctx=ctx,
                 search_tool_name=search_tool_name,
             )
 

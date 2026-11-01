@@ -8,13 +8,14 @@ cross-group fallback runs.
 """
 
 from collections import Counter
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import litellm
 from litellm import Router
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.utils import get_excluded_filtered_deployments
 
 
@@ -337,7 +338,7 @@ async def test_maybe_run_weighted_failover_persists_excluded_ids_to_kwargs(monke
     async def _stub_run_async_fallback(*args, **kwargs):
         return "ok"
 
-    monkeypatch.setattr("litellm.router.run_async_fallback", _stub_run_async_fallback)
+    monkeypatch.setattr("litellm.router_python_core.run_async_fallback", _stub_run_async_fallback)
 
     exc = Exception("fail")
     exc.failed_deployment_id = "A"
@@ -806,11 +807,11 @@ async def test_maybe_run_weighted_failover_skips_when_remaining_all_in_cooldown(
         run_async_fallback_called = True
         return "should not reach here"
 
-    monkeypatch.setattr("litellm.router.run_async_fallback", _should_not_be_called)
+    monkeypatch.setattr("litellm.router_python_core.run_async_fallback", _should_not_be_called)
 
     # Patch cooldown so B and C appear in cooldown.
     with patch(
-        "litellm.router.async_get_cooldown_deployments",
+        "litellm.router_python_core.async_get_cooldown_deployments",
         new=AsyncMock(return_value=["B", "C"]),
     ):
         result = await router._maybe_run_weighted_failover(
@@ -866,10 +867,10 @@ async def test_maybe_run_weighted_failover_proceeds_when_one_healthy_remains(
         run_async_fallback_called = True
         return "ok from C"
 
-    monkeypatch.setattr("litellm.router.run_async_fallback", _stub_run_async_fallback)
+    monkeypatch.setattr("litellm.router_python_core.run_async_fallback", _stub_run_async_fallback)
 
     with patch(
-        "litellm.router.async_get_cooldown_deployments",
+        "litellm.router_python_core.async_get_cooldown_deployments",
         new=AsyncMock(return_value=["B"]),
     ):
         result = await router._maybe_run_weighted_failover(
@@ -935,7 +936,7 @@ async def test_failover_falls_through_to_external_fallback_when_remaining_in_coo
 
     # Put B in cooldown so weighted failover can't use it after A fails.
     with patch(
-        "litellm.router.async_get_cooldown_deployments",
+        "litellm.router_python_core.async_get_cooldown_deployments",
         new=AsyncMock(return_value=["B"]),
     ):
         response = await router.acompletion(
@@ -944,3 +945,77 @@ async def test_failover_falls_through_to_external_fallback_when_remaining_in_coo
         )
 
     assert response._hidden_params["model_id"] == "fallback"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pre_call_check", "metadata"),
+    [
+        ("session_affinity", {"session_id": "sess-1"}),
+        ("deployment_affinity", {"user_api_key_hash": "hashed-key-1"}),
+    ],
+)
+async def test_failover_reaches_healthy_sibling_when_affinity_pins_failed_deployment(
+    pre_call_check: str, metadata: dict[str, str]
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad",
+                    "mock_response": Exception("A down"),
+                    "weight": 1,
+                },
+                "model_info": {"id": "A"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "good",
+                    "mock_response": "ok from B",
+                    "weight": 0,
+                },
+                "model_info": {"id": "B"},
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "good",
+                    "mock_response": "ok from fallback",
+                },
+                "model_info": {"id": "fallback"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+        num_retries=0,
+        disable_cooldowns=True,
+        enable_weighted_failover=True,
+        optional_pre_call_checks=[pre_call_check],
+        fallbacks=[{"test-model": ["fallback-model"]}],
+    )
+
+    while_a_is_down: Final = await router.acompletion(
+        model="test-model",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata=dict(metadata),
+    )
+    router.upsert_deployment(
+        Deployment(
+            model_name="test-model",
+            litellm_params=LiteLLM_Params(model="gpt-4o", api_key="bad", mock_response="ok from A", weight=1),
+            model_info=ModelInfo(id="A"),
+        )
+    )
+    after_a_recovers: Final = await router.acompletion(
+        model="test-model",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata=dict(metadata),
+    )
+
+    assert while_a_is_down._hidden_params["model_id"] == "B"
+    assert while_a_is_down._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
+    assert after_a_recovers._hidden_params["model_id"] == "A"

@@ -2,6 +2,7 @@
 
 PARITY pairs the streamed case with its plain twin where both bill the same row."""
 
+from collections.abc import Mapping
 from typing import Final, cast
 
 from integration.cost_calculation.cost_tracking_case import (
@@ -6985,6 +6986,106 @@ GPT_5_6_RESPONSES_CACHE_READ: Final = CostTrackingTestCase(
     ),
 )
 
+GPT_5_6_RESPONSES_CACHE_WRITE_12H: Final = CostTrackingTestCase(
+    name="gpt-5.6-responses_cache_write_12h",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    endpoint="/v1/responses",
+    request={
+        "model": "$MODEL",
+        "input": "summarize this text",
+        "prompt_cache_options": {"mode": "implicit", "ttl": "12h"},
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "resp_$REQUEST_ID",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_$REQUEST_ID",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "scripted response", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 12928,
+                "output_tokens": 380,
+                "total_tokens": 13308,
+                "input_tokens_details": {
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 5000,
+                    "cache_write_tokens_details": {"ttl_30m_tokens": 3000, "ttl_12h_tokens": 2000},
+                },
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0344865,
+        input_cost=0.0291865,
+        output_cost=0.00532,
+        prompt_tokens=12928,
+        completion_tokens=380,
+        cache_creation_cost=0.0153125,
+    ),
+)
+
+GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE: Final = CostTrackingTestCase(
+    name="gpt-6-luna-responses_cache_write_12h_no_12h_rate",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-luna",
+    endpoint="/v1/responses",
+    request={
+        "model": "$MODEL",
+        "input": "summarize this text",
+        "prompt_cache_options": {"mode": "implicit", "ttl": "12h"},
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "resp_$REQUEST_ID",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-6-luna",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_$REQUEST_ID",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "scripted response", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 12928,
+                "output_tokens": 380,
+                "total_tokens": 13308,
+                "input_tokens_details": {
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 5000,
+                    "cache_write_tokens_details": {"ttl_30m_tokens": 3000, "ttl_12h_tokens": 2000},
+                },
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0016078,
+        input_cost=0.0014178,
+        output_cost=0.00019,
+        prompt_tokens=12928,
+        completion_tokens=380,
+        cache_creation_cost=0.000625,
+    ),
+)
+
 GPT_5_6_RESPONSES_REASONING: Final = CostTrackingTestCase(
     name="gpt-5.6-responses_reasoning",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -7686,8 +7787,8 @@ GPT_5_6_UPSTREAM_COST_HEADER_BILLS_HEADER_VALUE: Final = CostTrackingTestCase(
     ),
     expected=ExactExpected(
         spend=0.000413,
-        input_cost=0.0,
-        output_cost=0.000413,
+        input_cost=0.000413 * (10 * 1.75e-06) / (10 * 1.75e-06 + 253 * 1.4e-05),
+        output_cost=0.000413 * (253 * 1.4e-05) / (10 * 1.75e-06 + 253 * 1.4e-05),
         prompt_tokens=10,
         completion_tokens=253,
         breakdown_persisted=False,
@@ -11778,7 +11879,215 @@ GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM: Final = GPT_5_6_TERRA_MESSAGES_BRIDGED_JS
     }
 )
 
+
+# An OpenAI-compatible gateway that reports what it charged under usage.cost (#47533). The reported total is the bill,
+# split across input and output by the ratio of the cost map rates (100 * 1e-6 : 20 * 3e-6), on plain and streamed
+# replies alike. A deployment the operator priced keeps the operator's rates on both.
+_GATEWAY_REPORTED_USAGE: Final = {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120, "cost": 0.037}
+_GATEWAY_REPORTED_EXPECTED: Final = ExactExpected(
+    spend=0.037, input_cost=0.023125, output_cost=0.013875, prompt_tokens=100, completion_tokens=20
+)
+_GATEWAY_OPERATOR_PRICED: Final = Deployment(input_cost_per_token=2e-06, output_cost_per_token=6e-06)
+_GATEWAY_OPERATOR_PRICED_EXPECTED: Final = ExactExpected(
+    spend=0.00032, input_cost=0.0002, output_cost=0.00012, prompt_tokens=100, completion_tokens=20
+)
+_GATEWAY_CHUNK: Final = {
+    "id": "chatcmpl-$REQUEST_ID",
+    "object": "chat.completion.chunk",
+    "created": 1,
+    "model": "gateway-reported-cost-fixture",
+}
+
+GATEWAY_REPORTED_COST: Final = CostTrackingTestCase(
+    name="gateway-reported-cost",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gateway-reported-cost-fixture",
+    endpoint="/v1/chat/completions",
+    request={"model": "$MODEL", "messages": [{"role": "user", "content": "reported cost"}], "stream": False},
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gateway-reported-cost-fixture",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": _GATEWAY_REPORTED_USAGE,
+        },
+    ),
+    expected=_GATEWAY_REPORTED_EXPECTED,
+)
+
+GATEWAY_REPORTED_COST_STREAM: Final = CostTrackingTestCase(
+    name="gateway-reported-cost-stream",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gateway-reported-cost-fixture",
+    endpoint="/v1/chat/completions",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "reported cost"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},
+            {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            {**_GATEWAY_CHUNK, "choices": [], "usage": _GATEWAY_REPORTED_USAGE},
+            done=True,
+        ),
+    ),
+    expected=_GATEWAY_REPORTED_EXPECTED,
+)
+
+GATEWAY_REPORTED_COST_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST.model_copy(
+    update={
+        "name": "gateway-reported-cost-operator_priced",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
+GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM: Final = GATEWAY_REPORTED_COST_STREAM.model_copy(
+    update={
+        "name": "gateway-reported-cost-operator_priced-stream",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
+_GATEWAY_RESPONSES_USAGE: Final[Mapping[str, JsonValue]] = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "cost": 0.037}
+_GATEWAY_RESPONSES_ITEM: Final[Mapping[str, JsonValue]] = {
+    "id": "msg_gateway",
+    "type": "message",
+    "role": "assistant",
+    "status": "completed",
+    "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+}
+_GATEWAY_RESPONSES_BODY: Final[Mapping[str, JsonValue]] = {
+    "id": "resp_$REQUEST_ID",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gateway-reported-cost-fixture",
+    "output": [_GATEWAY_RESPONSES_ITEM],
+    "usage": _GATEWAY_RESPONSES_USAGE,
+}
+
+GATEWAY_REPORTED_COST_RESPONSES: Final = CostTrackingTestCase(
+    name="gateway-reported-cost-responses",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gateway-reported-cost-fixture",
+    endpoint="/v1/responses",
+    request={"model": "$MODEL", "input": "reported cost", "cache": {"no-cache": True}},
+    response=JsonResponse(content_type="application/json", body=_GATEWAY_RESPONSES_BODY),
+    expected=_GATEWAY_REPORTED_EXPECTED,
+)
+
+GATEWAY_REPORTED_COST_RESPONSES_STREAM: Final = GATEWAY_REPORTED_COST_RESPONSES.model_copy(
+    update={
+        "name": "gateway-reported-cost-responses-stream",
+        "request": {**GATEWAY_REPORTED_COST_RESPONSES.request, "stream": True},
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                {
+                    "type": "response.created",
+                    "sequence_number": 0,
+                    "response": {**_GATEWAY_RESPONSES_BODY, "status": "in_progress", "output": [], "usage": None},
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "sequence_number": 1,
+                    "item_id": "msg_gateway",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "ok",
+                },
+                {"type": "response.completed", "sequence_number": 2, "response": _GATEWAY_RESPONSES_BODY},
+            ),
+        ),
+    }
+)
+
+GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST_RESPONSES.model_copy(
+    update={
+        "name": "gateway-reported-cost-responses-operator_priced",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
+GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED_STREAM: Final = GATEWAY_REPORTED_COST_RESPONSES_STREAM.model_copy(
+    update={
+        "name": "gateway-reported-cost-responses-operator_priced-stream",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
+
+_GATEWAY_ZERO_USAGE: Final = {**_GATEWAY_REPORTED_USAGE, "cost": 0}
+
+GATEWAY_REPORTED_ZERO_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST_OPERATOR_PRICED.model_copy(
+    update={
+        "name": "gateway-reported-zero-operator_priced",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={**GATEWAY_REPORTED_COST.response.body, "usage": _GATEWAY_ZERO_USAGE},
+        ),
+    }
+)
+
+GATEWAY_REPORTED_ZERO_OPERATOR_PRICED_STREAM: Final = GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM.model_copy(
+    update={
+        "name": "gateway-reported-zero-operator_priced-stream",
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},
+                {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+                {**_GATEWAY_CHUNK, "choices": [], "usage": _GATEWAY_ZERO_USAGE},
+                done=True,
+            ),
+        ),
+    }
+)
+
+_GATEWAY_OPENROUTER_OPERATOR_PRICED: Final = _GATEWAY_OPERATOR_PRICED.model_copy(
+    update={"model": "openrouter/vendor/gateway-reported-cost-fixture"}
+)
+
+GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST_OPERATOR_PRICED.model_copy(
+    update={
+        "name": "gateway-reported-cost-openrouter-operator_priced",
+        "deployment": _GATEWAY_OPENROUTER_OPERATOR_PRICED,
+    }
+)
+
+GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED_STREAM: Final = (
+    GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM.model_copy(
+        update={
+            "name": "gateway-reported-cost-openrouter-operator_priced-stream",
+            "deployment": _GATEWAY_OPENROUTER_OPERATOR_PRICED,
+        }
+    )
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    GATEWAY_REPORTED_COST,
+    GATEWAY_REPORTED_COST_STREAM,
+    GATEWAY_REPORTED_COST_OPERATOR_PRICED,
+    GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM,
+    GATEWAY_REPORTED_COST_RESPONSES,
+    GATEWAY_REPORTED_COST_RESPONSES_STREAM,
+    GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED,
+    GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED_STREAM,
+    GATEWAY_REPORTED_ZERO_OPERATOR_PRICED,
+    GATEWAY_REPORTED_ZERO_OPERATOR_PRICED_STREAM,
+    GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED,
+    GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED_STREAM,
     GPT_5_6_SLASH_ALIAS,
     GPT_5_6_SLASH_ALIAS_STREAM,
     GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON,
@@ -11913,6 +12222,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     OMNI_MODERATIONS_NEXT_SINGLE,
     OMNI_MODERATIONS_NEXT_LIST,
     GPT_5_6_RESPONSES_CACHE_READ,
+    GPT_5_6_RESPONSES_CACHE_WRITE_12H,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
     GPT_5_6_RESPONSES_REASONING,
     GPT_5_6_RESPONSES_STREAM,
     GPT_5_6_RESPONSES_STREAM_CACHE_READ,
@@ -12018,6 +12329,22 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
+    StreamParityTestCase(plain=GATEWAY_REPORTED_COST, streamed=GATEWAY_REPORTED_COST_STREAM),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_COST_OPERATOR_PRICED, streamed=GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM
+    ),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_ZERO_OPERATOR_PRICED, streamed=GATEWAY_REPORTED_ZERO_OPERATOR_PRICED_STREAM
+    ),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED,
+        streamed=GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED_STREAM,
+    ),
+    StreamParityTestCase(plain=GATEWAY_REPORTED_COST_RESPONSES, streamed=GATEWAY_REPORTED_COST_RESPONSES_STREAM),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED,
+        streamed=GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED_STREAM,
+    ),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM_INCOMPLETE),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM_UNVALIDATED),
