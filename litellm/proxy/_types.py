@@ -37,13 +37,15 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
-from litellm.proxy._experimental.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
+from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
+from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
 from litellm.types.agents import (
     AgentCaller as AgentCaller,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.agents import (
     AgentResponse as AgentResponse,  # noqa: PLC0414  # public re-export
 )
+from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.integrations.compression_interception import (
     CompressionSavingsMetadata,
 )
@@ -86,6 +88,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot as UserBudgetSnapshot,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
@@ -105,6 +108,7 @@ from litellm.types.utils import (
     ProviderField,
     StandardCallbackDynamicParams,
     StandardLoggingGuardrailInformation,
+    StandardLoggingKubernetesPodRouting,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
     StandardLoggingPayloadErrorInformation,
@@ -122,6 +126,7 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.repositories.database import Database
     from litellm.tracing import TraceReceiver
 
     Span = _Span | Any
@@ -131,6 +136,7 @@ else:
 
 class ProxyLifespanState(TypedDict):
     tracing_receiver: ReadOnly["TraceReceiver | None"]
+    database: ReadOnly["Database | None"]
 
 
 class ReconcileOutcome(NamedTuple):
@@ -216,6 +222,8 @@ from litellm.types.proxy.auth.user_api_key_auth import (  # noqa: E402  # re-exp
 from litellm.types.proxy.auth.user_roles import (  # noqa: E402  # re-export after the definitions above
     KeyManagementRoutes as KeyManagementRoutes,  # noqa: PLC0414  # public re-export
 )
+
+MODEL_LIST_ROUTES: Final = ("/models", "/v1/models", "/claude_code_gateway/v1/models")
 
 
 class LiteLLMRoutes(enum.Enum):
@@ -305,8 +313,7 @@ class LiteLLMRoutes(enum.Enum):
         "/threads/{thread_id}/runs",
         "/v1/threads/{thread_id}/runs",
         # models
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         # token counter
         "/utils/token_counter",
         "/utils/model_info",
@@ -375,6 +382,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/decisions",
         "/systemone",
         "/v1/systemone",
+        "/extraction",
+        "/v1/extraction",
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -386,6 +395,7 @@ class LiteLLMRoutes(enum.Enum):
     ]
 
     mapped_pass_through_routes = [
+        "/backend-api/codex",
         "/bedrock",
         "/comprehendmedical",
         "/azure_speech",
@@ -491,6 +501,7 @@ class LiteLLMRoutes(enum.Enum):
         "/a2a/{agent_id}/message/send",
         "/v1/a2a/{agent_id}/message/send",
         "/a2a/{agent_id}/message/stream",
+        "/v1/a2a/{agent_id}/message/stream",
         "/a2a/{agent_id}/.well-known/agent-card.json",
     )
 
@@ -551,6 +562,7 @@ class LiteLLMRoutes(enum.Enum):
         + list(agent_inference_routes)
         + model_info_routes
     )
+    llm_api_routes_without_mcp = sorted(set(llm_api_routes) - set(mcp_inference_routes))
     info_routes = [
         "/key/info",
         "/key/health",
@@ -562,6 +574,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/metadata_schema",
         "/user/info",
         "/v2/user/info",
+        "/management/v1/users/me",
         "/model/info",
         "/v1/model/info",
         "/v2/model/info",
@@ -571,8 +584,7 @@ class LiteLLMRoutes(enum.Enum):
         "/health/services",
         "/key/list",
         "/user/filter/ui",
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         "/sso/get/ui_settings",
         "/get/user_banner",
         "/get/latest_release_info",
@@ -660,11 +672,16 @@ class LiteLLMRoutes(enum.Enum):
             "/team/spend/by_user",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
+            "/subscription_accounts/usage",
+            "/subscription_accounts/new",
+            "/subscription_accounts/update",
+            "/subscription_accounts/delete",
             # model
             "/model/new",
             "/model/update",
             "/model/delete",
             "/model/info",
+            "/model/{model_id}/kubernetes_pods",
             "/jwt/key/mapping/new",
             "/jwt/key/mapping/update",
             "/jwt/key/mapping/delete",
@@ -753,8 +770,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/info",
         "/v2/model/info",
         "/v2/key/info",
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         "/global/spend",
         "/global/spend/logs",
         "/global/spend/keys",
@@ -1760,8 +1776,10 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     max_parallel_requests: int | None = Field(
         default=None, description="Max concurrent requests allowed for this budget id."
     )
-    tpm_limit: int | None = Field(default=None, description="Max tokens per minute, allowed for this budget id.")
-    rpm_limit: int | None = Field(default=None, description="Max requests per minute, allowed for this budget id.")
+    tpm_limit: int | None = Field(default=None, ge=0, description="Max tokens per minute, allowed for this budget id.")
+    rpm_limit: int | None = Field(
+        default=None, ge=0, description="Max requests per minute, allowed for this budget id."
+    )
     tpd_limit: int | None = Field(
         default=None, description="Max tokens per day, charged by batch submissions, allowed for this budget id."
     )
@@ -1872,6 +1890,8 @@ RouterSettingsDict = Annotated[
 
 
 class NewTeamRequest(TeamBase):
+    tpm_limit: int | None = Field(default=None, ge=0)
+    rpm_limit: int | None = Field(default=None, ge=0)
     router_settings: RouterSettingsDict | None = None
     model_aliases: dict | None = None
     model_max_budget: GenericBudgetConfigType | None = Field(
@@ -1951,8 +1971,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_alias: str | None = None
     organization_id: str | None = None
     metadata: dict | None = None
-    tpm_limit: int | None = None
-    rpm_limit: int | None = None
+    tpm_limit: int | None = Field(default=None, ge=0)
+    rpm_limit: int | None = Field(default=None, ge=0)
     tpd_limit: int | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
@@ -2453,6 +2473,36 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
+    accounting_capture: UsageCaptureSettings | None = Field(
+        None,
+        description="Opt-in durable usage capture. Legacy spend updates remain active. Requires local Prisma writes.",
+    )
+    accounting_sync_ack: bool = Field(
+        False,
+        description="Wait for usage commit on foreground non-stream chat, text, embedding and Responses requests. "
+        "Other requests remain supported with asynchronous usage capture.",
+    )
+    accounting_sync_ack_timeout_seconds: float = Field(
+        20.0, gt=0, description="Maximum response wait for usage commit, including the batch flush interval"
+    )
+    accounting_sync_ack_failure_policy: Literal["fail_closed", "log"] = Field(
+        "fail_closed", description="Return 503 or log the persistence failure after the response wait expires"
+    )
+
+    request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
+        None,
+        description="Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.",
+    )
+
+    @field_validator("request_tag_mappings")
+    @classmethod
+    def validate_request_tag_mapping_duplicates(
+        cls, rules: Sequence[RequestTagMapping] | None
+    ) -> Sequence[RequestTagMapping] | None:
+        if rules is not None and len({(rule.key, rule.value) for rule in rules}) != len(rules):
+            raise ValueError("Only one mapping is allowed for each baggage key/value, including its any-value fallback")
+        return rules
+
     completion_model: str | None = Field(None, description="proxy level default model for all chat completion calls")
     max_in_flight_requests_per_worker: int | None = Field(
         None, gt=0, description="maximum concurrent requests handled by each worker"
@@ -2696,6 +2746,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "hidden model can still be called."
         ),
     )
+    return_wildcard_routes: bool | None = Field(
+        None,
+        description=(
+            "When true, `/v1/models` lists wildcard routes like `openai/*` unless the request passes "
+            "`return_wildcard_routes=false`."
+        ),
+    )
     alerting: list | None = Field(
         None,
         description="List of alerting integrations - e.g. `alerting: ['slack', 'webhook', 'email']`. 'slack' posts Slack-format messages to any Slack-compatible webhook (Slack, Rocket.Chat, Mattermost); 'webhook' posts structured JSON budget alerts to WEBHOOK_URL",
@@ -2772,6 +2829,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         default=None,
         description="Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.",
     )
+    vertex_ai_pass_through_drop_anthropic_betas: tuple[str, ...] | None = Field(
+        default=None,
+        description="anthropic-beta header values the Vertex AI pass-through routes (/vertex_ai/* and /vertex-ai/*) remove before calling Vertex, for a beta a Vertex Claude model rejects, whether the client sent them as anthropic-beta or x-pass-anthropic-beta. Every other value the client sent is forwarded unchanged, and the header is left out when no value remains. Unset forwards the header as sent.",
+    )
     transcribe_media_buckets: list[str] | None = Field(
         default=None,
         description="S3 bucket names that keys other than proxy admins may read media from and write transcripts to through the Amazon Transcribe pass-through. Unset means only proxy admins can start transcription jobs.",
@@ -2785,6 +2846,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).",
     )
+    self_serve_budget_policy: Literal["disabled", "lower_only", "ceiling"] | None = Field(
+        None,
+        description="Lets a non-admin change max_budget or budget_limits on a key they created and still own via /key/update. 'disabled' (default) requires an admin for any budget change. 'lower_only' lets the owner add or lower limits. 'ceiling' also lets the owner raise or remove limits when they could create that key with the new budget via /key/generate.",
+    )
     user_mcp_management_mode: UserMCPManagementMode | None = Field(
         None,
         description="Controls how non-admin users interact with MCP servers in the dashboard. 'restricted' shows only accessible servers, 'view_all' lists every server in read-only mode.",
@@ -2792,6 +2857,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     store_prompts_in_spend_logs: bool | None = Field(
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
+    )
+    claude_code_marketplace_auth_required: bool = Field(
+        False,
+        description="If True, GET /claude-code/marketplace.json requires a LiteLLM key in the Authorization or x-litellm-api-key header (?key= is not accepted) and answers 401 with WWW-Authenticate: Bearer without one, and GET /public/skill_hub returns an empty list. Default is False, which serves the enabled plugins to anyone.",
     )
     disable_requester_ip_address_logging: bool | None = Field(
         None,
@@ -2855,6 +2924,30 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Maximum retention period for per-day tag spend aggregate rows (e.g., '90d'). Rows whose day is older "
             "than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never "
             "deleted. Only historical tag usage analytics are affected; tag budgets read the lifetime counter."
+        ),
+    )
+    maximum_spend_logs_size: str | None = Field(
+        None,
+        description=(
+            "Size rule for spend logs (e.g. '180GB'): when LiteLLM_SpendLogs plus LiteLLM_SpendLogToolIndex "
+            "(heap, indexes and TOAST, measured with pg_total_relation_size) hold more live data than this, the "
+            "cleanup job deletes the oldest spend logs first until they are under "
+            "maximum_spend_logs_cleanup_target_size. Independent of maximum_spend_logs_retention_period: a row is "
+            "deleted when either rule says so. Unset means no size rule."
+        ),
+    )
+    maximum_spend_logs_cleanup_target_size: str | None = Field(
+        None,
+        description=(
+            "Level a size-triggered cleanup run deletes down to (e.g. '20GB'). Must be below maximum_spend_logs_size. "
+            "Unset means the run stops as soon as the tables are back under maximum_spend_logs_size."
+        ),
+    )
+    maximum_spend_logs_size_check_interval: str | None = Field(
+        None,
+        description=(
+            "How often the size rule is checked (e.g. '10m'). Defaults to '1d'. Ignored when "
+            "maximum_spend_logs_cleanup_cron is set, which then drives both the age and the size cleanup."
         ),
     )
     use_spend_logs_partitioning: bool | None = Field(
@@ -3109,11 +3202,18 @@ from litellm.types.proxy.auth.user_api_key_auth import (
 )
 
 
+class AdminMCPPermissions(LiteLLMPydanticObjectBase):
+    model_config = ConfigDict(frozen=True)
+    tools: tuple[str, ...]
+    action_allowed: bool | None = None
+
+
 class UserInfoResponse(LiteLLMPydanticObjectBase):
     user_id: str | None
     user_info: dict | BaseModel | None
     keys: list
     teams: list
+    admin_mcp_permissions: AdminMCPPermissions | None = None
 
 
 class UserInfoV2Response(LiteLLMPydanticObjectBase):
@@ -3213,7 +3313,7 @@ class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
 
     members: list[LiteLLM_OrganizationMembershipTable] = []
     teams: list[LiteLLM_TeamTable] = []
-    litellm_budget_table: LiteLLM_BudgetTable | None = None
+    litellm_budget_table: LiteLLM_BudgetTableFull | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -3397,12 +3497,12 @@ class LiteLLM_SpendLogs_ResponseObject(LiteLLMPydanticObjectBase):
 class TokenCountRequest(LiteLLMPydanticObjectBase):
     model: str
     prompt: str | None = None
-    messages: list[dict] | None = None
+    messages: list[dict[Any, Any]] | None = None
     """
     Anthropic token counting endpoint uses /messages
     """
 
-    contents: list[dict] | None = None
+    contents: list[dict[Any, Any]] | None = None
     """
     Google /countTokens endpoint expects contents to be a list of dicts with the following structure:
     """
@@ -3666,6 +3766,7 @@ class SpendLogsMetadata(TypedDict):
     user_api_key_project_alias: str | None
     user_api_key_org_id: str | None
     user_api_key_user_id: str | None
+    user_api_key_user_email: ReadOnly[str | None]
     user_api_key_team_alias: str | None
     spend_logs_metadata: dict | None  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: str | None
@@ -3675,8 +3776,12 @@ class SpendLogsMetadata(TypedDict):
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None
     routing_decision: StandardLoggingRoutingDecision | None
+    kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     internal_call_origin: InternalCallOrigin | None
+    billed_retry_attempt: ReadOnly[NotRequired[bool | None]]
+    upstream_provider: ReadOnly[NotRequired[str | None]]
     litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
+    is_silent_experiment: ReadOnly[NotRequired[bool | None]]
     guardrail_information: list[StandardLoggingGuardrailInformation] | None
     eval_information: Any | None
     status: StandardLoggingPayloadStatus
@@ -3749,6 +3854,16 @@ class ManagementEndpointLoggingPayload(LiteLLMPydanticObjectBase):
     end_time: datetime | None = None
 
 
+def proxy_exception_status_code(message: str, code: str) -> str:
+    # Litellm router.py returns "No healthy deployment available" when there are no deployments available
+    # Should map to 429 errors https://github.com/BerriAI/litellm/issues/2487
+    if "No healthy deployment available" in message or "No deployments available" in message:
+        return "429"
+    if RouterErrors.no_deployments_with_tag_routing.value in message:
+        return "401"
+    return code
+
+
 class ProxyException(Exception):
     # NOTE: DO NOT MODIFY THIS
     # This is used to map exactly to OPENAI Exceptions
@@ -3777,13 +3892,7 @@ class ProxyException(Exception):
                     headers[k] = str(v)
         self.headers = headers or {}
         self.provider_specific_fields = provider_specific_fields
-        # rules for proxyExceptions
-        # Litellm router.py returns "No healthy deployment available" when there are no deployments available
-        # Should map to 429 errors https://github.com/BerriAI/litellm/issues/2487
-        if "No healthy deployment available" in self.message or "No deployments available" in self.message:
-            self.code = "429"
-        elif RouterErrors.no_deployments_with_tag_routing.value in self.message:
-            self.code = "401"
+        self.code = proxy_exception_status_code(self.message, self.code)
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
@@ -4494,6 +4603,7 @@ PassThroughEndpointLoggingResultValues = (
     | StandardPassThroughResponseObject
     | ResponsesAPIResponse
     | TranscriptionResponse
+    | OpenAIDecisionResponse
 )
 
 
@@ -4762,6 +4872,26 @@ class JWTIssuerConfig(LiteLLMBaseModel):
 DEFAULT_JWKS_STALE_TTL: Final = 3600
 
 
+class IdJagRequestingApp(LiteLLMBaseModel):
+    """A requesting application the operator lets redeem an ID-JAG (Identity Assertion
+    Authorization Grant) at the MCP gateway's ``POST /token``. ``client_id`` is the value
+    the identity provider puts in the assertion's ``client_id`` claim and the app sends as
+    the ``client_id`` form field. A ``client_secret`` makes the app a confidential client
+    that must authenticate with it (HTTP Basic or the ``client_secret`` form field); without
+    one the app is a public client."""
+
+    model_config = ConfigDict(frozen=True)
+
+    client_id: str = Field(
+        min_length=1, description="The requesting app's client_id as the identity provider asserts it."
+    )
+    client_secret: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Shared secret the app must present at the gateway's token endpoint. Omit for a public client.",
+    )
+
+
 class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     """
     A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
@@ -4806,6 +4936,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         "mcp_routes",
         "/v1/messages",
         "/v1/messages/count_tokens",
+        "/rag/ingest",
+        "/v1/rag/ingest",
+        "/rag/query",
+        "/v1/rag/query",
     ]
     team_id_default: str | None = Field(
         default=None,
@@ -4941,6 +5075,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     issuers: list[JWTIssuerConfig] | None = Field(
         default=None,
         description="Optional issuer-bound JWT validation rules. When a token's `iss` matches a configured issuer, validation uses that issuer's JWKS, audience, and claim mappings. Tokens with an unlisted `iss` fall back to the global JWT_AUDIENCE/JWT_ISSUER validation path — this is additive routing, not an allow-list.",
+    )
+    id_jag_requesting_apps: tuple[IdJagRequestingApp, ...] | None = Field(
+        default=None,
+        description="Requesting apps allowed to redeem an ID-JAG at the MCP gateway's POST /token with the RFC 7523 jwt-bearer grant. Unset or empty turns that grant off.",
     )
     #########################################################
 
@@ -5171,6 +5309,7 @@ class ToolDiscoveryQueueItem(TypedDict, total=False):
     team_id: str | None  # team that triggered discovery
     key_alias: str | None  # human-readable key alias
     user_agent: str | None  # HTTP User-Agent of the caller
+    call_count: ReadOnly[int]  # invocations folded into this row since the previous flush
 
 
 from litellm.models.managed_files import (  # noqa: E402

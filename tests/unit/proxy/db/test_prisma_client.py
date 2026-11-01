@@ -1,4 +1,5 @@
 import asyncio
+import importlib.resources
 import json
 import os
 import signal
@@ -202,6 +203,19 @@ async def test_recreate_prisma_client_recovers_from_disconnected_client(
 
 
 DB_PUSH_ARGV = ["db", "push", "--accept-data-loss", "--skip-generate"]
+ENVIRONMENT_VARIABLES_REVISION_TRIGGER_ARGV = [
+    "db",
+    "execute",
+    "--schema",
+    "schema.prisma",
+    "--file",
+    str(
+        importlib.resources.files("litellm_proxy_extras")
+        / "migrations"
+        / "20261015120000_add_environment_variables_revision_trigger"
+        / "migration.sql"
+    ),
+]
 
 
 def test_db_push_applies_replica_identity_full_when_requested(monkeypatch, fake_prisma_cli, unset_database_url):
@@ -221,7 +235,7 @@ def test_db_push_applies_replica_identity_full_when_requested(monkeypatch, fake_
 
     assert PrismaManager.setup_database(use_migrate=False) is True
 
-    assert fake_prisma_cli.calls == [DB_PUSH_ARGV]
+    assert fake_prisma_cli.calls == [DB_PUSH_ARGV, ENVIRONMENT_VARIABLES_REVISION_TRIGGER_ARGV]
     assert applied == [True]
 
 
@@ -254,7 +268,7 @@ def test_db_push_proceeds_when_spend_logs_is_not_partitioned(monkeypatch, fake_p
     )
     assert PrismaManager.setup_database(use_migrate=False) is True
 
-    assert fake_prisma_cli.calls == [DB_PUSH_ARGV]
+    assert fake_prisma_cli.calls == [DB_PUSH_ARGV, ENVIRONMENT_VARIABLES_REVISION_TRIGGER_ARGV]
 
 
 def _entra_jwt(expires_in_seconds: int) -> str:
@@ -447,7 +461,7 @@ def test_db_push_timeout_takes_its_process_tree_with_it(fake_prisma_cli, unset_d
     monkeypatch.setenv("FAKE_PRISMA_HANG_FIRST", "1")
 
     assert PrismaManager.setup_database(use_migrate=False) is True
-    assert fake_prisma_cli.calls == [DB_PUSH_ARGV, DB_PUSH_ARGV]
+    assert fake_prisma_cli.calls == [DB_PUSH_ARGV, DB_PUSH_ARGV, ENVIRONMENT_VARIABLES_REVISION_TRIGGER_ARGV]
     assert fake_prisma_cli.grandchild_is_gone(within_seconds=5)
 
 
@@ -572,3 +586,19 @@ async def test_a_query_issued_while_the_last_one_finishes_keeps_the_engine_drain
     await second
     await asyncio.wait_for(drained, timeout=1)
     assert engine.queries_finished == 2
+
+
+def test_migration_dry_run_summary_without_migrations_has_nothing_to_dry_run(unset_database_url):
+    """`prisma db push` applies no migration files, so the dry run reports that instead of connecting."""
+    from litellm.proxy.db.prisma_client import PrismaManager
+
+    assert PrismaManager.migration_dry_run_summary(use_migrate=False) == (
+        True,
+        "The schema is pushed rather than migrated, there is nothing to dry-run.",
+    )
+
+
+def test_migration_dry_run_summary_needs_database_url(unset_database_url):
+    from litellm.proxy.db.prisma_client import PrismaManager
+
+    assert PrismaManager.migration_dry_run_summary(use_migrate=True) == (False, "DATABASE_URL is not set.")

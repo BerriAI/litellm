@@ -17,6 +17,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import _is_api_route_allowed
 from litellm.proxy.auth.auth_checks_organization import user_is_org_admin
+from litellm.proxy.auth.login_utils import PASSWORD_RESET_ALLOWED_ROUTES
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
 
@@ -659,6 +660,41 @@ def test_virtual_key_llm_api_routes_allows_model_info(route):
     )
 
     assert result is True
+
+
+@pytest.mark.parametrize(
+    ("route", "is_llm_route"),
+    [
+        ("/eu_jev/v1/systemone", True),
+        ("/eu_jev/v1/systemone/extra", False),
+        ("/eu_jev/v1/systemone2", False),
+        ("/eu_jev/custom", False),
+    ],
+)
+def test_only_the_built_in_eu_jev_decision_path_is_an_llm_route(route: str, is_llm_route: bool) -> None:
+    assert RouteChecks.is_llm_api_route(route=route) is is_llm_route
+
+
+@pytest.mark.usefixtures("configured_eu_jev_route")
+def test_a_pass_through_configured_at_the_eu_jev_decision_path_is_not_an_llm_route() -> None:
+    assert RouteChecks.is_llm_api_route(route="/eu_jev/v1/systemone") is False
+
+
+@pytest.mark.usefixtures("configured_eu_jev_route_with_trailing_slash")
+@pytest.mark.parametrize("route", ["/eu_jev/v1/systemone", "/eu_jev/v1/systemone/"])
+def test_a_pass_through_configured_at_the_eu_jev_decision_path_with_a_trailing_slash_is_not_an_llm_route(
+    route: str,
+) -> None:
+    assert RouteChecks.is_llm_api_route(route=route) is False
+
+
+@pytest.mark.parametrize("allowed_route", ["llm_api_routes", "llm_api_routes_without_mcp"])
+def test_an_llm_api_key_can_call_the_built_in_eu_jev_decision_route(allowed_route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=[allowed_route])
+
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/eu_jev/v1/systemone", valid_token=valid_token, request=_mock_request("POST")
+    )
 
 
 @pytest.mark.parametrize("route", ["/model/info", "/v1/model/info", "/model_group/info"])
@@ -2471,6 +2507,7 @@ def test_proxy_admin_viewer_can_access_settings_read_endpoints(route):
 ADMIN_VIEWER_REPORTED_GET_ROUTES = [
     "/health/latest",
     "/credentials",
+    "/model/model-pods-1/kubernetes_pods",
     "/v1/mcp/network/client-ip",
     "/claude-code/plugins",
     "/policy/templates",
@@ -3614,6 +3651,59 @@ def test_internal_user_still_blocked_from_another_users_info():
     assert "key not allowed to access this user's info" in str(exc_info.value.detail)
 
 
+def test_internal_user_cannot_access_kubernetes_pod_discovery_route() -> None:
+    route: Final = "/model/model-pods-1/kubernetes_pods"
+    user_obj: Final = LiteLLM_UserTable(
+        user_id="internal_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="internal_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request: Final = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+
+    assert RouteChecks.is_management_route(route=route)
+    with pytest.raises(Exception, match="Only proxy admin can be used"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
+def test_proxy_admin_viewer_can_access_kubernetes_pod_discovery_route() -> None:
+    route: Final = "/model/model-pods-1/kubernetes_pods"
+    user_obj: Final = LiteLLM_UserTable(
+        user_id="admin_viewer",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="admin_viewer",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request: Final = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+
+    assert RouteChecks.is_management_route(route=route)
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
 @pytest.mark.parametrize(
     "route",
     [
@@ -3687,7 +3777,7 @@ def test_team_spend_by_user_reachable_by_non_admin(user_role):
         return "allowed"
 
     assert outcome("/team/spend/by_user") == "allowed"
-    assert outcome("/team/spend/by_key").startswith("denied: Only proxy admin")
+    assert outcome("/team/spend/by_key").startswith("denied: Authentication Error, Only proxy admin")
 
 
 def test_user_daily_activity_aggregated_not_covered_by_prefix_match():
@@ -3835,6 +3925,7 @@ AGENT_INFERENCE_ROUTES = [
     "/a2a/abc-123",
     "/a2a/abc-123/message/send",
     "/a2a/abc-123/message/stream",
+    "/v1/a2a/abc-123/message/stream",
     "/a2a/abc-123/.well-known/agent-card.json",
 ]
 
@@ -3992,18 +4083,36 @@ def _password_reset_session_token() -> UserAPIKeyAuth:
     `password_reset_required`."""
     return UserAPIKeyAuth(
         user_id="flagged_user",
-        allowed_routes=["/user/password/change"],
+        allowed_routes=list(PASSWORD_RESET_ALLOWED_ROUTES),
         metadata={"password_reset_required": True},
     )
 
 
-def test_password_reset_session_can_reach_change_password():
+@pytest.mark.parametrize("route", ["/user/password/change", "/management/v1/users/me"])
+def test_password_reset_session_can_reach_change_password_and_its_own_identity(route):
     result = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/user/password/change",
+        route=route,
         valid_token=_password_reset_session_token(),
     )
 
     assert result is True
+
+
+@pytest.mark.parametrize(
+    "role",
+    [LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value],
+)
+def test_non_admin_user_can_read_its_own_identity(role):
+    allowed = RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="test_user", user_role=role),
+        _user_role=role,
+        route="/management/v1/users/me",
+        request=MagicMock(spec=Request, query_params={}),
+        valid_token=UserAPIKeyAuth(user_id="test_user", user_role=role),
+        request_data={},
+    )
+
+    assert allowed is None
 
 
 @pytest.mark.parametrize(
@@ -4780,6 +4889,51 @@ def test_internal_user_credential_connection_route_collisions_denied(method: str
 def test_view_only_user_denied_credential_connection_routes(method: str, route: str) -> None:
     with pytest.raises(Exception, match="Only proxy admin"):
         _internal_user_check(route, method, role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+
+
+_SELF_SCOPED_CREDENTIAL_WRITES = (
+    ("POST", "/credentials/x/user_connection/start"),
+    ("POST", "/credentials/x/user_connection/poll"),
+    ("DELETE", "/credentials/x/user_connection"),
+    ("POST", "/v1/mcp/server/oauth/srv-1/register"),
+    ("POST", "/v1/mcp/server/srv-1/oauth-user-credential"),
+    ("DELETE", "/v1/mcp/server/srv-1/oauth-user-credential"),
+    ("POST", "/v1/mcp/server/srv-1/user-credential"),
+    ("DELETE", "/v1/mcp/server/srv-1/user-credential"),
+    ("POST", "/v1/mcp/server/srv-1/user-env-vars"),
+    ("DELETE", "/v1/mcp/server/srv-1/user-env-vars"),
+)
+
+
+@pytest.mark.parametrize(("method", "route"), _SELF_SCOPED_CREDENTIAL_WRITES)
+def test_proxy_admin_viewer_allowed_self_scoped_credential_writes(method: str, route: str) -> None:
+    """Regression for LIT-9320: these handlers only write the caller's own credential
+    row, so a read-only admin can use them like /user/password/change."""
+    assert _internal_user_check(route, method, role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY) is None
+
+
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("POST", "/v1/mcp/server"),
+        ("PUT", "/v1/mcp/server"),
+        ("DELETE", "/v1/mcp/server/srv-1"),
+        ("POST", "/v1/mcp/server/import"),
+        ("POST", "/v1/mcp/server/srv-1/pin"),
+        ("PATCH", "/v1/mcp/server/srv-1/oauth-user-credential"),
+        ("PUT", "/v1/mcp/server/srv-1/user-credential"),
+        ("PATCH", "/v1/mcp/server/srv-1/user-env-vars"),
+        ("POST", "/v1/mcp/server/srv-1/user-credential/rotate"),
+        ("POST", "/v1/mcp/server/oauth/srv-1/token"),
+        ("DELETE", "/v1/mcp/server/oauth/srv-1/register"),
+        ("PATCH", "/credentials/x/user_connection"),
+        ("DELETE", "/credentials/user_connections"),
+        ("POST", "/key/generate"),
+    ],
+)
+def test_proxy_admin_viewer_denied_mcp_admin_and_sibling_writes(method: str, route: str) -> None:
+    with pytest.raises(HTTPException, match="user not allowed to access this route"):
+        _internal_user_check(route, method, role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
 
 
 def test_user_connection_route_registration_order_wins_over_generic_credential_routes() -> None:

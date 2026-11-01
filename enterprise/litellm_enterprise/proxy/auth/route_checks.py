@@ -2,6 +2,8 @@ import os
 
 from fastapi import HTTPException, status
 
+from litellm.proxy._types import MODEL_LIST_ROUTES
+
 
 class EnterpriseRouteChecks:
     @staticmethod
@@ -43,7 +45,7 @@ class EnterpriseRouteChecks:
 
     # Routes that should remain accessible even when LLM API endpoints are disabled.
     # These are read-only model listing routes needed by the Admin UI.
-    LLM_API_EXEMPT_ROUTES = ["/models", "/v1/models"]
+    LLM_API_EXEMPT_ROUTES = MODEL_LIST_ROUTES
 
     @staticmethod
     def should_call_route(route: str):

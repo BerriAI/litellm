@@ -1,24 +1,33 @@
+from dataclasses import dataclass
+import asyncio
 import json
+import logging
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler import (
     OpenAIPassthroughLoggingHandler,
     count_relayed_prompt_tokens,
 )
+from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    EndpointType,
     PassthroughStandardLoggingPayload,
 )
 
@@ -1837,10 +1846,7 @@ class TestOpenAIPassthroughResponsesStreamingSpendLog:
 
     def _expected_spend(self) -> float:
         rates = litellm.model_cost[self.MODEL_MAP_KEY]
-        return (
-            self.INPUT_TOKENS * rates["input_cost_per_token"]
-            + self.OUTPUT_TOKENS * rates["output_cost_per_token"]
-        )
+        return self.INPUT_TOKENS * rates["input_cost_per_token"] + self.OUTPUT_TOKENS * rates["output_cost_per_token"]
 
     def _responses_stream_chunks(self) -> List[str]:
         """Usage arrives only on the terminal `response.completed` event, nested under
@@ -1953,6 +1959,28 @@ class TestOpenAIPassthroughResponsesStreamingSpendLog:
         row_metadata = json.loads(spend_log_row["metadata"])
         assert row_metadata["model_map_information"]["model_map_key"] == self.MODEL_MAP_KEY
 
+    def test_resumed_responses_stream_spend_log_is_labeled_with_the_streamed_model(self, local_model_cost_map):
+        result: Final = OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
+            litellm_logging_obj=self._logging_obj(),
+            passthrough_success_handler_obj=None,
+            url_route=f"https://api.openai.com/v1/responses/{self.RESPONSE_ID}?stream=true",
+            request_body={},
+            endpoint_type=None,
+            start_time=self.start_time,
+            all_chunks=self._responses_stream_chunks(),
+            end_time=self.end_time,
+        )
+
+        spend_log_row: Final = get_logging_payload(
+            kwargs=result["kwargs"],
+            response_obj=result["result"],
+            start_time=self.start_time,
+            end_time=self.end_time,
+        )
+
+        assert spend_log_row["model"] == self.MODEL_MAP_KEY
+        assert spend_log_row["spend"] == pytest.approx(self._expected_spend())
+
 
 class TestOpenAIPassthroughEmbeddingsSpendLog:
     """An OpenAI-passthrough `/v1/embeddings` call must write a priced spend log row
@@ -2041,6 +2069,595 @@ class TestOpenAIPassthroughEmbeddingsSpendLog:
         assert spend_log_row["model"] == self.MODEL
         assert spend_log_row["custom_llm_provider"] == "openai"
         assert spend_log_row["request_id"] == self.CALL_ID
+
+
+RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
+STORED_RESPONSE_ID: Final = "resp_080b10ff5d740c69006ad3de732e5087"
+DISPATCH_TIME: Final = datetime(2026, 10, 17, 13, 47, 3)
+RESPONSES_USAGE: Final = {
+    "input_tokens": 11,
+    "input_tokens_details": {"cached_tokens": 0},
+    "output_tokens": 5,
+    "output_tokens_details": {"reasoning_tokens": 0},
+    "total_tokens": 16,
+}
+CREATE_REQUEST: Final = {"model": "gpt-5.4-mini", "input": "Say hi in one word"}
+COMPACT_REQUEST: Final = {"model": "gpt-5.4-mini", "input": "Remember the number 42."}
+COMPACTION: Final = {
+    "id": STORED_RESPONSE_ID,
+    "object": "response.compaction",
+    "created_at": 1792270025,
+    "output": [{"id": "cmp_082492f9", "type": "compaction", "encrypted_content": "gAAAA"}],
+    "usage": RESPONSES_USAGE,
+}
+AGENTS_SESSIONS_URL: Final = "https://api.openai.com/v1/agents/sessions"
+ASSISTANT_MESSAGE: Final = {
+    "id": "msg_080b10ff5d740c69",
+    "type": "message",
+    "status": "completed",
+    "role": "assistant",
+    "content": [{"type": "output_text", "text": "Hi", "annotations": []}],
+}
+
+
+def _stored_response(status: str, background: bool, usage: Mapping[str, object] | None) -> dict[str, object]:
+    return {
+        "id": STORED_RESPONSE_ID,
+        "object": "response",
+        "created_at": 1792269939,
+        "status": status,
+        "background": background,
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": {},
+        "model": "gpt-5.4-mini-2026-03-17",
+        "output": [ASSISTANT_MESSAGE] if usage else [],
+        "parallel_tool_calls": True,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 0.98,
+        "usage": usage,
+    }
+
+
+def _agent_session(agent_model: str | None) -> dict[str, object]:
+    agent: Final = (
+        {}
+        if agent_model is None
+        else {
+            "agent": {"id": "agent_6a0b0f8e", "model": agent_model, "name": None, "service_tier": "auto", "tools": []}
+        }
+    )
+    return {
+        "id": "sess_6a0b0f8e2c1d4e5f",
+        "object": "agent.session",
+        "created_at": 1792270025,
+        "last_active_at": 1792270025,
+        "status": "in_progress",
+        "metadata": {},
+        "required_actions": [],
+        "vault_ids": [],
+        "usage": None,
+        **agent,
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class _LoggedCall:
+    spend_row: SpendLogsPayload
+    callback_response_id: str
+
+
+class _CallbackPayloadId(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+
+
+class _SpendRowRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.call: Final[asyncio.Future[_LoggedCall]] = asyncio.get_running_loop().create_future()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.call.set_result(
+            _LoggedCall(
+                spend_row=get_logging_payload(
+                    kwargs=kwargs, response_obj=response_obj, start_time=start_time, end_time=end_time
+                ),
+                callback_response_id=_CallbackPayloadId.model_validate(kwargs.get("standard_logging_object")).id,
+            )
+        )
+
+
+class TestOpenAIPassthroughResponsesSubRouteBilling:
+    def _dispatch(
+        self,
+        method: str,
+        sub_route: str,
+        request_body: dict[str, object],
+        response_body: dict[str, object],
+        base_url: str = RESPONSES_URL,
+    ):
+        url_route: Final = f"{base_url}{sub_route}"
+        logging_obj: Final = LiteLLMLoggingObj(
+            model="gpt-5.4-mini",
+            messages=[],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=DISPATCH_TIME,
+            litellm_call_id="6c1f3a52-93d4-4b1e-9f0e-6f2f4f6b9a10",
+            function_id="1234",
+        )
+        return PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+            httpx_response=httpx.Response(200, json=response_body, request=httpx.Request(method, url_route)),
+            response_body=response_body,
+            request_body=request_body,
+            logging_obj=logging_obj,
+            url_route=url_route,
+            result="",
+            start_time=DISPATCH_TIME,
+            end_time=DISPATCH_TIME,
+            cache_hit=False,
+            custom_llm_provider="openai",
+            litellm_params={},
+            call_type="pass_through_endpoint",
+        )
+
+    @pytest.mark.parametrize(
+        ("method", "sub_route", "request_body", "response_body"),
+        [
+            pytest.param(
+                "POST", "", CREATE_REQUEST, _stored_response("completed", False, RESPONSES_USAGE), id="create"
+            ),
+            pytest.param(
+                "POST",
+                "/",
+                CREATE_REQUEST,
+                _stored_response("completed", False, RESPONSES_USAGE),
+                id="create_trailing_slash",
+            ),
+            pytest.param("POST", "/compact", COMPACT_REQUEST, COMPACTION, id="compact"),
+            pytest.param("POST", "/%2563ompact", COMPACT_REQUEST, COMPACTION, id="percent_encoded_compact"),
+            pytest.param(
+                "GET",
+                f"/{STORED_RESPONSE_ID}",
+                {},
+                _stored_response("completed", True, RESPONSES_USAGE),
+                id="background_retrieve_completed",
+            ),
+            pytest.param(
+                "POST",
+                f"/{STORED_RESPONSE_ID}/cancel",
+                {},
+                _stored_response("cancelled", True, RESPONSES_USAGE),
+                id="background_cancel",
+            ),
+        ],
+    )
+    def test_billed_responses_call_records_cost(
+        self,
+        local_model_cost_map,
+        method: str,
+        sub_route: str,
+        request_body: dict[str, object],
+        response_body: dict[str, object],
+    ):
+        dispatched: Final = self._dispatch(method, sub_route, request_body, response_body)
+
+        assert dispatched["standard_logging_response_object"] is not None
+        assert dispatched["kwargs"]["response_cost"] > 0
+
+    @pytest.mark.parametrize(
+        ("method", "sub_route", "request_body", "response_body"),
+        [
+            pytest.param(
+                "POST",
+                "/input_tokens",
+                {"model": "gpt-5.4-mini", "input": "hi"},
+                {"object": "response.input_tokens", "input_tokens": 7},
+                id="input_tokens",
+            ),
+            pytest.param(
+                "GET",
+                f"/{STORED_RESPONSE_ID}",
+                {},
+                _stored_response("completed", False, RESPONSES_USAGE),
+                id="retrieve",
+            ),
+            pytest.param(
+                "GET",
+                f"/{STORED_RESPONSE_ID}/input_items",
+                {},
+                {
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "msg_074176e3",
+                            "type": "message",
+                            "status": "completed",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "Say hi in one word"}],
+                        }
+                    ],
+                    "first_id": "msg_074176e3",
+                    "last_id": "msg_074176e3",
+                    "has_more": False,
+                },
+                id="input_items",
+            ),
+            pytest.param(
+                "DELETE",
+                f"/{STORED_RESPONSE_ID}",
+                {},
+                {"id": STORED_RESPONSE_ID, "object": "response.deleted", "deleted": True},
+                id="delete",
+            ),
+            pytest.param(
+                "POST",
+                f"/{STORED_RESPONSE_ID}/cancel",
+                {},
+                _stored_response("cancelled", True, None),
+                id="background_cancel_before_any_output",
+            ),
+        ],
+    )
+    def test_unbilled_responses_sub_route_records_no_cost_and_no_error(
+        self,
+        local_model_cost_map,
+        caplog: pytest.LogCaptureFixture,
+        method: str,
+        sub_route: str,
+        request_body: dict[str, object],
+        response_body: dict[str, object],
+    ):
+        with caplog.at_level(logging.WARNING):
+            dispatched: Final = self._dispatch(method, sub_route, request_body, response_body)
+
+        assert not dispatched["kwargs"].get("response_cost")
+        assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
+
+    @staticmethod
+    def _recorded_logging_obj(recorder: _SpendRowRecorder, litellm_call_id: str, stream: bool) -> LiteLLMLoggingObj:
+        logging_obj: Final = LiteLLMLoggingObj(
+            model="unknown",
+            messages=[],
+            stream=stream,
+            call_type="pass_through_endpoint",
+            start_time=DISPATCH_TIME,
+            litellm_call_id=litellm_call_id,
+            function_id="1234",
+            dynamic_async_success_callbacks=[recorder],
+        )
+        logging_obj.update_environment_variables(
+            model="unknown", user="unknown", optional_params={}, litellm_params={}, call_type="pass_through_endpoint"
+        )
+        return logging_obj
+
+    async def _logged_stream(
+        self, url_route: str, request_body: dict[str, object], sse_events: tuple[bytes, ...], litellm_call_id: str
+    ) -> _LoggedCall:
+        recorder: Final = _SpendRowRecorder()
+        await PassThroughStreamingHandler.route_streaming_logging_to_handler(
+            litellm_logging_obj=self._recorded_logging_obj(recorder, litellm_call_id, stream=True),
+            passthrough_success_handler_obj=PassThroughEndpointLogging(),
+            url_route=url_route,
+            request_body=request_body,
+            endpoint_type=EndpointType.OPENAI,
+            start_time=DISPATCH_TIME,
+            raw_bytes=sse_events,
+            end_time=DISPATCH_TIME,
+        )
+        return await asyncio.wait_for(recorder.call, timeout=5)
+
+    async def _logged_call(
+        self,
+        method: str,
+        sub_route: str,
+        request_body: dict[str, object],
+        response_body: dict[str, object],
+        litellm_call_id: str,
+        base_url: str = RESPONSES_URL,
+    ) -> _LoggedCall:
+        url_route: Final = f"{base_url}{sub_route}"
+        recorder: Final = _SpendRowRecorder()
+        logging_obj: Final = self._recorded_logging_obj(recorder, litellm_call_id, stream=False)
+
+        await PassThroughEndpointLogging().pass_through_async_success_handler(
+            httpx_response=httpx.Response(200, json=response_body, request=httpx.Request(method, url_route)),
+            response_body=response_body,
+            logging_obj=logging_obj,
+            url_route=url_route,
+            result="",
+            start_time=DISPATCH_TIME,
+            end_time=DISPATCH_TIME,
+            cache_hit=False,
+            request_body=request_body,
+            passthrough_logging_payload=PassthroughStandardLoggingPayload(
+                url=url_route, request_body=request_body, request_method=method
+            ),
+            custom_llm_provider="openai",
+        )
+        return await asyncio.wait_for(recorder.call, timeout=5)
+
+    @pytest.mark.asyncio
+    async def test_unbilled_retrieve_spend_log_keeps_the_response_model(self, local_model_cost_map):
+        response_body: Final = _stored_response("completed", False, RESPONSES_USAGE)
+
+        spend_log_row: Final = (
+            await self._logged_call(
+                "GET", f"/{STORED_RESPONSE_ID}", {}, response_body, "0f6f3d2e-6a51-4c4e-9a43-6f1b0d1e9c21"
+            )
+        ).spend_row
+
+        assert spend_log_row["model"] == response_body["model"]
+        assert not spend_log_row["spend"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("request_agent", "response_agent_model", "logged_model"),
+        [
+            pytest.param({"agent_id": "agent_6a0b0f8e"}, "gpt-5.4-mini", "gpt-5.4-mini", id="saved_agent"),
+            pytest.param({"agent": {"model": "gpt-5.4-mini"}}, None, "gpt-5.4-mini", id="request_agent_only"),
+            pytest.param({"agent": {"model": "gpt-5.4"}}, "gpt-5.4-mini", "gpt-5.4-mini", id="response_agent_wins"),
+        ],
+    )
+    async def test_unbilled_agents_session_spend_log_names_the_agent_model(
+        self, request_agent: dict[str, object], response_agent_model: str | None, logged_model: str
+    ):
+        spend_log_row: Final = (
+            await self._logged_call(
+                "POST",
+                "",
+                {"environment": {"type": "none"}, "input": "Say hi in one word", **request_agent},
+                _agent_session(response_agent_model),
+                "2f7c9e1a-4b3d-4a6e-8c5f-1d0e9b7a3c62",
+                AGENTS_SESSIONS_URL,
+            )
+        ).spend_row
+
+        assert spend_log_row["model"] == logged_model
+        assert not spend_log_row["spend"]
+
+    @pytest.mark.asyncio
+    async def test_unbilled_saved_agent_spend_log_names_the_agent_model(self):
+        saved_agent: Final = {"id": "agent_6a0b0f8e", "object": "agent", "model": "gpt-5.4-mini", "tools": []}
+
+        spend_log_row: Final = (
+            await self._logged_call(
+                "POST",
+                "",
+                {"model": "gpt-5.4-mini", "instructions": "Answer in one word"},
+                saved_agent,
+                "8d2e4f6a-1b3c-4d5e-9f7a-2c4e6a8b0d13",
+                "https://api.openai.com/v1/agents",
+            )
+        ).spend_row
+
+        assert spend_log_row["model"] == saved_agent["model"]
+        assert not spend_log_row["spend"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("request_body", "session_agent_model", "logged_model"),
+        [
+            pytest.param({}, "gpt-5.4-mini", "gpt-5.4-mini", id="session_event_names_the_model"),
+            pytest.param({"agent": {"model": "gpt-5.4"}}, None, "gpt-5.4", id="request_agent_fallback"),
+        ],
+    )
+    async def test_streamed_agents_session_spend_log_names_the_agent_model(
+        self, request_body: dict[str, object], session_agent_model: str | None, logged_model: str
+    ):
+        session_event: Final = {"type": "agent.session.in_progress", "session": _agent_session(session_agent_model)}
+        sse_events: Final = (
+            f"event: agent.session.in_progress\ndata: {json.dumps(session_event)}\n\n".encode(),
+            b'event: agent.turn.completed\ndata: {"type": "agent.turn.completed", "usage": null}\n\n',
+        )
+
+        spend_log_row: Final = (
+            await self._logged_stream(
+                f"{AGENTS_SESSIONS_URL}/sess_6a0b0f8e2c1d4e5f/events",
+                request_body,
+                sse_events,
+                "5b7d9f1a-3c5e-4a7b-8d9f-0e2a4c6b8d35",
+            )
+        ).spend_row
+
+        assert spend_log_row["model"] == logged_model
+        assert not spend_log_row["spend"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("method", "sub_route", "response_body"),
+        [
+            pytest.param(
+                "GET",
+                f"/{STORED_RESPONSE_ID}",
+                _stored_response("completed", True, RESPONSES_USAGE),
+                id="background_retrieve_completed",
+            ),
+            pytest.param(
+                "POST",
+                f"/{STORED_RESPONSE_ID}/cancel",
+                _stored_response("cancelled", True, RESPONSES_USAGE),
+                id="background_cancel",
+            ),
+        ],
+    )
+    async def test_billed_background_read_spend_log_survives_next_to_its_create_and_poll_rows(
+        self, local_model_cost_map, method: str, sub_route: str, response_body: dict[str, object]
+    ):
+        create: Final = await self._logged_call(
+            "POST",
+            "",
+            {**CREATE_REQUEST, "background": True},
+            _stored_response("queued", True, None),
+            "3a4f0c1e-2b7d-4c55-8e0e-0d7a51d9f6a1",
+        )
+        poll: Final = await self._logged_call(
+            "GET",
+            f"/{STORED_RESPONSE_ID}",
+            {},
+            _stored_response("in_progress", True, None),
+            "5d8c2f71-0e4b-4a9d-b3c6-7f1e2a9d0c44",
+        )
+        read: Final = await self._logged_call(
+            method, sub_route, {}, response_body, "9b2e6d40-71c3-4f8a-a5d2-4e3c8f0b7d12"
+        )
+
+        assert read.spend_row["request_id"] not in {create.spend_row["request_id"], poll.spend_row["request_id"]}
+        assert read.spend_row["request_id"].startswith(STORED_RESPONSE_ID)
+        assert read.spend_row["spend"] > 0
+        assert not poll.spend_row["spend"]
+        assert read.callback_response_id == STORED_RESPONSE_ID
+
+    @pytest.mark.asyncio
+    async def test_streamed_background_create_and_its_finished_read_share_one_spend_row(self, local_model_cost_map):
+        finished: Final = _stored_response("completed", True, RESPONSES_USAGE)
+        stream_logging_obj: Final = LiteLLMLoggingObj(
+            model="gpt-5.4-mini",
+            messages=[],
+            stream=True,
+            call_type="pass_through_endpoint",
+            start_time=DISPATCH_TIME,
+            litellm_call_id="7e3b9a14-5c2d-4f60-8d1a-2b6c0e9f4a37",
+            function_id="1234",
+        )
+        stream_logging_obj.model_call_details["custom_llm_provider"] = "openai"
+        streamed_create: Final = OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
+            litellm_logging_obj=stream_logging_obj,
+            passthrough_success_handler_obj=None,
+            url_route=RESPONSES_URL,
+            request_body={**CREATE_REQUEST, "background": True, "stream": True},
+            endpoint_type=None,
+            start_time=DISPATCH_TIME,
+            all_chunks=[
+                f"data: {json.dumps({'type': 'response.completed', 'sequence_number': 1, 'response': finished})}",
+                "data: [DONE]",
+            ],
+            end_time=DISPATCH_TIME,
+        )
+        create_row: Final = get_logging_payload(
+            kwargs=streamed_create["kwargs"],
+            response_obj=streamed_create["result"],
+            start_time=DISPATCH_TIME,
+            end_time=DISPATCH_TIME,
+        )
+
+        read: Final = await self._logged_call(
+            "GET", f"/{STORED_RESPONSE_ID}", {}, finished, "1c8d5e2a-9f47-4b3e-a6d0-5e7f2c1b8a93"
+        )
+
+        assert create_row["spend"] > 0
+        assert read.spend_row["request_id"] == create_row["request_id"]
+        assert read.callback_response_id == STORED_RESPONSE_ID
+
+    @pytest.mark.parametrize(
+        "base_url",
+        [
+            pytest.param("https://my-resource.openai.azure.com/openai/v1/responses", id="azure_openai_v1"),
+            pytest.param("https://my-resource.cognitiveservices.azure.com/openai/responses", id="azure_openai_native"),
+        ],
+    )
+    def test_azure_responses_sub_routes_bill_like_openai(self, local_model_cost_map, base_url: str):
+        retrieve: Final = self._dispatch(
+            "GET", f"/{STORED_RESPONSE_ID}", {}, _stored_response("completed", False, RESPONSES_USAGE), base_url
+        )
+        input_tokens: Final = self._dispatch(
+            "POST",
+            "/input_tokens",
+            {"model": "gpt-5.4-mini", "input": "hi"},
+            {"object": "response.input_tokens", "input_tokens": 7},
+            base_url,
+        )
+        background_retrieve: Final = self._dispatch(
+            "GET", f"/{STORED_RESPONSE_ID}", {}, _stored_response("completed", True, RESPONSES_USAGE), base_url
+        )
+        compact: Final = self._dispatch("POST", "/compact", COMPACT_REQUEST, COMPACTION, base_url)
+
+        assert not retrieve["kwargs"].get("response_cost")
+        assert not input_tokens["kwargs"].get("response_cost")
+        assert background_retrieve["kwargs"]["response_cost"] > 0
+        assert compact["kwargs"]["response_cost"] > 0
+
+
+DECISIONS_URL: Final = "https://api.openai.com/v1/decisions"
+DECISIONS_MODEL: Final = "gpt-6-luna"
+DECISIONS_INPUT_TOKENS: Final = 1000
+DECISIONS_OUTPUT_TOKENS: Final = 7
+DECISIONS_REQUEST: Final = {
+    "input": "The package arrived crushed and the screen is cracked.",
+    "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is the product defective?"}],
+}
+DECISION: Final = {
+    "model": DECISIONS_MODEL,
+    "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.97}],
+    "usage": {
+        "input_tokens": DECISIONS_INPUT_TOKENS,
+        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+        "output_tokens": DECISIONS_OUTPUT_TOKENS,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": DECISIONS_INPUT_TOKENS + DECISIONS_OUTPUT_TOKENS,
+    },
+}
+
+
+class TestOpenAIPassthroughDecisionsSpendLog:
+    @staticmethod
+    async def _spend_row(method: str, url_route: str, request_body: dict[str, object]) -> SpendLogsPayload:
+        logged: Final = await TestOpenAIPassthroughResponsesSubRouteBilling()._logged_call(
+            method, "", request_body, DECISION, "4e9b2c71-8a3d-4f5e-b6c0-1d2e3f4a5b6c", url_route
+        )
+        return logged.spend_row
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("url_route", "requested_model"),
+        [
+            pytest.param(DECISIONS_URL, DECISIONS_MODEL, id="openai"),
+            pytest.param(f"{DECISIONS_URL}/", DECISIONS_MODEL, id="trailing_slash"),
+            pytest.param(DECISIONS_URL, "luna-prod-alias", id="unpriced_alias_billed_as_served_model"),
+        ],
+    )
+    async def test_decisions_passthrough_spend_log_is_priced_like_native_decisions(
+        self, local_model_cost_map, url_route: str, requested_model: str
+    ):
+        decisions_rates: Final = litellm.model_cost[DECISIONS_MODEL]
+
+        spend_log_row: Final = await self._spend_row(
+            "POST", url_route, {**DECISIONS_REQUEST, "model": requested_model}
+        )
+
+        assert spend_log_row["prompt_tokens"] == DECISIONS_INPUT_TOKENS
+        assert spend_log_row["completion_tokens"] == DECISIONS_OUTPUT_TOKENS
+        assert spend_log_row["spend"] == pytest.approx(
+            DECISIONS_INPUT_TOKENS * decisions_rates["input_cost_per_token_decisions"]
+            + DECISIONS_OUTPUT_TOKENS * decisions_rates["output_cost_per_token_decisions"]
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("method", "url_route"),
+        [
+            pytest.param("GET", DECISIONS_URL, id="list"),
+            pytest.param("GET", f"{DECISIONS_URL}/dec_6a0b0f8e", id="retrieve"),
+            pytest.param("POST", f"{DECISIONS_URL}/dec_6a0b0f8e/cancel", id="sub_route"),
+        ],
+    )
+    async def test_decisions_reads_and_sub_routes_are_not_billed(
+        self, local_model_cost_map, caplog: pytest.LogCaptureFixture, method: str, url_route: str
+    ):
+        with caplog.at_level(logging.WARNING):
+            spend_log_row: Final = await self._spend_row(
+                method, url_route, {**DECISIONS_REQUEST, "model": DECISIONS_MODEL}
+            )
+
+        assert not spend_log_row["spend"]
+        assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
 
 
 if __name__ == "__main__":

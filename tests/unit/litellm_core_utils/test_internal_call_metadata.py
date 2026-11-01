@@ -181,6 +181,20 @@ class TestNonInferenceCallBilling:
         assert is_unbilled_non_inference_call_from_params("aresponses", {}, self.BACKGROUND) is False
         assert is_unbilled_non_inference_call_from_params("acompletion", {"metadata": self.MANAGED_READ}, None) is False
 
+    def test_a_streamed_read_prices_like_a_plain_read_of_the_same_response(self):
+        from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
+
+        for stored in (self.BACKGROUND, self.FOREGROUND):
+            finished = ResponsesAPIResponse(**{**stored, "created_at": 1, "output": []})
+            completed_event = ResponseCompletedEvent(type="response.completed", response=finished)
+            for metadata in (None, self.MANAGED_READ, self.STATUS_POLL):
+                plain_read = is_unbilled_non_inference_call("aget_responses", metadata, finished)
+                assert is_unbilled_non_inference_call("aget_responses", metadata, completed_event) is plain_read
+                assert (
+                    is_unbilled_non_inference_call("aget_responses", metadata, completed_event.model_dump())
+                    is plain_read
+                )
+
     def test_a_tracked_streamed_background_create_is_free_in_every_shape_its_stream_logs(self):
         from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
 

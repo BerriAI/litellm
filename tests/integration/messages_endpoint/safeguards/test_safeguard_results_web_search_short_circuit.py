@@ -3,7 +3,7 @@ still receives an ``available`` result with no tool uses to judge."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 
 import pytest
@@ -16,6 +16,7 @@ from integration._support.safeguards_rig import (
     auto_mode_body,
     available,
     json_body,
+    deployment,
     nonce,
     safeguards_rig,
     sse_events,
@@ -26,11 +27,16 @@ from pydantic import JsonValue
 pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 240)
 
 WEB_SEARCH_TOOLS: Final[list[JsonValue]] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}]
+DATABRICKS_CLAUDE_MODEL: Final = "safeguards-databricks-claude"
+SEARCHING_MODELS: Final = (CHAT_MODEL, DATABRICKS_CLAUDE_MODEL)
 
 
 LITELLM_SETTINGS: Final[Mapping[str, JsonValue]] = {
     "callbacks": ["websearch_interception"],
-    "websearch_interception_params": {"enabled_providers": ["fireworks_ai"], "search_tool_name": "tavily-search"},
+    "websearch_interception_params": {
+        "enabled_providers": ["fireworks_ai", "databricks"],
+        "search_tool_name": "tavily-search",
+    },
 }
 
 
@@ -46,10 +52,20 @@ def search_tools(wire_url: str) -> Mapping[str, JsonValue]:
     return {"search_tools": [dict(tavily)]}
 
 
+def databricks_claude(wire_url: str) -> Sequence[Mapping[str, JsonValue]]:
+    return (
+        deployment(
+            DATABRICKS_CLAUDE_MODEL, "databricks/databricks-claude-sonnet-4-6", f"{wire_url}/dbx/serving-endpoints"
+        ),
+    )
+
+
 @pytest.fixture(scope="module")
 def searching(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     directory: Final = tmp_path_factory.mktemp("web-search")
-    with safeguards_rig(directory, litellm_settings=LITELLM_SETTINGS, top_level=search_tools) as rig:
+    with safeguards_rig(
+        directory, litellm_settings=LITELLM_SETTINGS, top_level=search_tools, extra_models=databricks_claude
+    ) as rig:
         yield rig
 
 
@@ -72,20 +88,22 @@ def assert_one_search_and_nothing_else(rig: Rig, request_nonce: str) -> None:
     assert received[0].headers.get("authorization") == "Bearer synthetic-tavily-key", received[0].headers
 
 
-def test_short_circuited_search_is_available_with_no_tool_uses(searching: Rig) -> None:
+@pytest.mark.parametrize("model", SEARCHING_MODELS)
+def test_short_circuited_search_is_available_with_no_tool_uses(searching: Rig, model: str) -> None:
     request_nonce: Final = nonce()
     body: Final = json_body(
-        searching.post(auto_mode_body(CHAT_MODEL, request_nonce, tools=WEB_SEARCH_TOOLS, prompt="search the web for"))
+        searching.post(auto_mode_body(model, request_nonce, tools=WEB_SEARCH_TOOLS, prompt="search the web for"))
     )
     assert request_nonce in search_text(body["content"]), body
     assert body["safeguard_results"] == available({}), body
     assert_one_search_and_nothing_else(searching, request_nonce)
 
 
-def test_short_circuited_search_stream_is_available_with_no_tool_uses(searching: Rig) -> None:
+@pytest.mark.parametrize("model", SEARCHING_MODELS)
+def test_short_circuited_search_stream_is_available_with_no_tool_uses(searching: Rig, model: str) -> None:
     request_nonce: Final = nonce()
     status, raw = searching.stream(
-        auto_mode_body(CHAT_MODEL, request_nonce, tools=WEB_SEARCH_TOOLS, prompt="search the web for")
+        auto_mode_body(model, request_nonce, tools=WEB_SEARCH_TOOLS, prompt="search the web for")
     )
     assert status == 200, raw
     assert request_nonce in streamed_text(raw), raw

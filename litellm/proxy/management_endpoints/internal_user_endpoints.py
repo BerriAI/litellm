@@ -13,6 +13,7 @@ These are members of a Team on LiteLLM
 """
 
 import asyncio
+import contextlib
 import json
 import traceback
 from collections.abc import Awaitable, Mapping, Sequence
@@ -22,7 +23,7 @@ from typing import Any, Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -46,6 +47,7 @@ from litellm.proxy.auth.password_policy import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     object_permission_cache_key,
@@ -121,6 +123,20 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
 _USER_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AdminTeamAndKeyRows(TypedDict):
+    keys: ReadOnly[Sequence[object] | None]
+    teams: ReadOnly[Sequence[object] | None]
+
+
+_ADMIN_TEAM_AND_KEY_ROWS_ADAPTER: Final = TypeAdapter(
+    list[_AdminTeamAndKeyRows], config=ConfigDict(hide_input_in_errors=True)
+)
+_ADMIN_KEY_ROW_ADAPTER: Final = TypeAdapter(
+    dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 def _user_table(
@@ -425,33 +441,28 @@ async def add_new_user_to_default_team(
     user_id: str,
     user_email: str | None,
     user_api_key_dict: UserAPIKeyAuth,
-    teams: list[str] | list[NewUserRequestTeam],
+    teams: Sequence[str | NewUserRequestTeam],
     prisma_client: "PrismaClient",
 ):
-    tasks: Final[list[Awaitable[object]]] = []
-    for team in teams:
-        user_role: Literal["user", "admin"] = "user"
-        max_budget_in_team: float | None = None
-        if isinstance(team, str):
-            team_id = team
-        elif isinstance(team, NewUserRequestTeam):
-            team_id = team.team_id
-            user_role = team.user_role
-            max_budget_in_team = team.max_budget_in_team
-        else:
-            raise ValueError(f"Invalid team type: {type(team)}")
-
-        tasks.append(
-            _add_user_to_team(
+    memberships: Final = tuple(_default_team_membership(team) for team in teams)
+    for membership in memberships:
+        with contextlib.suppress(Exception):
+            await _add_user_to_team(
                 user_id=user_id,
-                team_id=team_id,
+                team_id=membership.team_id,
                 user_email=user_email,
                 user_api_key_dict=user_api_key_dict,
-                max_budget_in_team=max_budget_in_team,
-                user_role=user_role,
+                max_budget_in_team=membership.max_budget_in_team,
+                user_role=membership.user_role,
             )
-        )
-    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _default_team_membership(team: str | NewUserRequestTeam) -> NewUserRequestTeam:
+    if isinstance(team, str):
+        return NewUserRequestTeam(team_id=team)
+    if isinstance(team, NewUserRequestTeam):
+        return team
+    raise ValueError(f"Invalid team type: {type(team)}")
 
 
 async def _fetch_user_team_ids(user_id: str, prisma_client: "PrismaClient") -> tuple[str, ...]:
@@ -499,7 +510,7 @@ async def new_user(
     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
     - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-    - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
+    - model_max_budget: Optional[dict] - Model-specific max budget for user, keyed by model name, `*` pattern, or model access group. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
     - mcp_rpm_limit: Optional[dict] - Per-MCP-server rpm limit, keyed by MCP server name {"github": 100, "slack": 200}. Enforced for keys and teams only; values set on a user are stored but not enforced per user.
@@ -930,6 +941,14 @@ async def user_info(
     request: Request,
     user_id: str | None = fastapi.Query(default=None, description="User ID in the request parameters"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    admin_mcp: bool = fastapi.Query(
+        default=False, description="Include the caller's current admin MCP route permissions"
+    ),
+    mcp_tool: str | None = fastapi.Query(default=None, description="Admin MCP tool to authorize for this caller"),
+    mcp_path: str | None = fastapi.Query(
+        default=None,
+        description="URL-encoded concrete management path used by the MCP tool, before query-string encoding",
+    ),
 ):
     """
     [10/07/2024]
@@ -950,12 +969,23 @@ async def user_info(
         user_id = _normalize_user_info_user_id(request=request, user_id=user_id)
         _enforce_user_info_access(user_id=user_id, user_api_key_dict=user_api_key_dict)
 
+        from litellm.proxy.admin_mcp import get_admin_mcp_permissions
+
+        mcp_permissions: Final = (
+            get_admin_mcp_permissions(user_api_key_dict, request, mcp_tool, mcp_path) if admin_mcp is True else None
+        )
+
         if prisma_client is None:
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         if user_id is None and user_api_key_has_admin_view(user_api_key_dict):
-            return await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
+            admin_response: Final = await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
+            return (
+                admin_response.model_copy(update={"admin_mcp_permissions": mcp_permissions})
+                if mcp_permissions is not None
+                else admin_response
+            )
         elif user_id is None:
             user_id = user_api_key_dict.user_id
         ## GET USER ROW ##
@@ -994,7 +1024,11 @@ async def user_info(
             ),
         )
 
-        return response_data
+        return (
+            response_data.model_copy(update={"admin_mcp_permissions": mcp_permissions})
+            if mcp_permissions is not None
+            else response_data
+        )
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_info(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
@@ -1169,8 +1203,8 @@ async def user_info_v2(
 
 async def _fetch_admin_teams_and_keys_rows(
     prisma_client: "PrismaClient", sql_query: str
-) -> Sequence[Mapping[str, Sequence[Mapping[str, object]] | None]]:
-    return await prisma_client.db.query_raw(sql_query)
+) -> Sequence[_AdminTeamAndKeyRows]:
+    return _ADMIN_TEAM_AND_KEY_ROWS_ADAPTER.validate_python(await prisma_client.db.query_raw(sql_query))
 
 
 async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
@@ -1200,17 +1234,17 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
 
     verbose_proxy_logger.debug("results_keys: %s", results)
 
-    _keys_in_db: Final[Sequence[Mapping[str, object]]] = results[0]["keys"] or []
+    _keys_in_db: Final[Sequence[object]] = results[0]["keys"] or []
     # cast all keys to LiteLLM_VerificationToken
     keys_in_db: Final = []
     for key in _keys_in_db:
-        key_payload = dict[str, object](key)
+        key_payload = _ADMIN_KEY_ROW_ADAPTER.validate_python(key)
         if key_payload.get("models") is None:
             key_payload["models"] = []
         keys_in_db.append(LiteLLM_VerificationToken.model_validate(key_payload))
 
     # cast all teams to LiteLLM_TeamTable
-    _teams_rows: Final[Sequence[Mapping[str, object]]] = results[0]["teams"] or []
+    _teams_rows: Final[Sequence[object]] = results[0]["teams"] or []
     _teams_in_db: Final = sorted(
         (LiteLLM_TeamTable.model_validate(team) for team in _teams_rows),
         key=lambda x: getattr(x, "team_alias", "") or "",
@@ -1702,7 +1736,7 @@ async def user_update(
         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
         - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-        - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
+        - model_max_budget: Optional[dict] - Model-specific max budget for user, keyed by model name, `*` pattern, or model access group. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
         - mcp_rpm_limit: Optional[dict] - Per-MCP-server rpm limit, keyed by MCP server name {"github": 100, "slack": 200}. Enforced for keys and teams only; values set on a user are stored but not enforced per user.
@@ -1729,21 +1763,9 @@ async def user_update(
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_update(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
 async def bulk_update_processed_users(
@@ -2093,7 +2115,9 @@ async def get_user_key_counts(
     return result
 
 
-def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str] | None:
+def _validate_sort_params(
+    sort_by: str | None, sort_order: str
+) -> Mapping[str, object] | Sequence[Mapping[str, object]] | None:
     order_by: Final[dict[str, str]] = {}
 
     if sort_by is None:
@@ -2106,6 +2130,11 @@ def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str
         "spend",
         "user_alias",
         "user_role",
+        "max_budget",
+        "updated_at",
+        "sso_user_id",
+        "status",
+        "key_count",
     ]
     if sort_by not in valid_columns:
         raise HTTPException(
@@ -2120,6 +2149,11 @@ def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str
             detail={"error": "Invalid sort order. Must be 'asc' or 'desc'"},
         )
 
+    if sort_by in {"status", "key_count"}:
+        return None
+    if sort_by in {"max_budget", "updated_at", "sso_user_id"}:
+        nulls: Final = "first" if sort_by == "max_budget" and sort_order.lower() == "desc" else "last"
+        return ({sort_by: {"sort": sort_order.lower(), "nulls": nulls}}, {"user_id": "asc"})
     order_by[sort_by] = sort_order.lower()
 
     return order_by
@@ -2338,16 +2372,40 @@ async def get_users(
 
     # Build order_by conditions
 
-    order_by: Final[dict[str, str] | None] = (
+    order_by: Final = (
         _validate_sort_params(sort_by, sort_order) if sort_by is not None and isinstance(sort_by, str) else None
     )
 
-    users: Final[Sequence[prisma_models.LiteLLM_UserTable]] = await UserRepository(prisma_client).table.find_many(
-        where=where,
-        skip=skip,
-        take=page_size,
-        order=(order_by if order_by else {"created_at": "desc"}),  # Default to created_at desc if no sort specified
+    from litellm.proxy.management_helpers.user_list_sorting import sorted_user_ids
+
+    computed_sort: Final = sort_by in ("status", "key_count")
+    sorted_ids: Final = (
+        await sorted_user_ids(
+            prisma_client,
+            sort_by="status" if sort_by == "status" else "key_count",
+            descending=sort_order.lower() == "desc",
+            skip=skip,
+            take=page_size,
+            role=role,
+            user_ids=user_ids,
+            user_email=user_email,
+            team=team,
+            sso_user_ids=sso_user_ids,
+            organization_ids=organization_ids,
+            search=search,
+        )
+        if computed_sort
+        else ()
     )
+    page_users: Final = await UserRepository(prisma_client).table.find_many(
+        # bounded-ok: sorted_ids comes from LIMIT page_size, capped at 100 by the route
+        where={"AND": (where, {"user_id": {"in": sorted_ids}})} if computed_sort else where,
+        skip=0 if computed_sort else skip,
+        take=page_size,
+        order=order_by if order_by else {"created_at": "desc"},
+    )
+    positions: Final = {user_id: index for index, user_id in enumerate(sorted_ids)}
+    users: Final = sorted(page_users, key=lambda user: positions[user.user_id]) if computed_sort else page_users
 
     # Get total count of user rows
     total_count: Final[int] = await UserRepository(prisma_client).table.count(where=where)
@@ -2864,7 +2922,8 @@ async def get_user_daily_activity(
     ),
     api_key: str | None = fastapi.Query(
         default=None,
-        description="Filter by specific API key",
+        description="Filter by reporting API key ID. Missing keys are reported as unattributed. "
+        "For a literal key unattributed or a key starting with raw:, add an extra raw: prefix",
     ),
     user_id: str | None = fastapi.Query(
         default=None,

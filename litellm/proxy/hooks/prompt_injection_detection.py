@@ -94,12 +94,13 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                     "PromptInjectionDetection: Model List not set. Required for Prompt Injection detection."
                 )
 
+            model_names = self.llm_router.registry().names(kind="group_set")
             self.print_verbose(
-                f"model_names: {self.llm_router.model_names}; self.prompt_injection_params.llm_api_name: {self.prompt_injection_params.llm_api_name}"
+                f"model_names: {model_names}; self.prompt_injection_params.llm_api_name: {self.prompt_injection_params.llm_api_name}"
             )
             if (
                 self.prompt_injection_params.llm_api_name is None
-                or self.prompt_injection_params.llm_api_name not in self.llm_router.model_names
+                or self.prompt_injection_params.llm_api_name not in model_names
             ):
                 raise Exception(
                     "PromptInjectionDetection: Invalid LLM API Name. LLM API Name must be a 'model_name' in 'model_list'."

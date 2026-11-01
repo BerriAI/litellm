@@ -15,8 +15,8 @@ import httpx
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import process_response_headers
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, process_response_headers
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
 from litellm.types.interactions import (
@@ -39,6 +39,14 @@ else:
 
 
 _JsonObject: TypeAlias = dict[str, object]
+
+
+def _has_agent_config_type(agent_config: object) -> bool:
+    match agent_config:
+        case {"type": str()}:
+            return True
+        case _:
+            return False
 
 
 class _InteractionPayload(TypedDict, total=False):
@@ -105,6 +113,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         return [
             "model",
             "agent",
+            "agent_config",
             "input",
             "tools",
             "system_instruction",
@@ -153,10 +162,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         if not api_key:
             raise ValueError("Google API key is required. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable.")
 
-        if stream:
-            return f"{api_base}/{self.api_version}/interactions?alt=sse"
-
-        return f"{api_base}/{self.api_version}/interactions"
+        collection_url: Final = join_api_base(api_base, f"{self.api_version}/interactions")
+        return f"{collection_url}?alt=sse" if stream else collection_url
 
     def transform_request(
         self,
@@ -190,6 +197,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             request_body["input"] = input
 
         optional_keys: Final = [
+            "agent_config",
             "tools",
             "system_instruction",
             "stream",
@@ -199,8 +207,14 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             "response_modalities",
             "previous_interaction_id",
         ]
+        dropped_keys: Final = (
+            frozenset({"agent_config"})
+            if drops_unsupported_params(litellm_params.get("drop_params"))
+            and (model or not _has_agent_config_type(optional_params.get("agent_config")))
+            else frozenset()
+        )
         for key in optional_keys:
-            if optional_params.get(key) is not None:
+            if key not in dropped_keys and optional_params.get(key) is not None:
                 request_body[key] = optional_params[key]
 
         # response_mime_type is removed — fold it into response_format.
@@ -304,7 +318,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             raise ValueError("Google API key is required")
         encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}",
+            join_api_base(resolved_api_base, f"{self.api_version}/interactions/{encoded_interaction_id}"),
             {},
         )
 
@@ -344,7 +358,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             raise ValueError("Google API key is required")
         encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}",
+            join_api_base(resolved_api_base, f"{self.api_version}/interactions/{encoded_interaction_id}"),
             {},
         )
 
@@ -375,7 +389,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             raise ValueError("Google API key is required")
         encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}/cancel",
+            join_api_base(resolved_api_base, f"{self.api_version}/interactions/{encoded_interaction_id}/cancel"),
             {},
         )
 

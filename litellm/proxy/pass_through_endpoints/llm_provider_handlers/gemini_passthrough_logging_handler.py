@@ -1,4 +1,3 @@
-import re
 from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
@@ -9,6 +8,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
+from litellm.llms.vertex_ai.common_utils import get_vertex_model_id_from_url
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
     GeminiSseChunkParser,
@@ -207,11 +207,7 @@ class GeminiPassthroughLoggingHandler:
 
     @staticmethod
     def extract_model_from_url(url: str) -> str:
-        pattern: Final = r"/models/([^:]+)"
-        match: Final = re.search(pattern, url)
-        if match:
-            return match.group(1)
-        return "unknown"
+        return get_vertex_model_id_from_url(url) or "unknown"
 
     @staticmethod
     def _create_gemini_response_logging_payload_for_generate_content(
@@ -245,5 +241,4 @@ class GeminiPassthroughLoggingHandler:
         logging_obj.model = litellm_model_response.model or model
         logging_obj.model_call_details["model"] = logging_obj.model
         logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
-        logging_obj.model_call_details["response_cost"] = response_cost
         return kwargs

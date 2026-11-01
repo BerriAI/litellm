@@ -21,6 +21,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _BACKEND: Final = "pplx-decider-v1-27b"
 _CONFIG_MODEL: Final = "decisions-chaos"
 _API_KEY: Final = "synthetic-decisions-key"

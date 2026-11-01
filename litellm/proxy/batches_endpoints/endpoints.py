@@ -17,6 +17,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_param
+from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
@@ -148,6 +149,14 @@ async def _raise_when_input_file_must_be_managed(model: str, credentials: Mappin
     )
 
 
+def _raise_when_routing_headers_disagree(request: Request, body_model: object) -> None:
+    if (isinstance(body_model, str) and body_model) or request.query_params.get("model"):
+        return
+    if len(frozenset(request.headers.getlist("x-litellm-model"))) < 2:
+        return
+    raise batch_error(400, "Send one x-litellm-model header. This request has several naming different models")
+
+
 def _litellm_metadata_of(data: MutableMapping[str, object]) -> MutableMapping[str, object]:
     """The request's litellm_metadata mapping, created on the request when it carries none.
 
@@ -170,6 +179,8 @@ def _raise_not_found_when_openai_fallback_unservable(
     if requested_provider is not None:
         return
     if data.get("api_key") or litellm.api_key or litellm.openai_key or os.getenv("OPENAI_API_KEY"):
+        return
+    if resolve_openai_workload_identity_config(api_key=None, api_base=None, litellm_params=data) is not None:
         return
     raise ProxyException(
         message=not_found_message,
@@ -271,6 +282,7 @@ async def create_batch(
     data: dict = {}
     try:
         data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
+        _raise_when_routing_headers_disagree(request, data.get("model"))
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n%s",
             json.dumps(data, indent=4),
@@ -609,7 +621,7 @@ async def retrieve_batch(
         unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
         if unified_model_id is not None:
             resolved_unified_model: Final = (
-                llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
+                llm_router.registry().resolve(unified_model_id, kind="from_id") if llm_router is not None else None
             )
             await authorize_model_for_key(
                 model_id=resolved_unified_model or unified_model_id,
@@ -1118,7 +1130,7 @@ async def cancel_batch(
         unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
         if unified_model_id is not None:
             resolved_unified_model: Final = (
-                llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
+                llm_router.registry().resolve(unified_model_id, kind="from_id") if llm_router is not None else None
             )
             await authorize_model_for_key(
                 model_id=resolved_unified_model or unified_model_id,

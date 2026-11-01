@@ -10,6 +10,7 @@ from typing_extensions import assert_never
 
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.daily_activity_sql import (
     ExportCursor,
@@ -19,6 +20,7 @@ from litellm.repositories.daily_activity_sql import (
     build_cache_leakage_keys_sql,
     build_entity_rollup_sql,
     build_export_sql,
+    build_guardrail_spend_sql,
     build_key_page_sql,
     build_key_search_sql,
     build_model_top_keys_sql,
@@ -36,6 +38,7 @@ from litellm.types.repositories.daily_activity import (
     ExportRow,
     ExportType,
     GroupingSetsRow,
+    GuardrailSpendRow,
     KeyMetadataRow,
     KeyPage,
     KeySpendRow,
@@ -100,6 +103,7 @@ class DailyActivityDatabase(Protocol):
 
 _GROUPING_ADAPTER: Final = TypeAdapter(tuple[GroupingSetsRow, ...])
 _ENTITY_ADAPTER: Final = TypeAdapter(tuple[EntityRollupRow, ...])
+_GUARDRAIL_SPEND_ADAPTER: Final = TypeAdapter(tuple[GuardrailSpendRow, ...])
 _KEY_SPEND_ADAPTER: Final = TypeAdapter(tuple[KeySpendRow, ...])
 _KEY_PAGE_TOTAL_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(int)
 _USER_SPEND_ADAPTER: Final = TypeAdapter(tuple[UserSpendRow, ...])
@@ -190,6 +194,9 @@ class DailyActivityRepository:
             entity_rows=entity_rows,
             distinct_api_keys=distinct_api_keys,
         )
+
+    async def guardrail_spend(self, scope: DailyActivityScope) -> tuple[GuardrailSpendRow, ...]:
+        return _GUARDRAIL_SPEND_ADAPTER.validate_python(await self._query(build_guardrail_spend_sql(scope)))
 
     async def search_keys(self, scope: DailyActivityScope, *, search: str, limit: int) -> tuple[str, ...]:
         if not 1 <= limit <= constants.USAGE_KEY_SEARCH_MAX:
@@ -338,7 +345,13 @@ class DailyActivityRepository:
             "date": {"gte": adjusted_start, "lte": adjusted_end},
             **({scope.entity_id_field: {"in": list(scope.entity_ids)}} if scope.entity_ids is not None else {}),
             **exclusion_filter,
-            **({"model": scope.model} if scope.model else {}),
+            **(
+                {"AND": [{"OR": [{"model": None}, {"model": ""}, {"model": scope.model}]}]}
+                if scope.model == UNKNOWN_MODEL_SPEND_LOG_MODEL
+                else {"model": scope.model}
+                if scope.model
+                else {}
+            ),
             **({"api_key": {"in": list(scope.api_keys)}} if scope.api_keys is not None else {}),
         }
         count, rows = await asyncio.gather(

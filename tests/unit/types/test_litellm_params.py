@@ -33,6 +33,7 @@ from litellm.types.litellm_params import (
     wire_names,
 )
 from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionUserMessage
+from litellm.types.proxy.guardrails.guardrail_hooks.headroom import HeadroomRequestContext
 from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 from litellm.types.router import (
     ConfigurableClientsideParamsCustomAuth,
@@ -65,6 +66,7 @@ CONNECTION_NAMES: Final = (
     "api_key",
     "api_base",
     "api_version",
+    "responses_api_version",
     "region_name",
     "headers",
     "provider_specific_header",
@@ -74,6 +76,8 @@ CONNECTION_NAMES: Final = (
     "request_timeout",
     "force_timeout",
     "stream_timeout",
+    "timeout_by_service_tier",
+    "stream_timeout_by_service_tier",
     "max_retries",
     "tenant_id",
     "client_id",
@@ -88,10 +92,13 @@ CONNECTION_NAMES: Final = (
     "azure_ad_token_provider",
     "litellm_credential_name",
     "github_copilot_auth_type",
+    "github_copilot_host",
     "configurable_clientside_auth_params",
     "use_xai_oauth",
+    "chatgpt_auth_file",
     "fireworks_forward_user_id",
     "aws_batch_role_arn",
+    "aws_bedrock_control_plane_endpoint",
     "s3_bucket_name",
     "s3_region_name",
     "s3_endpoint_url",
@@ -130,6 +137,7 @@ OPTION_NAMES: Final = (
     "use_litellm_proxy",
     "use_chat_completions_api",
     "use_in_pass_through",
+    "kubernetes_pod_discovery",
     "allowed_openai_params",
     "fallbacks",
     "context_window_fallback_dict",
@@ -147,6 +155,9 @@ OPTION_NAMES: Final = (
     "model_info",
     "rpm",
     "tpm",
+    "rpd",
+    "tpd",
+    "daily_reset_time",
     "itpm",
     "otpm",
     "default_api_key_rpm_limit",
@@ -211,6 +222,7 @@ OPTION_NAMES: Final = (
     "assistant_continue_message",
     "disable_add_transform_inline_image_block",
     "merge_reasoning_content_in_choices",
+    "thought_signature_in_tool_call_id",
     "enable_json_schema_validation",
     "complete_response",
     "stream_chunk_size",
@@ -221,6 +233,7 @@ OPTION_NAMES: Final = (
 )
 
 AGENTIC_LOOP_STATE_NAMES: Final = (
+    "_headroom_request_context",
     "_agentic_loop_depth",
     "_agentic_loop_fingerprints",
     "_agentic_loop_api_surface",
@@ -248,6 +261,7 @@ INTERNAL_STATE_NAMES: Final = (
     "_context_compaction_state",
     *AGENTIC_LOOP_STATE_NAMES,
     "_router_weights",
+    "_encrypted_content_affinity_pinned",
     "fallback_depth",
     "max_fallbacks",
     "attempted_targets",
@@ -257,6 +271,7 @@ INTERNAL_STATE_NAMES: Final = (
     "litellm_trusted_callback_vars",
     "_litellm_addressed_response_id",
     "_litellm_strip_stream_usage",
+    "_litellm_stream_usage_injected",
     "client_side_timeout",
     "model_file_id_mapping",
     "acompletion",
@@ -270,6 +285,7 @@ INTERNAL_STATE_NAMES: Final = (
 
 BEDROCK_BATCH_NAMES: Final = (
     "aws_batch_role_arn",
+    "aws_bedrock_control_plane_endpoint",
     "s3_bucket_name",
     "s3_region_name",
     "s3_endpoint_url",
@@ -516,6 +532,7 @@ TYPE_HINT_NAMESPACE: Final[Mapping[str, object]] = {
     "Logging": Logging,
     "SecretFields": SecretFields,
     "CompactionState": CompactionState,
+    "HeadroomRequestContext": HeadroomRequestContext,
     "RouterWeights": RouterWeights,
     "AttemptedFallbackTargets": AttemptedFallbackTargets,
 }
@@ -682,6 +699,7 @@ NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingPr
             "api_key",
             "api_version",
             "aws_batch_role_arn",
+            "aws_bedrock_control_plane_endpoint",
             "azure_password",
             "azure_scope",
             "azure_username",

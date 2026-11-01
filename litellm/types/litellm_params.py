@@ -17,10 +17,11 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.router_api import AttemptedFallbackTargets
     from litellm.router_strategy.complexity_router.context_compaction import CompactionState
-    from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
     from litellm.types.caching import DynamicCacheControl
     from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionUserMessage
+    from litellm.types.proxy.guardrails.guardrail_hooks.headroom import HeadroomRequestContext
     from litellm.types.proxy.litellm_pre_call_utils import SecretFields
     from litellm.types.router import ConfigurableClientsideParamsCustomAuth, DeploymentTypedDict, RetryPolicy
     from litellm.types.router_weights import RouterWeights
@@ -54,6 +55,7 @@ RoutingStrategyName: TypeAlias = Literal[
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
+STREAM_USAGE_INJECTED_FIELD: Final = "_litellm_stream_usage_injected"
 
 WIRE_NAME: Final = "wire_name"
 
@@ -67,6 +69,7 @@ class ProviderConnection:
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
+    responses_api_version: str | None = None
     region_name: str | None = None
     headers: Mapping[str, str] | None = None
     provider_specific_header: "ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None" = None
@@ -76,6 +79,8 @@ class ProviderConnection:
     request_timeout: float | None = None
     force_timeout: float | None = None
     stream_timeout: float | str | None = None
+    timeout_by_service_tier: Mapping[str, float] | None = None
+    stream_timeout_by_service_tier: Mapping[str, float] | None = None
     max_retries: int | None = None
     tenant_id: str | None = None
     client_id: str | None = None
@@ -87,7 +92,9 @@ class ProviderConnection:
     litellm_credential_name: str | None = None
     configurable_clientside_auth_params: "Sequence[str | ConfigurableClientsideParamsCustomAuth] | None" = None
     use_xai_oauth: bool | None = None
+    chatgpt_auth_file: str | None = None
     github_copilot_auth_type: str | None = None
+    github_copilot_host: str | None = None
     github_copilot_user_session: object | None = None
     token_exchange_endpoint: str | None = None
     token_exchange_profile: str | None = None
@@ -100,6 +107,7 @@ class ProviderConnection:
 class BedrockBatchConnection:
     # Bedrock rejects these names in request bodies, so register them as LiteLLM-owned
     aws_batch_role_arn: str | None = None
+    aws_bedrock_control_plane_endpoint: str | None = None
     s3_bucket_name: str | None = None
     s3_region_name: str | None = None
     s3_endpoint_url: str | None = None
@@ -182,6 +190,10 @@ class DeploymentOptions:
     tpm: int | None = None
     itpm: int | None = None
     otpm: int | None = None
+    rpd: int | None = None
+    tpd: int | None = None
+    daily_reset_time: str | None = None
+    kubernetes_pod_discovery: bool | None = None
     default_api_key_rpm_limit: int | None = None
     default_api_key_tpm_limit: int | None = None
     max_parallel_requests: int | None = None
@@ -276,6 +288,7 @@ class PromptOptions:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResponseOptions:
     merge_reasoning_content_in_choices: bool | None = None
+    thought_signature_in_tool_call_id: bool | None = None
     enable_json_schema_validation: bool | None = None
     complete_response: bool | None = None
     keepalive_seconds: float | None = None
@@ -341,6 +354,7 @@ class CallState:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AgenticLoopState:
+    headroom_context: "HeadroomRequestContext | None" = field(default=None, metadata=wire("_headroom_request_context"))
     depth: int | None = field(default=None, metadata=wire("_agentic_loop_depth"))
     fingerprints: Sequence[str] | None = field(default=None, metadata=wire("_agentic_loop_fingerprints"))
     api_surface: Literal["chat_completions", "responses"] | None = field(
@@ -379,6 +393,9 @@ class AgenticLoopState:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RouterState:
     weights: "RouterWeights | None" = field(default=None, metadata=wire("_router_weights"))
+    encrypted_content_affinity_pinned: bool | None = field(
+        default=None, metadata=wire("_encrypted_content_affinity_pinned")
+    )
     fallback_depth: int | None = None
     max_fallbacks: int | None = None
     attempted_targets: "AttemptedFallbackTargets | None" = None
@@ -391,6 +408,7 @@ class ProxyRequestState:
     trusted_callback_vars: Mapping[str, str] | None = field(default=None, metadata=wire(TRUSTED_CALLBACK_VARS_FIELD))
     addressed_response_id: str | None = field(default=None, metadata=wire(ADDRESSED_RESPONSE_ID_FIELD))
     strip_stream_usage: bool | None = field(default=None, metadata=wire("_litellm_strip_stream_usage"))
+    stream_usage_injected: bool | None = field(default=None, metadata=wire(STREAM_USAGE_INJECTED_FIELD))
     client_side_timeout: bool | None = None
     model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None
 

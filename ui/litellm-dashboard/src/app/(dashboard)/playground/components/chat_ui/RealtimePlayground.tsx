@@ -1,5 +1,6 @@
 "use client";
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { CircleX, Mic, MicOff, Send, Volume2 } from "lucide-react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -21,12 +22,27 @@ interface RealtimePlaygroundProps {
   selectedGuardrails?: string[];
 }
 
+const sessionUpdate = (voice: string) =>
+  JSON.stringify({
+    type: "session.update",
+    session: {
+      type: "realtime",
+      modalities: ["text", "audio"],
+      voice,
+      input_audio_format: "pcm16",
+      output_audio_format: "pcm16",
+      input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
+      turn_detection: { type: "server_vad" },
+    },
+  });
+
 const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   accessToken,
   selectedModel,
   customProxyBaseUrl,
   selectedGuardrails,
 }) => {
+  const term = useTerminology();
   const [messages, setMessages] = useState<RealtimeMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [isConnected, setIsConnected] = useState(false);
@@ -123,21 +139,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
           const type = data.type;
 
           if (type === "session.created") {
-            // GA: session.type is required ("realtime" | "transcription")
-            ws.send(
-              JSON.stringify({
-                type: "session.update",
-                session: {
-                  type: "realtime",
-                  modalities: ["text", "audio"],
-                  voice: selectedVoice,
-                  input_audio_format: "pcm16",
-                  output_audio_format: "pcm16",
-                  input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
-                  turn_detection: null,
-                },
-              }),
-            );
+            ws.send(sessionUpdate(selectedVoice));
           } else if (type === "session.updated") {
             // session configured
           } else if (
@@ -229,22 +231,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   const startRecording = useCallback(async () => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
-    // Switch to server VAD mode for voice input
-    // GA: session.type is required
-    wsRef.current.send(
-      JSON.stringify({
-        type: "session.update",
-        session: {
-          type: "realtime",
-          modalities: ["text", "audio"],
-          voice: selectedVoice,
-          input_audio_format: "pcm16",
-          output_audio_format: "pcm16",
-          input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
-          turn_detection: { type: "server_vad" },
-        },
-      }),
-    );
+    wsRef.current.send(sessionUpdate(selectedVoice));
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -299,7 +286,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     } catch (err: any) {
       addMessage("status", `Microphone error: ${err.message}`);
     }
-  }, [addMessage]);
+  }, [addMessage, selectedVoice]);
 
   const stopRecording = useCallback(() => {
     processorRef.current?.disconnect();
@@ -315,21 +302,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     if (configureSessionRef.current) return;
     configureSessionRef.current = true;
-    // GA: session.type is required
-    wsRef.current.send(
-      JSON.stringify({
-        type: "session.update",
-        session: {
-          type: "realtime",
-          modalities: ["text", "audio"],
-          voice: selectedVoice,
-          input_audio_format: "pcm16",
-          output_audio_format: "pcm16",
-          input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
-          turn_detection: null,
-        },
-      }),
-    );
+    wsRef.current.send(sessionUpdate(selectedVoice));
   }, [selectedVoice]);
 
   const sendTextMessage = useCallback(() => {
@@ -408,8 +381,8 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
             <Volume2 className="size-12" />
             <span className="text-lg text-muted-foreground">Realtime Voice Playground</span>
             <p className="text-sm text-muted-foreground text-center max-w-md">
-              Click <b>Connect</b> to start a realtime session. You can speak using your microphone or type messages.
-              The AI will respond with voice and text.
+              Click <b>Connect</b> to start a realtime session. You can speak using your microphone or type messages.{" "}
+              {term("The AI will respond with voice and text.")}
             </p>
           </div>
         )}
@@ -428,7 +401,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
                     : "bg-muted text-foreground rounded-bl-md"
                 }`}
               >
-                <div className="text-xs font-medium mb-0.5 opacity-70">{msg.role === "user" ? "You" : "AI"}</div>
+                <div className="text-xs font-medium mb-0.5 opacity-70">{msg.role === "user" ? "You" : term("AI")}</div>
                 <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
               </div>
             )}
