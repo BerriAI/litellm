@@ -3675,6 +3675,58 @@ def test_get_request_tags_preserves_non_string_metadata_tags():
     assert 7 in tags
 
 
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("invalid_tags", ["my-tag", 7, True, {"tag": "value"}, ("my-tag",), None, ""])
+def test_standard_logging_payload_ignores_non_list_tags(
+    logging_obj: LitellmLogging, metadata_key: str, invalid_tags: object
+) -> None:
+    timestamp: Final = datetime.datetime(2026, 1, 1)
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={
+            "litellm_call_id": "invalid-tag-request",
+            "model": "test-model",
+            "messages": [],
+            "litellm_params": {
+                metadata_key: {"tags": invalid_tags},
+                "proxy_server_request": {"headers": {"user-agent": "litellm/1.0.0"}},
+            },
+        },
+        init_response_obj={},
+        start_time=timestamp,
+        end_time=timestamp,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["litellm_call_id"] == "invalid-tag-request"
+    assert payload["request_tags"] == ["User-Agent: litellm", "User-Agent: litellm/1.0.0"]
+
+
+@pytest.mark.parametrize("invalid_tags", ["my-tag", 7, {"tag": "value"}, ("my-tag",), [], None])
+def test_get_request_tags_uses_valid_fallback_tags(invalid_tags: object) -> None:
+    fallback_tags: Final = ["fallback-tag"]
+    tags: Final = StandardLoggingPayloadSetup.get_request_tags(
+        litellm_params={
+            "metadata": {"tags": invalid_tags},
+            "litellm_metadata": {"tags": fallback_tags},
+        },
+        proxy_server_request={"headers": {"user-agent": "litellm/1.0.0"}},
+    )
+
+    assert tags == ["fallback-tag", "User-Agent: litellm", "User-Agent: litellm/1.0.0"]
+    assert fallback_tags == ["fallback-tag"]
+
+
+def test_get_request_tags_skips_unused_malformed_metadata() -> None:
+    tags: Final = StandardLoggingPayloadSetup.get_request_tags(
+        litellm_params={"metadata": {"tags": ["primary-tag"]}, "litellm_metadata": "unused"},
+        proxy_server_request={},
+    )
+
+    assert tags == ["primary-tag"]
+
+
 def test_get_request_tags_from_metadata_and_litellm_metadata():
     """
     Test that _get_request_tags correctly picks tags from both 'metadata' and 'litellm_metadata'.
