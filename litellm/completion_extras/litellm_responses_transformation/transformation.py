@@ -523,7 +523,7 @@ def _fold_choices_into_one(
     # A single Chat Completions message can carry one scalar phase. Preserve it
     # only when every folded Responses message has the same declared phase.
     message_phases: Final = tuple(
-        (message.provider_specific_fields or {}).get("phase") for message in messages
+        (message.provider_specific_fields or {}).get("phase") for message in content_messages
     )
     shared_phase: Final = (
         message_phases[0]
