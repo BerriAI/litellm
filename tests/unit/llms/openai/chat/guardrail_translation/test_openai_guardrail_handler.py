@@ -1670,6 +1670,42 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert [c["function"]["arguments"] for c in sent] == ['{"city": "Paris"}', '{"city": "Rome"}']
 
     @pytest.mark.asyncio
+    async def test_a_caller_cannot_set_the_choice_index_label(self) -> None:
+        """The label says which choice the round inspected, so only the round may set it."""
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class LabelReadingGuardrail(CustomGuardrail):
+            seen: list[object] = []
+
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                type(self).seen.append(request_data.get("guardrail_choice_index"))
+                return inputs
+
+        LabelReadingGuardrail.seen = []
+        request_data: Final[dict[str, object]] = {"model": "gpt-4", "guardrail_choice_index": 7}
+        chunks: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=0,
+            delta=Delta(content="looking", tool_calls=[
+                {"index": 0, "id": "call_0", "type": "function",
+                 "function": {"name": "weather", "arguments": '{"city": "Paris"}'}},
+            ]),
+            finish_reason="tool_calls",
+        )])]
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=LabelReadingGuardrail(guardrail_name="label"),
+            litellm_logging_obj=None,
+            request_data=request_data,
+            stream_transform_sink=StreamTransformSink(),
+        )
+        assert LabelReadingGuardrail.seen == [None]
+        assert request_data["guardrail_choice_index"] == 7
+
+    @pytest.mark.asyncio
     async def test_a_transform_round_leaves_the_callers_request_data_as_it_found_it(self) -> None:
         """The round owns these keys only while it runs; what it leaves behind is read by later hooks."""
         from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink

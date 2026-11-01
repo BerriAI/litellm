@@ -682,6 +682,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         prior_response: Final = inspection_request_data.get("response", missing)
         prior_responses: Final = inspection_request_data.get("responses", missing)
         prior_choice_index: Final = inspection_request_data.get("guardrail_choice_index", missing)
+        inspection_request_data.pop("guardrail_choice_index", None)
         undeliverable: UndeliverableStreamRewrite | None = None  # rebind-ok: keeps the first failure
         try:
             for inspection_response in inspection_responses:
@@ -949,6 +950,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         prior_response: Final = resolved_request_data.get("response", missing)
         prior_responses: Final = resolved_request_data.get("responses", missing)
         prior_choice_index: Final = resolved_request_data.get("guardrail_choice_index", missing)
+        resolved_request_data.pop("guardrail_choice_index", None)
         if "responses" not in resolved_request_data:
             resolved_request_data["responses"] = responses_so_far
         self.merge_user_api_key_metadata_into_request(resolved_request_data, user_api_key_dict)
