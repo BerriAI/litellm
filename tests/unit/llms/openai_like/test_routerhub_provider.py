@@ -1,0 +1,139 @@
+import json
+from typing import Final
+
+import pytest
+import respx
+
+import litellm
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+
+def test_routerhub_resolves_environment_key_and_explicit_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ROUTERHUB_API_KEY", "fake-environment-key")
+    assert get_llm_provider(model="routerhub/glm-5.3-abliterated") == (
+        "glm-5.3-abliterated",
+        "routerhub",
+        "fake-environment-key",
+        "https://routerhub.si/v1",
+    )
+    assert get_llm_provider(
+        model="routerhub/glm-5.3-abliterated", api_key="fake-explicit-key", api_base="https://gateway.example/v1"
+    ) == ("glm-5.3-abliterated", "routerhub", "fake-explicit-key", "https://gateway.example/v1")
+
+
+@pytest.mark.parametrize("model", ("glm-5.3-abliterated", "glm-5.3-flash-abliterated"))
+def test_routerhub_chat_routes_and_bills_reported_cached_usage(model: str, local_model_cost_map: None) -> None:
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://routerhub.si/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": model,
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}
+                ],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 5,
+                    "total_tokens": 105,
+                    "prompt_tokens_details": {"cached_tokens": 80},
+                },
+            },
+        )
+        response: Final = litellm.completion(
+            model=f"routerhub/{model}",
+            api_key="fake-test-key",
+            messages=[{"role": "user", "content": "Say hello"}],
+            max_tokens=32,
+        )
+    request: Final = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer fake-test-key"
+    assert json.loads(request.content) == {
+        "model": model,
+        "messages": [{"role": "user", "content": "Say hello"}],
+        "max_tokens": 32,
+    }
+    assert response.choices[0].message.content == "hello"
+    assert response.usage.prompt_tokens == 100
+    assert response.usage.completion_tokens == 5
+    rates: Final = litellm.model_cost[f"routerhub/{model}"]
+    expected: Final = (
+        20 * rates["input_cost_per_token"]
+        + 80 * rates["cache_read_input_token_cost"]
+        + 5 * rates["output_cost_per_token"]
+    )
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(expected)
+
+
+def test_routerhub_stream_preserves_text_finish_reason_and_usage() -> None:
+    chunks: Final = (
+        {
+            "id": "chatcmpl-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "glm-5.3-abliterated",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hello"}, "finish_reason": None}],
+        },
+        {
+            "id": "chatcmpl-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "glm-5.3-abliterated",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        },
+        {
+            "id": "chatcmpl-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "glm-5.3-abliterated",
+            "choices": [],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+        },
+    )
+    sse: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://routerhub.si/v1/chat/completions").respond(
+            200, text=sse, headers={"Content-Type": "text/event-stream"}
+        )
+        stream: Final = litellm.completion(
+            model="routerhub/glm-5.3-abliterated",
+            api_key="fake-test-key",
+            messages=[{"role": "user", "content": "Say hello"}],
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        received: Final = tuple(stream)
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "glm-5.3-abliterated",
+        "messages": [{"role": "user", "content": "Say hello"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in received if chunk.choices) == "hello"
+    assert tuple(chunk.choices[0].finish_reason for chunk in received if chunk.choices)[-1] == "stop"
+    assert received[-1].usage.prompt_tokens == 4
+    assert received[-1].usage.completion_tokens == 1
+
+
+@pytest.mark.parametrize(
+    ("status", "error"),
+    ((401, litellm.AuthenticationError), (404, litellm.NotFoundError), (429, litellm.RateLimitError)),
+)
+def test_routerhub_preserves_upstream_error_status(
+    status: int, error: type[litellm.AuthenticationError | litellm.NotFoundError | litellm.RateLimitError]
+) -> None:
+    with respx.mock() as upstream:
+        upstream.post("https://routerhub.si/v1/chat/completions").respond(
+            status, json={"error": {"message": "Request rejected", "type": "api_error", "code": "rejected"}}
+        )
+        with pytest.raises(error) as caught:
+            litellm.completion(
+                model="routerhub/glm-5.3-abliterated",
+                api_key="fake-test-key",
+                messages=[{"role": "user", "content": "Say hello"}],
+                num_retries=0,
+                max_retries=0,
+            )
+    assert caught.value.status_code == status
