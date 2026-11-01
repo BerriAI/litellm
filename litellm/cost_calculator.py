@@ -26,6 +26,12 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, billed_usage
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
+from litellm.litellm_core_utils.llm_cost_calc.pricing_context import (
+    pricing_discounts,
+    pricing_margins,
+    retained_model_info,
+    retained_models,
+)
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -379,7 +385,9 @@ def _per_second_pricing_cost(
     audio_seconds: float = 0.0,
 ) -> tuple[float, float] | None:
     try:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = retained_model_info(model, custom_llm_provider) or cached_get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
     except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
         return None
     if _has_token_or_tiered_pricing(model_info) or not _bills_wall_clock_seconds(model_info):
@@ -538,7 +546,7 @@ def cost_per_token(
     if response_cost is not None:
         return response_cost[0], response_cost[1]
 
-    model_cost_ref: Final = litellm.model_cost
+    model_cost_ref: Final = retained_models() or litellm.model_cost
     # Only callers that explicitly pass `custom_llm_provider` get the
     # dedup/prefix-join treatment. When provider is omitted, preserve legacy
     # behavior: `model_with_provider` stays equal to the raw `model` string
@@ -600,9 +608,11 @@ def cost_per_token(
         model = model_without_prefix
 
     if is_decisions_call_type(call_type):
-        decisions_model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        decisions_model_info: Final = retained_model_info(model, custom_llm_provider) or cached_get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         decisions_overrides: Final = decisions_pricing_fields(
-            litellm.model_cost.get(decisions_model_info["key"], {})  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
+            (retained_models() or litellm.model_cost).get(decisions_model_info["key"], {})  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
         )
         if decisions_overrides:
             return generic_cost_per_token(
@@ -623,7 +633,9 @@ def cost_per_token(
         )
         if lyria_generation_cost is not None:
             return 0.0, lyria_generation_cost
-        speech_model_info: Final = cached_get_model_info_helper(
+        speech_model_info: Final = retained_model_info(
+            model_without_prefix, custom_llm_provider
+        ) or cached_get_model_info_helper(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
             preserve_unset_costs=True,
@@ -808,7 +820,9 @@ def cost_per_token(
             service_tier=service_tier,
         )
     else:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = retained_model_info(model, custom_llm_provider) or cached_get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         if _has_token_or_tiered_pricing(model_info):
             return generic_cost_per_token(
                 model=model,
@@ -995,8 +1009,8 @@ def select_model_name_for_cost_calc(
     )
 
     if custom_pricing is True:
-        if router_model_id is not None and router_model_id in litellm.model_cost:
-            entry: Final = litellm.model_cost[router_model_id]
+        if router_model_id is not None and router_model_id in (retained_models() or litellm.model_cost):
+            entry: Final = (retained_models() or litellm.model_cost)[router_model_id]
             if _cost_map_entry_prices_anything(entry):
                 return_model = router_model_id
             else:
@@ -1075,14 +1089,16 @@ def _strip_unregistered_leading_segments(model: str, region_name: str | None) ->
     registered cost key ("vertex_ai/claude-opus-5"), keeping the model unchanged when it already
     resolves downstream (custom-priced router ids) or no stripped candidate is registered (#38069)."""
     segments: Final = model.split("/")
-    if "/".join(segments[1:]) in litellm.model_cost:
+    if "/".join(segments[1:]) in (retained_models() or litellm.model_cost):
         return model
     head_len: Final = 2 if region_name is not None and len(segments) > 2 and segments[1] == region_name else 1
     head: Final = "/".join(segments[:head_len])
     tail: Final = segments[head_len:]
     strippable: Final = next((index for index, segment in enumerate(tail) if segment in LlmProvidersSet), len(tail))
     candidates: Final = (f"{head}/{'/'.join(tail[start:])}" for start in range(min(strippable, len(tail) - 1) + 1))
-    return next((candidate for candidate in candidates if candidate in litellm.model_cost), model)
+    return next(
+        (candidate for candidate in candidates if candidate in (retained_models() or litellm.model_cost)), model
+    )
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
@@ -1348,9 +1364,7 @@ def _apply_cost_discount(
         Tuple of (final_cost, discount_percent, discount_amount)
     """
     original_cost: Final = base_cost
-    resolved_discount: Final = resolve_cost_discount(
-        litellm.cost_discount_config, custom_llm_provider, model, region_name
-    )
+    resolved_discount: Final = resolve_cost_discount(pricing_discounts(), custom_llm_provider, model, region_name)
     discount_percent: Final = 0.0 if resolved_discount is None else resolved_discount
     discount_amount: Final = original_cost * discount_percent
 
@@ -1389,12 +1403,12 @@ def _apply_cost_margin(
 
     # Get margin config - check provider-specific first, then global
     margin_config = None
-    if custom_llm_provider and custom_llm_provider in litellm.cost_margin_config:
-        margin_config = litellm.cost_margin_config[custom_llm_provider]
+    if custom_llm_provider and custom_llm_provider in pricing_margins():
+        margin_config = pricing_margins()[custom_llm_provider]
         if verbose_logger.isEnabledFor(logging.DEBUG):
             verbose_logger.debug("Found provider-specific margin config for %s: %s", custom_llm_provider, margin_config)
-    elif "global" in litellm.cost_margin_config:
-        margin_config = litellm.cost_margin_config["global"]
+    elif "global" in pricing_margins():
+        margin_config = pricing_margins()["global"]
         if verbose_logger.isEnabledFor(logging.DEBUG):
             verbose_logger.debug("Using global margin config: %s", margin_config)
     else:
@@ -1402,7 +1416,7 @@ def _apply_cost_margin(
             verbose_logger.debug(
                 "No margin config found. Provider: %s, Available configs: %s",
                 custom_llm_provider,
-                list(litellm.cost_margin_config.keys()),
+                list(pricing_margins().keys()),
             )
 
     if margin_config is not None:
@@ -1995,7 +2009,7 @@ def completion_cost(
                         video_resolution=video_resolution,
                     )
                 elif call_type in _SPEECH_CALL_TYPES:
-                    prompt_characters = _speech_billed_characters(
+                    prompt_characters = speech_billed_characters(
                         completion_response if isinstance(completion_response, HttpxBinaryResponseContent) else None,
                         prompt,
                     )
@@ -2159,12 +2173,14 @@ def completion_cost(
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai"
-                ) and not has_together_registry_pricing(model, litellm.model_cost):
+                ) and not has_together_registry_pricing(model, (retained_models() or litellm.model_cost)):
                     model = get_model_params_and_category(model, call_type=CallTypes(call_type))
 
                 # replicate llms are calculate based on time for request running
                 # see https://replicate.com/pricing
-                elif (model in litellm.replicate_models or "replicate" in model) and model not in litellm.model_cost:
+                elif (model in litellm.replicate_models or "replicate" in model) and model not in (
+                    retained_models() or litellm.model_cost
+                ):
                     # for unmapped replicate model, default to replicate's time tracking logic
                     return get_replicate_completion_pricing(completion_response, response_time_ms)
 
@@ -2261,7 +2277,7 @@ def completion_cost(
                     _final_cost += sum(additional_costs.values())
 
                 original_cost = _final_cost
-                if litellm.cost_discount_config:
+                if pricing_discounts():
                     (
                         _final_cost,
                         discount_percent,
@@ -2277,7 +2293,7 @@ def completion_cost(
                     discount_amount = 0.0
 
                 # Apply margin from module-level config if configured
-                if litellm.cost_margin_config:
+                if pricing_margins():
                     (
                         _final_cost,
                         margin_percent,
@@ -2352,15 +2368,15 @@ def completion_cost(
 
 
 def get_response_cost_from_hidden_params(
-    hidden_params: dict | BaseModel,
+    hidden_params: Mapping[str, object] | BaseModel,
 ) -> float | None:
     if isinstance(hidden_params, BaseModel):
         _hidden_params_dict = hidden_params.model_dump()
     else:
         _hidden_params_dict = hidden_params
 
-    additional_headers: Final = _hidden_params_dict.get("additional_headers", {})
-    if additional_headers and "llm_provider-x-litellm-response-cost" in additional_headers:
+    additional_headers: Final = as_str_mapping(_hidden_params_dict.get("additional_headers"))
+    if additional_headers is not None and "llm_provider-x-litellm-response-cost" in additional_headers:
         return _billable_header_cost(additional_headers["llm_provider-x-litellm-response-cost"])
     return None
 
@@ -2511,7 +2527,7 @@ def response_cost_calculator(
         raise e
 
 
-def _speech_billed_characters(speech_response: HttpxBinaryResponseContent | None, prompt: str) -> int:
+def speech_billed_characters(speech_response: HttpxBinaryResponseContent | None, prompt: str) -> int:
     reported: Final = speech_response.hidden_params.get("billed_characters") if speech_response is not None else None
     return reported if isinstance(reported, int) else litellm.utils.count_characters(text=prompt)
 
@@ -2629,7 +2645,7 @@ def _priced_candidates_before_unpriced_rules(candidates: tuple[_CostCandidate, .
 
 
 def _raw_cost_map_entry(key: str) -> Mapping[str, object] | None:
-    raw_entry: Final = litellm.model_cost.get(key)
+    raw_entry: Final = (retained_models() or litellm.model_cost).get(key)
     return raw_entry if isinstance(raw_entry, Mapping) else None
 
 
@@ -2908,6 +2924,46 @@ def transcription_cost(model: str, custom_llm_provider: str | None, duration: fl
     return openai_cost_per_second(model=model, custom_llm_provider=custom_llm_provider, duration=duration)
 
 
+def image_cost_model_candidates(
+    model: str, custom_llm_provider: str | None, quality: str | None, size: str | None
+) -> tuple[str | None, ...]:
+    # Standardize size format to use "-x-"
+    size_str: str = size or "1024-x-1024"
+    size_str = size_str.replace("x", "-x-") if "x" in size_str and "-x-" not in size_str else size_str
+
+    # Build model names for cost lookup
+    base_model_name = f"{size_str}/{model}"
+    model_name_without_custom_llm_provider: str | None = None
+    if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
+        model_name_without_custom_llm_provider = model.replace(f"{custom_llm_provider}/", "")
+        base_model_name = f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
+    model_name_with_quality: Final = f"{quality}/{base_model_name}" if quality else base_model_name
+    provider_first_model_name_with_quality: Final = (
+        f"{custom_llm_provider}/{quality}/{size_str}/{model_name_without_custom_llm_provider or model}"
+        if quality and custom_llm_provider
+        else None
+    )
+
+    # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
+    model_name_with_v2_quality: Final = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
+
+    verbose_logger.debug("Looking up cost for models: %s, %s", model_name_with_quality, base_model_name)
+
+    model_without_provider: Final = f"{size_str}/{model.split('/')[-1]}"
+    model_with_quality_without_provider = f"{quality}/{model_without_provider}" if quality else model_without_provider
+
+    return (
+        model_name_with_quality,
+        provider_first_model_name_with_quality,
+        base_model_name,
+        model_name_with_v2_quality,
+        model_with_quality_without_provider,
+        model_without_provider,
+        model,
+        model_name_without_custom_llm_provider,
+    )
+
+
 def default_image_cost_calculator(
     model: str,
     custom_llm_provider: str | None = None,
@@ -2934,51 +2990,23 @@ def default_image_cost_calculator(
     Raises:
         Exception: If model pricing not found in cost map
     """
-    # Standardize size format to use "-x-"
-    size_str: str = size or "1024-x-1024"
-    size_str = size_str.replace("x", "-x-") if "x" in size_str and "-x-" not in size_str else size_str
-
-    # Parse dimensions
-    height, width = map(int, size_str.split("-x-"))
-
-    # Build model names for cost lookup
-    base_model_name = f"{size_str}/{model}"
-    model_name_without_custom_llm_provider: str | None = None
-    if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
-        model_name_without_custom_llm_provider = model.replace(f"{custom_llm_provider}/", "")
-        base_model_name = f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
-    model_name_with_quality: Final = f"{quality}/{base_model_name}" if quality else base_model_name
-    provider_first_model_name_with_quality: Final = (
-        f"{custom_llm_provider}/{quality}/{size_str}/{model_name_without_custom_llm_provider or model}"
-        if quality and custom_llm_provider
-        else None
-    )
-
-    # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
-    model_name_with_v2_quality: Final = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
-
-    verbose_logger.debug("Looking up cost for models: %s, %s", model_name_with_quality, base_model_name)
-
-    model_without_provider: Final = f"{size_str}/{model.split('/')[-1]}"
-    model_with_quality_without_provider = f"{quality}/{model_without_provider}" if quality else model_without_provider
-
-    models_to_check: Final = (
-        model_name_with_quality,
-        provider_first_model_name_with_quality,
-        base_model_name,
-        model_name_with_v2_quality,
-        model_with_quality_without_provider,
-        model_without_provider,
-        model,
-        model_name_without_custom_llm_provider,
-    )
+    size_str: Final = (size or "1024x1024").replace("-x-", "x")
+    height, width = map(int, size_str.split("x"))
+    models_to_check: Final = image_cost_model_candidates(model, custom_llm_provider, quality, size)
     matched_model: Final = next(
-        (_model for _model in models_to_check if _model is not None and _model in litellm.model_cost), None
+        (
+            _model
+            for _model in models_to_check
+            if _model is not None and _model in (retained_models() or litellm.model_cost)
+        ),
+        None,
     )
     if matched_model is None and model_info is None:
         raise Exception(f"Model not found in cost map. Tried checking {models_to_check}")
 
-    shared_cost_info: Final = litellm.model_cost[matched_model] if matched_model is not None else None
+    shared_cost_info: Final = (
+        (retained_models() or litellm.model_cost)[matched_model] if matched_model is not None else None
+    )
     price_tables: Final = tuple(table for table in (model_info, shared_cost_info) if table is not None)
     image_count: Final = n if n is not None else 1
     unit_counts: Final = (
@@ -3016,7 +3044,7 @@ def default_video_cost_calculator(
         custom_llm_provider (Optional[str]): Custom LLM provider
         model_info (Optional[ModelInfo]): Deployment-level model info containing
             custom video pricing. When provided, used before falling back to
-            the global litellm.model_cost lookup.
+            the effective model cost lookup.
         video_resolution (Optional[str]): From usage (e.g. ``720p``, ``1080p``) for tiered per-second pricing.
 
     Returns:
@@ -3026,9 +3054,9 @@ def default_video_cost_calculator(
         Exception: If model pricing not found in cost map
     """
     # Use custom model_info pricing if provided (deployment-specific pricing)
-    cost_info: dict | None = None
+    cost_info: ModelInfo | None = None
     if model_info is not None:
-        cost_info = dict(model_info)
+        cost_info = model_info
     else:
         # Build model names for cost lookup
         base_model_name = model
@@ -3049,15 +3077,15 @@ def default_video_cost_calculator(
             model_name_without_custom_llm_provider,
         ]
         for _model in models_to_check:
-            if _model is not None and _model in litellm.model_cost:
-                cost_info = litellm.model_cost[_model]
+            if _model is not None and _model in (retained_models() or litellm.model_cost):
+                cost_info = (retained_models() or litellm.model_cost)[_model]
                 break
 
         # If still not found, try with custom_llm_provider prefix
         if cost_info is None and custom_llm_provider:
             prefixed_model: Final = f"{custom_llm_provider}/{model}"
-            if prefixed_model in litellm.model_cost:
-                cost_info = litellm.model_cost[prefixed_model]
+            if prefixed_model in (retained_models() or litellm.model_cost):
+                cost_info = (retained_models() or litellm.model_cost)[prefixed_model]
 
     if cost_info is None:
         raise Exception(f"Model not found in cost map for model={model}")
@@ -3663,9 +3691,9 @@ def _cost_map_entry_declares_pricing(model_name: str, custom_llm_provider: str) 
     """
     resolved: Final = _cost_map_model_info(model_name, custom_llm_provider)
     entries: Final = (
-        litellm.model_cost.get(resolved.get("key")) if resolved is not None else None,
-        litellm.model_cost.get(model_name),
-        litellm.model_cost.get(f"{custom_llm_provider}/{model_name}"),
+        (retained_models() or litellm.model_cost).get(resolved.get("key")) if resolved is not None else None,
+        (retained_models() or litellm.model_cost).get(model_name),
+        (retained_models() or litellm.model_cost).get(f"{custom_llm_provider}/{model_name}"),
     )
     return any(entry is not None and _cost_map_entry_prices_anything(entry) for entry in entries)
 
@@ -3910,11 +3938,11 @@ def _model_info_rate(info: ModelInfo, key: _TranscriptionRateKey) -> float | Non
 
 
 def _declared_transcription_rate(info: ModelInfo | None, keys: tuple[_TranscriptionRateKey, ...]) -> float | None:
-    """First of ``keys`` this entry prices, read off the raw ``litellm.model_cost`` entry
+    """First of ``keys`` this entry prices, read off the raw model cost entry
     because ``get_model_info`` synthesizes zero token rates for entries that omit them."""
     if info is None:
         return None
-    declared: Final = litellm.model_cost.get(info.get("key"))
+    declared: Final = (retained_models() or litellm.model_cost).get(info.get("key"))
     if declared is None:
         return None
     return next(

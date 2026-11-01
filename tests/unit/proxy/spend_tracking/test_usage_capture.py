@@ -1,13 +1,13 @@
 import asyncio
 import json
-from collections.abc import Awaitable, Mapping
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Final
 
 import pytest
 
-from litellm.accounting import Metric, MetricName, Outcome
+from litellm.accounting import Metric, MetricName, OutboundUsageEvent, Outcome, Unpriced
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.db.accounting_ledger import AccountingConflictError, UsageWrite
 from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureError, UsageCaptureSettings
@@ -334,7 +334,7 @@ async def test_competing_writers_reuse_only_terminal_pricing_snapshots(terminal:
 
 
 @pytest.mark.asyncio
-async def test_batch_poll_has_distinct_identity_and_only_terminal_usage_is_chargeable() -> None:
+async def test_batch_poll_and_terminal_summary_are_not_charge_owners() -> None:
     from litellm.proxy.spend_tracking.usage_capture import capture_callback
 
     database: Final = StoredUsage()
@@ -352,8 +352,8 @@ async def test_batch_poll_has_distinct_identity_and_only_terminal_usage_is_charg
     await meter.close()
     assert pending.writes[-1].event.event_id == "poll:status"
     assert json.loads(pending.writes[-1].envelope)["charge_eligible"] is False
-    assert completed.writes[-1].event.event_id == "batch_batch_cost"
-    assert json.loads(completed.writes[-1].envelope)["charge_eligible"] is True
+    assert completed.writes[-1].event.event_id == "batch_batch_cost:summary"
+    assert json.loads(completed.writes[-1].envelope)["charge_eligible"] is False
     assert len(completed.writes) == 1
 
 
@@ -441,13 +441,13 @@ async def test_supported_sync_ack_waits_for_commit(call_type: str, monkeypatch: 
     monkeypatch.setattr(proxy_server, "usage_capture", runtime)
     monkeypatch.setattr(proxy_server, "general_settings", {"accounting_sync_ack": True})
     deadlines: Final = asyncio.Queue[float | None]()
-    original_wait: Final = asyncio.wait_for
+    original_timeout: Final = asyncio.timeout
 
-    async def wait_with_deadline(awaitable: Awaitable[object], timeout: float | None) -> object:
-        deadlines.put_nowait(timeout)
-        return await original_wait(awaitable, timeout)
+    def timeout_with_deadline(delay: float | None) -> asyncio.Timeout:
+        deadlines.put_nowait(delay)
+        return original_timeout(delay)
 
-    monkeypatch.setattr(asyncio, "wait_for", wait_with_deadline)
+    monkeypatch.setattr(asyncio, "timeout", timeout_with_deadline)
     response: Final = asyncio.create_task(
         capture_proxy_response(
             _logger(call_type),
@@ -1021,9 +1021,8 @@ async def test_batch_capture_provenance_tracks_observations_not_envelope_presenc
     envelope: Final = json.loads(database.rows[-1].envelope)
     assert envelope["usage_source"] == ("unknown" if measured is None else "measured")
     assert envelope["usage"]["batch_usage_by_model"] == usage["batch_usage_by_model"]
-    assert database.rows[-1].event.metrics == (
-        None if measured is None else (Metric(name=MetricName.TOTAL_TOKENS, value=Decimal(measured["total_tokens"])),)
-    )
+    assert database.rows[-1].event.metrics is None
+    assert envelope["charge_eligible"] is False
 
 
 @pytest.mark.asyncio
@@ -1075,17 +1074,14 @@ async def test_response_ack_timeout_preserves_success_and_later_commits(monkeypa
     runtime.start(database.write, UsageCaptureSettings(batch_size=2))
     monkeypatch.setattr(proxy_server, "usage_capture", runtime)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_sync_ack": True})
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"accounting_sync_ack": True, "accounting_sync_ack_timeout_seconds": 0.01}
+    )
     logger: Final = _logger()
 
-    async def expired_deadline(future: object, timeout: float) -> None:
-        raise TimeoutError("controlled response deadline")
-
     try:
-        with monkeypatch.context() as clock:
-            clock.setattr(asyncio, "wait_for", expired_deadline)
-            with pytest.raises(HTTPException) as error:
-                await capture_proxy_response(logger, ModelResponse(id="provider", usage=Usage(prompt_tokens=3)))
+        with pytest.raises(HTTPException) as error:
+            await capture_proxy_response(logger, ModelResponse(id="provider", usage=Usage(prompt_tokens=3)))
         assert error.value.status_code == 503
         await database.entered.wait()
         captured: Final = logger.model_call_details["_accounting_capture"]
@@ -1710,3 +1706,80 @@ async def test_batch_replay_reserves_the_accepted_pricing_snapshot_size() -> Non
         assert runtime.meter is not None and runtime.meter.pending_bytes == 0
     finally:
         await runtime.stop(1)
+
+
+class DelayedCostCompiler:
+    def __init__(self) -> None:
+        self.entered: Final = asyncio.Event()
+        self.cancelled: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+
+    async def compile(self, event: OutboundUsageEvent) -> Unpriced:
+        self.entered.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+        return Unpriced(usage_event_id=event.event_id, reason="usage_unknown")
+
+
+@pytest.mark.asyncio
+async def test_sync_ack_preserves_committed_usage_ack_when_compilation_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime, capture_proxy_response
+    from litellm.types.utils import ModelResponse, Usage
+
+    database: Final = CommitBarrier()
+    database.release.set()
+    compiler: Final = DelayedCostCompiler()
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(database.write, UsageCaptureSettings(batch_size=2), compiler=compiler)
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"accounting_sync_ack": True, "accounting_sync_ack_timeout_seconds": 0.1}
+    )
+    try:
+        await asyncio.wait_for(
+            capture_proxy_response(_logger(), ModelResponse(id="provider", usage=Usage(prompt_tokens=3))), 2
+        )
+        assert compiler.entered.is_set()
+        assert compiler.cancelled.is_set()
+        assert database.committed == ("caller:inbound", "provider")
+    finally:
+        compiler.release.set()
+        await runtime.stop(1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["create_batch", "acreate_batch"])
+async def test_batch_creation_is_not_a_charge_owner(call_type: str) -> None:
+    from litellm.proxy.spend_tracking.cost_compiler import price_usage
+    from litellm.proxy.spend_tracking.usage_capture import capture_callback
+    from litellm.accounting import Unpriced
+
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    try:
+        captured: Final = capture_callback(
+            meter,
+            {
+                "call_type": call_type,
+                "litellm_call_id": "create",
+                "model": "capture-model",
+                "litellm_params": {},
+            },
+            {"id": "batch", "status": "validating"},
+            NOW,
+            NOW,
+        )
+        await meter.close()
+        outbound: Final = captured.writes[-1]
+        assert price_usage(outbound.envelope) == Unpriced(
+            usage_event_id=outbound.event.event_id, reason="not_charge_owner"
+        )
+    finally:
+        await meter.stop(1)

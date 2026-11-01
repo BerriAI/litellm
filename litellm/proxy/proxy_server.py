@@ -3256,11 +3256,15 @@ def _configure_usage_capture() -> None:
             "Usage capture requires local Prisma writes and disabled collector, remote writer and search free tier"
         )
     from litellm.proxy.db.accounting_ledger import AccountingLedger
+    from litellm.proxy.spend_tracking.cost_compiler import LoggingCostCompiler
 
     ledger: Final = AccountingLedger.for_client(prisma_client)
     writer: Final = UsageBatchWriter(ledger.insert_usage_batch, ledger.load_usage_batch)
     usage_capture.start(
-        writer.write, UsageCaptureSettings.model_validate(capture_settings), load=ledger.load_usage_batch
+        writer.write,
+        UsageCaptureSettings.model_validate(capture_settings),
+        load=ledger.load_usage_batch,
+        compiler=LoggingCostCompiler(ledger),
     )
 
 
@@ -11606,6 +11610,22 @@ class ProxyStartupEvent:
         )
 
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
+
+        async def compile_accounting_costs() -> None:
+            from litellm.proxy.db.accounting_ledger import AccountingLedger
+            from litellm.proxy.spend_tracking.cost_compiler import LoggingCostCompiler
+
+            if usage_capture.meter is not None:
+                await LoggingCostCompiler(AccountingLedger.for_client(prisma_client)).compile_pending()
+
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler has no typed add_job interface
+            compile_accounting_costs,
+            "interval",
+            seconds=5,
+            id="accounting_cost_compilation",
+            replace_existing=True,
+            max_instances=1,
+        )
 
         cls._initialize_spend_capture_rate_check_job(
             scheduler=scheduler,

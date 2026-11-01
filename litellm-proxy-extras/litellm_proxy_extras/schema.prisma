@@ -2111,8 +2111,12 @@ model LiteLLM_AccountingEvent {
   occurred_at     DateTime
   recorded_at     DateTime            @default(now())
   payload         Json
+  compilation_state String @default("pending")
+  compilation_error String?
+  compilation_retry_at DateTime?
 
   @@index([recorded_at])
+  @@index([kind, compilation_state, recorded_at])
   @@index([kind, source_event_id])
 }
 
