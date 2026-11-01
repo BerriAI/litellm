@@ -689,16 +689,11 @@ class TestProxySettingEndpoints:
         # Verify settings were updated
         settings = data["settings"]
         assert settings["google_client_id"] == new_sso_settings["google_client_id"]
-        assert (
-            settings["google_client_secret"] == new_sso_settings["google_client_secret"]
-        )
+        assert settings["google_client_secret"] == "new_****************cret"
         assert (
             settings["microsoft_client_id"] == new_sso_settings["microsoft_client_id"]
         )
-        assert (
-            settings["microsoft_client_secret"]
-            == new_sso_settings["microsoft_client_secret"]
-        )
+        assert settings["microsoft_client_secret"] == "new_*******************cret"
         assert settings["proxy_base_url"] == new_sso_settings["proxy_base_url"]
         assert settings["user_email"] == new_sso_settings["user_email"]
 
@@ -721,6 +716,163 @@ class TestProxySettingEndpoints:
         # The encryption mock returns data as-is, so we verify structure
         create_sso_settings = json.loads(create_data["sso_settings"])
         assert create_sso_settings["google_client_id"] == "new_google_client_id"
+
+    def _patch_sso_settings(self, monkeypatch, stored, body, environment_variables=None):
+        """PATCH /update/sso_settings against a stored row; returns (response, saved row)."""
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = MagicMock()
+        stored_record = None
+        if stored is not None:
+            stored_record = MagicMock()
+            stored_record.sso_settings = stored
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+            return_value=stored_record
+        )
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        env_var_entry = None
+        if environment_variables is not None:
+            env_var_entry = MagicMock()
+            env_var_entry.param_value = environment_variables
+        mock_prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=env_var_entry)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config, "encrypt_env_variables", lambda environment_variables: environment_variables
+        )
+        monkeypatch.setattr(proxy_config, "decrypt_db_variables", lambda variables: variables)
+
+        response = client.patch("/update/sso_settings", json=body)
+        upsert_kwargs = mock_prisma.db.litellm_ssoconfig.upsert.call_args.kwargs
+        return response, json.loads(upsert_kwargs["data"]["update"]["sso_settings"])
+
+    _STORED_GENERIC_SSO = {
+        "generic_client_id": "stored-client-id",
+        "generic_client_secret": "stored-client-secret",
+        "generic_authorization_endpoint": "https://idp.example.com/authorize",
+        "user_email": "admin@example.com",
+        "role_mappings": {
+            "provider": "generic",
+            "group_claim": "groups",
+            "default_role": "internal_user",
+            "roles": {"proxy_admin": ["admins"]},
+        },
+    }
+
+    def test_update_sso_settings_omitted_fields_keep_stored_values(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        monkeypatch.setenv("GENERIC_CLIENT_SECRET", "stored-client-secret")
+        new_role_mappings = {
+            "provider": "generic",
+            "group_claim": "roles",
+            "default_role": "internal_user",
+            "roles": {"proxy_admin": ["platform-admins"]},
+        }
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch, self._STORED_GENERIC_SSO, {"role_mappings": new_role_mappings}
+        )
+
+        assert response.status_code == 200
+        assert saved["generic_client_secret"] == "stored-client-secret"
+        assert saved["generic_client_id"] == "stored-client-id"
+        assert saved["user_email"] == "admin@example.com"
+        assert saved["role_mappings"]["group_claim"] == "roles"
+        assert os.environ["GENERIC_CLIENT_SECRET"] == "stored-client-secret"
+
+    def test_update_sso_settings_null_clears_only_that_field(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        monkeypatch.setenv("GENERIC_CLIENT_SECRET", "stored-client-secret")
+        monkeypatch.setenv("GENERIC_CLIENT_ID", "stored-client-id")
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch,
+            self._STORED_GENERIC_SSO,
+            {"generic_client_secret": None, "role_mappings": None},
+        )
+
+        assert response.status_code == 200
+        assert saved["generic_client_secret"] is None
+        assert saved["role_mappings"] is None
+        assert saved["generic_client_id"] == "stored-client-id"
+        assert "GENERIC_CLIENT_SECRET" not in os.environ
+        assert os.environ["GENERIC_CLIENT_ID"] == "stored-client-id"
+
+    def test_update_sso_settings_new_value_replaces_stored_value(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        response, saved = self._patch_sso_settings(
+            monkeypatch, self._STORED_GENERIC_SSO, {"generic_client_secret": "rotated-secret"}
+        )
+
+        assert response.status_code == 200
+        assert saved["generic_client_secret"] == "rotated-secret"
+        assert saved["generic_client_id"] == "stored-client-id"
+        assert os.environ["GENERIC_CLIENT_SECRET"] == "rotated-secret"
+
+    def test_update_sso_settings_omitted_field_leaves_env_only_value_alone(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        monkeypatch.setenv("GENERIC_CLIENT_SECRET", "env-only-secret")
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch, None, {"user_email": "admin@example.com"}
+        )
+
+        assert response.status_code == 200
+        assert saved["user_email"] == "admin@example.com"
+        assert saved["generic_client_secret"] is None
+        assert os.environ["GENERIC_CLIENT_SECRET"] == "env-only-secret"
+
+    def test_update_sso_settings_response_masks_stored_secrets(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        response, saved = self._patch_sso_settings(
+            monkeypatch, self._STORED_GENERIC_SSO, {}
+        )
+
+        assert response.status_code == 200
+        assert saved["generic_client_secret"] == "stored-client-secret"
+        returned = response.json()["settings"]
+        assert returned["generic_client_id"] == "stored-client-id"
+        assert returned["generic_client_secret"] != "stored-client-secret"
+        assert "stored-client-secret" not in response.text
+
+    def test_update_sso_settings_moves_omitted_env_row_values_into_sso_row(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import json
+
+        environment_variables = {
+            "MICROSOFT_TENANT": "env-row-tenant",
+            "MICROSOFT_CLIENT_ID": "env-row-client-id",
+            "GENERIC_CLIENT_ID": "env-row-generic-id",
+            "LANGFUSE_PUBLIC_KEY": "unrelated",
+        }
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch,
+            self._STORED_GENERIC_SSO,
+            {"user_email": "new@example.com", "microsoft_client_id": None},
+            environment_variables=environment_variables,
+        )
+
+        from litellm.proxy.proxy_server import prisma_client
+
+        assert response.status_code == 200
+        assert saved["microsoft_tenant"] == "env-row-tenant"
+        assert saved["microsoft_client_id"] is None
+        assert saved["generic_client_id"] == "stored-client-id"
+        assert saved["user_email"] == "new@example.com"
+        env_row_update = prisma_client.db.litellm_config.update.call_args.kwargs
+        assert json.loads(env_row_update["data"]["param_value"]) == {"LANGFUSE_PUBLIC_KEY": "unrelated"}
 
     def test_update_sso_settings_maps_saml_fields_to_env_vars(
         self, mock_proxy_config, mock_auth, monkeypatch
@@ -804,7 +956,7 @@ class TestProxySettingEndpoints:
         mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
         mock_prisma.db.litellm_config = MagicMock()
-        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+        mock_prisma.writer_db.litellm_config.find_unique = AsyncMock(
             side_effect=ValueError("cleanup failed")
         )
         mock_prisma.db.litellm_config.update = AsyncMock()

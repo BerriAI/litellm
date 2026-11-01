@@ -19,6 +19,7 @@ vi.mock("./shared/errorUtils", () => ({
 
 import { toast } from "@/lib/toast";
 import { getSSOSettings, updateSSOSettings } from "./networking";
+import { CLEARED_SSO_SETTINGS } from "./Settings/AdminSettings/SSOSettings/utils";
 
 describe("SSOModals", () => {
   it("should render the SSOModals component", () => {
@@ -515,27 +516,7 @@ describe("SSOModals", () => {
 
     // Verify the clear API was called with null values
     await waitFor(() => {
-      expect(updateSSOSettings).toHaveBeenCalledWith("test-token", {
-        google_client_id: null,
-        google_client_secret: null,
-        microsoft_client_id: null,
-        microsoft_client_secret: null,
-        microsoft_tenant: null,
-        generic_client_id: null,
-        generic_client_secret: null,
-        generic_authorization_endpoint: null,
-        generic_token_endpoint: null,
-        generic_userinfo_endpoint: null,
-        saml_idp_metadata_url: null,
-        saml_idp_metadata_xml: null,
-        saml_sp_entity_id: null,
-        saml_allow_unsolicited: null,
-        generic_scope: null,
-        proxy_base_url: null,
-        user_email: null,
-        sso_provider: null,
-        role_mappings: null,
-      });
+      expect(updateSSOSettings).toHaveBeenCalledWith("test-token", CLEARED_SSO_SETTINGS);
     });
 
     expect(toast.success).toHaveBeenCalledWith("SSO settings cleared successfully");
