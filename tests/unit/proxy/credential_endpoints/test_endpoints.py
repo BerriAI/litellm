@@ -2,9 +2,10 @@
 
 import json
 from contextlib import contextmanager
+from functools import reduce
 from types import SimpleNamespace
-from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Final, Protocol
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
@@ -12,12 +13,17 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter
 
 import litellm
-from litellm.models.credentials import CredentialSource
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.litellm_logging import get_masked_values
+from litellm.llms.github_copilot.per_user_auth import _SESSION_CACHE, _session_cache_key
+from litellm.models.credentials import CredentialSource, UserConnectionFlowHandle
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.credential_endpoints.endpoints import get_llm_router
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
+from litellm.proxy.credential_endpoints.endpoints import _decode_flow_handle, get_llm_router
 from litellm.proxy.proxy_server import app
 from litellm.types.utils import CredentialItem
 
@@ -457,6 +463,264 @@ def test_update_credential_never_syncs_a_null_into_the_in_memory_credential(rest
     assert synced.credential_values["api_key"] == "sk-rotated"
 
 
+_WRITTEN_JSON: Final = TypeAdapter(dict[str, object])
+
+
+class _InstallCredentialStore(Protocol):
+    def __call__(
+        self,
+        *,
+        connected: bool = True,
+        in_memory: tuple[object, ...] = (),
+        llm_router: object | None = None,
+        **repository_calls: AsyncMock,
+    ) -> None: ...
+
+
+def _encrypted_row(served: CredentialItem) -> CredentialItem:
+    return CredentialItem(
+        credential_name=served.credential_name,
+        credential_values={key: encrypt_value_helper(value) for key, value in served.credential_values.items()},
+        credential_info=dict(served.credential_info),
+    )
+
+
+def _written_values(update_by_name: AsyncMock) -> dict[str, object]:
+    written: Final = _WRITTEN_JSON.validate_json(update_by_name.await_args.kwargs["data"]["credential_values"])
+    return {
+        key: decrypt_value_helper(value, key) if isinstance(value, str) else value for key, value in written.items()
+    }
+
+
+def _written_info(update_by_name: AsyncMock) -> dict[str, object]:
+    return _WRITTEN_JSON.validate_json(update_by_name.await_args.kwargs["data"]["credential_info"])
+
+
+def _serve_credential(
+    credential_store: _InstallCredentialStore,
+    served: CredentialItem,
+    in_memory: tuple[CredentialItem, ...] | None = None,
+) -> AsyncMock:
+    update_by_name = AsyncMock(return_value=None)
+    credential_store(
+        in_memory=(served,) if in_memory is None else in_memory,
+        find_by_name=AsyncMock(side_effect=lambda _name: _encrypted_row(served)),
+        update_by_name=update_by_name,
+    )
+    return update_by_name
+
+
+def _service_account(
+    private_key: str = "pk-1234567890", client_email: str = "svc@example.com"
+) -> dict[str, dict[str, str]]:
+    return {"vertex_credentials": {"private_key": private_key, "client_email": client_email}}
+
+
+def test_update_credential_keeps_the_stored_secret_when_the_patch_echoes_its_masked_read_back(
+    credential_store: _InstallCredentialStore,
+):
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "sk-real-secret-1234"},
+        credential_info={"custom_llm_provider": "openai", "description": "original"},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential(
+        "existing",
+        {
+            "credential_values": {"api_key": "sk****34"},
+            "credential_info": {"custom_llm_provider": "openai", "description": "edited"},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "sk-real-secret-1234"}
+    assert _written_info(update_by_name)["description"] == "edited"
+    assert CredentialAccessor.get_credential_values("existing") == {"api_key": "sk-real-secret-1234"}
+    assert litellm.credential_list[0].credential_info["description"] == "edited"
+
+
+def test_update_credential_keeps_the_secret_when_the_patch_echoes_what_get_by_name_served(
+    credential_store: _InstallCredentialStore,
+):
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "sk-real-secret-1234", "api_base": "https://api.example.com"},
+        credential_info={"custom_llm_provider": "openai", "description": "original"},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+    read_back = _call_as("GET", "/credentials/by_name/existing").json()
+    assert read_back["credential_values"]["api_key"] != "sk-real-secret-1234"
+
+    response = _patch_credential(
+        "existing", {**read_back, "credential_info": {**read_back["credential_info"], "description": "edited"}}
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "sk-real-secret-1234", "api_base": "https://api.example.com"}
+    assert _written_info(update_by_name)["description"] == "edited"
+
+
+def test_update_credential_keeps_a_short_secret_whose_read_back_is_all_asterisks(
+    credential_store: _InstallCredentialStore,
+):
+    served = CredentialItem(credential_name="existing", credential_values={"api_key": "abc"}, credential_info={})
+    update_by_name = _serve_credential(credential_store, served)
+    read_back = _call_as("GET", "/credentials/by_name/existing").json()
+    assert read_back["credential_values"]["api_key"] != "abc"
+
+    response = _patch_credential(
+        "existing", {"credential_values": read_back["credential_values"], "credential_info": {}}
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "abc"}
+    assert CredentialAccessor.get_credential_values("existing") == {"api_key": "abc"}
+
+
+@pytest.mark.parametrize(
+    "rotated_values",
+    (
+        {"api_key": "sk-rotated-key-5678"},
+        {"api_key": "new**secret"},
+        _service_account(private_key="pk**rotated"),
+    ),
+)
+def test_update_credential_still_rotates_a_secret_sent_in_full(
+    credential_store: _InstallCredentialStore, rotated_values: dict[str, object]
+):
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "sk-old-key-000011", **_service_account()},
+        credential_info={},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential("existing", {"credential_values": rotated_values, "credential_info": {}})
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {**served.credential_values, **rotated_values}
+    assert CredentialAccessor.get_credential_values("existing") == {**served.credential_values, **rotated_values}
+
+
+def test_update_credential_saves_a_mask_shaped_value_on_a_key_get_never_masks(
+    credential_store: _InstallCredentialStore,
+):
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={
+            "api_key": "sk-real-secret-1234",
+            "api_base": "https://api.example.com",
+            "extra_headers": {"x-team": "platform"},
+        },
+        credential_info={},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+    sent: Final = {"api_base": "ab****cd", "organization": "*****", "extra_headers": {"x-team": "*****"}}
+    assert get_masked_values(sent, unmasked_length=4, number_of_asterisks=4) == sent
+
+    response = _patch_credential("existing", {"credential_values": sent, "credential_info": {}})
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "sk-real-secret-1234", **sent}
+
+
+@pytest.mark.parametrize("client_email", ("svc@example.com", "new@example.com"))
+def test_update_credential_keeps_a_masked_secret_inside_a_stored_object(
+    credential_store: _InstallCredentialStore, client_email: str
+):
+    served = CredentialItem(credential_name="existing", credential_values=_service_account(), credential_info={})
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential(
+        "existing",
+        {
+            "credential_values": _service_account(private_key="pk****90", client_email=client_email),
+            "credential_info": {},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == _service_account(client_email=client_email)
+    assert CredentialAccessor.get_credential_values("existing") == _service_account(client_email=client_email)
+
+
+def test_update_credential_drops_a_masked_leaf_the_stored_object_no_longer_has(
+    credential_store: _InstallCredentialStore,
+):
+    served = CredentialItem(credential_name="existing", credential_values=_service_account(), credential_info={})
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential(
+        "existing",
+        {
+            "credential_values": {
+                "vertex_credentials": {
+                    "private_key": "pk****90",
+                    "refresh_token": "rt****89",
+                    "client_email": "svc@example.com",
+                }
+            },
+            "credential_info": {},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == _service_account()
+
+
+@pytest.mark.parametrize(
+    "in_memory",
+    (
+        pytest.param(
+            (
+                CredentialItem(
+                    credential_name="existing",
+                    credential_values={"api_key": "sk-old-key-000011"},
+                    credential_info={"description": "original"},
+                ),
+            ),
+            id="replica_not_resynced",
+        ),
+        pytest.param((), id="replica_never_loaded_it"),
+    ),
+)
+def test_update_credential_keeps_the_table_secret_whatever_this_replica_last_rendered(
+    credential_store: _InstallCredentialStore, in_memory: tuple[CredentialItem, ...]
+):
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "sk-rotated-key-000099"},
+        credential_info={"description": "original"},
+    )
+    update_by_name = _serve_credential(credential_store, served, in_memory=in_memory)
+
+    response = _patch_credential(
+        "existing",
+        {"credential_values": {"api_key": "sk****11"}, "credential_info": {"description": "edited"}},
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "sk-rotated-key-000099"}
+    assert _written_info(update_by_name)["description"] == "edited"
+
+
+@pytest.mark.parametrize("levels", (20, 21))
+def test_update_credential_keeps_a_secret_exactly_as_deep_as_the_masker_masks(
+    credential_store: _InstallCredentialStore, levels: int
+):
+    nested = reduce(lambda inner, _level: {"credentials": inner}, range(levels), {"api_key": "leaf-secret-1234"})
+    served = CredentialItem(credential_name="existing", credential_values=nested, credential_info={})
+    update_by_name = _serve_credential(credential_store, served)
+    read_back = get_masked_values(served.credential_values, unmasked_length=4, number_of_asterisks=4)
+
+    response = _patch_credential("existing", {"credential_values": read_back, "credential_info": {}})
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == nested
+
+
 def _generate_es256_pem() -> str:
     key = ec.generate_private_key(ec.SECP256R1())
     return key.private_bytes(
@@ -659,6 +923,29 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
 
         assert response.status_code == 403, response.text
 
+    @pytest.mark.parametrize(
+        "auth, expected_status",
+        [(_as_non_admin, 403), (_as_admin, 200)],
+        ids=["non_admin", "proxy_admin"],
+    )
+    def test_only_a_proxy_admin_can_create_a_credential_with_an_oidc_api_key(
+        self, restore_credential_list, auth, expected_status: int
+    ):
+        """The call path reads an oidc/ api_key from the proxy's own filesystem, so it is a server-owned value the
+        same way a federation field is."""
+        with _repository_holding(None) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "mistral-sa",
+                    "credential_values": {"api_key": "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"},
+                    "credential_info": {"custom_llm_provider": "mistral"},
+                },
+                auth=auth,
+            )
+
+        assert response.status_code == expected_status, response.text
+        assert repository.create.await_count == (1 if expected_status == 200 else 0)
+
     def test_non_admin_can_create_a_credential_without_wif_fields(self, restore_credential_list):
         with _repository_holding(None) as repository:
             response = _post_credential(
@@ -788,8 +1075,8 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
         stored = CredentialItem(credential_name="existing", credential_values={"api_key": "sk-old"}, credential_info={})
         update_by_name = AsyncMock(return_value=None)
         router = MagicMock()
-        router.get_deployment.return_value = {"model_name": "claude-opus-5-5"}
-        router.get_deployment_credentials.return_value = {
+        router.registry.return_value.deployment.return_value = {"model_name": "claude-opus-5-5"}
+        router.registry.return_value.credentials.return_value = {
             "anthropic_keycloak_token_url": "https://keycloak.internal/token",
             "anthropic_keycloak_client_secret_ref": "os.environ/KEYCLOAK_CLIENT_SECRET",
         }
@@ -808,8 +1095,8 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
         stored = CredentialItem(credential_name="existing", credential_values={"api_key": "sk-old"}, credential_info={})
         update_by_name = AsyncMock(return_value=None)
         router = MagicMock()
-        router.get_deployment.return_value = {"model_name": "claude-opus-5-5"}
-        router.get_deployment_credentials.return_value = {
+        router.registry.return_value.deployment.return_value = {"model_name": "claude-opus-5-5"}
+        router.registry.return_value.credentials.return_value = {
             "anthropic_keycloak_token_url": "https://keycloak.internal/token"
         }
         credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name, llm_router=router)
@@ -919,6 +1206,32 @@ class TestNonAdminCannotTouchAStoredWifCredential:
 
         assert response.status_code == 403, response.text
         assert "anthropic_keycloak_token_url" in response.text
+        repository.update_by_name.assert_not_awaited()
+
+    def test_non_admin_cannot_repoint_a_stored_credential_whose_encrypted_api_key_is_an_oidc_reference(
+        self, restore_credential_list, monkeypatch
+    ):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-credential-endpoints-test-salt")
+        stored = CredentialItem(
+            credential_name="mistral-sa",
+            credential_values={
+                "api_key": encrypt_value_helper("oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token")
+            },
+            credential_info={"custom_llm_provider": "mistral"},
+        )
+        with _repository_holding(stored) as repository:
+            response = _patch_credential(
+                "mistral-sa",
+                {
+                    "credential_name": "mistral-sa",
+                    "credential_values": {"api_base": "https://attacker.example"},
+                    "credential_info": {},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        assert "'api_key'" in response.text
         repository.update_by_name.assert_not_awaited()
 
     def test_proxy_admin_can_delete_a_wif_field_off_a_credential(self, restore_credential_list):
@@ -1378,6 +1691,298 @@ def test_create_credential_still_answers_200_for_a_name_that_is_free(credential_
     find_by_name.assert_not_awaited(), "the unique index is the guard; create must not add a lookup"
 
 
+@pytest.mark.parametrize(
+    "host",
+    ["https://x.ghe.com", "ghes.example.com", "x.ghe.com:443", "a.b.ghe.com"],
+)
+def test_create_credential_rejects_invalid_github_copilot_hosts(credential_store, host):
+    create: Final = AsyncMock()
+    credential_store(create=create)
+
+    response: Final = _create_credential(
+        {
+            "credential_name": "copilot",
+            "credential_values": {"github_copilot_host": host},
+            "credential_info": {"custom_llm_provider": "github_copilot"},
+        }
+    )
+
+    assert response.status_code == 400
+    create.assert_not_awaited()
+
+
+def test_create_credential_normalizes_github_copilot_host(credential_store):
+    credential_store(create=AsyncMock())
+
+    response = _create_credential(
+        {
+            "credential_name": "copilot",
+            "credential_values": {"github_copilot_host": "OCTO.ghe.com"},
+            "credential_info": {"custom_llm_provider": "github_copilot"},
+        }
+    )
+
+    assert response.status_code == 200, response.text
+    assert CredentialAccessor.find_credential("copilot").credential_values["github_copilot_host"] == "octo.ghe.com"
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["https://x.ghe.com", "ghes.example.com", "x.ghe.com:443", "a.b.ghe.com"],
+)
+def test_update_credential_rejects_invalid_github_copilot_hosts(credential_store, host):
+    stored: Final = CredentialItem(
+        credential_name="copilot",
+        credential_values={"github_copilot_host": "octo.ghe.com"},
+        credential_info={"custom_llm_provider": "github_copilot"},
+    )
+    update: Final = AsyncMock()
+    credential_store(in_memory=(stored,), find_by_name=AsyncMock(return_value=stored), update_by_name=update)
+
+    response = _patch_credential(
+        "copilot",
+        {
+            "credential_name": "copilot",
+            "credential_values": {"github_copilot_host": host},
+            "credential_info": {"custom_llm_provider": "github_copilot"},
+        },
+    )
+
+    assert response.status_code == 400
+    update.assert_not_awaited()
+
+
+def test_update_credential_normalizes_github_copilot_host(credential_store):
+    stored = CredentialItem(
+        credential_name="copilot",
+        credential_values={},
+        credential_info={"custom_llm_provider": "github_copilot"},
+    )
+    credential_store(
+        in_memory=(stored,),
+        find_by_name=AsyncMock(return_value=stored),
+        update_by_name=AsyncMock(),
+    )
+
+    response = _patch_credential(
+        "copilot",
+        {
+            "credential_name": "copilot",
+            "credential_values": {"github_copilot_host": "OCTO.ghe.com"},
+            "credential_info": {"custom_llm_provider": "github_copilot"},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert CredentialAccessor.find_credential("copilot").credential_values["github_copilot_host"] == "octo.ghe.com"
+
+
+def _encrypted_per_user_copilot_credential(host: str) -> CredentialItem:
+    return CredentialItem(
+        credential_name="copilot",
+        credential_values={
+            "github_copilot_auth_type": encrypt_value_helper("per_user_oauth"),
+            "github_copilot_host": encrypt_value_helper(host),
+        },
+        credential_info={"custom_llm_provider": "github_copilot"},
+    )
+
+
+def test_update_credential_purges_connections_when_github_host_changes(monkeypatch, restore_credential_list):
+    stored = _encrypted_per_user_copilot_credential("github.com")
+    with _repository_holding(stored):
+        from litellm.proxy import proxy_server
+
+        table = MagicMock()
+        table.find_many = AsyncMock(return_value=[_connection_row(credential_name="copilot")])
+        table.delete_many = AsyncMock(return_value=None)
+        proxy_server.prisma_client.db.litellm_userprovidercredentials = table
+        proxy_server.prisma_client.writer_db = proxy_server.prisma_client.db
+
+        cached_values: Final[dict[str, object]] = {}  # mutable-ok: fake Redis stores invalidation writes
+
+        async def set_cache(key: str, value: str, **kwargs: object) -> None:
+            cached_values[key] = value
+
+        async def get_cache(key: str, **kwargs: object) -> object:
+            return cached_values.get(key)
+
+        redis_cache: Final = MagicMock()
+        redis_cache.async_set_cache = AsyncMock(side_effect=set_cache)
+        redis_cache.async_get_cache = AsyncMock(side_effect=get_cache)
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache(redis_cache=redis_cache))
+
+        session_key: Final = _session_cache_key("user-a", "copilot", "github.com")
+        _SESSION_CACHE.set_cache(
+            session_key,
+            ("gho_secret", "copilot-token", "https://api.githubcopilot.com", 4102444800),
+            ttl=3600,
+        )
+        response = _patch_credential(
+            "copilot",
+            {
+                "credential_name": "copilot",
+                "credential_values": {"github_copilot_host": "octo.ghe.com"},
+                "credential_info": {},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    table.find_many.assert_has_awaits(
+        [
+            call(where={"credential_name": "copilot"}),
+            call(where={"credential_name": "copilot"}),
+        ]
+    )
+    table.delete_many.assert_awaited_once_with(where={"credential_name": "copilot"})
+    assert cached_values[upc._cache_key("user-a", "copilot")] == upc._NOT_CONNECTED
+    assert _SESSION_CACHE.get_cache(session_key) is None
+
+
+def test_update_credential_does_not_purge_connections_for_case_only_host_change(restore_credential_list):
+    stored = _encrypted_per_user_copilot_credential("octo.ghe.com")
+    with _repository_holding(stored):
+        from litellm.proxy import proxy_server
+
+        table = MagicMock()
+        table.find_many = AsyncMock(
+            return_value=[_connection_row(credential_name="copilot", github_host="octo.ghe.com")]
+        )
+        table.delete_many = AsyncMock(return_value=None)
+        proxy_server.prisma_client.db.litellm_userprovidercredentials = table
+        proxy_server.prisma_client.writer_db = proxy_server.prisma_client.db
+
+        session_key: Final = _session_cache_key("user-a", "copilot", "octo.ghe.com")
+        _SESSION_CACHE.set_cache(
+            session_key,
+            ("gho_secret", "copilot-token", "https://copilot-api.octo.ghe.com", 4102444800),
+            ttl=3600,
+        )
+        response = _patch_credential(
+            "copilot",
+            {
+                "credential_name": "copilot",
+                "credential_values": {"github_copilot_host": "OCTO.ghe.com"},
+                "credential_info": {},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    table.find_many.assert_not_awaited()
+    table.delete_many.assert_not_awaited()
+    assert _SESSION_CACHE.get_cache(session_key) is not None
+    _SESSION_CACHE.delete_cache(session_key)
+
+
+def test_update_credential_does_not_purge_connections_for_legacy_host_case_difference(restore_credential_list):
+    stored = _encrypted_per_user_copilot_credential("OCTO.ghe.com")
+    with _repository_holding(stored):
+        from litellm.proxy import proxy_server
+
+        table = MagicMock()
+        table.find_many = AsyncMock(
+            return_value=[_connection_row(credential_name="copilot", github_host="octo.ghe.com")]
+        )
+        table.delete_many = AsyncMock(return_value=None)
+        proxy_server.prisma_client.db.litellm_userprovidercredentials = table
+        proxy_server.prisma_client.writer_db = proxy_server.prisma_client.db
+
+        session_key: Final = _session_cache_key("user-a", "copilot", "octo.ghe.com")
+        _SESSION_CACHE.set_cache(
+            session_key,
+            ("gho_secret", "copilot-token", "https://copilot-api.octo.ghe.com", 4102444800),
+            ttl=3600,
+        )
+        response = _patch_credential(
+            "copilot",
+            {
+                "credential_name": "copilot",
+                "credential_values": {"github_copilot_host": "octo.ghe.com"},
+                "credential_info": {},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    table.find_many.assert_not_awaited()
+    table.delete_many.assert_not_awaited()
+    assert _SESSION_CACHE.get_cache(session_key) is not None
+    _SESSION_CACHE.delete_cache(session_key)
+
+
+def test_update_credential_purges_connections_when_github_host_is_deleted(restore_credential_list):
+    stored = _encrypted_per_user_copilot_credential("octo.ghe.com")
+    with _repository_holding(stored):
+        from litellm.proxy import proxy_server
+
+        table = MagicMock()
+        table.find_many = AsyncMock(return_value=[_connection_row(credential_name="copilot")])
+        table.delete_many = AsyncMock(return_value=None)
+        proxy_server.prisma_client.db.litellm_userprovidercredentials = table
+        proxy_server.prisma_client.writer_db = proxy_server.prisma_client.db
+
+        response = _patch_credential(
+            "copilot",
+            {
+                "credential_name": "copilot",
+                "credential_values": {},
+                "credential_values_to_delete": ["github_copilot_host"],
+                "credential_info": {},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    table.delete_many.assert_awaited_once_with(where={"credential_name": "copilot"})
+
+
+def test_update_credential_purges_connections_for_invalid_legacy_github_host(restore_credential_list):
+    stored = _encrypted_per_user_copilot_credential("legacy.invalid")
+    with _repository_holding(stored):
+        from litellm.proxy import proxy_server
+
+        table = MagicMock()
+        table.find_many = AsyncMock(return_value=[_connection_row(credential_name="copilot")])
+        table.delete_many = AsyncMock(return_value=None)
+        proxy_server.prisma_client.db.litellm_userprovidercredentials = table
+        proxy_server.prisma_client.writer_db = proxy_server.prisma_client.db
+
+        response = _patch_credential(
+            "copilot",
+            {
+                "credential_name": "copilot",
+                "credential_values": {"api_key": "sk-updated"},
+                "credential_info": {},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    table.delete_many.assert_awaited_once_with(where={"credential_name": "copilot"})
+
+
+def test_update_credential_does_not_purge_connections_for_unrelated_value_update(restore_credential_list):
+    stored = _encrypted_per_user_copilot_credential("octo.ghe.com")
+    with _repository_holding(stored):
+        from litellm.proxy import proxy_server
+
+        table = MagicMock()
+        table.find_many = AsyncMock(return_value=[_connection_row(credential_name="copilot")])
+        table.delete_many = AsyncMock(return_value=None)
+        proxy_server.prisma_client.db.litellm_userprovidercredentials = table
+        proxy_server.prisma_client.writer_db = proxy_server.prisma_client.db
+
+        response = _patch_credential(
+            "copilot",
+            {
+                "credential_name": "copilot",
+                "credential_values": {"api_key": "sk-updated"},
+                "credential_info": {},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    table.find_many.assert_not_awaited()
+    table.delete_many.assert_not_awaited()
+
+
 def test_update_credential_resolves_credential_values_from_model_id_like_create(credential_store):
     """Regression: PATCH dropped ``model_id`` from the body, so an update that named a
     deployment instead of raw values wrote whatever the caller sent, or nothing."""
@@ -1388,8 +1993,8 @@ def test_update_credential_resolves_credential_values_from_model_id_like_create(
     )
     update_by_name = AsyncMock(return_value=None)
     router = MagicMock()
-    router.get_deployment.return_value = {"model_name": "gpt-5.2"}
-    router.get_deployment_credentials.return_value = {"api_key": "sk-from-deployment"}
+    router.registry.return_value.deployment.return_value = {"model_name": "gpt-5.2"}
+    router.registry.return_value.credentials.return_value = {"api_key": "sk-from-deployment"}
     credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name, llm_router=router)
 
     response = _patch_credential(
@@ -1398,7 +2003,7 @@ def test_update_credential_resolves_credential_values_from_model_id_like_create(
     )
 
     assert response.status_code == 200, response.text
-    router.get_deployment_credentials.assert_called_once_with("deployment-1")
+    router.registry.return_value.credentials.assert_called_once_with("deployment-1")
     written = json.loads(update_by_name.await_args.kwargs["data"]["credential_values"])
     assert set(written) == {"api_key"}
     assert written["api_key"] != "sk-old", "the deployment's values must replace the stored ones"
@@ -1411,7 +2016,7 @@ def test_update_credential_answers_404_when_model_id_names_no_deployment(credent
     )
     update_by_name = AsyncMock(return_value=None)
     router = MagicMock()
-    router.get_deployment.return_value = None
+    router.registry.return_value.deployment.return_value = None
     credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name, llm_router=router)
 
     response = _patch_credential(
@@ -1472,24 +2077,38 @@ def _as_user(user_id="user-a"):
     return lambda: UserAPIKeyAuth(api_key="test-key", user_role="internal_user", user_id=user_id)
 
 
-def _per_user_credential(name="copilot-cred"):
+def _per_user_credential(
+    name: str = "copilot-cred",
+    host: str | None = None,
+) -> CredentialItem:
     return CredentialItem(
         credential_name=name,
-        credential_values={"github_copilot_auth_type": "per_user_oauth"},
+        credential_values={
+            "github_copilot_auth_type": "per_user_oauth",
+            **({"github_copilot_host": host} if host is not None else {}),
+        },
         credential_info={},
     )
 
 
-def _connection_row(user_id="user-a", credential_name="copilot-cred", login="octo"):
+def _connection_row(
+    user_id: str = "user-a",
+    credential_name: str = "copilot-cred",
+    login: str = "octo",
+    github_host: str = "github.com",
+) -> SimpleNamespace:
     from datetime import datetime, timezone
-    from types import SimpleNamespace
 
     return SimpleNamespace(
         user_id=user_id,
         credential_name=credential_name,
         provider="github_copilot",
         credential_b64=upc._encode(
-            upc.GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login=login)
+            upc.GithubCopilotUserConnectionPayload(
+                access_token="gho_secret",
+                github_login=login,
+                github_host=github_host,
+            )
         ),
         created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
@@ -1585,6 +2204,20 @@ def test_user_connection_start_returns_device_flow_fields(monkeypatch):
     }
     handle = response.json()["flow_handle"]
     assert isinstance(handle, str) and "device_code" not in handle and _DEVICE_FLOW_START["device_code"] not in handle
+    decoded_handle: Final = _decode_flow_handle(handle)
+    assert decoded_handle is not None
+    assert decoded_handle.github_host == "github.com"
+
+
+def test_legacy_user_connection_flow_handle_defaults_to_github_com():
+    handle: Final = UserConnectionFlowHandle(
+        user_id="user-a",
+        credential_name="copilot-cred",
+        device_code="DC-1",
+        interval=5,
+        expires_at=4102444800,
+    )
+    assert handle.github_host == "github.com"
 
 
 def test_user_connection_start_404s_for_shared_credential(monkeypatch):
@@ -1607,7 +2240,7 @@ def test_user_connection_poll_rejects_an_undecryptable_flow_handle(monkeypatch):
 
 
 def test_user_connection_poll_connected_persists_and_reports_login(monkeypatch):
-    table = _patch_user_connection_env(monkeypatch, [_per_user_credential()])
+    table: Final = _patch_user_connection_env(monkeypatch, [_per_user_credential()])
     with _github_http(
         {
             _DEVICE_CODE_URL: _DEVICE_FLOW_START,
@@ -1616,9 +2249,13 @@ def test_user_connection_poll_connected_persists_and_reports_login(monkeypatch):
             _GITHUB_USER_URL: {"login": "octo"},
         }
     ):
-        start = _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
+        start: Final = _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
         assert start.status_code == 200, start.text
-        poll = _call_as(
+        encrypted_handle: Final = start.json()["flow_handle"]
+        decoded_handle: Final = _decode_flow_handle(encrypted_handle)
+        assert decoded_handle is not None
+        assert decoded_handle.github_host == "github.com"
+        poll: Final = _call_as(
             "POST",
             "/credentials/copilot-cred/user_connection/poll",
             json_body={"flow_handle": start.json()["flow_handle"]},
@@ -1627,6 +2264,110 @@ def test_user_connection_poll_connected_persists_and_reports_login(monkeypatch):
     assert poll.status_code == 200, poll.text
     assert poll.json() == {"status": "connected", "interval": None, "github_login": "octo"}
     table.upsert.assert_awaited_once()
+    stored_connection: Final = upc.decode_user_provider_credential(
+        table.upsert.await_args.kwargs["data"]["create"]["credential_b64"]
+    )
+    assert stored_connection is not None
+    assert stored_connection.github_host == "github.com"
+
+
+def test_poll_host_change_race_requires_reconnect_on_the_next_request(monkeypatch):
+    from litellm.llms.github_copilot.per_user_auth import attach_github_copilot_user_session
+
+    table: Final = _patch_user_connection_env(monkeypatch, [_per_user_credential(host="octo.ghe.com")])
+
+    def change_host_after_token_exchange(request: httpx.Request) -> dict[str, str]:
+        monkeypatch.setattr(litellm, "credential_list", [_per_user_credential()])
+        return {"access_token": "gho_1"}
+
+    with _github_http(
+        {
+            "https://octo.ghe.com/login/device/code": _DEVICE_FLOW_START,
+            "https://octo.ghe.com/login/oauth/access_token": change_host_after_token_exchange,
+            "https://api.octo.ghe.com/copilot_internal/v2/token": {
+                "token": "copilot-tok",
+                "expires_at": 4102444800,
+                "endpoints": {"api": "https://copilot-api.octo.ghe.com"},
+            },
+            "https://api.octo.ghe.com/user": {"login": "octo"},
+        }
+    ):
+        start: Final = _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
+        poll: Final = _call_as(
+            "POST",
+            "/credentials/copilot-cred/user_connection/poll",
+            json_body={"flow_handle": start.json()["flow_handle"]},
+            auth=_as_user(),
+        )
+    assert poll.status_code == 200, poll.text
+    stored_connection: Final = upc.decode_user_provider_credential(
+        table.upsert.await_args.kwargs["data"]["create"]["credential_b64"]
+    )
+    assert stored_connection is not None
+
+    kwargs: Final[dict[str, object]] = {
+        "litellm_credential_name": "copilot-cred",
+        "secret_fields": {
+            "user_provider_credentials_user_id": "user-a",
+            "user_provider_credentials": {
+                "copilot-cred": {
+                    "access_token": stored_connection.access_token,
+                    "github_host": stored_connection.github_host,
+                }
+            },
+        },
+    }
+    module_level_client: Final = MagicMock()
+    module_level_client.get.side_effect = AssertionError("unexpected token exchange")
+    with _github_http({}), patch.object(litellm, "module_level_client", module_level_client):
+        with pytest.raises(litellm.CallerCredentialAuthenticationError) as exc:
+            attach_github_copilot_user_session(kwargs)
+    assert "Connect GitHub Copilot for credential 'copilot-cred'" in str(exc.value)
+    assert stored_connection.github_host == "octo.ghe.com"
+
+
+def test_ghe_user_connection_uses_tenant_urls_for_device_flow_exchange_and_login(monkeypatch):
+    table: Final = _patch_user_connection_env(monkeypatch, [_per_user_credential(host="octo.ghe.com")])
+    with _github_http(
+        {
+            "https://octo.ghe.com/login/device/code": _DEVICE_FLOW_START,
+            "https://octo.ghe.com/login/oauth/access_token": {"access_token": "gho_1"},
+            "https://api.octo.ghe.com/copilot_internal/v2/token": {
+                "token": "copilot-tok",
+                "expires_at": 4102444800,
+                "endpoints": {"api": "https://copilot-api.octo.ghe.com"},
+            },
+            "https://api.octo.ghe.com/user": {"login": "octo"},
+        }
+    ):
+        start: Final = _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
+        assert start.status_code == 200, start.text
+        poll: Final = _call_as(
+            "POST",
+            "/credentials/copilot-cred/user_connection/poll",
+            json_body={"flow_handle": start.json()["flow_handle"]},
+            auth=_as_user(),
+        )
+    assert poll.status_code == 200, poll.text
+    assert poll.json() == {"status": "connected", "interval": None, "github_login": "octo"}
+    table.upsert.assert_awaited_once()
+    stored_connection: Final = upc.decode_user_provider_credential(
+        table.upsert.await_args.kwargs["data"]["create"]["credential_b64"]
+    )
+    assert stored_connection is not None
+    assert stored_connection.github_host == "octo.ghe.com"
+
+
+def test_user_connection_poll_rejects_handle_from_different_host(monkeypatch):
+    _patch_user_connection_env(monkeypatch, [_per_user_credential(host="octo.ghe.com")])
+    response = _call_as(
+        "POST",
+        "/credentials/copilot-cred/user_connection/poll",
+        json_body={"flow_handle": _flow_handle_for()},
+        auth=_as_user(),
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["message"] == "invalid or expired flow_handle"
 
 
 def test_user_connection_poll_pending(monkeypatch):
@@ -1986,6 +2727,23 @@ def test_pending_device_flow_survives_disconnect_via_stateless_handle(monkeypatc
         assert start.status_code == 200
     delete = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_as_user())
     assert delete.json() == {"status": "disconnected"}
+
+
+def test_delete_user_connection_evicts_copilot_session(monkeypatch):
+    table: Final = _patch_user_connection_env(monkeypatch, [_per_user_credential()], rows=[_connection_row()])
+    session_key: Final = _session_cache_key("user-a", "copilot-cred", "github.com")
+    _SESSION_CACHE.set_cache(
+        session_key,
+        ("gho_secret", "copilot-token", "https://api.githubcopilot.com", 4102444800),
+        ttl=3600,
+    )
+
+    response: Final = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_as_user())
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "disconnected"}
+    assert _SESSION_CACHE.get_cache(session_key) is None
+    table.delete_many.assert_awaited_once_with(where={"user_id": "user-a", "credential_name": "copilot-cred"})
 
 
 def test_user_connection_cache_keys_cannot_collide_on_colons():
@@ -2517,3 +3275,51 @@ class TestCredentialDisplayName:
         assert (by_name["display_name"], by_name["source"]) == ("Prod OpenAI", "db")
         assert config_by_name["source"] == "config"
         assert listed["openai-prod"]["credential_values"]["api_key"] != "sk-old"
+
+
+def test_looking_up_a_missing_credential_is_labelled_a_client_error_not_a_gateway_failure(
+    restore_credential_list: None,
+):
+    """Naming a credential that does not exist is the caller's own mistake, and the shared
+    handler used to label every one of these internal_server_error, so an SDK branching on
+    the type read a 404 it can never retry past as a gateway outage and backed off forever."""
+    response: Final = _call_as("GET", "/credentials/by_name/definitely-not-there")
+
+    assert response.status_code == 404, f"lookup answered {response.status_code}: {response.text}"
+    assert response.json()["error"] == {
+        "message": "Credential not found. Got credential name: definitely-not-there",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "404",
+    }
+
+
+def test_get_credential_by_model_masks_the_deployment_credentials(monkeypatch):
+    import asyncio
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.credential_endpoints.endpoints import get_credential_by_model
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test-credential-value"},
+                    "model_info": {"id": "dep-1"},
+                }
+            ]
+        ),
+    )
+    caller: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    credential: Final = asyncio.run(get_credential_by_model(MagicMock(), MagicMock(), "dep-1", caller))
+    assert credential.credential_name == "gpt-credential-dep-1"
+    assert credential.credential_values["api_key"] != "sk-test-credential-value"
+
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as missing:
+        asyncio.run(get_credential_by_model(MagicMock(), MagicMock(), "no-such-id", caller))
+    assert missing.value.code == "404"

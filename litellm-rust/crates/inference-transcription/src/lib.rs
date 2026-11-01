@@ -1,5 +1,5 @@
 pub mod types;
-pub use litellm_inference::RouteError as Error;
+pub use litellm_inference::Error;
 mod constants;
 mod handler;
 

@@ -187,6 +187,7 @@ fn native_events_reach_python_with_levels_context_reentry_and_http_deduplication
         locals
             .set_item("http_warning", wrap_pyfunction!(http_warning, py).unwrap())
             .unwrap();
+        locals.set_item("native", crate::native_module(py)).unwrap();
         let importable = py
             .eval(
                 c"__import__('importlib.util', fromlist=['util']).find_spec('dotenv') is not None",
@@ -205,6 +206,7 @@ import asyncio
 import logging
 import sys
 sys.path.insert(0, repo_root)
+sys.modules['litellm.rust_bridge._native'] = native
 import litellm
 from litellm._logging import verbose_logger, session_id_var, trace_id_var
 

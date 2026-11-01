@@ -9,10 +9,11 @@ import litellm
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import ProxyException
-from litellm.types.token_count import TokenCountSourceFields, TokenCountTokenizer
+from litellm.types.token_count import TokenCountProvider, TokenCountSourceFields, TokenCountTokenizer
 from litellm.types.utils import TokenCountResponse
 
 CANNOT_COUNT_MODEL_STATUSES: Final = frozenset({400, 404})
+REGION_DENIED_STATUSES: Final = frozenset({401, 403})
 TOKENIZER_LOAD_WAIT_SECONDS: Final = 5.0
 TOKENIZER_LOAD_REUSE_SECONDS: Final = 60.0
 TOKENIZER_LOAD_MAX_RUNNING: Final = 4
@@ -46,6 +47,8 @@ def _with_hint(message: str, hint: str) -> str:
 class TokenCountModel:
     model: str
     region: str | None
+    litellm_provider: TokenCountProvider | None = None
+    configured: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +68,13 @@ class ProviderCountFailure:
     def cannot_count_model(self) -> bool:
         return not self.rejected_before_provider_call and self.status_code in CANNOT_COUNT_MODEL_STATUSES
 
+    @property
+    def denied_in_region(self) -> bool:
+        return not self.rejected_before_provider_call and self.status_code in REGION_DENIED_STATUSES
+
     def with_hint(self, hint: str) -> "ProviderCountFailure":
+        if self.rejected_before_provider_call:
+            return self
         return replace(self, message=_with_hint(self.message, hint))
 
     def to_proxy_exception(self) -> ProxyException:
@@ -100,9 +109,28 @@ def _non_blank(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
-def _count_model(value: Mapping[str, object]) -> TokenCountModel | None:
+def _count_provider(value: object) -> TokenCountProvider | None:
+    match value:
+        case "bedrock":
+            return "bedrock"
+        case "bedrock_mantle":
+            return "bedrock_mantle"
+        case _:
+            return None
+
+
+def _count_model(value: Mapping[str, object], configured: bool) -> TokenCountModel | None:
     model: Final = _non_blank(value.get("model"))
-    return None if model is None else TokenCountModel(model=model, region=_non_blank(value.get("region")))
+    return (
+        None
+        if model is None
+        else TokenCountModel(
+            model=model,
+            region=_non_blank(value.get("region")),
+            litellm_provider=_count_provider(value.get("litellm_provider")),
+            configured=configured,
+        )
+    )
 
 
 def _geography(region: str) -> str:
@@ -112,7 +140,10 @@ def _geography(region: str) -> str:
 def _within_deployment_geography(
     count_model: TokenCountModel | None, deployment_region: Callable[[], str]
 ) -> TokenCountModel | None:
-    if count_model is None or count_model.region is None or count_model.model.startswith("global."):
+    if count_model is None or count_model.region is None:
+        return count_model
+    model: Final = count_model.model.removeprefix("bedrock/").removeprefix("bedrock_mantle/")
+    if model.startswith("global."):
         return count_model
     if _geography(deployment_region()) == _geography(count_model.region):
         return count_model
@@ -124,12 +155,12 @@ def _resolved_count_model(
 ) -> TokenCountModel | None:
     configured_mapping: Final = as_str_mapping(configured)
     if configured_mapping is not None:
-        return _count_model(configured_mapping)
+        return _count_model(configured_mapping, configured=True)
     default_mapping: Final = as_str_mapping(default)
     return (
         None
         if default_mapping is None
-        else _within_deployment_geography(_count_model(default_mapping), deployment_region)
+        else _within_deployment_geography(_count_model(default_mapping, configured=False), deployment_region)
     )
 
 

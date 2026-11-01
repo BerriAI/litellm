@@ -11,6 +11,7 @@ import contextvars
 import datetime
 import traceback
 import uuid
+import weakref
 from collections.abc import Awaitable, Coroutine, Mapping
 from dataclasses import dataclass
 from typing import (
@@ -61,9 +62,21 @@ def setup(
     }
     supplied: Final = arguments.get("litellm_logging_obj")
     if isinstance(supplied, Logging):
-        return _claim_budget_reservation(CallSetup(supplied, arguments), asynchronous)
+        return _begin_call(CallSetup(supplied, arguments), asynchronous)
     logger, prepared = function_setup(call_type, Rules(), start_time, *args, is_async_call=asynchronous, **arguments)
-    return _claim_budget_reservation(CallSetup(logger, prepared), asynchronous)
+    return _begin_call(CallSetup(logger, prepared), asynchronous)
+
+
+# Loggers whose current native call is async: their sync failure step is followed by the async one
+_ASYNC_CALLS: Final[weakref.WeakSet[Logging]] = weakref.WeakSet()
+
+
+def _begin_call(call_setup: CallSetup, asynchronous: bool) -> CallSetup:
+    if asynchronous:
+        _ASYNC_CALLS.add(call_setup.logger)
+    else:
+        _ASYNC_CALLS.discard(call_setup.logger)
+    return _claim_budget_reservation(call_setup, asynchronous)
 
 
 def _claim_budget_reservation(call_setup: CallSetup, asynchronous: bool) -> CallSetup:
@@ -90,7 +103,7 @@ def finalize(
     update(response, logger, model if isinstance(model, str) else None, kwargs, start_time, end_time)
     cache_key: Final = logger.model_call_details.get("cache_key")
     if logger.model_call_details.get("cache_hit") is True and isinstance(cache_key, str):
-        from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+        from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 
         hidden: Final = get_hidden_params_dict(response, create=True)
         hidden.update({"cache_key": cache_key, "cache_hit": True})
@@ -135,6 +148,8 @@ class LoggingSurface(Protocol):
         traceback_exception: str,
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
+        *,
+        for_async_request: bool = False,
     ) -> None: ...
 
     def async_failure_handler(
@@ -261,7 +276,7 @@ def failure_handler(
         if not is_internal_call():
             unbind_budget_reservation_from_callbacks(logger.litellm_params)
         return logger.async_failure_handler(error, trace, start, end)
-    logger.failure_handler(error, trace, start, end)
+    logger.failure_handler(error, trace, start, end, for_async_request=logger in _ASYNC_CALLS)
     return None
 
 
@@ -362,7 +377,7 @@ def stream_success(
     end: datetime.datetime,
     first_chunk: datetime.datetime | None,
 ) -> None:
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.streaming_iterator import (
         GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
     )
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler

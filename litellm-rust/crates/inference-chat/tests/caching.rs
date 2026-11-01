@@ -21,7 +21,7 @@ use litellm_host::{
     lifecycle::{CallEvent, ExecutionEvent},
     observation::observation_channel,
 };
-use litellm_inference::RouteError;
+use litellm_inference::Error;
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 
@@ -140,7 +140,7 @@ impl litellm_secrets::source::SecretSource for ChangingSecrets {
         name: &'a str,
     ) -> futures_util::future::BoxFuture<
         'a,
-        Result<Option<litellm_secrets::SecretValue>, litellm_secrets::Error>,
+        Result<Option<litellm_secret_value::SecretValue>, litellm_secrets::Error>,
     > {
         Box::pin(async move {
             let revision = self.revision.load(Ordering::SeqCst);
@@ -154,7 +154,7 @@ impl litellm_secrets::source::SecretSource for ChangingSecrets {
             } else {
                 None
             };
-            Ok(value.map(litellm_secrets::SecretValue::new))
+            Ok(value.map(litellm_secret_value::SecretValue::new))
         })
     }
 }
@@ -166,12 +166,12 @@ struct ChangingHooks {
     facts: std::sync::Mutex<Vec<ExecutionFacts>>,
 }
 
-impl Interceptors<RouteError> for ChangingHooks {
+impl Interceptors<Error> for ChangingHooks {
     async fn before_provider_request(
         &self,
         mut wire: WireRequest,
         _: RequestContext,
-    ) -> Result<WireRequest, RouteError> {
+    ) -> Result<WireRequest, Error> {
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         if self.rewrite {
             wire.body["temperature"] = json!(if call < 2 { 0.1 } else { 0.8 });
@@ -179,11 +179,11 @@ impl Interceptors<RouteError> for ChangingHooks {
         Ok(wire)
     }
 
-    async fn after_provider_response(&self, _: RawResponse) -> Result<(), RouteError> {
+    async fn after_provider_response(&self, _: RawResponse) -> Result<(), Error> {
         Ok(())
     }
 
-    async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), RouteError> {
+    async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), Error> {
         self.facts.lock().unwrap().push(facts);
         Ok(())
     }
@@ -239,7 +239,7 @@ async fn chat_cache_identity_follows_resolved_configuration_and_request_callback
             .store(usize::from(call >= 2), Ordering::SeqCst);
         let cache = ScopedCache::new(cache.clone(), CacheScope::Shared);
         ChatCompletionsRoute::new(
-            litellm_http::Client::plain_for_test(),
+            litellm_http::Client::for_test(),
             Arc::new(Default::default()),
             secrets.clone(),
         )

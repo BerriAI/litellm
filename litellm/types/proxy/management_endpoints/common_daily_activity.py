@@ -1,7 +1,6 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date
 from enum import Enum
-from typing import Any
 
 from pydantic import ConfigDict, Field
 from typing_extensions import TypedDict
@@ -61,9 +60,42 @@ class KeyMetricWithMetadata(MetricBase):
 
 
 class MetricWithMetadata(MetricBase):
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: Mapping[str, object] = Field(default_factory=dict)
     # API key breakdown for this metric (e.g., which API keys are using this MCP server)
     api_key_breakdown: dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
+
+
+class GuardrailSpendMetrics(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    spend: float = Field(default=0.0, description="Guardrail spend in USD, already included in key and model spend")
+    untracked_units: int = Field(default=0, description="Guardrail units with no known price, excluded from spend")
+
+
+class GuardrailKeyMetric(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    metrics: GuardrailSpendMetrics = Field(description="Guardrail spend and unpriced units for this API key")
+    metadata: KeyMetadata = Field(description="API key alias and existence information")
+
+
+class GuardrailMetadata(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    guardrail_name: str = Field(description="Guardrail display name, falling back to the guardrail ID")
+
+
+class GuardrailMetric(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    metrics: GuardrailSpendMetrics = Field(
+        description="Guardrail spend and unpriced units across all matching API keys"
+    )
+    metadata: GuardrailMetadata = Field(description="Guardrail name information")
+    api_key_breakdown: Mapping[str, GuardrailKeyMetric] = Field(
+        default_factory=dict,
+        description="Per-key guardrail spend and unpriced units, limited to keys in the day's API key breakdown",
+    )
 
 
 class BreakdownMetrics(LiteLLMBaseModel):
@@ -76,6 +108,11 @@ class BreakdownMetrics(LiteLLMBaseModel):
     endpoints: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # endpoint -> {metrics, metadata}
     api_keys: dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
     entities: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # entity -> {metrics, metadata}
+    guardrails: Mapping[str, GuardrailMetric] = Field(
+        default_factory=dict,
+        description="Spend by guardrail ID, already included in key and model spend. "
+        "Populated on user, team and organization aggregated activity only, without a model filter",
+    )
 
 
 class DailySpendData(LiteLLMBaseModel):

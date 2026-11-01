@@ -6,14 +6,19 @@ import httpx
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
+from litellm.llms.azure_ai.decisions.transformation import AzureAIDecisionsConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
+    BaseDecisionsConfig,
+    DecisionsInputLimits,
     ir_to_systemone_request,
     ir_to_systemone_response,
     parse_systemone_response,
     systemone_request_to_ir,
 )
 from litellm.llms.openai.decisions.transformation import openai_request_to_ir
+from litellm.llms.typesafe.decisions.transformation import TypeSafeDecisionsConfig
 from litellm.types.decisions import (
     MAX_DECISION_QUESTIONS,
     DecisionsIRRefusal,
@@ -21,7 +26,6 @@ from litellm.types.decisions import (
     DecisionsIRScoreAnswer,
     DecisionsRequestBody,
     OpenAIDecisionRequestBody,
-    UnsupportedDecisionsRequest,
 )
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -47,6 +51,61 @@ _SYSTEMONE_REQUEST: Final[Mapping[str, object]] = {
         "severity": {"type": "score", "criteria": ["minor", {"label": "major"}]},
     },
 }
+
+
+@pytest.mark.parametrize("declared", (4096, 0, -1, True, None))
+def test_decision_input_limits_use_only_positive_catalog_limits(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, declared: int | None
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bespoke/test-input-limit",
+        {"litellm_provider": "bespoke", "mode": "evaluation", "max_input_tokens": declared},
+    )
+
+    limits: Final = BaseDecisionsConfig().get_input_limits("test-input-limit", "bespoke", {})
+
+    assert limits == DecisionsInputLimits(max_request_tokens=4096 if declared == 4096 else None)
+
+
+def test_unmapped_decision_model_limits_remain_unknown(local_model_cost_map: None) -> None:
+    assert BaseDecisionsConfig().get_input_limits("unmapped-input-limit", "databricks", {}) == DecisionsInputLimits()
+
+
+@pytest.mark.parametrize(
+    ("headers", "long_context"),
+    (
+        ({}, False),
+        ({"TypeSafe-Danger-Zone-Long-Context": "false"}, False),
+        ({"typesafe-danger-zone-long-context": " TRUE "}, True),
+        ({"TypeSafe-Danger-Zone-Long-Context": "true", "typesafe-danger-zone-long-context": "true"}, True),
+        ({"TypeSafe-Danger-Zone-Long-Context": "true", "typesafe-danger-zone-long-context": "false"}, False),
+        ({"typesafe-danger-zone-long-context": "true,false"}, False),
+    ),
+)
+def test_typesafe_limits_require_unambiguous_long_context_opt_in(
+    headers: Mapping[str, str], long_context: bool
+) -> None:
+    """Provider contract from https://docs.typesafe.ai/models, verified 2026-10-30"""
+    limits: Final = TypeSafeDecisionsConfig().get_input_limits("jev-latest", "typesafe", headers)
+
+    assert limits == (
+        DecisionsInputLimits(max_request_tokens=262144, max_question_tokens=262144)
+        if long_context
+        else DecisionsInputLimits(max_request_tokens=65536, max_question_tokens=32768)
+    )
+
+
+@pytest.mark.parametrize("model", ("Microsoft-Decision-1", "unmapped-decision-deployment"))
+def test_azure_decision_deployments_use_catalog_limits_without_typesafe_modes(
+    local_model_cost_map: None, model: str
+) -> None:
+    catalog_limit: Final = litellm.get_model_info("Microsoft-Decision-1", "azure_ai")["max_input_tokens"]
+    limits: Final = AzureAIDecisionsConfig().get_input_limits(
+        model, "azure_ai", {"TypeSafe-Danger-Zone-Long-Context": "true"}
+    )
+
+    assert limits == DecisionsInputLimits(max_request_tokens=catalog_limit)
 
 
 def _openai_ir(raw: Mapping[str, object]) -> DecisionsIRRequest:
@@ -197,7 +256,29 @@ def test_missing_or_mismatched_systemone_answers_are_refusals_left_out_of_the_re
     assert tuple(ir_to_systemone_response(parsed, ir).answers) == ("damaged",)
 
 
-def test_each_media_kind_is_gated_by_its_own_support_flag() -> None:
+@pytest.mark.parametrize(
+    ("payload", "field"),
+    [
+        ({"model": "jev-latest", "usage": {"input_tokens": 10, "output_tokens": 1}}, ("answers",)),
+        (
+            {"model": "jev-latest", "answers": {"damaged": None}, "usage": {"input_tokens": 10, "output_tokens": 1}},
+            ("answers", "damaged"),
+        ),
+    ],
+    ids=["missing_answers", "null_answer"],
+)
+def test_a_malformed_systemone_response_names_the_field_at_fault(
+    payload: Mapping[str, object], field: tuple[str, ...]
+) -> None:
+    ir: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python(_SYSTEMONE_REQUEST))
+
+    with pytest.raises(ValidationError) as error:
+        parse_systemone_response(payload, ir)
+
+    assert [item["loc"] for item in error.value.errors()] == [field]
+
+
+def test_each_media_kind_is_sent_in_its_own_field() -> None:
     audio: Final = ["data:audio/wav;base64,YQ=="]
     videos: Final = ["data:video/mp4;base64,YQ=="]
     audio_only: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "audio": audio}))
@@ -205,22 +286,16 @@ def test_each_media_kind_is_gated_by_its_own_support_flag() -> None:
         _SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "videos": videos})
     )
 
-    assert ir_to_systemone_request("clef-omni", audio_only, supports_audio=True) == {
+    assert ir_to_systemone_request("clef-omni", audio_only) == {
         "model": "clef-omni",
         **_SYSTEMONE_REQUEST,
         "audio": audio,
     }
-    assert ir_to_systemone_request("clef-omni", video_only, supports_video=True) == {
+    assert ir_to_systemone_request("clef-omni", video_only) == {
         "model": "clef-omni",
         **_SYSTEMONE_REQUEST,
         "videos": videos,
     }
-    assert isinstance(
-        ir_to_systemone_request("clef-omni", audio_only, supports_video=True), UnsupportedDecisionsRequest
-    )
-    assert isinstance(
-        ir_to_systemone_request("clef-omni", video_only, supports_audio=True), UnsupportedDecisionsRequest
-    )
 
 
 _ASSET_REQUEST: Final[Mapping[str, object]] = {
@@ -332,4 +407,68 @@ def test_invalid_provider_response_is_an_api_error(payload: object, provider: st
     )
     with pytest.raises(BaseLLMException, match="unexpected response") as error:
         config.transform_decisions_response("drex-v2.0", provider, httpx.Response(200, json=payload), request)
+    assert error.value.status_code == 500
+
+
+@pytest.mark.parametrize(
+    ("probabilities", "expected"),
+    (
+        ({}, ()),
+        ({"1": 0.8}, ((1, "medium", 0.8),)),
+        ({"0": 0.0, "1": 0.8}, ((0, "low", 0.0), (1, "medium", 0.8))),
+        ({"2": 0.0}, ((2, "high", 0.0),)),
+    ),
+    ids=("empty", "missing", "explicit_zero", "only_zero"),
+)
+def test_score_probabilities_preserve_missing_entries_and_explicit_zeros(
+    probabilities: Mapping[str, float], expected: tuple[tuple[int, str, float], ...]
+) -> None:
+    ir: Final = systemone_request_to_ir(
+        _SYSTEMONE_BODY.validate_python(
+            {
+                "state": "Classify the fixture.",
+                "questions": {"score": {"type": "score", "criteria": ["low", "medium", "high"]}},
+            }
+        )
+    )
+    payload: Final = {
+        "model": "fixture",
+        "answers": {
+            "score": {
+                "type": "score",
+                "score": 1,
+                "confidence": 0.8,
+                "legend": {"0": "low", "1": "medium", "2": "high"},
+                "probabilities": probabilities,
+            }
+        },
+        "usage": {"input_tokens": 0, "output_tokens": 0},
+    }
+
+    response: Final = parse_systemone_response(payload, ir)
+    answer: Final = response.answers[0]
+
+    assert isinstance(answer, DecisionsIRScoreAnswer)
+    assert tuple((item.value, item.label, item.probability) for item in answer.probabilities) == expected
+    assert (
+        ir_to_systemone_response(response, ir).model_dump(mode="json")["answers"]["score"]["probabilities"]
+        == probabilities
+    )
+
+
+@pytest.mark.parametrize("raw_content", (b"", b"not-json", b'{"answers":'))
+@pytest.mark.parametrize("provider", ("nace", "openrouter", "fireworks_ai", "typesafe", "openai"))
+def test_non_json_provider_response_is_an_api_error(raw_content: bytes, provider: str) -> None:
+    config: Final = ProviderConfigManager.get_provider_decisions_config("drex-v2.0", LlmProviders(provider))
+    assert config is not None
+    request: Final = systemone_request_to_ir(
+        DecisionsRequestBody.model_validate(
+            {
+                "state": "text",
+                "questions": {"a": {"type": "score", "criteria": ["low", "high"]}},
+            }
+        )
+    )
+    with pytest.raises(BaseLLMException, match="unexpected response") as error:
+        config.transform_decisions_response("drex-v2.0", provider, httpx.Response(200, content=raw_content), request)
     assert error.value.status_code == 500

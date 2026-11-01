@@ -49,23 +49,27 @@ from litellm.proxy.management_endpoints.common_daily_activity import daily_activ
 from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_dependencies,
     authorize_member_auto_router_team,
+    auto_router_environment_reference_error,
+    raise_auto_router_environment_reference_error,
     validate_member_auto_router_config,
 )
 from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.daily_activity_sql import build_where_clause
+from litellm.repositories.table_repositories import PrismaTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
+from litellm.router_api import RoutingContext
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
+    StrategyRouterDependencyRole,
+    classify_strategy_router_model,
+    strategy_router_dependencies,
+)
 from litellm.router_strategy.complexity_router import ComplexityRouter
 from litellm.router_strategy.complexity_router.request_models import (
     AutoRouterRoutingTestRequest,
     RequestComplexityRouterConfig,
-)
-from litellm.router_utils.auto_router_model_naming import (
-    StrategyRouterDependencyRole,
-    classify_strategy_router_model,
-    strategy_router_dependencies,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import (
@@ -179,7 +183,7 @@ class _ShadowEvalAttemptRow(Protocol):
 
 
 class _ShadowEvalFunnelTable(Protocol):
-    async def create_many(self, data: Sequence[Mapping[str, object]], skip_duplicates: bool) -> int: ...
+    async def create_many(self, data: Sequence[Mapping[str, object]], *, skip_duplicates: bool) -> int: ...
 
 
 class _ShadowEvalAttemptTable(Protocol):
@@ -204,21 +208,40 @@ def _user_rows(prisma_client: "PrismaClient") -> _UserRowsTable:
     return UserRepository(prisma_client).table
 
 
+class _ShadowEvalJobRepository(PrismaTableRepository[_ShadowEvalJobRow]):
+    table_name = "litellm_shadowevaljob"
+
+
+class _ShadowEvalFunnelRepository(PrismaTableRepository[object]):
+    table_name = "litellm_shadowevalfunnel"
+
+
+class _ShadowEvalAttemptRepository(PrismaTableRepository[_ShadowEvalAttemptRow]):
+    table_name = "litellm_shadowevalattempt"
+
+
 def _shadow_eval_jobs(prisma_client: "PrismaClient") -> _ShadowEvalJobTable:
-    return prisma_client.db.litellm_shadowevaljob
+    return _ShadowEvalJobRepository(prisma_client).table
 
 
 def _shadow_eval_funnel(prisma_client: "PrismaClient") -> _ShadowEvalFunnelTable:
-    return prisma_client.db.litellm_shadowevalfunnel  # pyright: ignore[reportAttributeAccessIssue]  # generated client
+    return _ShadowEvalFunnelRepository(prisma_client).table
 
 
 def _shadow_eval_attempts(prisma_client: "PrismaClient") -> _ShadowEvalAttemptTable:
-    return prisma_client.db.litellm_shadowevalattempt
+    return _ShadowEvalAttemptRepository(prisma_client).table
+
+
+_RAW_ROWS: Final = TypeAdapter(Sequence[dict[str, object]], config=ConfigDict(strict=True))
 
 
 async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -> Sequence[Mapping[str, object]]:
     async with db_span("auto_router_report_query", sql_relation(query)):
-        return await prisma_client.db.query_raw(query, *args)
+        return _RAW_ROWS.validate_python(await prisma_client.db.query_raw(query, *args))
+
+
+async def _execute_raw(prisma_client: "PrismaClient", query: str, *args: object) -> int:
+    return await prisma_client.db.execute_raw(query, *args)
 
 
 async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> LiteLLM_TeamTable | None:
@@ -337,7 +360,7 @@ async def _authorize_models_this_test_can_call(
     for model in models:
         await can_key_call_resolved_model(
             model=model,
-            llm_model_list=llm_router.model_list,
+            llm_model_list=llm_router.registry().all(),
             valid_token=user_api_key_dict,
             llm_router=llm_router,
         )
@@ -385,7 +408,11 @@ async def validate_complexity_router_config(
     """
     member_team: Final = await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
 
-    from litellm.router_utils.auto_router_model_naming import (
+    raise_auto_router_environment_reference_error(
+        auto_router_environment_reference_error(data.complexity_router_config, user_api_key_dict)
+    )
+
+    from litellm.router_strategy.auto_router.auto_router_model_naming import (
         validate_complexity_router_config_write,
     )
 
@@ -430,7 +457,9 @@ async def get_auto_router_availability(
         ):
             raise HTTPException(status_code=403, detail="Cannot check another user's auto router")
     existing: Final = saved.deployment if saved is not None else None
-    others: Final = tuple(row.deployment for row in rows if row is not saved) + tuple(llm_router.config_deployments())
+    others: Final = tuple(row.deployment for row in rows if row is not saved) + tuple(
+        llm_router.registry().deployments(source="config")
+    )
     candidate: Final = MappingProxyType(
         {
             "litellm_params": MappingProxyType(
@@ -455,14 +484,14 @@ async def _resolve_saved_routing_test(
 ) -> AutoRouterRoutingTestRequest:
     if data.saved_model_id is None:
         return data
-    deployment: Final = llm_router.get_deployment(data.saved_model_id)
+    deployment: Final = llm_router.registry().deployment(data.saved_model_id)
     if deployment is None or deployment.model_info.blocked:
         raise HTTPException(status_code=404, detail="Saved auto router is unavailable")
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN and deployment.model_info.team_id != data.team_id:
         raise HTTPException(status_code=403, detail="Saved auto router belongs to a different team")
     await can_key_call_resolved_model(
         model=deployment.model_info.team_public_model_name or deployment.model_name,
-        llm_model_list=llm_router.model_list,
+        llm_model_list=llm_router.registry().all(),
         valid_token=user_api_key_dict,
         llm_router=llm_router,
     )
@@ -543,6 +572,12 @@ async def preview_auto_router_routing(
             detail={"error": CommonProxyErrors.no_llm_router.value},
         )
     resolved: Final = await _resolve_saved_routing_test(data, user_api_key_dict, llm_router)
+    if data.saved_model_id is None:
+        raise_auto_router_environment_reference_error(
+            auto_router_environment_reference_error(
+                data.complexity_router_config.model_dump(exclude_none=True), user_api_key_dict
+            )
+        )
     actor: Final = (
         await _authorize_member_dry_run_config(
             config=resolved.complexity_router_config.model_dump(exclude_none=True),
@@ -578,9 +613,9 @@ async def preview_auto_router_routing(
     )
 
     try:
-        complexity_router: Final = ComplexityRouter(
+        complexity_strategy: Final = ComplexityRouter(
             model_name=resolved.router_name,
-            litellm_router_instance=llm_router,
+            ctx=RoutingContext(llm_router),
             complexity_router_config=resolved.complexity_router_config.model_dump(exclude_none=True),
             default_model=resolved.complexity_router_config.resolve_default_model(resolved.default_model),
             derive_savings_baseline=False,
@@ -596,7 +631,7 @@ async def preview_auto_router_routing(
     refresh_proxy_server_request_body_snapshot(request_kwargs)
 
     try:
-        hook_response: Final = await complexity_router.async_pre_routing_hook(
+        hook_response: Final = await complexity_strategy.async_pre_routing_hook(
             model=resolved.router_name,
             request_kwargs=request_kwargs,
             messages=request_kwargs["messages"],
@@ -833,7 +868,7 @@ async def _recorded_autorouter_savings(
             entity_id_field="user_id",
             entity_id=user_id,
             exclude_entity_ids=None,
-            api_key=api_key,
+            api_key=(api_key,) if api_key is not None else None,
             start_date=start_day,
             end_date=end_day,
             model=None,
@@ -904,7 +939,7 @@ def _idle_router_groups(
     zero: Final = _summed_agg_row(())
     idle: Final = frozenset(
         key
-        for key in (_strategy_router_key(deployment) for deployment in llm_router.model_list or ())
+        for key in (_strategy_router_key(deployment) for deployment in llm_router.registry().all() or ())
         if key is not None and key not in covered
     )
     return tuple(
@@ -1069,13 +1104,14 @@ def _require_admin_writer(user_api_key_dict: UserAPIKeyAuth, action: str) -> Non
 
 
 def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) -> bool:
+    router_registry: Final = llm_router.registry()
     return any(
         router_name in registry
         for registry in (
-            llm_router.auto_routers,
-            llm_router.complexity_routers,
-            llm_router.adaptive_routers,
-            llm_router.quality_routers,
+            router_registry.plugins("auto"),
+            router_registry.plugins("complexity"),
+            router_registry.plugins("adaptive"),
+            router_registry.plugins("quality"),
         )
     )
 
@@ -1151,7 +1187,7 @@ def _validate_model_scope(llm_router: "Router | None", models: Sequence[str]) ->
         model
         for model in models
         if judge_target(llm_router, model).via == "nothing"
-        and (llm_router is None or model not in llm_router.team_public_model_names)
+        and (llm_router is None or model not in llm_router.registry().names(kind="team_public"))
     )
     if unreachable:
         raise HTTPException(
@@ -1180,7 +1216,7 @@ def _router_arm_models(llm_router: "Router | None", router_name: str) -> tuple[t
     this lookup is unscoped; what each tier NAME resolves to is the team-dependent half, and
     it belongs to the caller that compares them.
     """
-    deployments: Final = llm_router.get_model_list(model_name=router_name) if llm_router is not None else None
+    deployments: Final = llm_router.registry().deployments(router_name) if llm_router is not None else None
     return tuple(
         dict.fromkeys(
             (dependency.role, dependency.model_name)
@@ -1788,7 +1824,7 @@ async def start_shadow_eval(
     # deliberate. Sweep and claim filter on exact (target_type, id) pairs so a team id
     # that happens to equal a key hash never matches the other kind's slot.
     for target_type, ids in requested_by_type:
-        await prisma_client.db.execute_raw(_SWEEP_FINISHED_JOBS_SQL, list(ids), target_type)
+        await _execute_raw(prisma_client, _SWEEP_FINISHED_JOBS_SQL, list(ids), target_type)
     claimed: Final = await _shadow_eval_jobs(prisma_client).find_many(
         where={
             "OR": [
@@ -2005,8 +2041,8 @@ async def stop_shadow_eval_job(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     stamp: Final = datetime.now(timezone.utc)
     operator: Final = user_api_key_dict.user_id or "operator"
-    claimed: Final = await prisma_client.db.execute_raw(
-        _STOP_JOB_SQL, job_id, operator, stamp.replace(tzinfo=None).isoformat()
+    claimed: Final = await _execute_raw(
+        prisma_client, _STOP_JOB_SQL, job_id, operator, stamp.replace(tzinfo=None).isoformat()
     )
     legs: Final = _LEG_ROWS.validate_python(
         await _shadow_eval_jobs(prisma_client).find_many(where={"group_id": job_id}) or ()

@@ -1,5 +1,9 @@
+import json
 from typing import TYPE_CHECKING, Final
 
+from pydantic import ValidationError
+
+from litellm.models.user_banner import UserBanner
 from litellm.repositories.table_repositories import PrismaTableRepository
 
 if TYPE_CHECKING:
@@ -8,8 +12,24 @@ if TYPE_CHECKING:
 USER_BANNER_ROW_ID: Final = "user_banner"
 
 
+def parse_user_banner(raw_settings: object) -> UserBanner:
+    if raw_settings is None:
+        return UserBanner()
+    try:
+        parsed: Final = json.loads(raw_settings) if isinstance(raw_settings, str) else raw_settings
+        return UserBanner.model_validate(parsed)
+    except (json.JSONDecodeError, ValidationError):
+        return UserBanner()
+
+
 class UserBannerRepository(PrismaTableRepository["prisma_models.LiteLLM_UISettings"]):
     table_name = "litellm_uisettings"
+
+    async def get_banner(self) -> UserBanner:
+        return parse_user_banner(await self.get_raw_settings())
+
+    async def save_banner(self, banner: UserBanner) -> None:
+        await self.upsert_settings(json.dumps(banner.model_dump()))
 
     async def get_raw_settings(self) -> object:
         db_record: Final = await self.table.find_unique(where={"id": USER_BANNER_ROW_ID})

@@ -8,8 +8,10 @@ from typing import Final, get_type_hints
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import ORJSONResponse
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.constants import MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -17,6 +19,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
+    hierarchical_router_settings_updates,
     log_llm_api_exception,
     resolve_litellm_call_id,
 )
@@ -36,6 +39,7 @@ from litellm.types.images.main import ImageEditRequestParams
 from litellm.types.llms.openai import ChatCompletionUserMessage
 
 router: Final = APIRouter()
+_IMAGE_GENERATION_MODEL_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
 
 IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
 IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
@@ -132,6 +136,19 @@ async def image_generation(
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
+        if llm_router is not None:
+            requested_model: Final = _IMAGE_GENERATION_MODEL_ADAPTER.validate_python(data.get("model"))
+            data.update(
+                await hierarchical_router_settings_updates(
+                    requested_model=requested_model,
+                    user_api_key_dict=user_api_key_dict,
+                    llm_router=llm_router,
+                    proxy_config=proxy_config,
+                    proxy_logging_obj=proxy_logging_obj,
+                    apply_model_group_alias=request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is not True,
+                )
+            )
+
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         prompt_value: Final = data.get("prompt")
         if prompt_value is not None:
@@ -156,6 +173,7 @@ async def image_generation(
             route_type="aimage_generation",
             llm_router=llm_router,
             user_model=user_model,
+            user_api_key_dict=user_api_key_dict,
         )
         response = await llm_call
 
