@@ -876,11 +876,18 @@ class BaseLLMHTTPHandler:
         )
 
         # get config from model, custom llm provider
+        #
+        # optional_params["extra_headers"] is a second source of request headers
+        # here: providers that need headers of their own (github_copilot and its
+        # editor-version, for one) put them there in main.py, and so do callers
+        # using the extra_headers= kwarg. The caller's own headers= win on a
+        # clash, same as everywhere else.
+        _config_headers: Final = optional_params.get("extra_headers")
         request_headers: Final = cast(  # cast-ok: validate_environment is declared as a bare dict
             "dict[str, object]",
             provider_config.validate_environment(
                 api_key=api_key,
-                headers=headers or {},
+                headers={**(_config_headers if isinstance(_config_headers, dict) else {}), **(headers or {})},
                 model=model,
                 messages=messages,
                 optional_params=optional_params,
