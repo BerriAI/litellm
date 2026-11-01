@@ -1,11 +1,11 @@
 import asyncio
 from collections.abc import Callable, Sequence
 from typing import Final, Literal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from mcp.server.context import ServerRequestContext
-from mcp.types import GetPromptRequest, GetPromptRequestParams, GetPromptResult
+from mcp.types import CallToolResult, GetPromptRequest, GetPromptRequestParams, GetPromptResult, TextContent
 from mcp.types import Tool as MCPTool
 
 import litellm
@@ -2050,3 +2050,32 @@ async def test_discovery_optional_probes_use_remaining_listing_budget(delay, mon
     else:
         assert entered.is_set()
         assert cleaned.is_set()
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_guardrails_keep_the_request_metadata_on_the_guardrail_auth_path():
+    """Guardrails and opt-outs resolved onto the request must reach post_mcp_call gating.
+
+    Protocol tool calls pass a guardrail auth that is a separate object from the
+    caller's, and the logging payload nests the request metadata under litellm_params.
+    """
+    request_metadata: Final = {
+        "guardrails": ["policy-guardrail"],
+        "user_api_key_metadata": {"opted_out_global_guardrails": ["global-guardrail"]},
+    }
+    logging_obj: Final = MagicMock(model_call_details={"litellm_params": {"metadata": request_metadata}})
+    proxy_logging: Final = MagicMock(post_mcp_call_hook=AsyncMock(side_effect=lambda response, **_: response))
+    result: Final = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging):
+        await operations._run_post_mcp_call_guardrails(
+            result=result,
+            litellm_logging_obj=logging_obj,
+            original_auth=UserAPIKeyAuth(api_key="sk-caller", user_id="u1"),
+            guardrail_auth=UserAPIKeyAuth(api_key="sk-caller", user_id="u1"),
+            request_data={},
+        )
+
+    gated: Final = proxy_logging.post_mcp_call_hook.await_args.kwargs["request_data"]["metadata"]
+    assert gated["guardrails"] == ["policy-guardrail"]
+    assert gated["user_api_key_metadata"] == request_metadata["user_api_key_metadata"]
