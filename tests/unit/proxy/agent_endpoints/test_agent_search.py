@@ -261,6 +261,42 @@ class TestSearchAgents:
         assert isinstance(outcome, AgentSearchNotConfigured)
         assert "agent_search_embedding_model" in outcome.reason
 
+    @pytest.mark.parametrize("embedding_model", ("", "   "), ids=("empty", "whitespace"))
+    @pytest.mark.asyncio
+    async def test_empty_embedding_model_is_not_configured(self, embedding_model: str) -> None:
+        router: Final = MagicMock()
+        router.aembedding = AsyncMock(
+            side_effect=lambda model, input, metadata: litellm.EmbeddingResponse(
+                model=model,
+                data=[{"object": "embedding", "index": i, "embedding": list(VECTORS[t])} for i, t in enumerate(input)],
+            )
+        )
+        not_configured: Final = await search_agents(
+            "language translation",
+            AGENTS,
+            5,
+            router=router,
+            embedding_model=None,
+            index=AgentSearchIndex(),
+            user_api_key_dict=CALLER,
+            proxy_logging_obj=_pass_through_key_limits(),
+        )
+        outcome: Final = await search_agents(
+            "language translation",
+            AGENTS,
+            5,
+            router=router,
+            embedding_model=embedding_model,
+            index=AgentSearchIndex(),
+            user_api_key_dict=CALLER,
+            proxy_logging_obj=_pass_through_key_limits(),
+        )
+
+        assert isinstance(not_configured, AgentSearchNotConfigured)
+        assert isinstance(outcome, AgentSearchNotConfigured)
+        assert outcome.reason == not_configured.reason
+        router.aembedding.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_no_router_is_not_configured(self) -> None:
         outcome = await search_agents(

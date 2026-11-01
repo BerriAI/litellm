@@ -7176,6 +7176,80 @@ def test_rebuilding_a_priced_stream_bills_the_margin_once(monkeypatch: pytest.Mo
     )
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("has_served_model", [True, False])
+@pytest.mark.parametrize(
+    ("wrapper_provider", "logging_provider"),
+    [("openrouter", "openrouter"), ("cached_response", "openrouter"),
+     ("openai", "openai"), ("cached_response", "openai")],
+)
+@pytest.mark.asyncio
+async def test_openrouter_served_model_survives_blank_chunks_usage_and_cache_replay(
+    sync_mode: bool, has_served_model: bool, wrapper_provider: str, logging_provider: str
+) -> None:
+    selected_model: Final = "selected-model" if has_served_model else ""
+    expected_model: Final = selected_model if logging_provider == "openrouter" and selected_model else "auto"
+    logging_obj: Final = Logging(
+        model="auto",
+        messages=[{"role": "user", "content": "Say hi"}],
+        stream=True,
+        call_type="completion" if sync_mode else "acompletion",
+        start_time=1.0,
+        litellm_call_id="openrouter-model-identity",
+        function_id="test",
+    )
+    logging_obj.stream_options = {"include_usage": True}
+    logging_obj.model_call_details["custom_llm_provider"] = (
+        None if wrapper_provider == "cached_response" else logging_provider
+    )
+    chunks: Final = [
+        ModelResponseStream(
+            id="served-stream", created=1, model=None,
+            choices=[StreamingChoices(index=0, delta=Delta(role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="served-stream", created=1, model=selected_model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="hello"))],
+            usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+        ),
+        ModelResponseStream(
+            id="served-stream", created=1, model=None,
+            choices=[StreamingChoices(index=0, delta=Delta(content=" world"))],
+        ),
+        ModelResponseStream(
+            id="served-stream", created=1, model="",
+            choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")],
+        ),
+        ModelResponseStream(
+            id="served-stream", created=1, model=None, choices=[],
+            usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+        ),
+    ]
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="auto", logging_obj=logging_obj, custom_llm_provider=wrapper_provider,
+        stream_options={"include_usage": True},
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="auto", custom_llm_provider=logging_provider,
+    )
+    first: Final = next(wrapper) if sync_mode else await wrapper.__anext__()
+    second: Final = next(wrapper) if sync_mode else await wrapper.__anext__()
+    partial: Final = wrapper.partial_response()
+    emitted: Final = [first, second, *(await _collect(wrapper, sync_mode))]
+    assembled: Final = litellm.stream_chunk_builder(chunks=emitted)
+
+    assert first.model == "auto"
+    assert {chunk.model for chunk in emitted[1:]} == {expected_model}
+    assert partial is not None and partial.model == expected_model
+    assert assembled is not None and assembled.model == expected_model
+    assert assembled.choices[0].message.content == "hello world"
+    assert emitted[-1].choices == []
+    assert emitted[-1].usage is not None and emitted[-1].usage.total_tokens == 5
+    assert second._hidden_params.get("provider_response_model") == (selected_model or None)
+    assert wrapper.model == logging_obj.model == logging_obj.model_call_details["model"] == "auto"
+
+
 def test_chunk_creator_keeps_provider_model_private_across_stream():
     from litellm.litellm_core_utils.add_retry_fallback_headers import (
         get_hidden_params_dict,
