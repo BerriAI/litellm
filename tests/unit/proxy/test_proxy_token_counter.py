@@ -4252,3 +4252,55 @@ def test_utils_token_counter_line_stays_one_line_when_the_model_carries_a_newlin
     assert line["request_model"] == forged_model
     assert "\n" not in message
     assert message.startswith(f'token count - litellm_call_id="count log" request_model={json.dumps(forged_model)} ')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "contents,messages",
+    [
+        (
+            [{"parts": [{"text": "Count every word in this request."}]}],
+            [{"role": "user", "content": "Count every word in this request."}],
+        ),
+        (
+            [{"role": "user", "parts": [{"text": "One part."}, {"text": "Another part."}]}],
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "One part."}, {"type": "text", "text": "Another part."}],
+                }
+            ],
+        ),
+        (
+            [{"role": "user", "parts": [{"text": "Hello"}]}, {"role": "model", "parts": [{"text": "Welcome back"}]}],
+            [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Welcome back"}],
+        ),
+    ],
+)
+async def test_token_counter_counts_gemini_contents(
+    contents: list[dict[str, object]], messages: list[dict[str, object]]
+) -> None:
+    expected: Final = await token_counter(
+        TokenCountRequest(model="gemini/gemini-3.8-flash", messages=messages)
+    )
+    actual: Final = await token_counter(
+        TokenCountRequest(model="gemini/gemini-3.8-flash", contents=contents)
+    )
+    assert actual.total_tokens == expected.total_tokens
+    assert actual.total_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_token_counter_prefers_explicit_messages_over_contents() -> None:
+    messages: Final = [{"role": "user", "content": "Count this message."}]
+    expected: Final = await token_counter(
+        TokenCountRequest(model="gemini/gemini-3.8-flash", messages=messages)
+    )
+    actual: Final = await token_counter(
+        TokenCountRequest(
+            model="gemini/gemini-3.8-flash",
+            messages=messages,
+            contents=[{"parts": [{"text": "Do not count this different text."}]}],
+        )
+    )
+    assert actual.total_tokens == expected.total_tokens
