@@ -16,6 +16,7 @@ from typing import (
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
+from prisma.errors import PrismaError
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, create_model, field_validator
 from pydantic.fields import FieldInfo, PydanticUndefined
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -26,6 +27,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.validation_error_body import public_validation_errors
 from litellm.proxy.config_resolvers import FieldSource, SettingsStore, source_for
 from litellm.proxy.config_resolvers.settings_store import ConfigOwnedKeyError
@@ -1247,6 +1249,37 @@ async def get_sso_settings():
     }
 
 
+_ENVIRONMENT_VARIABLES_PARAM: Final = TypeAdapter(dict[str, object])
+
+
+def _parse_environment_variables_param(param_value: str | Mapping[str, object] | None) -> Mapping[str, object]:
+    if isinstance(param_value, str):
+        return _ENVIRONMENT_VARIABLES_PARAM.validate_python(json.loads(param_value))
+    return param_value or {}
+
+
+async def _load_environment_variables_param(
+    repo: ConfigRepository,
+) -> Mapping[str, object] | None | PrismaError | ValueError:
+    try:
+        entry: Final = await _config_param_db(repo).find_unique(where={"param_name": "environment_variables"})
+        param_value: Final = None if entry is None else _parse_environment_variables_param(entry.param_value)
+    except (PrismaError, ValueError) as e:
+        return e
+    else:
+        return param_value
+
+
+def _decrypted_sso_fields(environment_variables: Mapping[str, object]) -> Mapping[str, str | None]:
+    return MappingProxyType(
+        {
+            field_name: decrypt_value_helper(value=value, key=env_var, return_original_value=True)
+            for field_name, env_var in SSO_FIELD_ENV_VARS.items()
+            if isinstance(value := environment_variables.get(env_var), str)
+        }
+    )
+
+
 @router.patch(
     "/update/sso_settings",
     tags=["SSO Settings"],
@@ -1310,11 +1343,21 @@ async def update_sso_settings(
     if "general_settings" not in config:
         config["general_settings"] = {}
 
-    # PATCH semantics: omitted fields keep their stored value, an explicit null clears it
+    # PATCH semantics: omitted fields keep their stored value, an explicit null clears it. SSO values that
+    # still live only in the environment_variables row are carried over, since that row is stripped below
+    environment_variables_param: Final = await _load_environment_variables_param(
+        ConfigRepository(prisma_client, use_writer=True)
+    )
+    legacy_env_values: Final[Mapping[str, str | None]] = (
+        _decrypted_sso_fields(environment_variables_param)
+        if isinstance(environment_variables_param, Mapping)
+        else MappingProxyType({})
+    )
+    stored_values: Final = {k: v for k, v in (before_sso_data or {}).items() if v is not None}
+    fallback_values: Final = {**legacy_env_values, **stored_values}
     submitted: Final = sso_config.model_dump(include=sso_config.model_fields_set)
-    stored_values: Final = before_sso_data or {}
     sso_data: Final = {
-        field_name: submitted[field_name] if field_name in submitted else stored_values.get(field_name)
+        field_name: submitted[field_name] if field_name in submitted else fallback_values.get(field_name)
         for field_name in SSOConfig.model_fields
     }
     for field_name, value in submitted.items():
@@ -1353,25 +1396,17 @@ async def update_sso_settings(
         )
     )
 
-    # Remove SSO-related env vars from config.environment_variables
-    try:
-        env_var_entry: Final = await _config_param_db(ConfigRepository(prisma_client, use_writer=True)).find_unique(
-            where={"param_name": "environment_variables"}
+    if isinstance(environment_variables_param, (PrismaError, ValueError)):
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Error updating environment_variables: {environment_variables_param}"},
         )
 
-        # If no environment_variables entry exists, nothing to clean up
-        if env_var_entry is not None:
-            if env_var_entry.param_value is not None:
-                if isinstance(env_var_entry.param_value, str):
-                    environment_variables: Mapping[str, object] = json.loads(env_var_entry.param_value)
-                else:
-                    environment_variables = dict(env_var_entry.param_value)
-            else:
-                environment_variables = {}
-
+    if environment_variables_param is not None:
+        try:
             env_vars_to_remove: Final = set(SSO_FIELD_ENV_VARS.values())
             filtered_env_vars: Final = {
-                key: value for key, value in environment_variables.items() if key not in env_vars_to_remove
+                key: value for key, value in environment_variables_param.items() if key not in env_vars_to_remove
             }
 
             await _config_param_db(ConfigRepository(prisma_client)).update(
@@ -1381,11 +1416,11 @@ async def update_sso_settings(
                 },
             )
             await invalidate_config_param("environment_variables")
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": f"Error updating environment_variables: {e}"},
-        )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": f"Error updating environment_variables: {e}"},
+            )
 
     return {
         "message": "SSO settings updated successfully",

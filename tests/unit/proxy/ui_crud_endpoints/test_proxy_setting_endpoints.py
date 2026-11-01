@@ -717,7 +717,7 @@ class TestProxySettingEndpoints:
         create_sso_settings = json.loads(create_data["sso_settings"])
         assert create_sso_settings["google_client_id"] == "new_google_client_id"
 
-    def _patch_sso_settings(self, monkeypatch, stored, body):
+    def _patch_sso_settings(self, monkeypatch, stored, body, environment_variables=None):
         """PATCH /update/sso_settings against a stored row; returns (response, saved row)."""
         import json
         from unittest.mock import AsyncMock, MagicMock
@@ -732,7 +732,12 @@ class TestProxySettingEndpoints:
             return_value=stored_record
         )
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
-        mock_prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=None)
+        env_var_entry = None
+        if environment_variables is not None:
+            env_var_entry = MagicMock()
+            env_var_entry.param_value = environment_variables
+        mock_prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=env_var_entry)
+        mock_prisma.db.litellm_config.update = AsyncMock()
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
         from litellm.proxy.proxy_server import proxy_config
@@ -840,6 +845,35 @@ class TestProxySettingEndpoints:
         assert returned["generic_client_secret"] != "stored-client-secret"
         assert "stored-client-secret" not in response.text
 
+    def test_update_sso_settings_moves_omitted_env_row_values_into_sso_row(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import json
+
+        environment_variables = {
+            "MICROSOFT_TENANT": "env-row-tenant",
+            "MICROSOFT_CLIENT_ID": "env-row-client-id",
+            "GENERIC_CLIENT_ID": "env-row-generic-id",
+            "LANGFUSE_PUBLIC_KEY": "unrelated",
+        }
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch,
+            self._STORED_GENERIC_SSO,
+            {"user_email": "new@example.com", "microsoft_client_id": None},
+            environment_variables=environment_variables,
+        )
+
+        from litellm.proxy.proxy_server import prisma_client
+
+        assert response.status_code == 200
+        assert saved["microsoft_tenant"] == "env-row-tenant"
+        assert saved["microsoft_client_id"] is None
+        assert saved["generic_client_id"] == "stored-client-id"
+        assert saved["user_email"] == "new@example.com"
+        env_row_update = prisma_client.db.litellm_config.update.call_args.kwargs
+        assert json.loads(env_row_update["data"]["param_value"]) == {"LANGFUSE_PUBLIC_KEY": "unrelated"}
+
     def test_update_sso_settings_maps_saml_fields_to_env_vars(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):
@@ -922,7 +956,7 @@ class TestProxySettingEndpoints:
         mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
         mock_prisma.db.litellm_config = MagicMock()
-        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+        mock_prisma.writer_db.litellm_config.find_unique = AsyncMock(
             side_effect=ValueError("cleanup failed")
         )
         mock_prisma.db.litellm_config.update = AsyncMock()
