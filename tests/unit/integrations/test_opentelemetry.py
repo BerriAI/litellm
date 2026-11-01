@@ -6232,9 +6232,11 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
     DURATION_METRIC = "gen_ai.client.operation.duration"
     TOKEN_METRIC = "gen_ai.client.token.usage"
 
-    # High-cardinality attributes the captured fixture emits by default. Each is
-    # a member of VALID_METRIC_ATTRIBUTE_NAMES and is present on the recorded
-    # metric when no filter is configured (verified by the backward-compat test).
+    # Attributes the captured fixture emits by default and an operator may want
+    # off metrics. Each is a member of VALID_METRIC_ATTRIBUTE_NAMES and is present
+    # on the recorded metric when no filter is configured (verified by the
+    # backward-compat test). The metadata ones vary per caller or per request;
+    # hidden_params carries only model_id, so it varies per deployment.
     HIGH_CARDINALITY_KEYS = (
         "hidden_params",
         "metadata.user_api_key_hash",
@@ -6333,9 +6335,9 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
             self.assertEqual(keys - {"gen_ai.token.type"}, allowed)
 
     def test_no_filter_preserves_high_cardinality_keys(self):
-        """Backward compatibility: with no attributes config, every
-        high-cardinality key the fixture carries is still stamped on the
-        metric, so existing customers who rely on them are unaffected."""
+        """Backward compatibility: with no attributes config, every key in
+        HIGH_CARDINALITY_KEYS the fixture carries is still stamped on the metric,
+        so existing customers who rely on them are unaffected."""
         reader = self._record(None)
         expected = set(self.HIGH_CARDINALITY_KEYS)
 
@@ -6395,6 +6397,66 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
                     f"{metric_name} leaked {excluded & keys} via callback_settings",
                 )
                 self.assertIn(self.RETAINED_LOW_CARDINALITY_KEY, keys)
+
+    def _duration_points(self, *mutations):
+        """Run one success hook per mutation of the fixture kwargs and return the
+        duration histogram's data points."""
+        metric_reader = InMemoryMetricReader()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
+        otel = OpenTelemetry(
+            config=OpenTelemetryConfig(exporter="console", enable_metrics=True),
+            tracer_provider=tracer_provider,
+            meter_provider=MeterProvider(metric_readers=[metric_reader]),
+        )
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        start = datetime.utcnow()
+        for mutate in mutations:
+            kwargs, response_obj = self._load_fixtures()
+            mutate(kwargs)
+            otel._handle_success(kwargs, response_obj, start, start + timedelta(seconds=1))
+
+        return [
+            dp
+            for rm in metric_reader.get_metrics_data().resource_metrics
+            for sm in rm.scope_metrics
+            for m in sm.metrics
+            if m.name == self.DURATION_METRIC
+            for dp in m.data.data_points
+        ]
+
+    def test_hidden_params_label_is_one_series_across_calls_with_different_cost(self):
+        """Two calls differing only in per-request cost must land in one series
+        whose hidden_params label carries the deployment's model_id alone."""
+
+        def with_cost(cost):
+            def mutate(kwargs):
+                kwargs["response_cost"] = cost
+                kwargs["standard_logging_object"]["hidden_params"]["response_cost"] = cost
+
+            return mutate
+
+        data_points = self._duration_points(with_cost(0.001), with_cost(0.002))
+
+        model_id = self._load_fixtures()[0]["standard_logging_object"]["hidden_params"]["model_id"]
+        self.assertEqual(len(data_points), 1)
+        self.assertEqual(data_points[0].count, 2)
+        self.assertEqual(json.loads(data_points[0].attributes["hidden_params"]), {"model_id": model_id})
+
+    def test_hidden_params_label_is_omitted_without_model_id(self):
+        """A call with no model_id still records the metric, just without the
+        hidden_params label."""
+
+        def drop_model_id(kwargs):
+            del kwargs["standard_logging_object"]["hidden_params"]["model_id"]
+
+        data_points = self._duration_points(drop_model_id)
+
+        self.assertEqual(len(data_points), 1)
+        self.assertEqual(data_points[0].count, 1)
+        self.assertNotIn("hidden_params", data_points[0].attributes)
+        self.assertIn(self.RETAINED_LOW_CARDINALITY_KEY, data_points[0].attributes)
 
     def test_callback_settings_validation_failure_is_not_sticky(self):
         """On the lazy callback_settings path a validation failure must not cache
