@@ -1,7 +1,7 @@
 import csv
 import io
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from itertools import chain
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
@@ -35,6 +35,8 @@ from litellm.types.repositories.daily_activity import (
     KeyMetadataRow,
     KeyPage,
     KeySpendRow,
+    TagPage,
+    TagSpendRow,
     UserMetadataRow,
     UserPage,
     UserSpendRow,
@@ -251,6 +253,8 @@ class _FakeRepository:
         self.guardrail_spend = AsyncMock(return_value=())
         self.key_page = AsyncMock(side_effect=self._key_page)
         self.key_page_call: tuple[DailyActivityScope, int, int] | None = None
+        self.tag_page = AsyncMock(side_effect=self._tag_page)
+        self.tag_page_call: tuple[DailyActivityScope, str, int, int] | None = None
         self.search_keys = AsyncMock(side_effect=self._search_keys)
         self.model_top_keys = AsyncMock(side_effect=self._model_top_keys)
         self.cache_leakage_keys = AsyncMock(side_effect=self._cache_leakage_keys)
@@ -320,6 +324,29 @@ class _FakeRepository:
         return KeyPage(
             rows=tuple(_key_spend_row(api_key, rows) for api_key in api_keys[offset : offset + limit]),
             total_api_keys=len(api_keys),
+        )
+
+    async def _tag_page(
+        self, scope: DailyActivityScope, *, team_id: str, offset: int, limit: int
+    ) -> TagPage:
+        self.tag_page_call = (scope, team_id, offset, limit)
+        tag_scope: Final = replace(
+            scope,
+            table=DailyActivityTable.TAG,
+            entity_id_field="tag",
+            entity_ids=None,
+            exclude_entity_ids=(),
+        )
+        rows: Final = self._matching_rows(tag_scope)
+        tags: Final = tuple(
+            sorted(
+                {row.entity_id for row in rows},
+                key=lambda tag: (-sum(row.spend for row in rows if row.entity_id == tag), tag),
+            )
+        )
+        return TagPage(
+            rows=tuple(_tag_spend_row(tag, rows) for tag in tags[offset : offset + limit]),
+            total_tags=len(tags),
         )
 
     async def _model_top_keys(
@@ -434,6 +461,22 @@ def _key_spend_row(api_key: str, rows: Sequence[_Activity]) -> KeySpendRow:
     matching: Final = tuple(row for row in rows if row.api_key == api_key)
     return KeySpendRow(
         api_key=api_key,
+        spend=sum(row.spend for row in matching),
+        prompt_tokens=sum(row.prompt_tokens for row in matching),
+        completion_tokens=sum(row.completion_tokens for row in matching),
+        total_tokens=sum(row.prompt_tokens + row.completion_tokens for row in matching),
+        api_requests=sum(row.api_requests for row in matching),
+        successful_requests=sum(row.successful_requests for row in matching),
+        failed_requests=sum(row.failed_requests for row in matching),
+        cache_read_input_tokens=sum(row.cache_read_input_tokens for row in matching),
+        cache_creation_input_tokens=sum(row.cache_creation_input_tokens for row in matching),
+    )
+
+
+def _tag_spend_row(tag: str, rows: Sequence[_Activity]) -> TagSpendRow:
+    matching: Final = tuple(row for row in rows if row.entity_id == tag)
+    return TagSpendRow(
+        tag=tag,
         spend=sum(row.spend for row in matching),
         prompt_tokens=sum(row.prompt_tokens for row in matching),
         completion_tokens=sum(row.completion_tokens for row in matching),
@@ -1268,6 +1311,105 @@ def test_team_scope_applies_membership_and_user_key_filter(
     assert scope.entity_ids == ("team-a",)
     assert scope.timezone_offset_minutes == 480
     assert repository.aggregated.call_args.kwargs["include_entity_breakdown"] is True
+
+
+@pytest.mark.parametrize("team_ids", ["team-a", "team-a,", ",team-a"])
+def test_team_tag_page_normalizes_team_ids_and_applies_the_members_key_filter(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    team_ids: str,
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        "/team/daily/activity/aggregated/tags",
+        params={**_entity_params("team_ids", team_ids), "offset": 3, "limit": 7},
+        headers={"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["offset"] == 3
+    assert response.json()["limit"] == 7
+    tag_page_call: Final = repository.tag_page_call
+    assert tag_page_call is not None
+    scope, team_id, offset, limit = tag_page_call
+    assert (scope.table, scope.entity_ids, scope.api_keys, team_id, offset, limit) == (
+        DailyActivityTable.TEAM,
+        ("team-a",),
+        ("key-alpha",),
+        "team-a",
+        3,
+        7,
+    ), tag_page_call
+
+
+@pytest.mark.parametrize(
+    ("team_ids", "expected_count"),
+    [(None, 0), ("team-a,team-b", 2), ("team-a,,team-b", 2)],
+)
+@pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.INTERNAL_USER])
+def test_team_tag_page_needs_exactly_one_named_team_for_every_caller(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    team_ids: str | None,
+    expected_count: int,
+    role: LitellmUserRoles,
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        "/team/daily/activity/aggregated/tags",
+        params={**_DATE_PARAMS, **({"team_ids": team_ids} if team_ids else {})},
+        headers={"x-user-role": role.value, "x-user-id": "user-a"},
+    )
+    assert response.status_code == 400, response.text
+    assert response.json() == {
+        "detail": {"error": f"tags page needs exactly one team in team_ids, got {expected_count}"}
+    }
+    repository.tag_page.assert_not_awaited()
+
+
+def test_team_tag_page_returns_404_for_a_non_member(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        "/team/daily/activity/aggregated/tags",
+        params=_entity_params("team_ids", "team-b"),
+        headers={"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
+    )
+
+    assert response.status_code == 404, response.text
+    repository.tag_page.assert_not_awaited()
+
+
+def test_team_tag_page_is_empty_for_a_team_that_is_also_excluded(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        "/team/daily/activity/aggregated/tags",
+        params={**_entity_params("team_ids", "team-a"), "exclude_team_ids": "team-a", "offset": 0, "limit": 5},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"tags": [], "total_tags": 0, "offset": 0, "limit": 5}
+    repository.tag_page.assert_not_awaited()
+
+
+def test_team_aggregated_ignores_group_by_and_reads_the_team_table(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    params: Final = _entity_params("team_ids", "team-a")
+    without_group_by: Final = client.get("/team/daily/activity/aggregated", params=params)
+    with_group_by: Final = client.get(
+        "/team/daily/activity/aggregated",
+        params={**params, "group_by": "tag"},
+    )
+    assert without_group_by.status_code == with_group_by.status_code == 200
+    assert with_group_by.json() == without_group_by.json()
+    scope: Final = repository.aggregated.call_args.args[0]
+    assert (scope.table, scope.entity_id_field, scope.entity_ids) == (
+        DailyActivityTable.TEAM,
+        "team_id",
+        ("team-a",),
+    ), scope
 
 
 @pytest.mark.parametrize("api_key", ["key-beta", "unattributed", "raw:unattributed", "raw:raw:unattributed"])
