@@ -93,6 +93,21 @@ def _caller_tag_list(value: object) -> tuple[str, ...]:
     return ()
 
 
+def _end_user_without_request_user(kwargs: Mapping[str, object]) -> str | None:
+    """The proxy end-user id (header mapping, ``x-litellm-end-user-id``, ...) when the request carries no ``user``.
+
+    The vanilla Langfuse logger uses this id as the trace user; the shared OTel attributes only fall back to the
+    key owner's ``user_api_key_user_id``, so without this every such call lands on one Langfuse user."""
+    payload: Final = as_str_mapping(kwargs.get("standard_logging_object")) or {}
+    metadata: Final = as_str_mapping(payload.get("metadata")) or {}
+    end_user: Final = metadata.get("user_api_key_end_user_id")
+    if not end_user:
+        return None
+    optional_params: Final = as_str_mapping(kwargs.get("optional_params")) or {}
+    model_params: Final = as_str_mapping(payload.get("model_parameters")) or {}
+    return None if optional_params.get("user") or model_params.get("user") else str(end_user)
+
+
 def _parent_of(span: object) -> trace.SpanContext | None:
     parent: Final = getattr(span, "parent", None)
     return parent if isinstance(parent, trace.SpanContext) else None
@@ -157,7 +172,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         super().__init__(config=config, *args, **kwargs)
 
     @staticmethod
-    def set_langfuse_otel_attributes(span: Span, kwargs, response_obj):
+    def set_langfuse_otel_attributes(span: Span, kwargs: Mapping[str, object], response_obj: object) -> None:
         """
         Sets OpenTelemetry span attributes for Langfuse observability.
         Uses the same attribute setting logic as Arize Phoenix for consistency.
@@ -304,6 +319,11 @@ class LangfuseOtelLogger(OpenTelemetry):
                 LangfuseSpanAttributes.LANGFUSE_ENVIRONMENT.value,
                 langfuse_environment,
             )
+
+        # Before the metadata mapping, so an explicit `trace_user_id` still wins.
+        end_user: Final = _end_user_without_request_user(kwargs)
+        if end_user is not None:
+            safe_set_attribute(span, LangfuseSpanAttributes.TRACE_USER_ID.value, end_user)
 
         metadata: Final = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
         LangfuseOtelLogger._set_metadata_attributes(span=span, metadata=metadata)

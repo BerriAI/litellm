@@ -312,6 +312,51 @@ class TestLangfuseOtelIntegration:
             ), "Mismatch between expected and actual OTEL attribute mapping."
 
     @pytest.mark.parametrize(
+        "end_user, optional_params, metadata, expected_user",
+        [
+            ("agent-a", {}, {}, "agent-a"),
+            ("agent-a", {"user": "body-user"}, {}, "body-user"),
+            ("agent-a", {}, {"trace_user_id": "explicit-user"}, "explicit-user"),
+            (None, {}, {}, "default_user_id"),
+        ],
+        ids=[
+            "end-user-replaces-key-owner-fallback",
+            "request-user-still-wins",
+            "explicit-trace-user-id-still-wins",
+            "without-end-user-key-owner-fallback-unchanged",
+        ],
+    )
+    def test_trace_user_falls_back_to_end_user(
+        self,
+        end_user: str | None,
+        optional_params: dict[str, str],
+        metadata: dict[str, str],
+        expected_user: str,
+    ) -> None:
+        """Like the vanilla Langfuse logger, the proxy end user (e.g. from `user_header_mappings`) is the trace user
+        when the request carries no `user`, instead of the key owner's `user_api_key_user_id`."""
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+
+        exporter: Final = InMemorySpanExporter()
+        provider: Final = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        span: Final = provider.get_tracer(__name__).start_span("litellm_request")
+        logging_metadata: Final[dict[str, str]] = {"user_api_key_user_id": "default_user_id"}
+        if end_user is not None:
+            logging_metadata["user_api_key_end_user_id"] = end_user
+        kwargs: Final[dict[str, object]] = {
+            "optional_params": optional_params,
+            "litellm_params": {"metadata": metadata},
+            "standard_logging_object": {"metadata": logging_metadata, "model_parameters": optional_params},
+        }
+
+        LangfuseOtelLogger.set_langfuse_otel_attributes(span, kwargs, None)
+        span.end()
+
+        attributes: Final = exporter.get_finished_spans()[0].attributes or {}
+        assert attributes.get(LangfuseSpanAttributes.TRACE_USER_ID.value) == expected_user
+
+    @pytest.mark.parametrize(
         "metadata, expected_version",
         [
             (
