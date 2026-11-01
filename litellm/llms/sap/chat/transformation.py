@@ -2,13 +2,14 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
+import os
 import types
 from collections.abc import AsyncIterator, Iterator, Mapping
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import message_with_file_parts_as_image_urls
@@ -55,6 +56,21 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
         "model_version",
     }
 )
+
+
+class _DeploymentUrlOverride(BaseModel):
+    """The deployment_url a caller can pass in optional_params to skip discovery"""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    deployment_url: str | None = None
+
+
+class _OrchestrationConfiguration(BaseModel):
+    """The fields discovery reads from an AI Core /lm/configurations/{id} response"""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    executable_id: str = Field(default="", alias="executableId")
+    name: str = ""
 
 
 def validate_dict(
@@ -187,20 +203,40 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         # Keep a short, tight client lifecycle here to avoid fd leaks
         client: Final = litellm.module_level_client
         # with httpx.Client(timeout=30) as client:
-        deployments: Final[AICoreDeploymentList] = client.get(
-            join_api_base(self.base_url, "lm/deployments"), headers=self.headers
-        ).json()
-        valid: Final[list[tuple[str, str]]] = []
+        deployments: Final = client.get(join_api_base(self.base_url, "lm/deployments"), headers=self.headers).json()
+        valid: Final[list[tuple[str, str, str]]] = []
         for dep in deployments.get("resources", []):
             if dep.get("scenarioId") == "orchestration":
-                cfg: AICoreConfiguration = client.get(
-                    join_api_base(self.base_url, f"lm/configurations/{dep['configurationId']}"),
-                    headers=self.headers,
-                ).json()
-                if cfg.get("executableId") == "orchestration":
-                    valid.append((dep["deploymentUrl"], dep["createdAt"]))
-            # newest first
-        return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
+                cfg = _OrchestrationConfiguration.model_validate(
+                    client.get(
+                        join_api_base(self.base_url, f"lm/configurations/{dep['configurationId']}"),
+                        headers=self.headers,
+                    ).json()
+                )
+                if cfg.executable_id == "orchestration":
+                    valid.append((dep["deploymentUrl"], dep["createdAt"], cfg.name))
+        if not valid:
+            raise GenAIHubOrchestrationError(
+                status_code=400,
+                message=(
+                    "No orchestration deployment found for this SAP AI Core resource group. Create one, or set "
+                    "AICORE_ORCHESTRATION_DEPLOYMENT_URL, or pass deployment_url in optional_params, to skip "
+                    "discovery."
+                ),
+            )
+        # newest first
+        ranked: Final = sorted(valid, key=lambda dep: dep[1], reverse=True)
+        if len(ranked) > 1:
+            chosen_url, _, chosen_name = ranked[0]
+            others: Final = [(name, url) for url, _, name in ranked[1:]]
+            litellm.verbose_logger.warning(
+                "SAP: %d orchestration deployments found; using newest (name=%r, url=%r). Others ignored: %r.",
+                len(ranked),
+                chosen_name,
+                chosen_url,
+                others,
+            )
+        return ranked[0][0]
 
     @classmethod
     def get_config(cls):
@@ -267,8 +303,11 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ):
-        api_base_: Final = join_api_base(self.deployment_url, "v2/completion")
-        return api_base_
+        explicit_url: Final = _DeploymentUrlOverride.model_validate(optional_params).deployment_url
+        deployment_url: Final = (
+            explicit_url or os.environ.get("AICORE_ORCHESTRATION_DEPLOYMENT_URL") or self.deployment_url
+        )
+        return join_api_base(deployment_url, "v2/completion")
 
     def _build_prompt_module(
         self,
