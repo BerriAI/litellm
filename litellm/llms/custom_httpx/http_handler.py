@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import inspect
 import os
+import re
 import socket
 import ssl
 import sys
@@ -272,6 +273,18 @@ _STREAMING_ERROR_BODY_READ_EXECUTOR: Final = concurrent.futures.ThreadPoolExecut
 )
 
 
+_SURROGATE_RE: Final = re.compile(r"[\ud800-\udfff]")
+
+
+def _repair_surrogates(value: str) -> str:
+    """Repair malformed UTF-16 text without copying ordinary Unicode strings."""
+    if not _SURROGATE_RE.search(value):
+        return value
+    # Preserve valid surrogate pairs as their scalar value; replace only lone
+    # surrogates. Byte payloads and caller-owned mappings are never rewritten.
+    return value.encode("utf-16-le", errors="surrogatepass").decode("utf-16-le", errors="replace")
+
+
 def _prepare_request_data_and_content(
     data: dict | str | bytes | None = None,
     content: _RequestContent | None = None,
@@ -308,6 +321,9 @@ def _prepare_request_data_and_content(
         else:
             # dict/Mapping stays in data= parameter
             request_data = data
+
+    if isinstance(request_content, str):
+        request_content = _repair_surrogates(request_content)
 
     return request_data, request_content
 
