@@ -3,7 +3,7 @@ import json
 import re
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -13,7 +13,7 @@ import anthropic
 import httpx
 import openai
 import pytest
-from integration._support.client import Gateway, eventually, object_value
+from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.vertex import service_account_json
@@ -417,14 +417,31 @@ def test_a_deployment_dropping_context_management_sends_neither_the_field_nor_it
         _spend_row(f"msg_{marker}")
 
 
+@pytest.fixture(scope="module")
+def local_beta_map_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    with (
+        gateway_from_environment() as shared,
+        owned_proxy(
+            shared,
+            tmp_path_factory.mktemp("safeguards-local-beta-map"),
+            {"LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS": "true"},
+        ) as owned,
+    ):
+        yield owned
+
+
 @pytest.mark.parametrize("row", tuple(_FOUNDRY_SHAPES))
-def test_azure_ai_messages_forward_the_mapped_client_betas_beside_the_derived_one(gateway: Gateway, row: str) -> None:
+def test_azure_ai_messages_forward_the_mapped_client_betas_beside_the_derived_one(
+    local_beta_map_gateway: Gateway, row: str
+) -> None:
     case: Final = _FOUNDRY_SHAPES[row]
     marker: Final = uuid.uuid4().hex
-    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+    with wire_server(anthropic_peer) as wire, local_beta_map_gateway.scenario() as scenario:
         model: Final = scenario.model(model=_FOUNDRY_MODEL, api_base=wire.url, api_key=_FOUNDRY_KEY)
         response: Final = _post(
-            gateway, messages_body(model, marker, safeguards=case.sent, stream=case.stream), beta=case.client_beta
+            local_beta_map_gateway,
+            messages_body(model, marker, safeguards=case.sent, stream=case.stream),
+            beta=case.client_beta,
         )
         if case.stream:
             _assert_streamed(response, marker)
