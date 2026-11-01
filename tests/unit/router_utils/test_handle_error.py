@@ -273,3 +273,10 @@ def setup_and_teardown():
     yield
     loop.close()
     asyncio.set_event_loop(None)
+
+
+@pytest.mark.asyncio
+async def test_send_llm_exception_alert_without_a_router_does_nothing():
+    from litellm.router_utils.handle_error import send_llm_exception_alert
+
+    assert await send_llm_exception_alert(None, {"model": "gpt-5-mini"}, "traceback", Exception("boom")) is None

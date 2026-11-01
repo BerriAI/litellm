@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_semantic_cache_prompt_from_messages,
     get_str_from_messages,
     handle_any_messages_to_chat_completion_str_messages_conversion,
+    handle_messages_with_content_list_to_str_conversion,
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
@@ -2000,6 +2001,12 @@ class TestRequestContainsImageContent:
             [{"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": "x"}}]}],
             [{"role": "user", "content": [{"type": "tool_result", "content": [{"type": "text", "text": "ok"}]}]}],
             [{"role": "user", "content": None}],
+            [{"role": "user", "content": [None, "text", {"type": []}]}],
+            ["malformed"],
+            [None, 5],
+            "malformed",
+            5,
+            None,
             [],
         ],
     )
@@ -2675,3 +2682,16 @@ def test_tpm_projection_preserves_non_media_identity_and_opaque_values() -> None
     projected, media = split_media_for_tpm(request)
     assert projected is request
     assert media == ()
+
+
+def test_content_list_flattening_returns_new_messages_and_leaves_the_callers_untouched() -> None:
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}, {"type": "text", "text": " world"}]},
+        {"role": "assistant", "content": "Hi"},
+    ]
+    messages_before: Final = copy.deepcopy(messages)
+
+    flattened: Final = handle_messages_with_content_list_to_str_conversion(messages)
+
+    assert flattened == [{"role": "user", "content": "Hello world"}, {"role": "assistant", "content": "Hi"}]
+    assert messages == messages_before

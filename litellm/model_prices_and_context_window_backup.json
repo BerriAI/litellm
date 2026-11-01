@@ -15555,18 +15555,20 @@
         "input_cost_per_token": 2.65e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 8000,
-        "max_output_tokens": 2048,
+        "max_output_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 3.5e-06,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-70b-instruct.md",
         "supports_pdf_input": true
     },
     "bedrock/us-gov-west-1/meta.llama3-8b-instruct-v1:0": {
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 8000,
-        "max_output_tokens": 2048,
+        "max_output_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-8b-instruct.md",
         "supports_pdf_input": true
     },
     "bedrock/us-west-1/meta.llama3-70b-instruct-v1:0": {
@@ -25301,6 +25303,38 @@
         "cache_read_input_token_cost": 8e-08,
         "cache_creation_input_token_cost": 1e-06,
         "prompt_cache_min_tokens": 2048
+    },
+    "eu.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "cache_creation_input_token_cost": 1.375e-06,
+        "cache_creation_input_token_cost_above_1hr": 2.2e-06,
+        "cache_read_input_token_cost": 1.1e-07,
+        "input_cost_per_token": 1.1e-06,
+        "deprecation_date": "2026-10-15",
+        "litellm_provider": "bedrock_converse",
+        "supports_tool_search": true,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 5.5e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_assistant_prefill": true,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_native_structured_output": true,
+        "supports_parallel_tool_use_config": true,
+        "prompt_cache_min_tokens": 4096,
+        "input_cost_per_token_batches": 5.5e-07,
+        "output_cost_per_token_batches": 2.75e-06,
+        "token_count_model": {
+            "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "litellm_provider": "bedrock"
+        }
     },
     "eu.anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -39655,6 +39689,57 @@
             "/v1/images/generations"
         ]
     },
+    "hostinger_router/gpt-5.2": {
+        "cache_read_input_token_cost": 0.00000021,
+        "input_cost_per_token": 0.0000021,
+        "litellm_provider": "hostinger_router",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 0.0000168,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+        "source": "https://router.hostinger.com/v1/models"
+    },
+    "hostinger_router/claude-sonnet-5": {
+        "cache_creation_input_token_cost": 3.3e-06,
+        "cache_creation_input_token_cost_above_1hr": 5.28e-06,
+        "cache_read_input_token_cost": 2.64e-07,
+        "input_cost_per_token": 2.64e-06,
+        "litellm_provider": "hostinger_router",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.32e-05,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "supported_endpoints": ["/v1/chat/completions", "/v1/messages"],
+        "source": "https://router.hostinger.com/v1/models"
+    },
+    "hostinger_router/text-embedding-3-large": {
+        "input_cost_per_token": 1.716e-07,
+        "litellm_provider": "hostinger_router",
+        "max_input_tokens": 8191,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "source": "https://router.hostinger.com/v1/models"
+    },
+    "hostinger_router/text-embedding-3-small": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "hostinger_router",
+        "max_input_tokens": 8191,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "source": "https://router.hostinger.com/v1/models"
+    },
     "hyperbolic/NousResearch/Hermes-3-Llama-3.1-70B": {
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "hyperbolic",
@@ -48872,6 +48957,7 @@
     },
     "together_ai/Qwen/Qwen3.8-2.4T-A95B": {
         "cache_read_input_token_cost": 2.5e-07,
+        "deprecation_date": "2026-11-04",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1010000,
@@ -51355,6 +51441,11 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "output_cost_per_token": 5e-06,
         "output_cost_per_token_batches": 2.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
@@ -51383,6 +51474,11 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "output_cost_per_token": 5e-06,
         "output_cost_per_token_batches": 2.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
@@ -52129,6 +52225,11 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_batches": 7.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
@@ -52234,6 +52335,11 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_batches": 7.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
@@ -81258,6 +81364,78 @@
         "mode": "responses",
         "source": "https://developers.openai.com/api/docs/pricing",
         "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "gpt-6-astra-law": {
+        "cache_read_input_token_cost": 1e-06,
+        "input_cost_per_token": 1e-05,
+        "litellm_provider": "openai",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard",
+            "pro"
+        ],
+        "regional_processing_uplift_multiplier_eu": 1.1,
+        "regional_processing_uplift_multiplier_us": 1.1,
+        "search_context_cost_per_query": {"search_context_size_high":0.01,"search_context_size_low":0.01,"search_context_size_medium":0.01},
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": false,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_cache_breakpoint": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_tool_search": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "chatgpt/gpt-6-astra-law": {
+        "litellm_provider": "chatgpt",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "responses",
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ],
         "supports_function_calling": true,
