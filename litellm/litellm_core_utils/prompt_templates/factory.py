@@ -910,6 +910,9 @@ def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) ->
         )
 
 
+_ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES: Final = {"application/pdf", "text/plain"}
+
+
 def create_anthropic_image_param(
     image_url_input: str | dict,
     format: str | None = None,
@@ -932,9 +935,18 @@ def create_anthropic_image_param(
     if image_url.startswith("http://") or image_url.startswith("https://"):
         # For Bedrock invoke and Vertex AI Anthropic, always convert URLs to base64
         # as these providers don't support URL sources for images
-        if is_bedrock_invoke or image_url.startswith("http://"):
+        clean_url: Final = image_url.split("#")[0].split("?")[0].lower()
+        is_document: Final = (
+            (format in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES)
+            or (format is not None and select_anthropic_content_block_type_for_file(format) == "document")
+            or clean_url.endswith(".pdf")
+        )
+        if is_bedrock_invoke or image_url.startswith("http://") or is_document:
+            inferred_format = format
+            if inferred_format is None and clean_url.endswith(".pdf"):
+                inferred_format = "application/pdf"
             base64_url: Final = convert_url_to_base64(url=image_url)
-            image_chunk = convert_to_anthropic_image_obj(openai_image_url=base64_url, format=format)
+            image_chunk = convert_to_anthropic_image_obj(openai_image_url=base64_url, format=inferred_format)
             return _anthropic_content_element_factory(image_chunk)
         else:
             # HTTPS URL - pass directly for regular Anthropic
@@ -1071,7 +1083,7 @@ def anthropic_messages_pt_xml(messages: list):
                             base64_source = cast(AnthropicContentParamSource, source)
                             user_content.append(
                                 {
-                                    "type": "image",
+                                    "type": image_param.get("type", "image"),
                                     "source": {
                                         "type": "base64",
                                         "media_type": base64_source["media_type"],
@@ -1804,9 +1816,6 @@ def _sanitize_bedrock_tool_use_id(tool_use_id: str) -> str:
     return f"{sanitized[: _BEDROCK_TOOL_USE_ID_MAX_LEN - _BEDROCK_TOOL_USE_ID_HASH_LEN - 1]}_{digest}"
 
 
-_ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES: Final = {"application/pdf", "text/plain"}
-
-
 def _is_anthropic_document_data_uri(url: str) -> bool:
     # Anthropic's base64 document source accepts only application/pdf and
     # text/plain (see select_anthropic_content_block_type_for_file). Routing
@@ -2257,13 +2266,17 @@ def add_cache_control_to_content(
 def _anthropic_content_element_factory(
     image_chunk: GenericImageParsingChunk,
 ) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
-    if image_chunk["media_type"] == "application/pdf":
+    media_type = image_chunk.get("media_type")
+    if (
+        media_type in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES
+        or (isinstance(media_type, str) and select_anthropic_content_block_type_for_file(media_type) == "document")
+    ):
         _anthropic_content_element: AnthropicMessagesDocumentParam | AnthropicMessagesImageParam = (
             AnthropicMessagesDocumentParam(
                 type="document",
                 source=AnthropicContentParamSource(
                     type="base64",
-                    media_type=image_chunk["media_type"],
+                    media_type=media_type,
                     data=image_chunk["data"],
                 ),
             )
