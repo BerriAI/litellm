@@ -2054,6 +2054,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         Args:
             parsed_chunk: Dict containing the Responses API event chunk
             tool_call_index_map: Per-stream output_index -> sequential tool_call index map
+            message_phase_by_output_index: Per-stream Responses message output_index -> phase mapping
             replays_openai_history: Record the completed output's item sequence for the next turn
             structured_output: Only the first message item became content
             reasoning_summary_streamed: Whether earlier chunks already streamed reasoning summary text
