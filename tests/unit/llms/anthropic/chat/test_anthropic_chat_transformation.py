@@ -2262,7 +2262,6 @@ _OBJECT_OUTPUT_FORMAT: Final = {"type": "json_schema", "schema": {"type": "objec
         pytest.param("json", True, False, False, id="string_dropped_under_request_drop_params"),
         pytest.param("json", None, True, False, id="string_dropped_under_global_drop_params"),
         pytest.param("json", None, False, True, id="string_forwarded_without_drop_params"),
-        pytest.param(_OBJECT_OUTPUT_FORMAT, True, False, True, id="object_kept_under_drop_params"),
     ],
 )
 def test_anthropic_chat_drops_only_a_non_object_output_format_and_only_under_drop_params(
@@ -2283,6 +2282,65 @@ def test_anthropic_chat_drops_only_a_non_object_output_format_and_only_under_dro
     )
 
     assert result.get("output_format") == (output_format if forwarded else None)
+
+
+@pytest.mark.parametrize(
+    ("output_config", "sent_output_config"),
+    [
+        pytest.param(None, {"format": _OBJECT_OUTPUT_FORMAT}, id="alone"),
+        pytest.param({"effort": "low"}, {"effort": "low", "format": _OBJECT_OUTPUT_FORMAT}, id="beside_effort"),
+        pytest.param(
+            {"format": {"type": "json_schema", "schema": {"type": "string"}}},
+            {"format": _OBJECT_OUTPUT_FORMAT},
+            id="over_output_config_format",
+        ),
+    ],
+)
+def test_anthropic_chat_sends_an_object_output_format_as_output_config_format(
+    output_config: dict[str, object] | None,
+    sent_output_config: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    result = AnthropicConfig().transform_request(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "output_format": _OBJECT_OUTPUT_FORMAT,
+            **({} if output_config is None else {"output_config": output_config}),
+        },
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert "output_format" not in result
+    assert result["output_config"] == sent_output_config
+
+
+def test_anthropic_chat_sends_a_json_schema_response_format_as_output_config_format():
+    config = AnthropicConfig()
+    schema = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "response_format": {"type": "json_schema", "json_schema": {"name": "place", "schema": schema}}
+        },
+        optional_params={},
+        model="claude-haiku-4-5",
+        drop_params=False,
+    )
+
+    result = config.transform_request(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Name a city"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "output_format" not in result
+    assert result["output_config"]["format"]["type"] == "json_schema"
+    assert result["output_config"]["format"]["schema"]["properties"] == schema["properties"]
 
 
 def test_anthropic_drop_params_strips_output_config_for_pre_4_5_models():

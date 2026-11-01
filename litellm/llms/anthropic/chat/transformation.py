@@ -2561,6 +2561,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and drops_unsupported_params(_LITELLM_PARAMS_ADAPTER.validate_python(litellm_params).get("drop_params"))
         ):
             request_params.pop("output_format")
+        if isinstance(output_format, Mapping):
+            output_config: Final = request_params.get("output_config")
+            request_params.pop("output_format")
+            request_params["output_config"] = {  # rebind-ok: out-param store
+                **(output_config if isinstance(output_config, Mapping) else {}),
+                "format": output_format,
+            }
 
         data: Final = {
             "model": model,
