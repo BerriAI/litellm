@@ -74,6 +74,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     EndpointType,
     PassthroughStandardLoggingPayload,
@@ -6638,6 +6639,7 @@ async def _relay_through_pass_through(
     target: str,
     guardrails_config: dict[str, object] | None,
     custom_body: dict[str, object] | None = None,
+    custom_endpoint: bool = False,
 ) -> Mapping[str, object]:
     async def receive() -> Mapping[str, object]:
         return {"type": "http.request", "body": json.dumps(dict(client_body)).encode()}
@@ -6649,6 +6651,7 @@ async def _relay_through_pass_through(
             "path": "/my-claude-route",
             "query_string": b"",
             "headers": [(b"content-type", b"application/json")],
+            "endpoint": SimpleNamespace(**{LITELLM_PASS_THROUGH_ENDPOINT_MARKER: True}) if custom_endpoint else None,
         },
         receive,
     )
@@ -6674,6 +6677,17 @@ async def _relay_through_pass_through(
 
     assert response.status_code == 200
     return MappingProxyType(json.loads(relayed))
+
+
+@pytest.mark.parametrize("request_id", [1, "request-1", None])
+async def test_custom_pass_through_preserves_json_rpc_request_id(request_id: int | str | None) -> None:
+    body: Final = {"jsonrpc": "2.0", "id": request_id, "method": "skills/list", "params": {}, "canary": "kept"}
+
+    upstream_body: Final = await _relay_through_pass_through(
+        body, "http://upstream.test/mcp", guardrails_config=None, custom_endpoint=True
+    )
+
+    assert upstream_body == body
 
 
 _MESSAGES_BODY: Final = MappingProxyType(
