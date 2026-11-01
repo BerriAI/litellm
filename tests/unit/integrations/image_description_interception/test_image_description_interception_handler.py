@@ -1,11 +1,14 @@
 import asyncio
 import base64
 import hashlib
-from collections.abc import Mapping, Sequence
+import uuid
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 
+import httpx
 import pytest
 
+import litellm
 from litellm.integrations.image_description_interception.handler import (
     Described,
     DescriptionFailed,
@@ -13,6 +16,8 @@ from litellm.integrations.image_description_interception.handler import (
     DescriptionResult,
     ImageDescriptionInterceptionLogger,
 )
+from litellm.litellm_core_utils.prompt_templates import image_handling
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.utils import CallTypes
 
@@ -267,3 +272,32 @@ def test_proxy_config_applies_callback_settings():
     )
 
     assert (logger.image_model, logger.prompt, logger.timeout) == ("vision-describer", "Describe.", 30.0)
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_remote_image_becomes_a_placeholder_without_being_read_whole(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    served_chunks: Final[list[int]] = []  # mutable-ok: counts the chunks the server sent
+
+    async def body() -> AsyncIterator[bytes]:
+        for _ in range(8):
+            served_chunks.append(1)
+            yield b"\0" * (512 * 1024)
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=body())
+
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.MockTransport(serve)))
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 1)
+    describer: Final = _RecordingDescriber([Described("unused")])
+
+    result: Final = await _logger(describer).async_pre_call_deployment_hook(
+        _request([_image_turn("hi", f"https://img.example/{uuid.uuid4()}.png")]), CallTypes.acompletion
+    )
+
+    assert result == _request(
+        [_turn_with_text("hi", "[Image #1 could not be described: image fetch failed (ImageFetchError)]")]
+    )
+    assert (len(served_chunks), describer.requests) == (3, [])

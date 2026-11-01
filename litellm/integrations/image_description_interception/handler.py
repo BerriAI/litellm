@@ -242,7 +242,7 @@ def _with_text_parts(
 
 async def _load_image(url: str) -> _LoadedImage | DescriptionFailed:
     try:
-        data_uri: Final = await async_convert_url_to_base64(url)
+        data_uri: Final = await async_convert_url_to_base64(url, bounded_read=True)
     except Exception as e:  # noqa: BLE001  # an unreachable or oversized image degrades to a placeholder
         return DescriptionFailed(f"image fetch failed ({type(e).__name__})")
     _, separator, encoded = data_uri.partition(";base64,")

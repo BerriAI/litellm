@@ -99,7 +99,11 @@ def _rejected_image_fetch(url: str, verdict: SSRFError) -> "litellm.ImageFetchEr
     )
 
 
-async def async_convert_url_to_base64(url: str, timeout: float | httpx.Timeout | None = None) -> str:
+async def async_convert_url_to_base64(
+    url: str, timeout: float | httpx.Timeout | None = None, *, bounded_read: bool = False
+) -> str:
+    """With ``bounded_read`` the body streams in under MAX_IMAGE_URL_DOWNLOAD_SIZE_MB, so an oversized image is never
+    held whole. That reader asks for an uncompressed body and refuses a compressed one, so it is opt-in"""
     if url.startswith("data:") and ";base64," in url:
         return url
 
@@ -114,8 +118,7 @@ async def async_convert_url_to_base64(url: str, timeout: float | httpx.Timeout |
         return cached_result
 
     client: Final = litellm.module_level_aclient
-    # Bound the body while it streams in, so an oversized image never lands in memory whole
-    max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+    max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024) if bounded_read else None
     for attempt_timeout in _attempt_timeouts(timeout):
         try:
             response = await async_safe_get(client, url, timeout=attempt_timeout, max_response_bytes=max_bytes)
