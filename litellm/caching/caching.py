@@ -46,6 +46,14 @@ from .s3_cache import S3Cache
 
 RESPONSE_CACHE_TARGET: Final = "llm_response"
 _ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token"})
+# Everything above is request payload. These two say where the request goes, and without them a
+# call that differs only in its destination reads whatever the other endpoint stored: same model,
+# same messages, different api_base -> one cache entry. api_key is in here for the same reason
+# plus one of its own: several deployments of one model behind one base (per-tenant gateways with
+# their own budgets) are distinguished by the key and by nothing else in the material.
+# The rest of the connection (headers, client, ssl_verify, ...) is per-process setup, not per-call
+# routing, and stays out of the key.
+_KEYED_CONNECTION_PARAMS: Final = frozenset({"api_base", "api_key"})
 _DECODED_LITERAL: Final = TypeAdapter(object)
 _REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
     list[dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
@@ -406,7 +414,7 @@ class Cache:
         for param in kwargs:
             if param in scope_excluded_params:
                 continue
-            if param in combined_kwargs or param in _ALWAYS_KEYED_PROVIDER_PARAMS:
+            if param in combined_kwargs or param in _ALWAYS_KEYED_PROVIDER_PARAMS or param in _KEYED_CONNECTION_PARAMS:
                 param_value: str | None = self._get_param_value(param, kwargs)
                 if param in _ALWAYS_KEYED_PROVIDER_PARAMS and not param_value:
                     continue
