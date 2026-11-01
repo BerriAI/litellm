@@ -158,14 +158,14 @@ mcp_servers:
     .await
     .unwrap()
     .unwrap();
-    let mcp_router = litellm_gateway_mcp::router(
+    let mcp_routes = litellm_gateway_mcp::routes(
         mcp.operations.clone(),
         HttpConfig {
             cancellation_token: shutdown.clone(),
             ..Default::default()
         },
     );
-    let app = litellm_gateway::router(inference, &config, None, Some(mcp_router));
+    let app = litellm_gateway::router(inference, &config, None, Some(mcp_routes));
     Served {
         app,
         mcp,
@@ -180,26 +180,50 @@ mcp_servers:
 #[case::streamable_delete("/mcp", "DELETE")]
 #[case::legacy_sse("/mcp/sse", "GET")]
 #[case::legacy_messages("/mcp/sse/messages", "POST")]
-#[case::rest_list("/mcp-rest/tools/list", "GET")]
 #[case::enabled("/mcp/enabled", "GET")]
 #[tokio::test]
-async fn every_mcp_route_requires_admission_credentials(
+async fn mcp_protocol_routes_require_bearer_admission(
     #[future] served: Served,
     #[case] path: &str,
     #[case] method: &str,
+    #[values(&[], &[("x-api-key", "admission-secret")])] headers: &[(&str, &str)],
 ) {
     let served = served.await;
+    let request = headers.iter().fold(
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .header("host", "localhost"),
+        |request, (name, value)| request.header(*name, *value),
+    );
     let response = served
         .app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(method)
-                .uri(path)
-                .header("host", "localhost")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 401);
+    served.close().await;
+}
+
+#[rstest]
+#[case::missing(&[])]
+#[case::wrong_x_api_key(&[("x-api-key", "wrong")])]
+#[case::non_bearer_authorization(&[("authorization", "Basic admission-secret"), ("x-api-key", "admission-secret")])]
+#[tokio::test]
+async fn mcp_rest_routes_reject_a_missing_or_invalid_key(
+    #[future] served: Served,
+    #[case] headers: &[(&str, &str)],
+) {
+    let served = served.await;
+    let request = headers.iter().fold(
+        Request::get("/mcp-rest/tools/list?server_id=configured-id"),
+        |request, (name, value)| request.header(*name, *value),
+    );
+    let response = served
+        .app
+        .clone()
+        .oneshot(request.body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(response.status(), 401);
@@ -210,6 +234,8 @@ async fn every_mcp_route_requires_admission_credentials(
 #[tokio::test]
 async fn serves_configured_upstream_with_separate_admission_and_outbound_credentials(
     #[future] served: Served,
+    #[values(("authorization", "Bearer admission-secret"), ("x-api-key", "admission-secret"))]
+    admission: (&str, &str),
 ) {
     let served = served.await;
     let app = served.app.clone();
@@ -218,7 +244,7 @@ async fn serves_configured_upstream_with_separate_admission_and_outbound_credent
         .oneshot(
             Request::builder()
                 .uri("/mcp-rest/tools/list?server_id=configured-id")
-                .header("authorization", "Bearer admission-secret")
+                .header(admission.0, admission.1)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -231,7 +257,7 @@ async fn serves_configured_upstream_with_separate_admission_and_outbound_credent
     assert_eq!(body["tools"][0]["name"], "echo");
     assert_eq!(body["tools"][0]["mcp_info"]["alias"], "knowledge");
 
-    let response = app.clone().oneshot(Request::post("/mcp-rest/tools/call").header("authorization", "Bearer admission-secret").header("content-type", "application/json").body(Body::from(json!({"server_id":"configured-id", "name":"echo", "arguments":{"value":"hello"}}).to_string())).unwrap()).await.unwrap();
+    let response = app.clone().oneshot(Request::post("/mcp-rest/tools/call").header(admission.0, admission.1).header("content-type", "application/json").body(Body::from(json!({"server_id":"configured-id", "name":"echo", "arguments":{"value":"hello"}}).to_string())).unwrap()).await.unwrap();
     assert_eq!(response.status(), 200);
     let body: Value =
         serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
@@ -243,7 +269,7 @@ async fn serves_configured_upstream_with_separate_admission_and_outbound_credent
     let blocked = app
         .oneshot(
             Request::post("/mcp-rest/tools/call")
-                .header("authorization", "Bearer admission-secret")
+                .header(admission.0, admission.1)
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({"server_id":"configured-id", "name":"hidden"}).to_string(),
