@@ -498,6 +498,10 @@ DROP_SERVICE_TIER_PROVIDER_WARNING: Final = (
     "Dropping `service_tier` for model=%s on provider=%s. Only the Anthropic API routes accept it."
 )
 
+DROP_THREAD_PROVIDER_WARNING: Final = (
+    "Dropping `thread` for model=%s on provider=%s. Only the Anthropic API keeps Message Threads."
+)
+
 DROP_UNSUPPORTED_TOOL_SEARCH_WARNING: Final = (
     "Dropping the OpenAI `tool_search` tool and the `defer_loading` of the other tools for model=%s on %s "
     "(drop_params=True) because this route cannot run that tool search."
@@ -778,6 +782,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return
         litellm.verbose_logger.warning(DROP_SERVICE_TIER_PROVIDER_WARNING, model, custom_llm_provider)
         optional_params.pop("service_tier", None)
+
+    @staticmethod
+    def maybe_drop_thread_param(
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        custom_llm_provider: str | None = None,
+    ) -> None:
+        if "thread" not in optional_params or custom_llm_provider in (None, "anthropic"):
+            return
+        litellm.verbose_logger.warning(DROP_THREAD_PROVIDER_WARNING, model, custom_llm_provider)
+        optional_params.pop("thread", None)
 
     @staticmethod
     def _raise_invalid_reasoning_effort(model: str, value: object, llm_provider: str) -> NoReturn:

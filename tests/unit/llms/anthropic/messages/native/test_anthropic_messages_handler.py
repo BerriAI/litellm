@@ -1634,6 +1634,66 @@ async def test_anthropic_messages_forwards_safeguards_and_unknown_beta_to_anthro
 
 
 @pytest.mark.asyncio
+async def test_anthropic_messages_forwards_message_threads_continue_to_anthropic():
+    """Shape is what Claude Code 2.1.312 sends with the message-threads-2026-08-12 beta, captured 2026-10-29."""
+    from litellm.llms.anthropic.messages.native import handler
+
+    thread = {"type": "continue", "previous_message_id": "msg_01ABC"}
+    tool_result_only = [
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "README contents"}]}
+    ]
+    captured: dict[str, object] = {}
+
+    def upstream_records_the_request(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_02DEF",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+            request=request,
+        )
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_records_the_request))
+
+    await handler.anthropic_messages(
+        max_tokens=16,
+        messages=tool_result_only,
+        model="anthropic/claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        api_key="sk-test",
+        client=upstream,
+        thread=thread,
+        extra_headers={"anthropic-beta": "message-threads-2026-08-12"},
+    )
+
+    assert captured["body"]["thread"] == thread
+    assert captured["body"]["messages"] == tool_result_only
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "bedrock", "azure_ai", "databricks"])
+def test_anthropic_messages_drops_thread_where_message_threads_are_not_served(custom_llm_provider: str) -> None:
+    from litellm.llms.anthropic.messages.native.utils import AnthropicMessagesRequestUtils
+
+    optional_params = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+        params={"max_tokens": 64, "thread": {"type": "create"}},
+        model="claude-haiku-4-5",
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert "thread" not in optional_params
+    assert dict(optional_params).get("max_tokens") == 64
+
+
+@pytest.mark.asyncio
 async def test_anthropic_messages_streaming_forwards_safeguards_and_keeps_safeguard_results():
     """Shapes are what Claude Code 2.1.278 sends and api.anthropic.com returns, captured 2026-09-21."""
     from litellm.llms.anthropic.messages.native import handler
