@@ -100,6 +100,48 @@ def test_openinference_mapper_input_output_messages():
     assert params["max_tokens"] == 128
 
 
+_OPENINFERENCE_TOKEN_DETAIL_KEYS: Final = (
+    "llm.token_count.prompt_details.cache_read",
+    "llm.token_count.prompt_details.cache_write",
+    "llm.token_count.completion_details.reasoning",
+)
+
+
+def test_openinference_mapper_emits_cache_and_reasoning_token_details():
+    usage: Final = LLMUsage(
+        input_tokens=120,
+        output_tokens=40,
+        total_tokens=160,
+        cache_read_input_tokens=80,
+        cache_creation_input_tokens=30,
+        reasoning_tokens=25,
+    )
+    attrs: Final = OpenInferenceMapper().map(_llm_call(usage=usage))
+    assert attrs["llm.token_count.prompt_details.cache_read"] == 80
+    assert attrs["llm.token_count.prompt_details.cache_write"] == 30
+    assert attrs["llm.token_count.completion_details.reasoning"] == 25
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        LLMUsage(input_tokens=12, output_tokens=8, total_tokens=20),
+        LLMUsage(
+            input_tokens=12,
+            output_tokens=8,
+            total_tokens=20,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+            reasoning_tokens=0,
+        ),
+    ],
+    ids=["absent", "zero"],
+)
+def test_openinference_mapper_omits_missing_token_details(usage: LLMUsage):
+    attrs: Final = OpenInferenceMapper().map(_llm_call(usage=usage))
+    assert not set(_OPENINFERENCE_TOKEN_DETAIL_KEYS) & set(attrs)
+
+
 def test_openinference_mapper_skips_non_llm_roles():
     from litellm.integrations.otel.model.payloads import GuardrailSpanData
 
