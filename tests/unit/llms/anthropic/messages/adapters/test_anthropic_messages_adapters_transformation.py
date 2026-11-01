@@ -564,6 +564,166 @@ def test_translate_anthropic_messages_to_openai_drops_bridge_encrypted_reasoning
     assert [b["signature"] for b in result[2]["thinking_blocks"]] == ["EqQBCkYIAxgCIkA_signed"]
 
 
+def test_chatgpt_messages_keep_encrypted_reasoning_and_replay_it():
+    """chatgpt /v1/messages ends in the Responses API, so the signed block has to survive into the next request."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    summary_encrypted: Final = "gAAAA_summary"
+    bytes_encrypted: Final = "gAAAA_bytes"
+    messages: Final = [
+        AnthropicMessagesUserMessageParam(role="user", content="Which city is colder?"),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "thinking",
+                    "thinking": "Oslo is colder.",
+                    "signature": encrypted_reasoning_signature(summary_encrypted),
+                },
+                {"type": "redacted_thinking", "data": encrypted_reasoning_signature(bytes_encrypted)},
+                {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Oslo"}},
+            ],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "tool_result", "tool_use_id": "call_1", "content": "-7 C"}],
+        ),
+    ]
+
+    kept: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=messages,
+        model="chatgpt/gpt-6.1-sol",
+        custom_llm_provider="chatgpt",
+    )
+    assistant: Final = kept[1]
+    assert [block["type"] for block in assistant["thinking_blocks"]] == ["thinking", "redacted_thinking"]
+    assert assistant["thinking_blocks"][0]["signature"] == encrypted_reasoning_signature(summary_encrypted)
+    assert assistant["thinking_blocks"][1]["data"] == encrypted_reasoning_signature(bytes_encrypted)
+
+    responses_input, _instructions = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        kept
+    )
+    reasoning: Final = tuple(item for item in responses_input if item.get("type") == "reasoning")
+    assert [item["encrypted_content"] for item in reasoning] == [summary_encrypted, bytes_encrypted]
+    types: Final = [item.get("type") for item in responses_input]
+    assert types.index("reasoning") < types.index("function_call")
+
+    stripped: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=messages,
+        model="gpt-4o",
+        custom_llm_provider="openai",
+    )
+    assert not stripped[1].get("thinking_blocks")
+
+    prefixed: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=messages,
+        model="responses/gpt-5-mini",
+        custom_llm_provider="openai",
+    )
+    assert prefixed[1]["thinking_blocks"][1]["data"] == encrypted_reasoning_signature(bytes_encrypted)
+
+
+def test_translate_openai_reasoning_items_become_signed_thinking_blocks():
+    encrypted: Final = "gAAAA_outbound"
+    openai_choices: Final = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content="Oslo.",
+                reasoning_items=[
+                    {
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "encrypted_content": encrypted,
+                        "summary": [{"type": "summary_text", "text": "Oslo is colder."}],
+                    }
+                ],
+                tool_calls=[
+                    ChatCompletionAssistantToolCall(
+                        id="call_1",
+                        type="function",
+                        function=Function(name="get_weather", arguments='{"city": "Oslo"}'),
+                    )
+                ],
+            )
+        )
+    ]
+
+    result: Final = LiteLLMAnthropicMessagesAdapter()._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert result[0]["type"] == "thinking"
+    assert result[0]["thinking"] == "Oslo is colder."
+    assert result[0]["signature"] == encrypted_reasoning_signature(encrypted)
+    assert result[1]["type"] == "text"
+    assert result[2]["type"] == "tool_use"
+
+
+def test_translate_openai_reasoning_items_without_summary_become_redacted_thinking():
+    encrypted: Final = "gAAAA_bytes_only"
+    openai_choices: Final = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content=None,
+                reasoning_items=[
+                    {"type": "reasoning", "id": "rs_1", "encrypted_content": encrypted, "summary": []}
+                ],
+            )
+        )
+    ]
+
+    result: Final = LiteLLMAnthropicMessagesAdapter()._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert result == [
+        {"type": "redacted_thinking", "data": encrypted_reasoning_signature(encrypted)},
+    ]
+
+
+def test_translate_openai_reasoning_items_are_not_duplicated_when_thinking_blocks_already_carry_them():
+    encrypted: Final = "gAAAA_once"
+    signature: Final = encrypted_reasoning_signature(encrypted)
+    openai_choices: Final = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content="Oslo.",
+                thinking_blocks=[{"type": "redacted_thinking", "data": signature}],
+                reasoning_items=[
+                    {"type": "reasoning", "id": "rs_1", "encrypted_content": encrypted, "summary": []}
+                ],
+            )
+        )
+    ]
+
+    result: Final = LiteLLMAnthropicMessagesAdapter()._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert [block["type"] for block in result] == ["redacted_thinking", "text"]
+
+
+def test_streaming_chunk_with_only_reasoning_items_opens_a_signed_thinking_block():
+    encrypted: Final = "gAAAA_delta"
+    choices: Final = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_items=[
+                    {"type": "reasoning", "id": "rs_1", "encrypted_content": encrypted, "summary": []}
+                ]
+            ),
+        )
+    ]
+
+    block_type, start = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "redacted_thinking"
+    assert start["data"] == encrypted_reasoning_signature(encrypted)
+
+
 def test_translate_anthropic_messages_to_openai_sets_reasoning_content():
     """Reasoning-aware chat providers read reasoning_content, so thinking text must land there.
 

@@ -270,6 +270,37 @@ def test_is_chunk_non_empty(initialized_custom_stream_wrapper: CustomStreamWrapp
     )
 
 
+def test_is_chunk_non_empty_keeps_thinking_blocks_without_other_content(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Encrypted reasoning arrives as thinking_blocks and nothing else, so that delta has to be yielded."""
+    chunk: Final = ModelResponseStream(
+        id="chunk-thinking",
+        object="chat.completion.chunk",
+        created=1,
+        model="chatgpt/gpt-6.1-sol",
+        choices=[
+            StreamingChoices(
+                index=0,
+                finish_reason=None,
+                delta=Delta(
+                    thinking_blocks=[
+                        {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:gAAAA"}
+                    ]
+                ),
+            )
+        ],
+    )
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={},
+            model_response=chunk,
+            response_obj={},
+        )
+        is True
+    )
+
+
 def test_is_chunk_non_empty_with_annotations(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):

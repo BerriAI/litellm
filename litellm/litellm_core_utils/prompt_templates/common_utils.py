@@ -2556,6 +2556,88 @@ def encrypted_reasoning_signature(encrypted_content: str) -> str:
     return f"{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{encrypted_content}"
 
 
+_REASONING_SUMMARY_SEPARATOR: Final = "\n\n"
+_OBJECT_SEQUENCE: Final = TypeAdapter(tuple[object, ...])
+
+
+def _object_sequence(value: object) -> tuple[object, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return ()
+    return _OBJECT_SEQUENCE.validate_python(value)
+
+
+def _iter_mappings(value: object) -> tuple[Mapping[str, object], ...]:
+    return tuple(mapping for item in _object_sequence(value) if (mapping := as_str_mapping(item)) is not None)
+
+
+def _reasoning_summary_part_text(part: object) -> str:
+    mapping: Final = as_str_mapping(part)
+    if mapping is not None:
+        text: Final = mapping.get("text")
+        return text if isinstance(text, str) else ""
+    text_attr: Final = getattr(part, "text", None)
+    return text_attr if isinstance(text_attr, str) else ""
+
+
+def _reasoning_item_summary_text(item: Mapping[str, object]) -> str:
+    parts: Final = tuple(_reasoning_summary_part_text(part) for part in _object_sequence(item.get("summary")))
+    return _REASONING_SUMMARY_SEPARATOR.join(part for part in parts if part)
+
+
+def thinking_block_from_reasoning_item(
+    item: object,
+) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock | None:
+    """The chat thinking block that carries one Responses `reasoning` item back to an Anthropic client.
+
+    `encrypted_content` rides the same `litellm_encrypted_reasoning:` signature the Responses
+    adapter uses. A summary becomes thinking text. Bytes with no summary become `redacted_thinking`,
+    because an empty thinking string is not something the client can replay.
+    """
+    mapping: Final = as_str_mapping(item)
+    if mapping is None or mapping.get("type") not in (None, "reasoning"):
+        return None
+    encrypted_content: Final = mapping.get("encrypted_content")
+    if not isinstance(encrypted_content, str) or not encrypted_content:
+        return None
+    signature: Final = encrypted_reasoning_signature(encrypted_content)
+    text: Final = _reasoning_item_summary_text(mapping)
+    if not text:
+        return ChatCompletionRedactedThinkingBlock(type="redacted_thinking", data=signature)
+    return ChatCompletionThinkingBlock(type="thinking", thinking=text, signature=signature)
+
+
+def thinking_blocks_from_reasoning_items(
+    items: object,
+) -> tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...]:
+    return tuple(
+        block for item in _object_sequence(items) if (block := thinking_block_from_reasoning_item(item)) is not None
+    )
+
+
+def _block_encrypted_content(block: object) -> str | None:
+    mapping: Final = as_str_mapping(block)
+    if mapping is None:
+        return None
+    return encrypted_content_of_block(mapping)
+
+
+def thinking_blocks_with_encrypted_reasoning(
+    thinking_blocks: object,
+    reasoning_items: object,
+) -> tuple[Mapping[str, object], ...]:
+    """Thinking blocks already on the message, plus any encrypted reasoning item they do not already carry."""
+    direct: Final = _iter_mappings(thinking_blocks)
+    represented: Final = frozenset(
+        content for block in direct if (content := _block_encrypted_content(block)) is not None
+    )
+    extra: Final = tuple(
+        block
+        for block in thinking_blocks_from_reasoning_items(_iter_mappings(reasoning_items))
+        if _block_encrypted_content(block) not in represented
+    )
+    return (*extra, *direct)
+
+
 def _carries_encrypted_reasoning(signature: object) -> bool:
     return isinstance(signature, str) and signature.startswith(ENCRYPTED_REASONING_SIGNATURE_PREFIX)
 

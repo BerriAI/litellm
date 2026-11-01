@@ -127,6 +127,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     anthropic_inline_document,
     parse_tool_call_arguments,
     reasoning_content_from_thinking_blocks,
+    thinking_blocks_with_encrypted_reasoning,
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -227,6 +228,19 @@ def target_supports_mid_conversation_system(model: str | None, custom_llm_provid
     if not model:
         return False
     return supports_mid_conversation_system(model=model, custom_llm_provider=custom_llm_provider)
+
+
+def _keeps_encrypted_reasoning_for_responses(model: str | None, custom_llm_provider: str | None) -> bool:
+    from litellm.responses.bridge_check import chat_completion_ends_in_responses_api
+
+    return chat_completion_ends_in_responses_api(model, custom_llm_provider)
+
+
+def _anthropic_thinking_blocks(source: object) -> tuple[Mapping[str, object], ...]:
+    return thinking_blocks_with_encrypted_reasoning(
+        getattr(source, "thinking_blocks", None),
+        getattr(source, "reasoning_items", None),
+    )
 
 
 def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
@@ -497,7 +511,11 @@ class LiteLLMAnthropicMessagesAdapter:
         preserve_midturn_system: bool = False,
     ) -> list[AllMessageValues]:
         new_messages: Final[list[AllMessageValues]] = []
-        replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        replayable_messages: Final = (
+            messages
+            if _keeps_encrypted_reasoning_for_responses(model, custom_llm_provider)
+            else strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        )
         leading_count: Final = next(
             (i for i, m in enumerate(replayable_messages) if not is_system_role_message(m)),
             len(replayable_messages),
@@ -1435,9 +1453,9 @@ class LiteLLMAnthropicMessagesAdapter:
             for choice in choices
         ):
             new_content.extend(dict(_COMPACTION_BLOCK.validate_python(block)) for block in compaction_blocks)
-            # Handle thinking blocks first
-            if hasattr(choice.message, "thinking_blocks") and choice.message.thinking_blocks:
-                for thinking_block in choice.message.thinking_blocks:
+            signed_thinking_blocks = _anthropic_thinking_blocks(choice.message)
+            if signed_thinking_blocks:
+                for thinking_block in signed_thinking_blocks:
                     if thinking_block.get("type") == "thinking":
                         if is_empty_unsigned_thinking_block(thinking_block):
                             continue
@@ -1748,24 +1766,24 @@ class LiteLLMAnthropicMessagesAdapter:
                 choice.delta
             ) is not None:
                 return "text", TextBlock(type="text", text="")
-            elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
-                thinking_blocks = choice.delta.thinking_blocks or []
-                if len(thinking_blocks) > 0:
-                    thinking_block = thinking_blocks[0]
-                    if thinking_block["type"] == "redacted_thinking":
-                        return "redacted_thinking", ChatCompletionRedactedThinkingBlock(
-                            type="redacted_thinking", data=thinking_block.get("data") or ""
-                        )
-                    if thinking_block["type"] == "thinking":
-                        thinking = thinking_block.get("thinking") or ""
-                        signature = thinking_block.get("signature") or ""
+            elif isinstance(choice, StreamingChoices) and (thinking_blocks := _anthropic_thinking_blocks(choice.delta)):
+                thinking_block = thinking_blocks[0]
+                if thinking_block["type"] == "redacted_thinking":
+                    redacted_data = thinking_block.get("data")
+                    return "redacted_thinking", ChatCompletionRedactedThinkingBlock(
+                        type="redacted_thinking",
+                        data=redacted_data if isinstance(redacted_data, str) else "",
+                    )
+                if thinking_block["type"] == "thinking":
+                    thinking = thinking_block.get("thinking") or ""
+                    signature = thinking_block.get("signature") or ""
 
-                        assert isinstance(thinking, str)
-                        assert isinstance(signature, str)
+                    assert isinstance(thinking, str)
+                    assert isinstance(signature, str)
 
-                        return "thinking", ChatCompletionThinkingBlock(
-                            type="thinking", thinking=thinking if signature else "", signature=signature
-                        )
+                    return "thinking", ChatCompletionThinkingBlock(
+                        type="thinking", thinking=thinking if signature else "", signature=signature
+                    )
             # OpenAI-compatible reasoning backends (e.g. vLLM/SGLang reasoning
             # parsers) populate ``reasoning_content`` without ``thinking_blocks``.
             # ``Delta`` deletes the ``thinking_blocks`` attribute when unset, so the
@@ -1798,19 +1816,17 @@ class LiteLLMAnthropicMessagesAdapter:
                 for tool in choice.delta.tool_calls:
                     if tool.function is not None and tool.function.arguments is not None:
                         partial_json = (partial_json or "") + tool.function.arguments
-            elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
-                thinking_blocks = choice.delta.thinking_blocks or []
-                if len(thinking_blocks) > 0:
-                    for thinking_block in thinking_blocks:
-                        if thinking_block["type"] == "thinking":
-                            thinking = thinking_block.get("thinking") or ""
-                            signature = thinking_block.get("signature") or ""
+            elif isinstance(choice, StreamingChoices) and (thinking_blocks := _anthropic_thinking_blocks(choice.delta)):
+                for thinking_block in thinking_blocks:
+                    if thinking_block["type"] == "thinking":
+                        thinking = thinking_block.get("thinking") or ""
+                        signature = thinking_block.get("signature") or ""
 
-                            assert isinstance(thinking, str)
-                            assert isinstance(signature, str)
+                        assert isinstance(thinking, str)
+                        assert isinstance(signature, str)
 
-                            reasoning_content += thinking
-                            reasoning_signature += signature
+                        reasoning_content += thinking
+                        reasoning_signature += signature
             # Handle reasoning_content when thinking_blocks is not present
             # This handles providers like OpenRouter that return reasoning_content
             elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "reasoning_content"):
