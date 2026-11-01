@@ -1019,3 +1019,37 @@ async def test_counter_leaves_out_context_management_without_edits(context_manag
         ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
         ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
     }
+
+
+@pytest.mark.parametrize("config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig))
+def test_validate_request_accepts_a_tool_call_turn_without_content(
+    config_type: type[AnthropicCountTokensConfig],
+) -> None:
+    """OpenAI leaves ``content`` optional on an assistant ``tool_calls`` turn, and an SDK dump that drops
+    None values leaves the key out, so the shape the chat translation already counts is not rejected here."""
+    validated: Final = config_type().validate_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "Weather in SF?"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call-1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                ],
+            },
+        ],
+    )
+
+    assert validated is None
+
+
+@pytest.mark.parametrize("config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig))
+def test_validate_request_still_requires_content_on_a_plain_turn(
+    config_type: type[AnthropicCountTokensConfig],
+) -> None:
+    """A turn that carries neither content nor tool calls has nothing to count and is still refused."""
+    with pytest.raises(ValueError, match="Message 1 must have a 'content' field"):
+        config_type().validate_request(
+            model="claude-opus-5-5",
+            messages=[{"role": "user", "content": "Weather in SF?"}, {"role": "assistant"}],
+        )

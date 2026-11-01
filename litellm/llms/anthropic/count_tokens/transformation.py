@@ -488,5 +488,5 @@ class AnthropicCountTokensConfig:
             if "role" not in message:
                 raise ValueError(f"Message {i} must have a 'role' field")
 
-            if "content" not in message:
+            if "content" not in message and "tool_calls" not in message:
                 raise ValueError(f"Message {i} must have a 'content' field")
