@@ -13713,10 +13713,10 @@ class PythonCore(DeprecatedRouterMembers):
     ) -> tuple[Mapping[str, Any], ...]:
         """
         `deployments` without the ones `_pre_call_checks` keeps this request away from for being outside its allowed
-        region, typed for the tag routing filter
+        region, regardless of whether the request carries countable message or input content
         """
         allowed_model_region: Final = None if request_kwargs is None else request_kwargs.get("allowed_model_region")
-        if allowed_model_region is None or not self._core_enable_pre_call_checks or not has_request_input:
+        if allowed_model_region is None or not self._core_enable_pre_call_checks:
             return tuple(deployments)
         if not isinstance(allowed_model_region, str):
             return ()
@@ -15757,7 +15757,7 @@ class PythonCore(DeprecatedRouterMembers):
             parent_otel_span=parent_otel_span,
         )
 
-        if self._core_enable_pre_call_checks and (messages is not None or input is not None):
+        if self._core_enable_pre_call_checks:
             deployments_to_check: Final = healthy_deployments
             healthy_deployments = self._pre_call_checks(
                 model=model,
@@ -17028,7 +17028,7 @@ class PythonCore(DeprecatedRouterMembers):
         )
 
         # filter pre-call checks
-        if self._core_enable_pre_call_checks and (messages is not None or input is not None):
+        if self._core_enable_pre_call_checks:
             healthy_deployments = self._pre_call_checks(
                 model=model,
                 healthy_deployments=healthy_deployments,
@@ -17272,7 +17272,7 @@ class PythonCore(DeprecatedRouterMembers):
         pass_through_deployments = self._filter_blocked_deployments(pass_through_deployments)
 
         # 5. Apply pre-call checks (if enabled)
-        if self._core_enable_pre_call_checks and (messages is not None or input is not None):
+        if self._core_enable_pre_call_checks:
             pass_through_deployments = self._pre_call_checks(
                 model=model,
                 healthy_deployments=pass_through_deployments,
