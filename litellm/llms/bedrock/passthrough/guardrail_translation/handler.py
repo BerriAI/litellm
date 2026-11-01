@@ -60,6 +60,7 @@ if TYPE_CHECKING:
 
 _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _INVOKE_STREAM_ACTION: Final = "invoke-with-response-stream"
+_INVOKE_ACTIONS: Final = frozenset({"invoke", _INVOKE_STREAM_ACTION})
 _EVENT_STREAM_CONTENT_TYPE: Final = "vnd.amazon.eventstream"
 _EVENT_STREAM_MEDIA_TYPE: Final = "application/vnd.amazon.eventstream"
 
@@ -71,6 +72,33 @@ def _is_converse_endpoint(endpoint: str) -> bool:
 
 def _is_invoke_stream_endpoint(endpoint: str) -> bool:
     return endpoint.rstrip("/").split("/")[-1] == _INVOKE_STREAM_ACTION
+
+
+def _anthropic_invoke_body(
+    data: Mapping[str, object],
+) -> dict[str, object] | None:  # mutable-ok: the body guardrails write back into
+    """The body of an InvokeModel call in Anthropic Messages format, which Bedrock requires to carry anthropic_version"""
+    endpoint: Final = data.get("endpoint")
+    body: Final = data.get("data")
+    if not isinstance(endpoint, str) or endpoint.rstrip("/").split("/")[-1] not in _INVOKE_ACTIONS:
+        return None
+    if not isinstance(body, dict):
+        return None
+    invoke_body: Final = _BODY_BY_REFERENCE.validate_python(body)
+    if not isinstance(invoke_body.get("anthropic_version"), str) or not isinstance(invoke_body.get("messages"), list):
+        return None
+    return invoke_body
+
+
+def _anthropic_invoke_reply(
+    response: object,
+    request_data: object,
+) -> dict[str, object] | None:  # mutable-ok: the reply guardrails write back into
+    if not isinstance(response, dict) or not isinstance(request_data, dict):
+        return None
+    if _anthropic_invoke_body(_OBJECT_BY_REFERENCE.validate_python(request_data)) is None:
+        return None
+    return _BODY_BY_REFERENCE.validate_python(response)
 
 
 def _generic_passthrough_handler() -> "PassThroughEndpointHandler":
@@ -1285,6 +1313,16 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         body: Final = data.get("data")
 
         if not _is_converse_endpoint(endpoint):
+            passthrough_request: Final = _BODY_BY_REFERENCE.validate_python(data)
+            anthropic_body: Final = _anthropic_invoke_body(passthrough_request)
+            if anthropic_body is not None:
+                await AnthropicMessagesHandler().process_input_messages(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+                    data=anthropic_body,
+                    guardrail_to_apply=guardrail_to_apply,
+                    litellm_logging_obj=litellm_logging_obj,
+                    request_data=passthrough_request,
+                )
+                return passthrough_request
             return await _generic_passthrough_handler().process_input_messages(
                 data=data,
                 guardrail_to_apply=guardrail_to_apply,
@@ -1410,6 +1448,15 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             and not _is_converse_endpoint(endpoint)
             and not _is_invoke_stream_endpoint(endpoint)
         ):
+            anthropic_reply: Final = _anthropic_invoke_reply(response, request_data)  # pyright: ignore[reportUnknownArgumentType]  # the base signature types request_data as a bare dict
+            if anthropic_reply is not None:
+                return await AnthropicMessagesHandler().process_output_response(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+                    response=anthropic_reply,  # pyright: ignore[reportArgumentType]  # the Anthropic reply dict, written back in place
+                    guardrail_to_apply=guardrail_to_apply,
+                    litellm_logging_obj=litellm_logging_obj,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                )
             return await _generic_passthrough_handler().process_output_response(
                 response=response,
                 guardrail_to_apply=guardrail_to_apply,
