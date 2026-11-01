@@ -507,10 +507,10 @@ class TestNoProviderRetryAmplification:
     async def test_direct_completion_still_forwards_num_retries_to_provider(self):
         """
         For a NON-routed direct ``litellm.acompletion`` call, ``num_retries`` remains an
-        alias for the provider client's ``max_retries`` (the instructor use case). The
-        provider SDK therefore retries in addition to litellm's own retry wrapper, so the
-        upstream count exceeds ``num_retries + 1`` - proving the routed-call fix did not
-        change direct-call behaviour.
+        alias for the provider client's ``max_retries`` (the instructor use case).
+        litellm itself has no retry wrapper for direct calls, so the provider SDK
+        performs all the retries and the upstream count is exactly ``num_retries + 1`` -
+        proving the routed-call fix did not change direct-call behaviour.
         """
         counter = self._install_counting_upstream()
         num_retries = 2
@@ -523,7 +523,7 @@ class TestNoProviderRetryAmplification:
                     messages=[{"role": "user", "content": "hi"}],
                     num_retries=num_retries,
                 )
-        assert counter["n"] > num_retries + 1
+        assert counter["n"] == num_retries + 1
 
 
 class _AttemptCounter(CustomLogger):
