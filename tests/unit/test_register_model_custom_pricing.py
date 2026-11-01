@@ -19,6 +19,14 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import _expand_model_aliases, adopt_model_cost_map
+from litellm.types.utils import (
+    Choices,
+    CompletionTokensDetailsWrapper,
+    Message,
+    ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
@@ -521,8 +529,8 @@ def test_embedding_router_zero_pricing_does_not_clobber_builtin_pricing():
 
 
 def test_embedding_router_custom_pricing_costs_request_via_deployment_id():
-    """The request that carries custom pricing is costed with that pricing from its own logging object, while
-    ``litellm.model_cost`` keeps the built-in rate for siblings and gains no entry for the deployment."""
+    """A Router registers the deployment's pricing under its id when the deployment is added. The routed request
+    is costed from that entry, and the shared backend key keeps the built-in rate for siblings."""
     shared_key = "openai/text-embedding-3-small"
     deployment_id = "lit3991-wildcard-embed-custom"
     override_input_cost = 5e-05
@@ -531,6 +539,16 @@ def test_embedding_router_custom_pricing_costs_request_via_deployment_id():
     assert builtin_input_cost != override_input_cost
 
     try:
+        litellm.register_model(
+            {
+                deployment_id: {
+                    "input_cost_per_token": override_input_cost,
+                    "output_cost_per_token": override_input_cost * 2,
+                    "litellm_provider": "openai",
+                    "mode": "embedding",
+                }
+            }
+        )
         response = litellm.embedding(
             model=shared_key,
             input=["hello"],
@@ -545,7 +563,6 @@ def test_embedding_router_custom_pricing_costs_request_via_deployment_id():
         assert response._hidden_params["response_cost"] == pytest.approx(
             response.usage.prompt_tokens * override_input_cost
         )
-        assert deployment_id not in litellm.model_cost
         assert litellm.get_model_info(model=shared_key)["input_cost_per_token"] == builtin_input_cost
     finally:
         _restore_model_cost_entries(snapshot)
@@ -1442,3 +1459,101 @@ def test_register_model_scopes_builtin_match_to_the_given_provider():
         assert litellm.model_cost[builtin_key] == builtin_row_before
     finally:
         _restore_model_cost_entries(model_cost_entries)
+
+
+def _audio_reply() -> ModelResponse:
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=1000,
+        total_tokens=2000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(audio_tokens=1000, text_tokens=0),
+        completion_tokens_details=CompletionTokensDetailsWrapper(audio_tokens=1000, text_tokens=0),
+    )
+    return ModelResponse(model="gpt-audio-2025-08-28", choices=[Choices(message=Message(content="hi"))], usage=usage)
+
+
+_AUDIO_RATES: Final = {
+    "input_cost_per_token": 2.5e-06,
+    "output_cost_per_token": 1e-05,
+    "input_cost_per_audio_token": 4e-05,
+    "output_cost_per_audio_token": 8e-05,
+}
+
+
+def test_router_call_with_audio_rates_is_priced_per_modality_from_its_registered_deployment():
+    """A Router registers the deployment's full custom pricing when the deployment is added. The per-call flat
+    prices must not override that entry, or 1000 audio input plus 1000 audio output tokens would bill at the text
+    rates ($0.0125) instead of the audio rates ($0.12)."""
+    deployment_id: Final = "audio-rates-deployment"
+    snapshot: Final = _snapshot_model_cost_entries([deployment_id])
+    try:
+        litellm.register_model({deployment_id: {**_AUDIO_RATES, "litellm_provider": "openai", "mode": "chat"}})
+        response: Final = litellm.completion(
+            model="openai/gpt-audio-2025-08-28",
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            metadata={"model_info": {"id": deployment_id}},
+            mock_response=_audio_reply(),
+            **_AUDIO_RATES,
+        )
+        assert response._hidden_params["response_cost"] == pytest.approx(1000 * 4e-05 + 1000 * 8e-05)
+    finally:
+        _restore_model_cost_entries(snapshot)
+
+
+def test_direct_call_with_flat_rates_is_priced_from_them_without_writing_the_cost_map():
+    model_key: Final = "openai/lit-direct-flat-rates-model"
+    try:
+        response: Final = litellm.completion(
+            model=model_key,
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            mock_response=_audio_reply(),
+            input_cost_per_token=2.5e-06,
+            output_cost_per_token=1e-05,
+        )
+        assert response._hidden_params["response_cost"] == pytest.approx(1000 * 2.5e-06 + 1000 * 1e-05)
+        assert model_key not in litellm.model_cost
+    finally:
+        litellm.model_cost.pop(model_key, None)
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_direct_call_with_audio_rates_is_priced_per_modality_without_writing_the_cost_map():
+    model_key: Final = "openai/lit-direct-audio-rates-model"
+    try:
+        response: Final = litellm.completion(
+            model=model_key,
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            mock_response=_audio_reply(),
+            input_cost_per_token=2.5e-06,
+            output_cost_per_token=1e-05,
+            input_cost_per_audio_token=4e-05,
+            output_cost_per_audio_token=8e-05,
+        )
+        assert response._hidden_params["response_cost"] == pytest.approx(1000 * 4e-05 + 1000 * 8e-05)
+        assert model_key not in litellm.model_cost
+    finally:
+        litellm.model_cost.pop(model_key, None)
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_direct_call_with_directional_per_second_rates_is_priced_from_them_without_writing_the_cost_map():
+    model_key: Final = "openai/lit-direct-per-second-model"
+    try:
+        response: Final = litellm.completion(
+            model=model_key,
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            mock_response="ok",
+            input_cost_per_second=0.004,
+        )
+        assert litellm.completion_cost(completion_response=response, custom_cost_per_second=0.004) == pytest.approx(
+            0.004 * response._response_ms / 1000
+        )
+        assert response._hidden_params["response_cost"] == pytest.approx(0.004 * response._response_ms / 1000, rel=0.2)
+        assert model_key not in litellm.model_cost
+    finally:
+        litellm.model_cost.pop(model_key, None)
+        _invalidate_model_cost_lowercase_map()

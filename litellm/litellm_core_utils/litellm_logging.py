@@ -706,6 +706,7 @@ class Logging(LiteLLMLoggingBaseClass):
     custom_pricing: bool = False
     custom_cost_per_token: CostPerToken | None = None
     custom_cost_per_second: float | None = None
+    custom_model_info: ModelInfo | None = None
     replaced_global_callback_keys: frozenset[str] = frozenset()
     stream_options = None
     litellm_request_debug: bool = False
@@ -2205,6 +2206,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "custom_pricing": custom_pricing,
                 "custom_cost_per_token": self.custom_cost_per_token if custom_pricing else None,
                 "custom_cost_per_second": self.custom_cost_per_second if custom_pricing else None,
+                "per_call_model_info": self.custom_model_info if custom_pricing else None,
                 "prompt": prompt,
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
@@ -2400,6 +2402,10 @@ class Logging(LiteLLMLoggingBaseClass):
             response_headers=self.model_call_details.get("response_headers"),
             additional_headers=additional_headers,
         )
+
+    def set_per_call_pricing(self, custom_model_info: ModelInfo | None) -> None:
+        """Price this call from its own full price entry instead of ``litellm.model_cost``."""
+        self.custom_model_info = custom_model_info
 
     def custom_pricing_for(self, result: object) -> bool:
         if self.spilled_over_ptu_for(result):
