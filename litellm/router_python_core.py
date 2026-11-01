@@ -15164,6 +15164,8 @@ class PythonCore(DeprecatedRouterMembers):
             deployments=_returned_deployments,
         )
         request_settings: Final[Mapping[str, object]] = request_kwargs if request_kwargs is not None else {}
+        original_function_name: Final = getattr(request_settings.get("original_function"), "__name__", None)
+        requires_ocr_capability: Final = original_function_name in {"ocr", "aocr"}
         requested_params: Final[frozenset[str]] = (
             self._pre_call_check_requested_chat_params(request_settings)
             if request_kwargs is not None and self._host.dynamic().drop_params is False
@@ -15176,6 +15178,16 @@ class PythonCore(DeprecatedRouterMembers):
             _model_info = deployment.get("model_info", {})
 
             max_input_tokens = deployment_max_input_tokens[idx]
+            if requires_ocr_capability and (
+                not isinstance(_model_info, Mapping) or _model_info.get("mode") != "ocr"
+            ):
+                invalid_model_indices.add(idx)
+                verbose_router_logger.debug(
+                    "Skipping deployment %s for OCR request: declared mode=%s",
+                    _litellm_params.get("model"),
+                    _model_info.get("mode") if isinstance(_model_info, Mapping) else None,
+                )
+                continue
             if (
                 max_input_tokens is not None
                 and has_countable_input
