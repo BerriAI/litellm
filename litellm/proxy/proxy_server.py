@@ -482,6 +482,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
 )
+from litellm.proxy.common_utils.callback_lifecycle import close_proxy_callbacks, setup_proxy_callbacks
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.codex_model_catalog import codex_model_list_body
 from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
@@ -1910,6 +1911,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
+                    setup_proxy_callbacks(app, litellm.callbacks)
                     gc.freeze()
                     verbose_proxy_logger.warning("gc.freeze pinned %d startup objects", gc.get_freeze_count())
                     yield state
@@ -1955,6 +1957,8 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
 
             await proxy_config.stop_auth_cache_invalidation_subscriber()
 
+            await close_proxy_callbacks(litellm.callbacks)
+            await litellm.close_litellm_async_clients()
             await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
 
             if prometheus_multiproc_dir:
