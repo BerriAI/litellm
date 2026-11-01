@@ -746,6 +746,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
 )
+from litellm.proxy.management_endpoints.key_revocation_endpoints import (
+    router as key_revocation_router,
+)
 from litellm.proxy.management_endpoints.management_v1 import (
     router as management_v1_router,
 )
@@ -21849,6 +21852,7 @@ app.include_router(pass_through_router)
 app.include_router(health_router)
 app.include_router(deployment_warning_router)
 app.include_router(key_management_router)
+app.include_router(key_revocation_router)
 app.include_router(internal_user_router)
 app.include_router(daily_activity_router)
 app.include_router(password_management_router)

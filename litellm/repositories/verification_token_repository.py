@@ -3,7 +3,7 @@ VerificationToken repository for database operations on LiteLLM_VerificationToke
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from types import TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
@@ -17,6 +17,7 @@ from litellm.repositories.base_repository import (
     DbRecord,
     record_to_dict,
 )
+from litellm.repositories.chunked_in import update_many_in
 from litellm.repositories.prisma_protocols import TableActions
 
 if TYPE_CHECKING:
@@ -57,6 +58,9 @@ class _PrismaClientView(Protocol):
     @property
     def db(self) -> _PrismaVerificationTokenDb: ...
 
+    @property
+    def writer_db(self) -> _PrismaVerificationTokenDb: ...
+
 
 _JSON_ENCODED_TOKEN_FIELDS: Final = (
     "aliases",
@@ -74,10 +78,14 @@ _JSON_ENCODED_TOKEN_FIELDS: Final = (
 class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
     """Repository for verification token (API key) database operations."""
 
+    def __init__(self, prisma_client: object, *, use_writer: bool = False) -> None:
+        super().__init__(prisma_client)
+        self._use_writer: Final = use_writer
+
     @property
     def _db(self) -> _PrismaVerificationTokenDb:
         client: Final[_PrismaClientView] = self.prisma_client
-        return client.db
+        return client.writer_db if self._use_writer else client.db
 
     @property
     def table(self) -> TableActions["PrismaVerificationToken"]:
@@ -436,6 +444,20 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         if updated_by is not None:
             data["updated_by"] = updated_by
         return await self.update(token, data, id_field="token")
+
+    async def find_by_tokens(self, tokens: Iterable[str]) -> tuple[LiteLLM_VerificationToken, ...]:
+        return tuple(await self.find_many_in("token", tokens))
+
+    async def block_tokens(self, tokens: Iterable[str]) -> None:
+        from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
+
+        await update_many_in(
+            self.table,
+            "token",
+            tokens,
+            data=with_settings_updated_at({"blocked": True}),
+            atomicity="per_chunk_ok",
+        )
 
     async def unblock_token(self, token: str, updated_by: str | None = None) -> LiteLLM_VerificationToken | None:
         """Unblock a token."""

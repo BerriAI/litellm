@@ -37,6 +37,26 @@ def test_only_the_missing_piece_is_reported() -> None:
     )
 
 
+def test_the_schema_is_judged_on_the_lowest_2xx_response() -> None:
+    accepted: Final = {**_DOCUMENTED, "responses": {"202": _RESPONSES["200"], "422": {"description": "Invalid"}}}
+    untyped_202: Final = {**_DOCUMENTED, "responses": {"202": {"description": "Accepted"}, "422": _RESPONSES["200"]}}
+    untyped_200: Final = {**_DOCUMENTED, "responses": {"200": {"description": "OK"}, "201": _RESPONSES["200"]}}
+    no_2xx: Final = {**_DOCUMENTED, "responses": {"422": _RESPONSES["200"]}}
+    spec: Final = {
+        "paths": {
+            "/a": {"post": accepted},
+            "/b": {"post": untyped_202},
+            "/c": {"post": untyped_200},
+            "/d": {"post": no_2xx},
+        }
+    }
+    assert checker.violations(spec) == (
+        checker.Violation("POST", "/b", "OA003"),
+        checker.Violation("POST", "/c", "OA003"),
+        checker.Violation("POST", "/d", "OA003"),
+    )
+
+
 def test_non_post_operations_are_not_gated() -> None:
     spec: Final = {"paths": {"/v1/thing": {"get": {}, "delete": {}, "put": {}, "post": _DOCUMENTED}}}
     assert checker.violations(spec) == ()
