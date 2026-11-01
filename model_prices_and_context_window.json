@@ -28713,6 +28713,22 @@
         "output_cost_per_token": 0.0,
         "source": "https://fireworks.ai/pricing"
     },
+    "flonno/qwen3.8-27b": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "flonno",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://www.flonno.com/pricing.json",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "friendliai/zai-org/GLM-5.3-Flash": {
         "litellm_provider": "friendliai",
         "max_input_tokens": 1048576,

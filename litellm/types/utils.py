@@ -4606,6 +4606,7 @@ class LlmProviders(str, Enum):
     FIREWORKS_AI = "fireworks_ai"
     FRIENDLIAI = "friendliai"
     FEATHERLESS_AI = "featherless_ai"
+    FLONNO = "flonno"
     WATSONX = "watsonx"
     SCALEDOWN = "scaledown"
     WATSONX_TEXT = "watsonx_text"

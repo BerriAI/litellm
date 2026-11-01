@@ -262,6 +262,20 @@
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   },
+  "flonno": {
+    "base_url": "https://www.flonno.com/v1",
+    "api_key_env": "FLONNO_API_KEY",
+    "api_base_env": "FLONNO_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_vision": true,
+      "supports_reasoning": true
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/messages"
+    ]
+  },
   "inferenceapis": {
     "base_url": "https://api.inferenceapis.com/v1",
     "api_key_env": "INFERENCEAPIS_API_KEY",

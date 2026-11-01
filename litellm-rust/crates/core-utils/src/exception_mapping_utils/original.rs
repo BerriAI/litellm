@@ -87,6 +87,7 @@ const OPENAI_COMPATIBLE_PROVIDERS: &[&str] = &[
     "parasail",
     "libertai",
     "featherless_ai",
+    "flonno",
     "nscale",
     "nebius",
     "dashscope",
