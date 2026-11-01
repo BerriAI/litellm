@@ -696,7 +696,7 @@ For companies that need better security, user management and professional suppor
 [Talk to founders](https://enterprise.litellm.ai/demo)
 
 This covers:
-- ✅ **Features under the [LiteLLM Commercial License](https://docs.litellm.ai/docs/proxy/enterprise):**
+- ✅ **Features under the [LiteLLM Commercial License](https://docs.litellm.ai/docs/enterprise):**
 - ✅ **Feature Prioritization**
 - ✅ **Custom Integrations**
 - ✅ **Professional Support - Dedicated discord + slack**
