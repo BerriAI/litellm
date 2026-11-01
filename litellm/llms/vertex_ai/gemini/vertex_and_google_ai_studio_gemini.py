@@ -108,7 +108,7 @@ from ..context_caching.rejected_cache_retry import (
     post_with_fresh_cache_sync,
 )
 from ..vertex_llm_base import VertexBase
-from .grounding_requests import calculate_grounding_requests
+from .grounding_requests import calculate_grounding_requests, web_search_queries_from_server_side_invocations
 from .long_decode import (
     HOP_FAILURES,
     AsyncStreamResume,
@@ -2567,8 +2567,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return cls._calculate_web_search_requests(grounding_metadata)
 
     @staticmethod
-    def _set_grounding_usage_counters(usage: Usage, grounding_metadata: Sequence[Mapping[str, object]]) -> None:
-        grounding_requests: Final = calculate_grounding_requests(grounding_metadata)
+    def _set_grounding_usage_counters(
+        usage: Usage,
+        grounding_metadata: Sequence[Mapping[str, object]],
+        server_side_invocations: Sequence[Mapping[str, object]] | None = None,
+    ) -> None:
+        grounding_requests: Final = calculate_grounding_requests(
+            grounding_metadata, server_side_invocations=server_side_invocations
+        )
         details: Final = cast(PromptTokensDetailsWrapper, usage.prompt_tokens_details)
         if grounding_requests.web_search_requests is not None:
             details.web_search_requests = grounding_requests.web_search_requests
@@ -2580,8 +2586,33 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         cls,
         usage: Usage,
         grounding_metadata: Sequence[Mapping[str, object]],
+        server_side_invocations: Sequence[Mapping[str, object]] | None = None,
     ) -> None:
-        return cls._set_grounding_usage_counters(usage, grounding_metadata)
+        return cls._set_grounding_usage_counters(
+            usage, grounding_metadata, server_side_invocations=server_side_invocations
+        )
+
+    @staticmethod
+    def _collect_server_side_tool_invocations_from_response(
+        model_response: Union[ModelResponse, "ModelResponseStream"],
+    ) -> list[dict[str, object]]:
+        """Gather server_side_tool_invocations already placed on choices."""
+        from litellm.types.utils import ModelResponseStream
+
+        collected: list[dict[str, object]] = []
+        for choice in getattr(model_response, "choices", None) or []:
+            message = None
+            if isinstance(model_response, ModelResponseStream):
+                message = getattr(choice, "delta", None)
+            else:
+                message = getattr(choice, "message", None)
+            fields = getattr(message, "provider_specific_fields", None) if message is not None else None
+            if not isinstance(fields, dict):
+                continue
+            invocations = fields.get("server_side_tool_invocations")
+            if isinstance(invocations, list):
+                collected.extend(inv for inv in invocations if isinstance(inv, dict))
+        return collected
 
     @staticmethod
     def _create_streaming_choice(
@@ -3090,7 +3121,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 cache_creation_tokens=_cache_creation_tokens(logging_obj),
             )
 
-            VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
+            VertexGeminiConfig._set_grounding_usage_counters(
+                usage,
+                grounding_metadata,
+                server_side_invocations=VertexGeminiConfig._collect_server_side_tool_invocations_from_response(
+                    model_response
+                ),
+            )
 
             setattr(model_response, "usage", usage)
 
@@ -3934,6 +3971,10 @@ class ModelResponseIterator:
         self._initial_prompt_tokens: int | None = None
         self._grounding_offset: tuple[Mapping[str, object], ...] = ()
         self._hop_grounding: tuple[Mapping[str, object], ...] = ()
+        # Distinct Google Search queries seen in server-side tool invocations
+        # across stream chunks (usage often arrives in a later chunk without
+        # groundingMetadata when include_server_side_tool_invocations is on).
+        self._server_side_search_queries: set[str] = set()
         self._answer_offset: int = 0
         self._hop_answer_bytes: int = 0
 
@@ -4041,6 +4082,12 @@ class ModelResponseIterator:
             citation_metadata,
         )
 
+        self._server_side_search_queries.update(
+            web_search_queries_from_server_side_invocations(
+                VertexGeminiConfig._collect_server_side_tool_invocations_from_response(model_response)
+            )
+        )
+
         return (
             grounding_metadata,
             url_context_metadata,
@@ -4076,7 +4123,23 @@ class ModelResponseIterator:
             cache_creation_tokens=_cache_creation_tokens(self.logging_obj),
         )
 
-        VertexGeminiConfig.set_grounding_usage_counters(usage, self._grounding_through_this_hop(grounding_metadata))
+        # Rebuild minimal invocation records so calculate_grounding_requests can
+        # union stream-accumulated search queries with any groundingMetadata.
+        accumulated_invocations: Final = (
+            [
+                {
+                    "tool_type": "GOOGLE_SEARCH_WEB",
+                    "args": {"queries": sorted(self._server_side_search_queries)},
+                }
+            ]
+            if self._server_side_search_queries
+            else None
+        )
+        VertexGeminiConfig.set_grounding_usage_counters(
+            usage,
+            self._grounding_through_this_hop(grounding_metadata),
+            server_side_invocations=accumulated_invocations,
+        )
 
         traffic_type: Final = processed_chunk.get("usageMetadata", {}).get("trafficType")
         if traffic_type:
