@@ -1960,6 +1960,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "HOPBASE",
+    "provider_display_name": "HopBase",
+    "litellm_provider": "hopbase",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.hop-base.com/v1",
+        "tooltip": "Optional. Leave blank to use the provider's default endpoint.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "hopbase/glm-5.3"
+  },
+  {
     "provider": "HUGGINGFACE",
     "provider_display_name": "Huggingface",
     "litellm_provider": "huggingface",
