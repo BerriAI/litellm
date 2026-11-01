@@ -1133,6 +1133,35 @@ async def test_a_polled_background_response_replays_its_finished_output_once():
     assert _replayed_roles_and_texts(session) == [("user", "Count to three"), ("assistant", "One, two, three")]
 
 
+@pytest.mark.asyncio
+async def test_a_background_response_that_grows_between_polls_replays_each_output_item_once():
+    first: Final = _identified_output_message("msg_first", "One")
+    second: Final = _identified_output_message("msg_second", "Two")
+    spend_logs: Final = (
+        _stored_response_turn("resp_queued", "aresponses", "queued", [], prompt="Count to two"),
+        _stored_response_turn("resp_poll_partial", "aget_responses", "in_progress", [first]),
+        _stored_response_turn("resp_poll_done", "aget_responses", "completed", [first, second]),
+        _stored_response_turn("resp_poll_again", "aget_responses", "completed", [first, second]),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_queued")
+
+    assert _replayed_roles_and_texts(session) == [("user", "Count to two"), ("assistant", "One"), ("assistant", "Two")]
+
+
+@pytest.mark.asyncio
+async def test_a_read_that_ends_before_its_streamed_create_replays_the_answer_once_after_the_prompt():
+    answer: Final = [_identified_output_message("msg_answer", "OK")]
+    spend_logs: Final = (
+        _stored_response_turn("resp_read_mid_stream", "aget_responses", "completed", answer),
+        _stored_response_turn("resp_create", "aresponses", "completed", answer, prompt="Say OK"),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_create")
+
+    assert _replayed_roles_and_texts(session) == [("user", "Say OK"), ("assistant", "OK")]
+
+
 def _tool_call_ids(message: object) -> tuple[str, ...]:
     tool_calls: Final = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
     return tuple(call["id"] if isinstance(call, dict) else call.id for call in tool_calls or ())

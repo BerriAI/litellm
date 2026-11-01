@@ -7,7 +7,7 @@ instead of writing immediately on each request.
 
 from collections.abc import AsyncGenerator, Callable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, TypeVar
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
@@ -20,10 +20,12 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ResponsesAPIResponse,
 )
+from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, CallTypesLiteral, LLMResponseTypes, SpecialEnums
 
 if TYPE_CHECKING:
@@ -68,6 +70,8 @@ def _proxy_signing_key() -> str | None:
 
 
 _RESPONSE_PAYLOAD_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_ResponseObjectT = TypeVar("_ResponseObjectT", bound=BaseLiteLLMOpenAIResponseObject)
+_AddressedResultT = TypeVar("_AddressedResultT", bound=ResponsesAPIResponse | DeleteResponseResult)
 
 
 def _response_payload(response_obj: object) -> Mapping[str, object] | None:
@@ -78,9 +82,9 @@ def _response_payload(response_obj: object) -> Mapping[str, object] | None:
 
 
 def _rewrite_advertised_id(
-    event: BaseLiteLLMOpenAIResponseObject,
+    event: _ResponseObjectT,
     rewrite: Callable[[str], str],
-) -> BaseLiteLLMOpenAIResponseObject:
+) -> _ResponseObjectT:
     event_id: Final = getattr(event, "id", None)
     if isinstance(event_id, str) and event_id.startswith("resp_"):
         setattr(event, "id", rewrite(event_id))
@@ -118,6 +122,14 @@ def _streams_response_ids(request_route: str | None) -> bool:
 
 
 _NO_HELD_IDS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def _upstream_response_id(response_id: str) -> str:
+    return ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response_id)
+
+
+def _names_the_same_response(response_id: str | None, original_response_id: str) -> bool:
+    return response_id is not None and _upstream_response_id(response_id) == _upstream_response_id(original_response_id)
 
 
 class ResponsesIDSecurity(CustomLogger):
@@ -279,10 +291,10 @@ class ResponsesIDSecurity(CustomLogger):
 
     def _encrypt_response_id(
         self,
-        response: BaseLiteLLMOpenAIResponseObject,
+        response: _ResponseObjectT,
         user_api_key_dict: "UserAPIKeyAuth",
         request_cache: dict[str, str] | None = None,
-    ) -> BaseLiteLLMOpenAIResponseObject:
+    ) -> _ResponseObjectT:
         encrypt: Final = self._response_id_encrypter(user_api_key_dict, request_cache)
         return response if encrypt is None else _rewrite_advertised_id(response, encrypt)
 
@@ -347,13 +359,23 @@ class ResponsesIDSecurity(CustomLogger):
         original_response_id, _, _ = self._decrypt_response_id(addressed_id)
         return MappingProxyType({original_response_id: addressed_id})
 
+    def _id_the_caller_holds(self, response_id: str | None, addressed_id: object) -> str | None:
+        return next(
+            (
+                held_id
+                for original_response_id, held_id in self._ids_the_caller_holds(addressed_id).items()
+                if _names_the_same_response(response_id, original_response_id)
+            ),
+            None,
+        )
+
     def _advertised_response(
         self,
-        response: ResponsesAPIResponse,
+        response: _AddressedResultT,
         user_api_key_dict: "UserAPIKeyAuth",
         request_data: Mapping[str, object],
-    ) -> BaseLiteLLMOpenAIResponseObject:
-        held_id: Final = self._ids_the_caller_holds(request_data.get(ADDRESSED_RESPONSE_ID_FIELD)).get(response.id)
+    ) -> _AddressedResultT:
+        held_id: Final = self._id_the_caller_holds(response.id, request_data.get(ADDRESSED_RESPONSE_ID_FIELD))
         logged_response: Final = self._encrypt_response_id(response, user_api_key_dict, request_cache=None)
         return logged_response if held_id is None else logged_response.model_copy(update={"id": held_id})
 
@@ -367,8 +389,8 @@ class ResponsesIDSecurity(CustomLogger):
 
         if general_settings.get("disable_responses_id_security", False):
             return response
-        if isinstance(response, ResponsesAPIResponse):
-            response = cast(ResponsesAPIResponse, self._advertised_response(response, user_api_key_dict, data))
+        if isinstance(response, ResponsesAPIResponse | DeleteResponseResult):
+            return self._advertised_response(response, user_api_key_dict, data)
         return response
 
     async def async_post_call_streaming_iterator_hook(

@@ -5,18 +5,22 @@ Tests the security hook that prevents user B from seeing response from user A.
 """
 
 import datetime
+from collections.abc import Callable, Mapping
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
+from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.responses_id_security import (
     ResponsesIDSecurity,
     _streams_response_ids,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     GenericEvent,
     ResponseAPIUsage,
@@ -25,7 +29,8 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.utils import Choices, Message, ModelResponse, SpecialEnums, Usage
+from litellm.types.responses.main import DeleteResponseResult
+from litellm.types.utils import CallTypesLiteral, Choices, Message, ModelResponse, SpecialEnums, Usage
 
 
 @pytest.fixture
@@ -60,11 +65,11 @@ class TestIsEncryptedResponseId:
         import litellm.proxy.hooks.responses_id_security as responses_module
 
         with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
-            mock_decrypt.return_value = f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}response_id:resp_123;user_id:user-456"
-
-            result = responses_id_security._is_encrypted_response_id(
-                "resp_encrypted_value"
+            mock_decrypt.return_value = (
+                f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}response_id:resp_123;user_id:user-456"
             )
+
+            result = responses_id_security._is_encrypted_response_id("resp_encrypted_value")
 
             assert result is True
             mock_decrypt.assert_called_once()
@@ -93,9 +98,7 @@ class TestDecryptResponseId:
         with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
             mock_decrypt.return_value = f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}response_id:resp_original_123;user_id:user-456;team_id:team-789"
 
-            original_id, user_id, team_id = responses_id_security._decrypt_response_id(
-                "resp_encrypted_value"
-            )
+            original_id, user_id, team_id = responses_id_security._decrypt_response_id("resp_encrypted_value")
 
             assert original_id == "resp_original_123"
             assert user_id == "user-456"
@@ -109,9 +112,7 @@ class TestDecryptResponseId:
         with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
             mock_decrypt.return_value = None
 
-            original_id, user_id, team_id = responses_id_security._decrypt_response_id(
-                "resp_plain_value"
-            )
+            original_id, user_id, team_id = responses_id_security._decrypt_response_id("resp_plain_value")
 
             assert original_id == "resp_plain_value"
             assert user_id is None
@@ -121,9 +122,7 @@ class TestDecryptResponseId:
 class TestCheckUserAccessToResponseId:
     """Test check_user_access_to_response_id function"""
 
-    def test_check_user_access_same_user(
-        self, responses_id_security, mock_user_api_key_dict
-    ):
+    def test_check_user_access_same_user(self, responses_id_security, mock_user_api_key_dict):
         """Test that same user has access to their response ID"""
         result = responses_id_security.check_user_access_to_response_id(
             response_id_user_id="test-user-123",
@@ -133,9 +132,7 @@ class TestCheckUserAccessToResponseId:
 
         assert result is True
 
-    def test_check_user_access_different_user_raises_exception(
-        self, responses_id_security, mock_user_api_key_dict
-    ):
+    def test_check_user_access_different_user_raises_exception(self, responses_id_security, mock_user_api_key_dict):
         """Test that different user is denied access to response ID"""
         with patch("litellm.proxy.proxy_server.general_settings", {}):
             with pytest.raises(HTTPException) as exc_info:
@@ -148,9 +145,7 @@ class TestCheckUserAccessToResponseId:
             assert exc_info.value.status_code == 403
             assert "Forbidden" in exc_info.value.detail
 
-    def test_check_user_access_different_team_raises_exception(
-        self, responses_id_security, mock_user_api_key_dict
-    ):
+    def test_check_user_access_different_team_raises_exception(self, responses_id_security, mock_user_api_key_dict):
         """Test that different team is denied access to response ID"""
         with patch("litellm.proxy.proxy_server.general_settings", {}):
             with pytest.raises(HTTPException) as exc_info:
@@ -163,9 +158,7 @@ class TestCheckUserAccessToResponseId:
             assert exc_info.value.status_code == 403
             assert "Forbidden" in exc_info.value.detail
 
-    def test_check_user_access_team_a_to_team_b_without_user_id(
-        self, responses_id_security
-    ):
+    def test_check_user_access_team_a_to_team_b_without_user_id(self, responses_id_security):
         """Test that key from team A (without user_id) cannot access response from team B (without user_id)"""
         # Create a mock user from team A without user_id
         mock_auth_team_a = MagicMock()
@@ -184,9 +177,7 @@ class TestCheckUserAccessToResponseId:
             assert exc_info.value.status_code == 403
             assert "team" in exc_info.value.detail.lower()
 
-    def test_check_user_access_team_a_to_team_b_with_user_id(
-        self, responses_id_security
-    ):
+    def test_check_user_access_team_a_to_team_b_with_user_id(self, responses_id_security):
         """Test that key from team A (without user_id) cannot access response from team B (with user_id)"""
         # Create a mock user from team A without user_id
         mock_auth_team_a = MagicMock()
@@ -222,9 +213,7 @@ class TestCheckUserAccessToResponseId:
 
         assert result is True
 
-    def test_check_user_access_admin_can_access_any_response(
-        self, responses_id_security
-    ):
+    def test_check_user_access_admin_can_access_any_response(self, responses_id_security):
         """Test that proxy admin can access any response ID"""
         from litellm.proxy._types import LitellmUserRoles
 
@@ -243,9 +232,7 @@ class TestCheckUserAccessToResponseId:
 
         assert result is True
 
-    def test_check_user_access_security_disabled(
-        self, responses_id_security, mock_user_api_key_dict
-    ):
+    def test_check_user_access_security_disabled(self, responses_id_security, mock_user_api_key_dict):
         """Test that when security is disabled, any user can access any response"""
         with patch(
             "litellm.proxy.proxy_server.general_settings",
@@ -271,9 +258,7 @@ class TestAsyncPreCallHook:
         """Test pre-call hook decrypts previous_response_id for aresponses call"""
         data = {"previous_response_id": "resp_encrypted_value"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -289,15 +274,11 @@ class TestAsyncPreCallHook:
                 assert result["previous_response_id"] == "resp_original_123"
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_aget_responses(
-        self, responses_id_security, mock_user_api_key_dict, mock_cache
-    ):
+    async def test_async_pre_call_hook_aget_responses(self, responses_id_security, mock_user_api_key_dict, mock_cache):
         """Test pre-call hook decrypts response_id for aget_responses call"""
         data = {"response_id": "resp_encrypted_456"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -313,9 +294,7 @@ class TestAsyncPreCallHook:
                 assert result["response_id"] == "resp_original_456"
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_team_a_accessing_team_b_response(
-        self, responses_id_security, mock_cache
-    ):
+    async def test_async_pre_call_hook_team_a_accessing_team_b_response(self, responses_id_security, mock_cache):
         """Test pre-call hook prevents team A from accessing team B response"""
         # Create a mock user from team A
         mock_auth_team_a = MagicMock()
@@ -325,9 +304,7 @@ class TestAsyncPreCallHook:
 
         data = {"response_id": "resp_encrypted_team_b"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -346,9 +323,7 @@ class TestAsyncPreCallHook:
                     assert "team" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_team_a_accessing_team_b_with_user(
-        self, responses_id_security, mock_cache
-    ):
+    async def test_async_pre_call_hook_team_a_accessing_team_b_with_user(self, responses_id_security, mock_cache):
         """Test pre-call hook prevents team A (no user) from accessing team B response (with user)"""
         # Create a mock user from team A without user_id
         mock_auth_team_a = MagicMock()
@@ -358,9 +333,7 @@ class TestAsyncPreCallHook:
 
         data = {"response_id": "resp_encrypted_team_b_with_user"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -380,9 +353,7 @@ class TestAsyncPreCallHook:
                     assert "forbidden" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_same_team_access(
-        self, responses_id_security, mock_cache
-    ):
+    async def test_async_pre_call_hook_same_team_access(self, responses_id_security, mock_cache):
         """Test pre-call hook allows team A to access their own team's response"""
         # Create a mock user from team A
         mock_auth_team_a = MagicMock()
@@ -392,9 +363,7 @@ class TestAsyncPreCallHook:
 
         data = {"response_id": "resp_encrypted_team_a"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -410,9 +379,7 @@ class TestAsyncPreCallHook:
                 assert result["response_id"] == "resp_original_team_a"
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_adelete_responses_team_security(
-        self, responses_id_security, mock_cache
-    ):
+    async def test_async_pre_call_hook_adelete_responses_team_security(self, responses_id_security, mock_cache):
         """Test pre-call hook prevents team A from deleting team B's response"""
         # Create a mock user from team A
         mock_auth_team_a = MagicMock()
@@ -422,9 +389,7 @@ class TestAsyncPreCallHook:
 
         data = {"response_id": "resp_encrypted_team_b"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -443,9 +408,7 @@ class TestAsyncPreCallHook:
                     assert "team" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_acancel_responses_team_security(
-        self, responses_id_security, mock_cache
-    ):
+    async def test_async_pre_call_hook_acancel_responses_team_security(self, responses_id_security, mock_cache):
         """Test pre-call hook prevents team A from canceling team B's response"""
         # Create a mock user from team A
         mock_auth_team_a = MagicMock()
@@ -455,9 +418,7 @@ class TestAsyncPreCallHook:
 
         data = {"response_id": "resp_encrypted_team_b"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -475,16 +436,13 @@ class TestAsyncPreCallHook:
                     assert exc_info.value.status_code == 403
                     assert "team" in exc_info.value.detail.lower()
 
-
     @pytest.mark.asyncio
     async def test_async_pre_call_hook_alist_input_items_decrypts_response_id(
         self, responses_id_security, mock_user_api_key_dict, mock_cache
     ):
         data = {"response_id": "resp_encrypted_789"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -501,9 +459,7 @@ class TestAsyncPreCallHook:
                 assert result["response_id"] == "resp_original_789"
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_alist_input_items_team_security(
-        self, responses_id_security, mock_cache
-    ):
+    async def test_async_pre_call_hook_alist_input_items_team_security(self, responses_id_security, mock_cache):
         mock_auth_team_a = MagicMock()
         mock_auth_team_a.user_id = None
         mock_auth_team_a.team_id = "team-a"
@@ -511,9 +467,7 @@ class TestAsyncPreCallHook:
 
         data = {"response_id": "resp_encrypted_team_b"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -625,9 +579,7 @@ class TestAsyncPostCallStreamingIteratorHook:
             "/openai/v1/responses/resp_rawprovider123",
         ],
     )
-    async def test_streamed_id_encrypted_on_all_responses_routes(
-        self, responses_id_security, route, monkeypatch
-    ):
+    async def test_streamed_id_encrypted_on_all_responses_routes(self, responses_id_security, route, monkeypatch):
         streamed_id = await self._drain_streamed_id(responses_id_security, route, monkeypatch)
 
         assert streamed_id != "resp_rawprovider123"
@@ -639,12 +591,8 @@ class TestAsyncPostCallStreamingIteratorHook:
         )
 
     @pytest.mark.asyncio
-    async def test_streamed_id_untouched_on_non_responses_route(
-        self, responses_id_security, monkeypatch
-    ):
-        streamed_id = await self._drain_streamed_id(
-            responses_id_security, "/chat/completions", monkeypatch
-        )
+    async def test_streamed_id_untouched_on_non_responses_route(self, responses_id_security, monkeypatch):
+        streamed_id = await self._drain_streamed_id(responses_id_security, "/chat/completions", monkeypatch)
 
         assert streamed_id == "resp_rawprovider123"
         assert not responses_id_security._is_encrypted_response_id(streamed_id)
@@ -703,12 +651,8 @@ class TestStreamedGenericEventIdEncryption:
     def _advertised_ids(events):
         nested = (getattr(event, "response", None) for event in events)
         return [
-            payload["id"] if isinstance(payload, dict) else payload.id
-            for payload in nested
-            if payload is not None
-        ] + [
-            event.id for event in events if isinstance(getattr(event, "id", None), str)
-        ]
+            payload["id"] if isinstance(payload, dict) else payload.id for payload in nested if payload is not None
+        ] + [event.id for event in events if isinstance(getattr(event, "id", None), str)]
 
     async def _drain(self, responses_id_security, monkeypatch):
         monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-abcdefghij")
@@ -728,9 +672,7 @@ class TestStreamedGenericEventIdEncryption:
         ]
 
     @pytest.mark.asyncio
-    async def test_every_event_advertises_the_same_encrypted_id(
-        self, responses_id_security, monkeypatch
-    ):
+    async def test_every_event_advertises_the_same_encrypted_id(self, responses_id_security, monkeypatch):
         events = await self._drain(responses_id_security, monkeypatch)
         advertised = self._advertised_ids(events)
 
@@ -747,22 +689,14 @@ class TestStreamedGenericEventIdEncryption:
         )
 
     @pytest.mark.asyncio
-    async def test_raw_provider_id_never_reaches_the_client(
-        self, responses_id_security, monkeypatch
-    ):
+    async def test_raw_provider_id_never_reaches_the_client(self, responses_id_security, monkeypatch):
         events = await self._drain(responses_id_security, monkeypatch)
 
-        assert [self.RAW_ID in event.model_dump_json() for event in events] == [
-            False
-        ] * len(events)
+        assert [self.RAW_ID in event.model_dump_json() for event in events] == [False] * len(events)
 
     @pytest.mark.asyncio
-    async def test_sibling_fields_survive_the_rewrite(
-        self, responses_id_security, monkeypatch
-    ):
-        _, queued, keepalive, later, _ = await self._drain(
-            responses_id_security, monkeypatch
-        )
+    async def test_sibling_fields_survive_the_rewrite(self, responses_id_security, monkeypatch):
+        _, queued, keepalive, later, _ = await self._drain(responses_id_security, monkeypatch)
 
         assert queued.response["status"] == "queued"
         assert later.response["status"] == "in_progress"
@@ -774,27 +708,19 @@ class TestAsyncPostCallSuccessHook:
     """Test async_post_call_success_hook function"""
 
     @pytest.mark.asyncio
-    async def test_async_post_call_success_hook_encrypts_response(
-        self, responses_id_security, mock_user_api_key_dict
-    ):
+    async def test_async_post_call_success_hook_encrypts_response(self, responses_id_security, mock_user_api_key_dict):
         """Test post-call hook encrypts ResponsesAPIResponse"""
-        mock_response = ResponsesAPIResponse(
-            id="resp_789", created_at=1234567890, output=[], status="completed"
-        )
+        mock_response = ResponsesAPIResponse(id="resp_789", created_at=1234567890, output=[], status="completed")
         data = {}
 
-        with patch.object(
-            responses_id_security, "_encrypt_response_id", return_value=mock_response
-        ) as mock_encrypt:
+        with patch.object(responses_id_security, "_encrypt_response_id", return_value=mock_response) as mock_encrypt:
             result = await responses_id_security.async_post_call_success_hook(
                 data=data,
                 user_api_key_dict=mock_user_api_key_dict,
                 response=mock_response,
             )
 
-            mock_encrypt.assert_called_once_with(
-                mock_response, mock_user_api_key_dict, request_cache=None
-            )
+            mock_encrypt.assert_called_once_with(mock_response, mock_user_api_key_dict, request_cache=None)
             assert result == mock_response
 
     @pytest.mark.asyncio
@@ -851,9 +777,7 @@ def _auth(user_id="owner-user", team_id="owner-team", user_role=None):
 def _issue_managed_id(hook, owner, provider_response_id=_FABRICATED_PROVIDER_RESPONSE_ID):
     """Mint an id exactly the way the proxy hands one to a client on create."""
     issued = hook._encrypt_response_id(
-        ResponsesAPIResponse(
-            id=provider_response_id, created_at=1234567890, output=[], status="completed"
-        ),
+        ResponsesAPIResponse(id=provider_response_id, created_at=1234567890, output=[], status="completed"),
         owner,
     )
     return issued.id
@@ -1085,9 +1009,7 @@ class TestClientSuppliedRetainedIdCannotBypassAuthorization:
         assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_stranger_forging_their_own_id_never_reaches_someone_elses_response(
-        self, mock_cache, salt_key_env
-    ):
+    async def test_stranger_forging_their_own_id_never_reaches_someone_elses_response(self, mock_cache, salt_key_env):
         hook = _hook()
         stranger = _auth(user_id="stranger-user", team_id="stranger-team")
         stranger_id = _issue_managed_id(hook, stranger, provider_response_id="resp_strangerownprovideridcccccccc")
@@ -1111,7 +1033,7 @@ def _admin():
     return _auth(user_id="admin-user", team_id="admin-team", user_role=LitellmUserRoles.PROXY_ADMIN)
 
 
-def _provider_answer(response_id):
+def _provider_answer(response_id: str) -> ResponsesAPIResponse:
     return ResponsesAPIResponse(id=response_id, created_at=1234567890, output=[], status="completed")
 
 
@@ -1244,13 +1166,22 @@ class _SpendRowRecorder(CustomLogger):
         super().__init__()
         self.spend_row_ids = []
         self.standard_logging_ids = []
+        self.callback_response_ids = []
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         self.spend_row_ids.append(get_logging_payload(kwargs, response_obj, start_time, end_time)["request_id"])
-        self.standard_logging_ids.append(kwargs["standard_logging_object"]["id"])
+        self.callback_response_ids.append(response_obj.id)
+        if "standard_logging_object" in kwargs:
+            self.standard_logging_ids.append(kwargs["standard_logging_object"]["id"])
 
 
-async def _stream_logged_mid_stream(hook, route, logged_result, caller=None, request_data=None):
+async def _stream_logged_mid_stream(
+    hook: ResponsesIDSecurity,
+    route: str,
+    logged_result: ResponseCompletedEvent | ModelResponse,
+    caller: UserAPIKeyAuth | None = None,
+    request_data: Mapping[str, object] | None = None,
+) -> tuple[str, _SpendRowRecorder]:
     streaming_caller = caller if caller is not None else _auth()
     recorder = _SpendRowRecorder()
     logging_obj = LiteLLMLoggingObj(
@@ -1369,7 +1300,14 @@ class TestStreamedReadAnswersWithTheIdTheClientHolds:
         )
 
 
-async def _read_logged_by_callbacks(hook, caller, issued_id, call_type, cache):
+async def _read_logged_by_callbacks(
+    hook: ResponsesIDSecurity,
+    caller: UserAPIKeyAuth,
+    issued_id: str,
+    call_type: CallTypesLiteral,
+    cache: DualCache,
+    answer: Callable[[str], ResponsesAPIResponse | DeleteResponseResult] = _provider_answer,
+) -> tuple[str, _SpendRowRecorder]:
     recorder = _SpendRowRecorder()
     now = datetime.datetime.now()
     logging_obj = LiteLLMLoggingObj(
@@ -1388,7 +1326,7 @@ async def _read_logged_by_callbacks(hook, caller, issued_id, call_type, cache):
     data = await hook.async_pre_call_hook(
         user_api_key_dict=caller, cache=cache, data={"response_id": issued_id}, call_type=call_type
     )
-    provider_answer = _provider_answer(data["response_id"])
+    provider_answer = answer(data["response_id"])
 
     client_response = await hook.async_post_call_success_hook(
         data=data, user_api_key_dict=caller, response=provider_answer
@@ -1417,3 +1355,68 @@ class TestEveryReadLogsAnIdOfItsOwn:
         assert {hook._decrypt_response_id(logged_id) for logged_id in logged_ids} == {
             (_FABRICATED_PROVIDER_RESPONSE_ID, reader.user_id, reader.team_id)
         }
+
+
+_RAW_UPSTREAM_RESPONSE_ID = "resp_06de59f3upstreamiddddddddddddddddd"
+
+
+def _routed_response_id(upstream_response_id: str) -> str:
+    return ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+        _provider_answer(upstream_response_id), "openai", {"model_info": {"id": "deployment-1"}}
+    ).id
+
+
+def _deletion_of(response_id: str) -> DeleteResponseResult:
+    return DeleteResponseResult(
+        id=ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response_id),
+        object="response.deleted",
+        deleted=True,
+    )
+
+
+class TestDeleteAnswersWithTheIdTheClientHolds:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reader", [_auth(), _admin()], ids=["owner", "admin"])
+    @pytest.mark.parametrize(
+        "stored_id",
+        [_routed_response_id(_RAW_UPSTREAM_RESPONSE_ID), _RAW_UPSTREAM_RESPONSE_ID],
+        ids=["routed-deployment", "plain-id"],
+    )
+    async def test_a_caller_with_access_gets_back_the_exact_id_they_sent(
+        self, mock_cache, salt_key_env, reader, stored_id
+    ):
+        hook = _hook()
+        issued_id = _issue_managed_id(hook, _auth(), provider_response_id=stored_id)
+        data = await hook.async_pre_call_hook(
+            user_api_key_dict=reader, cache=mock_cache, data={"response_id": issued_id}, call_type="adelete_responses"
+        )
+
+        result = await hook.async_post_call_success_hook(
+            data=data, user_api_key_dict=reader, response=_deletion_of(data["response_id"])
+        )
+
+        assert (result.id, result.object, result.deleted) == (issued_id, "response.deleted", True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reader", [_auth(), _admin()], ids=["owner", "admin"])
+    async def test_callbacks_and_the_spend_row_log_an_id_of_its_own_never_the_one_the_client_holds(
+        self, mock_cache, salt_key_env, reader
+    ):
+        hook = _hook()
+        issued_id = _issue_managed_id(
+            hook, _auth(), provider_response_id=_routed_response_id(_RAW_UPSTREAM_RESPONSE_ID)
+        )
+
+        client_id, recorder = await _read_logged_by_callbacks(
+            hook, reader, issued_id, "adelete_responses", mock_cache, answer=_deletion_of
+        )
+
+        assert client_id == issued_id
+        assert recorder.spend_row_ids == recorder.callback_response_ids
+        assert len(recorder.callback_response_ids) == 1
+        assert recorder.callback_response_ids[0] != issued_id
+        assert hook._decrypt_response_id(recorder.callback_response_ids[0]) == (
+            _RAW_UPSTREAM_RESPONSE_ID,
+            reader.user_id,
+            reader.team_id,
+        )

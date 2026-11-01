@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     without_classifier_audit,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     get_litellm_metadata_from_kwargs,
     proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
@@ -345,7 +346,10 @@ def _cost_row_request_id_suffix(
 
 
 def get_spend_logs_id(
-    call_type: str, response_obj: dict, kwargs: Mapping[str, object], metadata: Mapping[str, object] = EMPTY_MAPPING
+    call_type: str,
+    response_obj: Mapping[str, object],
+    kwargs: Mapping[str, object],
+    metadata: Mapping[str, object] = EMPTY_MAPPING,
 ) -> str | None:
     standard_logging_payload = kwargs.get("standard_logging_object")
     candidate_ids: Final = (
@@ -362,6 +366,17 @@ def get_spend_logs_id(
         kwargs.get(SETTLES_BACKGROUND_RESPONSE_KWARG) is BackgroundResponseSettlement.SETTLES
     )
     return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, settles_background_response)}"
+
+
+def get_logged_event_spend_logs_id(kwargs: Mapping[str, object], event_id: str | None) -> str | None:
+    call_type: Final = kwargs.get("call_type")
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
+    return get_spend_logs_id(
+        call_type if isinstance(call_type, str) and call_type else "acompletion",
+        {"id": event_id} if event_id else {},
+        kwargs,
+        as_str_mapping(litellm_params.get("litellm_metadata")) or as_str_mapping(litellm_params.get("metadata")) or {},
+    )
 
 
 _MISSING_ATTRIBUTE: Final = object()

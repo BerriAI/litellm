@@ -1,15 +1,16 @@
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import reduce
 from itertools import chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.responses.litellm_completion_transformation.client_tool_search import (
     bridge_client_tool_search,
     client_tool_search_loaded_tools,
@@ -94,25 +95,52 @@ def _output_item_ids(spend_log: "SpendLogsPayload") -> frozenset[str]:
     return frozenset(item_id for item_id in map(_output_item_id, output) if item_id is not None)
 
 
-@dataclass(frozen=True, slots=True)
-class _SessionTurns:
-    spend_logs: tuple["SpendLogsPayload", ...] = ()
-    output_item_ids: frozenset[str] = frozenset()
-
-
-def _with_conversation_turn(turns: _SessionTurns, spend_log: "SpendLogsPayload") -> _SessionTurns:
-    if not _is_a_conversation_turn(spend_log):
-        return turns
-    output_item_ids: Final = _output_item_ids(spend_log)
-    if _is_a_response_read(spend_log) and output_item_ids <= turns.output_item_ids:
-        return turns
-    return _SessionTurns(
-        spend_logs=(*turns.spend_logs, spend_log), output_item_ids=turns.output_item_ids | output_item_ids
+def _first_index_holding_each_item(indexed_turns: Iterable[tuple[int, "SpendLogsPayload"]]) -> Mapping[str, int]:
+    return dict(
+        chain.from_iterable(
+            ((item_id, index) for item_id in _output_item_ids(turn)) for index, turn in reversed(tuple(indexed_turns))
+        )
     )
 
 
+def _turn_replaying_each_item(turns: Sequence["SpendLogsPayload"]) -> Mapping[str, int]:
+    indexed_turns: Final = tuple(enumerate(turns))
+    first_read_holding: Final = _first_index_holding_each_item(
+        (index, turn) for index, turn in indexed_turns if _is_a_response_read(turn)
+    )
+    first_other_turn_holding: Final = _first_index_holding_each_item(
+        (index, turn) for index, turn in indexed_turns if not _is_a_response_read(turn)
+    )
+    return MappingProxyType({**first_read_holding, **first_other_turn_holding})
+
+
+def _replayed_by(item: object, index: int, turn_replaying: Mapping[str, int]) -> bool:
+    item_id: Final = _output_item_id(item)
+    return item_id is not None and turn_replaying.get(item_id) == index
+
+
+def _with_only_new_output(
+    index: int, turn: "SpendLogsPayload", turn_replaying: Mapping[str, int]
+) -> "SpendLogsPayload | None":
+    if not _is_a_response_read(turn):
+        return turn
+    stored_response: Final = as_str_mapping(_stored_response(turn))
+    new_output: Final = [
+        item
+        for item in _stored_responses_api_output(stored_response) or []
+        if _replayed_by(item, index, turn_replaying)
+    ]
+    if stored_response is None or not new_output:
+        return None
+    replayed_turn: Final[SpendLogsPayload] = {**turn, "response": {**stored_response, "output": new_output}}
+    return replayed_turn
+
+
 def _conversation_turns(spend_logs: Sequence["SpendLogsPayload"]) -> tuple["SpendLogsPayload", ...]:
-    return reduce(_with_conversation_turn, spend_logs, _SessionTurns()).spend_logs
+    turns: Final = tuple(filter(_is_a_conversation_turn, spend_logs))
+    turn_replaying: Final = _turn_replaying_each_item(turns)
+    replayed: Final = (_with_only_new_output(index, turn, turn_replaying) for index, turn in enumerate(turns))
+    return tuple(turn for turn in replayed if turn is not None)
 
 
 _MCP_AUTO_EXECUTE_OUTPUT_TYPES: Final = frozenset(("mcp_tools_fetched", "tool_execution_results"))

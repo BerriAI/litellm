@@ -13,9 +13,11 @@ import litellm
 import pytest
 import respx
 
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 
 mock_response_data: Final = {
@@ -172,9 +174,7 @@ async def test_get_payload_not_found(monkeypatch):
     assert payload is None
 
 
-def _gcs_logger_with_upload_status(
-    monkeypatch: pytest.MonkeyPatch, status_code: int
-) -> tuple[GCSBucketLogger, Mock]:
+def _gcs_logger_with_upload_status(monkeypatch: pytest.MonkeyPatch, status_code: int) -> tuple[GCSBucketLogger, Mock]:
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     monkeypatch.setattr(google.auth, "default", _google_default_credentials)
     monkeypatch.setenv("GCS_FLUSH_INTERVAL", "3600")
@@ -394,3 +394,95 @@ async def test_batch_line_items_are_serialized_off_the_event_loop(monkeypatch: p
 
     (thread,) = threads
     assert thread is not threading.main_thread()
+
+
+@pytest.mark.asyncio
+async def test_unbatched_background_cost_event_keeps_its_own_object_readable_by_its_spend_log_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GCS_USE_BATCHED_LOGGING", "false")
+    logger, _ = _gcs_logger_with_upload_status(monkeypatch, 200)
+    object_prefix: Final = "/storage/v1/b/test-bucket/o/"
+    stored: Final[dict[str, object]] = {}
+
+    def bucket(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            stored[request.url.params["name"]] = json.loads(request.content)
+            return httpx.Response(200, json={"name": request.url.params["name"]})
+        name: Final = request.url.path.removeprefix(object_prefix)
+        if name not in stored:
+            return httpx.Response(404, text="No such object")
+        return httpx.Response(200, content=json.dumps(stored[name]).encode("utf-8"))
+
+    logger.async_httpx_client = AsyncHTTPHandler(transport=httpx.MockTransport(bucket))
+    response_id: Final = "resp_YmFja2dyb3VuZA"
+    create: Final = {
+        "id": response_id,
+        "messages": [{"role": "user", "content": "background create input"}],
+        "error_str": None,
+    }
+    cost: Final = {"id": response_id, "response_cost": 0.42, "error_str": None}
+    ordinary: Final = {"id": "chatcmpl-ordinary", "error_str": None}
+    events: Final = (
+        ({"call_type": "aresponses", "litellm_params": {"metadata": {}}}, create),
+        (
+            {
+                "call_type": "aget_responses",
+                "litellm_params": {
+                    "metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN}
+                },
+            },
+            cost,
+        ),
+        ({"call_type": "acompletion", "litellm_params": {"metadata": {}}}, ordinary),
+    )
+
+    for kwargs, payload in events:
+        await logger.async_log_success_event(
+            {**kwargs, "standard_logging_object": payload}, {"id": payload["id"]}, None, None
+        )
+    await logger.flush_queue()
+
+    assert {name.split("/", maxsplit=1)[1]: payload for name, payload in stored.items()} == {
+        response_id: create,
+        f"{response_id}_background_cost": cost,
+        "chatcmpl-ordinary": ordinary,
+    }, "the create, its background cost event and an ordinary event must each keep their own object"
+    now: Final = datetime.now(timezone.utc)
+    assert await logger.get_request_response_payload(f"{response_id}_background_cost", now, None) == cost
+    assert await logger.get_request_response_payload(response_id, now, None) == create
+
+
+@pytest.mark.asyncio
+async def test_unbatched_gcs_log_id_still_names_a_background_cost_event_object(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GCS_USE_BATCHED_LOGGING", "false")
+    logger, _ = _gcs_logger_with_upload_status(monkeypatch, 200)
+    stored: Final[dict[str, object]] = {}
+
+    def bucket(request: httpx.Request) -> httpx.Response:
+        stored[request.url.params["name"]] = json.loads(request.content)
+        return httpx.Response(200, json={"name": request.url.params["name"]})
+
+    logger.async_httpx_client = AsyncHTTPHandler(transport=httpx.MockTransport(bucket))
+    cost: Final = {"id": "resp_YmFja2dyb3VuZA", "response_cost": 0.42, "error_str": None}
+    await logger.async_log_success_event(
+        {
+            "call_type": "aget_responses",
+            "litellm_params": {
+                "metadata": {
+                    INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
+                    "gcs_log_id": "qa-run-7",
+                }
+            },
+            "standard_logging_object": cost,
+        },
+        {"id": cost["id"]},
+        None,
+        None,
+    )
+    await logger.flush_queue()
+
+    ((name, payload),) = stored.items()
+    object_name: Final = name.split("/", maxsplit=1)[1]
+    assert object_name.startswith("custom-") and object_name.endswith("-qa-run-7"), object_name
+    assert payload == cost

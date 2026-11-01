@@ -5,19 +5,28 @@ import re
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.azure_storage import azure_storage as azure_storage_module
 from litellm.integrations.azure_storage.azure_storage import (
     AzureBlobStorageLogger,
     _cached_credential_chain_token_provider,
     adls_safe_file_name,
 )
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
 from litellm.types.secret_managers.get_azure_ad_token_provider import AzureCredentialType
-from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
+from litellm.types.utils import (
+    BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
+    StandardAuditLogPayload,
+    StandardLoggingPayload,
+)
 
 
 @pytest.fixture
@@ -648,3 +657,160 @@ async def test_audit_log_is_uploaded_to_a_dated_audit_logs_path_with_an_account_
     assert json.loads(uploaded) == audit_log
     assert file_client.append_data.await_args.kwargs == {"data": uploaded, "offset": 0, "length": len(uploaded)}
     file_client.flush_data.assert_awaited_once_with(position=len(uploaded), offset=0)
+
+
+BACKGROUND_RESPONSE_ID: Final = "resp_YWJjZA=="
+BACKGROUND_COST_POLL_KWARGS: Final = {
+    "call_type": "aget_responses",
+    "litellm_params": {
+        "metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN},
+    },
+}
+PASSTHROUGH_SETTLEMENT_KWARGS: Final = {
+    "call_type": "pass_through_endpoint",
+    "litellm_params": {"metadata": {}},
+    SETTLES_BACKGROUND_RESPONSE_KWARG: BackgroundResponseSettlement.SETTLES,
+}
+
+
+def _background_create_cost_and_ordinary_events(
+    cost_kwargs: dict[str, object],
+) -> tuple[tuple[dict[str, object], StandardLoggingPayload], ...]:
+    create: Final = StandardLoggingPayload(
+        id=BACKGROUND_RESPONSE_ID,
+        call_type="aresponses",
+        messages=[{"role": "user", "content": "background create input"}],
+    )
+    cost: Final = StandardLoggingPayload(id=BACKGROUND_RESPONSE_ID, call_type="aget_responses", response_cost=0.42)
+    ordinary: Final = StandardLoggingPayload(id="chatcmpl-ordinary", call_type="acompletion")
+    return (
+        ({"call_type": "aresponses", "litellm_params": {"metadata": {}}, "standard_logging_object": create}, create),
+        ({**cost_kwargs, "standard_logging_object": cost}, cost),
+        (
+            {"call_type": "acompletion", "litellm_params": {"metadata": {}}, "standard_logging_object": ordinary},
+            ordinary,
+        ),
+    )
+
+
+def _expected_files(
+    events: tuple[tuple[dict[str, object], StandardLoggingPayload], ...],
+) -> dict[str, StandardLoggingPayload]:
+    create, cost, ordinary = (payload for _, payload in events)
+    return {
+        "resp_YWJjZA.json": create,
+        "resp_YWJjZA_background_cost.json": cost,
+        "chatcmpl-ordinary.json": ordinary,
+    }
+
+
+async def _log_and_flush(
+    logger: AzureBlobStorageLogger, events: tuple[tuple[dict[str, object], StandardLoggingPayload], ...]
+) -> None:
+    for kwargs, payload in events:
+        await logger.async_log_success_event(kwargs, {"id": payload["id"]}, None, None)
+    await logger.async_send_batch()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cost_kwargs",
+    (
+        pytest.param(BACKGROUND_COST_POLL_KWARGS, id="cost-poll"),
+        pytest.param(PASSTHROUGH_SETTLEMENT_KWARGS, id="passthrough-settlement"),
+    ),
+)
+async def test_background_cost_event_keeps_its_own_file_beside_the_create_on_the_entra_path(
+    mock_env_vars, monkeypatch, cost_kwargs
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    events: Final = _background_create_cost_and_ordinary_events(cost_kwargs)
+    with patch(  # test-quality-ok: REST client is created inside the method; assert emitted requests
+        "litellm.integrations.azure_storage.azure_storage.get_async_httpx_client"
+    ) as mock_get_client:
+        mock_http_client = AsyncMock()
+        mock_http_client.put.return_value = MagicMock()
+        mock_http_client.patch.return_value = MagicMock()
+        mock_get_client.return_value = mock_http_client
+
+        logger = AzureBlobStorageLogger()
+        logger.azure_auth_token = "mock-azure-ad-token"
+        logger.token_expiry = None
+        await _log_and_flush(logger, events)
+
+    base_url: Final = "https://test-account.dfs.core.windows.net/test-container/"
+    appends: Final = [call for call in mock_http_client.patch.call_args_list if "action=append" in call.args[0]]
+    uploaded: Final = {
+        call.args[0].removeprefix(base_url).split("?")[0]: json.loads(call.kwargs["data"]) for call in appends
+    }
+    assert uploaded == _expected_files(events), (
+        "the create, its background cost event and an ordinary event must each keep their own file"
+    )
+
+
+@pytest.mark.asyncio
+async def test_failure_event_is_uploaded_to_a_file_named_after_its_id(mock_env_vars, monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    failure: Final = StandardLoggingPayload(id="chatcmpl-failed", call_type="acompletion", error_str="provider failure")
+    with patch(  # test-quality-ok: REST client is created inside the method; assert emitted requests
+        "litellm.integrations.azure_storage.azure_storage.get_async_httpx_client"
+    ) as mock_get_client:
+        mock_http_client = AsyncMock()
+        mock_http_client.put.return_value = MagicMock()
+        mock_http_client.patch.return_value = MagicMock()
+        mock_get_client.return_value = mock_http_client
+
+        logger = AzureBlobStorageLogger()
+        logger.azure_auth_token = "mock-azure-ad-token"
+        logger.token_expiry = None
+        await logger.async_log_failure_event(
+            {"call_type": "acompletion", "litellm_params": {"metadata": {}}, "standard_logging_object": failure},
+            None,
+            None,
+            None,
+        )
+        await logger.async_send_batch()
+
+    base_url: Final = "https://test-account.dfs.core.windows.net/test-container/"
+    appends: Final = [call for call in mock_http_client.patch.call_args_list if "action=append" in call.args[0]]
+    assert {call.args[0].removeprefix(base_url).split("?")[0]: json.loads(call.kwargs["data"]) for call in appends} == {
+        "chatcmpl-failed.json": failure
+    }
+
+
+@pytest.mark.asyncio
+async def test_background_cost_event_keeps_its_own_file_beside_the_create_with_an_account_key(
+    workload_identity_env_vars, monkeypatch
+):
+    monkeypatch.setenv("AZURE_STORAGE_ACCOUNT_KEY", "dGVzdC1rZXk=")
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    events: Final = _background_create_cost_and_ordinary_events(BACKGROUND_COST_POLL_KWARGS)
+
+    uploaded: Final[dict[str, StandardLoggingPayload]] = {}
+
+    def file_client_for(file_path: str) -> MagicMock:
+        file_client = MagicMock()
+        file_client.create_file = AsyncMock()
+        file_client.flush_data = AsyncMock()
+
+        async def append_data(data: bytes, offset: int, length: int) -> None:
+            uploaded[file_path] = json.loads(data)
+
+        file_client.append_data = append_data
+        return file_client
+
+    file_system_client = MagicMock()
+    file_system_client.get_file_client = MagicMock(side_effect=file_client_for)
+    service_client = MagicMock()
+    service_client.get_file_system_client = MagicMock(return_value=file_system_client)
+    fake_aio_module = MagicMock()
+    fake_aio_module.DataLakeServiceClient = MagicMock(return_value=service_client)
+
+    with patch.dict(sys.modules, {"azure.storage.filedatalake.aio": fake_aio_module}):
+        logger = AzureBlobStorageLogger()
+        await _log_and_flush(logger, events)
+
+    today: Final = datetime.now().strftime("%Y-%m-%d")
+    assert uploaded == {f"{today}/{name}": payload for name, payload in _expected_files(events).items()}, (
+        "the create, its background cost event and an ordinary event must each keep their own file"
+    )
