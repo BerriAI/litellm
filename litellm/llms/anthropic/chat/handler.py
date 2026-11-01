@@ -1024,7 +1024,7 @@ class ModelResponseIterator:
                 if self.current_content_block_type in _THINKING_BLOCK_TYPES:
                     self.thinking_block_index += 1
                 if content_block_start["content_block"]["type"] == "text":
-                    text = self._release_answer_close() + content_block_start["content_block"]["text"]
+                    text = self._release_answer_close() + (content_block_start["content_block"].get("text") or "")
                 elif (
                     content_block_start["content_block"]["type"] == "tool_use"
                     or content_block_start["content_block"]["type"] == "server_tool_use"

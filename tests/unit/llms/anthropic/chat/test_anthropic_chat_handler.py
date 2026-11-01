@@ -3705,6 +3705,22 @@ def test_streamed_end_turn_carries_no_stop_details():
     assert "stop_reason" not in provider_fields
 
 
+def test_streaming_text_block_start_without_text_field() -> None:
+    """Preserve text deltas when a gateway omits block-start text."""
+    model_response_iterator: Final = ModelResponseIterator(
+        streaming_response=iter(()), sync_stream=True, json_mode=False
+    )
+    chunks: Final = (
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello"}},
+    )
+
+    parsed_chunks: Final = tuple(model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks)
+    text: Final = "".join(chunk.choices[0].delta.content or "" for chunk in parsed_chunks)
+
+    assert text == "hello"
+
+
 def _anthropic_chat_request_for_bound_thinking(
     extra_headers: dict[str, str] | None, drop_params: bool | None = None
 ) -> httpx.Request:
