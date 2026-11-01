@@ -51,6 +51,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     STORED_PROMPT_PROBE_MODEL,
+    WALKOUT_TURN_DRAIN_SECONDS,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
     SafeRouteAdder,
@@ -8797,10 +8798,19 @@ async def test_websocket_passthrough_charges_each_lane_a_client_walked_out_of_to
 
 
 class UpstreamFinishingTheTurnAfterTheClientLeft:
-    """Starts a turn for each client frame and sends the rest of it only after the client left, and stops once closed"""
+    """Starts a turn for each client frame, unless it only answers once the client left, sends the rest of the session
+    once the client left, and stops once closed"""
 
-    def __init__(self, client_left: asyncio.Event, started: str, rest_of_the_turn: Sequence[str]):
+    def __init__(
+        self,
+        client_left: asyncio.Event,
+        started: str | None,
+        rest_of_the_turn: Sequence[str],
+        opening: Sequence[str] = (),
+    ):
         self._frames: asyncio.Queue[str | None] = asyncio.Queue()
+        for frame in opening:
+            self._frames.put_nowait(frame)
         self._client_left = client_left
         self._started = started
         self._rest_of_the_turn = rest_of_the_turn
@@ -8814,8 +8824,10 @@ class UpstreamFinishingTheTurnAfterTheClientLeft:
         self._frames.put_nowait(None)
 
     async def _start_turn(self, frame: str | bytes) -> None:
-        self._frames.put_nowait(self._started)
-        self._finishing.append(asyncio.create_task(self._finish_once_the_client_left()))
+        if self._started is not None:
+            self._frames.put_nowait(self._started)
+        if not self._finishing:
+            self._finishing.append(asyncio.create_task(self._finish_once_the_client_left()))
 
     async def _finish_once_the_client_left(self) -> None:
         await self._client_left.wait()
@@ -8845,13 +8857,42 @@ async def test_websocket_passthrough_bills_the_turn_a_client_walked_out_of_once_
     bills it, so the gateway keeps reading until the turn ends and logs its usage,
     whether it reads the hang-up first or finds it by failing to relay a frame.
     """
+    client_left: Final = asyncio.Event()
+    client: Final = _walking_out_client(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4"})],
+        '"response.created"',
+        None,
+        client_left,
+        hang_up_read_before_the_next_send,
+    )
+    upstream_ws: Final = UpstreamFinishingTheTurnAfterTheClientLeft(
+        client_left,
+        _responses_turn_started("gpt-5.4"),
+        (json.dumps({"type": "response.output_text.delta", "delta": "Hi"}), _responses_turn_ended("gpt-5.4")),
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), walkout_turn_drain_seconds=5)
+
+    assert [
+        [json.loads(frame)["type"] if isinstance(frame, str) else frame["type"] for frame in logged.kwargs["response_body"]]
+        for logged in relayed.success_handler.call_args_list
+    ] == [["response.created", "response.output_text.delta", "response.completed"]]
+    upstream_ws.close.assert_awaited()
+
+
+def _walking_out_client(
+    frames: Sequence[str],
+    answered_by: str,
+    answers_due: Sequence[int] | None,
+    client_left: asyncio.Event,
+    hang_up_read_before_the_next_send: bool = True,
+) -> MagicMock:
+    """A turn-taking client that sets client_left as it hangs up, which the gateway either reads at once or only finds
+    when its next send to the client fails"""
     from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-    client_left: Final = asyncio.Event()
     send_failed: Final = asyncio.Event()
-    client: Final = _turn_taking_client(
-        [json.dumps({"type": "response.create", "model": "gpt-5.4"})], answered_by='"response.created"'
-    )
+    client: Final = _turn_taking_client(frames, answered_by, answers_due)
     receive: Final = client.receive
     send_text: Final = client.send_text
 
@@ -8872,19 +8913,126 @@ async def test_websocket_passthrough_bills_the_turn_a_client_walked_out_of_once_
 
     client.receive = receive_until_leaving
     client.send_text = AsyncMock(side_effect=send_text_until_leaving)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_bills_the_turn_a_client_walked_out_of_before_the_provider_started_it():
+    """
+    A client can ask for a turn and leave before the provider says it started.
+    The provider still runs and bills that turn, so the gateway keeps reading
+    until it ends and logs its usage.
+    """
+    client_left: Final = asyncio.Event()
+    client: Final = _walking_out_client(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4"})], '"response.created"', (0, 0), client_left
+    )
     upstream_ws: Final = UpstreamFinishingTheTurnAfterTheClientLeft(
-        client_left,
-        _responses_turn_started("gpt-5.4"),
-        (json.dumps({"type": "response.output_text.delta", "delta": "Hi"}), _responses_turn_ended("gpt-5.4")),
+        client_left, None, (_responses_turn_started("gpt-5.4"), _responses_turn_ended("gpt-5.4"))
     )
 
     relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), walkout_turn_drain_seconds=5)
 
-    assert [
-        [json.loads(frame)["type"] if isinstance(frame, str) else frame["type"] for frame in logged.kwargs["response_body"]]
-        for logged in relayed.success_handler.call_args_list
-    ] == [["response.created", "response.output_text.delta", "response.completed"]]
+    assert _logged_frame_types(relayed) == [["response.created", "response.completed"]]
     upstream_ws.close.assert_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hang_up_read_before_the_next_send", [True, False], ids=["read_first", "found_by_a_send"])
+async def test_websocket_passthrough_bills_a_realtime_turn_a_client_walked_out_of_while_the_provider_stored_its_input(
+    hang_up_read_before_the_next_send: bool,
+):
+    """
+    A realtime client can add an item, ask for a turn, and leave at once. The
+    provider confirms the item before it starts the turn, and that confirmation
+    must not end the session while the turn it was asked for is still owed.
+    """
+    client_left: Final = asyncio.Event()
+    client: Final = _walking_out_client(
+        [
+            json.dumps({"type": "conversation.item.create", "item": {"type": "message", "role": "user"}}),
+            json.dumps({"type": "response.create"}),
+        ],
+        '"session.created"',
+        (1, 1, 1),
+        client_left,
+        hang_up_read_before_the_next_send,
+    )
+    upstream_ws: Final = UpstreamFinishingTheTurnAfterTheClientLeft(
+        client_left,
+        None,
+        (
+            json.dumps({"type": "conversation.item.created", "item": {"type": "message", "role": "user"}}),
+            json.dumps({"type": "response.created", "response": {"status": "in_progress"}}),
+            REALTIME_RESPONSE_DONE,
+        ),
+        opening=(REALTIME_SESSION_CREATED,),
+    )
+
+    relayed: Final = await _relay_turns(
+        client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime", walkout_turn_drain_seconds=5
+    )
+
+    assert _logged_frame_types(relayed) == [
+        ["session.created", "conversation.item.created", "response.created", "response.done"]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_bills_a_realtime_turn_a_client_walked_out_of_after_the_provider_started_one_itself():
+    """
+    A realtime provider can start a turn on its own when voice detection hears
+    the user stop. That turn answers no client frame, so a turn the client asks
+    for next and leaves before it starts is still owed and still billed.
+    """
+    realtime_response_created: Final = json.dumps({"type": "response.created", "response": {"status": "in_progress"}})
+    client_left: Final = asyncio.Event()
+    client: Final = _walking_out_client(
+        [json.dumps({"type": "response.create"})], '"response.done"', (1, 1), client_left
+    )
+    upstream_ws: Final = UpstreamFinishingTheTurnAfterTheClientLeft(
+        client_left,
+        None,
+        (realtime_response_created, REALTIME_RESPONSE_DONE),
+        opening=(REALTIME_SESSION_CREATED, realtime_response_created, REALTIME_RESPONSE_DONE),
+    )
+
+    relayed: Final = await _relay_turns(
+        client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime", walkout_turn_drain_seconds=5
+    )
+
+    assert _logged_frame_types(relayed) == [
+        ["session.created", "response.created", "response.done"],
+        ["session.created", "response.created", "response.done"],
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [_responses_turn("gpt-5.4"), [_responses_error("previous_response_not_found")]],
+    ids=["finished", "refused"],
+)
+async def test_websocket_passthrough_lets_go_of_the_provider_at_once_when_a_client_leaves_owing_no_turn(
+    answer: Sequence[str],
+):
+    """
+    Once every turn a client asked for has ended or been refused, nothing more
+    can be billed, so a client leaving closes the provider socket right away
+    instead of holding it for the walkout drain.
+    """
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4"})],
+        answered_by=json.dumps(json.loads(answer[-1])["type"]),
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(replies=[answer])
+
+    relayed: Final = await _relay_turns(
+        client, upstream_ws, RecordingFrameModelGate(), walkout_turn_drain_seconds=WALKOUT_TURN_DRAIN_SECONDS
+    )
+
+    upstream_ws.close.assert_awaited()
+    assert len(relayed.success_handler.call_args_list) == 1
 
 
 @pytest.mark.asyncio

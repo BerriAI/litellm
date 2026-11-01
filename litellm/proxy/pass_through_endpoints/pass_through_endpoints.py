@@ -2878,12 +2878,14 @@ class _WebsocketTurnLedger:
         self.session_opened = False
         self.started = started
         self.logged_turns = 0
+        self.unstarted_turns = 0
 
     def current(self, lane: str | None) -> _TurnAuthorization:
         oldest: Final = next(iter(self.queued_turns.get(lane, ())), None)
         return self.opening if oldest is None else oldest
 
     def queue_turn(self, lane: str | None, turn: _TurnAuthorization | None) -> None:
+        self.unstarted_turns += 1
         if not self.session_opened:
             self.queued_turns = MappingProxyType({**self.queued_turns, lane: (*self.queued_turns.get(lane, ()), turn)})
 
@@ -2896,7 +2898,11 @@ class _WebsocketTurnLedger:
         self.started = end_time
         self._forget_turn(lane, 0)
 
+    def start_turn(self) -> None:
+        self.unstarted_turns = max(0, self.unstarted_turns - 1)
+
     def drop_refused_turn(self, lane: str | None, lane_is_running_a_turn: bool) -> None:
+        self.start_turn()
         self._forget_turn(lane, 1 if lane_is_running_a_turn else 0)
 
     def _forget_turn(self, lane: str | None, position: int) -> None:
@@ -2920,6 +2926,16 @@ def _turn_in_flight(
 ) -> bool:
     return upstream_frame_kind is not None and any(
         upstream_frame_kind(frame) == "starts_turn" for frame in unlogged_frames
+    )
+
+
+def _turn_owed(
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier | None,
+    unlogged_frames: Sequence[Mapping[str, object]],
+    ledger: _WebsocketTurnLedger,
+) -> bool:
+    return _turn_in_flight(upstream_frame_kind, unlogged_frames) or (
+        upstream_frame_kind is not None and ledger.unstarted_turns > 0
     )
 
 
@@ -3323,7 +3339,7 @@ async def websocket_passthrough_request(
                                 _RefuseClientFrame,
                             ):
                                 break
-                    if not _turn_in_flight(upstream_frame_kind, websocket_messages):
+                    if not _turn_owed(upstream_frame_kind, websocket_messages, ledger):
                         await upstream_ws.close()
                 except asyncio.CancelledError:
                     raise
@@ -3362,6 +3378,8 @@ async def websocket_passthrough_request(
                 match None if upstream_frame_kind is None else upstream_frame_kind(message_data):
                     case "opens_session":
                         ledger.open_session()
+                    case "starts_turn":
+                        ledger.start_turn()
                     case "updates_session" if upstream_frame_kind is not None:
                         websocket_messages[:] = _without_earlier_session_updates(
                             upstream_frame_kind, websocket_messages, message_data
@@ -3381,7 +3399,7 @@ async def websocket_passthrough_request(
             async def relay_upstream_frame(upstream_message: str | bytes) -> None:
                 record_upstream_frame(upstream_message)
                 if not _client_socket_is_open(websocket):
-                    if not _turn_in_flight(upstream_frame_kind, websocket_messages):
+                    if not _turn_owed(upstream_frame_kind, websocket_messages, ledger):
                         await upstream_ws.close()
                     return
                 try:
@@ -3390,7 +3408,7 @@ async def websocket_passthrough_request(
                     else:
                         await websocket.send_text(upstream_message)
                 except WebSocketDisconnect:
-                    if not _turn_in_flight(upstream_frame_kind, websocket_messages):
+                    if not _turn_owed(upstream_frame_kind, websocket_messages, ledger):
                         raise
 
             async def forward_upstream_to_client() -> Close | None:
@@ -3421,7 +3439,7 @@ async def websocket_passthrough_request(
             tasks: Final = (client_task, upstream_task)
 
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            if client_task.done() and _turn_in_flight(upstream_frame_kind, websocket_messages):
+            if client_task.done() and _turn_owed(upstream_frame_kind, websocket_messages, ledger):
                 await asyncio.wait((upstream_task,), timeout=walkout_turn_drain_seconds)
             done: Final = tuple(task for task in tasks if task.done())
             pending: Final = tuple(task for task in tasks if not task.done())
