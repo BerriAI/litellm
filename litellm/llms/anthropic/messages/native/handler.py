@@ -636,6 +636,7 @@ def anthropic_messages_handler(
         litellm_logging_obj.model_call_details["agentic_loop_params"] = {
             "model": original_model,
             "custom_llm_provider": custom_llm_provider,
+            "max_tokens": max_tokens,
         }
         litellm_logging_obj.model_call_details.setdefault("litellm_params", {})[CallTypes.aanthropic_messages.value] = (
             is_async

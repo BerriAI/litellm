@@ -7,7 +7,7 @@ import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -2692,7 +2692,7 @@ def _answer_after_the_lookup(request: httpx.Request) -> httpx.Response:
     )
 
 
-def _messages_with_the_lookup_result(messages: list[dict]) -> list[dict]:
+def _messages_with_the_lookup_result(messages: list[dict[str, object]]) -> list[dict[str, object]]:
     return [
         *messages,
         {"role": "assistant", "content": [_LOOKUP_CALL]},
@@ -2700,66 +2700,80 @@ def _messages_with_the_lookup_result(messages: list[dict]) -> list[dict]:
     ]
 
 
+def _without_the_logging_obj(kwargs: Mapping[str, object]) -> dict[str, object]:
+    return {key: value for key, value in kwargs.items() if key != "litellm_logging_obj"}
+
+
 class _LookupLoop(CustomLogger):
     async def async_should_run_agentic_loop(
         self,
         response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
-    ) -> tuple[bool, dict]:
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
         return isinstance(response, dict) and response.get("stop_reason") == "tool_use", {}
 
 
 class _OwnMaxTokensLoop(_LookupLoop):
+    def __init__(self, spreads: Literal["params", "kwargs"]) -> None:
+        super().__init__()
+        self.spreads: Final = spreads
+
     async def async_run_agentic_loop(
         self,
-        tools: dict,
+        tools: dict[str, object],
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         response: object,
         anthropic_messages_provider_config: object,
-        anthropic_messages_optional_request_params: dict,
+        anthropic_messages_optional_request_params: dict[str, object],
         logging_obj: object,
         stream: bool,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> object:
+        spread: Final = (
+            {"api_key": "sk-ant-test", **anthropic_messages_optional_request_params}
+            if self.spreads == "params"
+            else _without_the_logging_obj(kwargs)
+        )
         return await litellm.anthropic.messages.acreate(
             model="anthropic/claude-haiku-5-5",
             messages=_messages_with_the_lookup_result(messages),
             max_tokens=300,
-            api_key="sk-ant-test",
-            **anthropic_messages_optional_request_params,
+            **spread,  # pyright: ignore[reportArgumentType]  # a hook forwards the request's params as they arrive
         )
 
 
 class _PlannedLoop(_LookupLoop):
-    def __init__(self, max_tokens: int | None) -> None:
+    def __init__(self, max_tokens: int | None, kwargs_max_tokens: int | None = None) -> None:
         super().__init__()
         self.max_tokens: Final = max_tokens
+        self.kwargs_max_tokens: Final = kwargs_max_tokens
 
     async def async_build_agentic_loop_plan(
         self,
-        tools: dict,
+        tools: dict[str, object],
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         response: object,
         anthropic_messages_provider_config: object,
-        anthropic_messages_optional_request_params: dict,
+        anthropic_messages_optional_request_params: dict[str, object],
         logging_obj: object,
         stream: bool,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> AgenticLoopPlan:
+        own_kwargs: Final = {} if self.kwargs_max_tokens is None else {"max_tokens": self.kwargs_max_tokens}
         return AgenticLoopPlan(
             run_agentic_loop=True,
             request_patch=AgenticLoopRequestPatch(
                 model="anthropic/claude-haiku-5-5",
                 messages=_messages_with_the_lookup_result(messages),
                 max_tokens=self.max_tokens,
-                kwargs={key: value for key, value in kwargs.items() if key != "litellm_logging_obj"},
+                kwargs={**_without_the_logging_obj(kwargs), **own_kwargs},
             ),
         )
 
@@ -2768,9 +2782,11 @@ class _PlannedLoop(_LookupLoop):
 @pytest.mark.parametrize(
     ("hook", "follow_up_max_tokens"),
     [
-        pytest.param(_OwnMaxTokensLoop(), 300, id="hook-passes-its-own-max-tokens"),
+        pytest.param(_OwnMaxTokensLoop(spreads="params"), 300, id="hook-spreads-the-params-with-its-own-max-tokens"),
+        pytest.param(_OwnMaxTokensLoop(spreads="kwargs"), 300, id="hook-spreads-the-kwargs-with-its-own-max-tokens"),
         pytest.param(_PlannedLoop(max_tokens=None), 4000, id="plan-leaves-max-tokens-to-the-client"),
         pytest.param(_PlannedLoop(max_tokens=300), 300, id="plan-sets-its-own-max-tokens"),
+        pytest.param(_PlannedLoop(max_tokens=None, kwargs_max_tokens=300), 300, id="plan-sets-max-tokens-in-kwargs"),
     ],
 )
 async def test_agentic_follow_up_uses_the_client_max_tokens_unless_the_hook_sets_its_own(
