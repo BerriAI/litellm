@@ -50,7 +50,13 @@ from litellm.litellm_core_utils.token_counter import (
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
-from litellm.types.utils import SelectTokenizerResponse
+from litellm.types.utils import (
+    ChatCompletionCustomToolCallPayload,
+    ChatCompletionMessageCustomToolCall,
+    ChatCompletionMessageToolCall,
+    Function,
+    SelectTokenizerResponse,
+)
 from tests.large_text import text
 from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
@@ -383,6 +389,146 @@ def test_token_counter_legacy_function_call_counts_arguments():
         f"got function_call={fc_tokens}, tool_calls={tc_tokens}"
     )
     assert fc_tokens > 500, f"4000-char arguments payload must contribute real tokens, got {fc_tokens}"
+
+
+def _tool_call_turn(tool_call: object) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "run the code"},
+        {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "done"},
+    ]
+
+
+_CUSTOM_CODE = "print('hello world from a custom tool')\n" * 50
+
+
+@pytest.mark.parametrize(
+    "custom_call",
+    (
+        {"id": "call_1", "type": "custom", "custom": {"name": "code_exec", "input": _CUSTOM_CODE}},
+        {"id": "call_1", "type": "custom", "function": None, "custom": {"name": "code_exec", "input": _CUSTOM_CODE}},
+        {"id": "call_1", "custom": {"name": "code_exec", "input": _CUSTOM_CODE}},
+    ),
+    ids=("typed", "sdk-shaped-null-function", "typeless"),
+)
+def test_token_counter_custom_tool_call_counts_input_like_function_arguments(custom_call: dict[str, object]):
+    custom_tokens = token_counter(model="gpt-4o", messages=_tool_call_turn(custom_call))
+    function_tokens = token_counter(
+        model="gpt-4o",
+        messages=_tool_call_turn(
+            {"id": "call_1", "type": "function", "function": {"name": "code_exec", "arguments": _CUSTOM_CODE}}
+        ),
+    )
+
+    assert custom_tokens == function_tokens, (
+        f"custom tool call input must count like function arguments, got {custom_tokens} vs {function_tokens}"
+    )
+    assert custom_tokens > 300, f"custom tool call input must contribute real tokens, got {custom_tokens}"
+
+
+@pytest.mark.parametrize(
+    ("sdk_call", "dict_call"),
+    (
+        (
+            ChatCompletionMessageToolCall(
+                id="call_1", type="function", function=Function(name="code_exec", arguments=_CUSTOM_CODE)
+            ),
+            {"id": "call_1", "type": "function", "function": {"name": "code_exec", "arguments": _CUSTOM_CODE}},
+        ),
+        (
+            ChatCompletionMessageCustomToolCall(
+                id="call_1", custom=ChatCompletionCustomToolCallPayload(name="code_exec", input=_CUSTOM_CODE)
+            ),
+            {"id": "call_1", "type": "custom", "custom": {"name": "code_exec", "input": _CUSTOM_CODE}},
+        ),
+        (
+            {"id": "call_1", "type": "function", "function": Function(name="code_exec", arguments=_CUSTOM_CODE)},
+            {"id": "call_1", "type": "function", "function": {"name": "code_exec", "arguments": _CUSTOM_CODE}},
+        ),
+    ),
+    ids=("function", "custom", "dict-holding-function-object"),
+)
+def test_token_counter_counts_reused_sdk_tool_call_objects_like_their_dicts(
+    sdk_call: object, dict_call: dict[str, object]
+):
+    sdk_tokens = token_counter(model="gpt-4o", messages=_tool_call_turn(sdk_call))
+
+    assert sdk_tokens == token_counter(model="gpt-4o", messages=_tool_call_turn(dict_call))
+    assert sdk_tokens > 300, f"a reused SDK tool call must contribute its payload tokens, got {sdk_tokens}"
+
+
+@pytest.mark.parametrize(
+    ("null_call", "empty_call"),
+    (
+        (
+            {"id": "call_1", "type": "custom", "custom": None},
+            {"id": "call_1", "type": "custom", "custom": {"name": "code_exec", "input": ""}},
+        ),
+        (
+            {"id": "call_1", "type": "function", "function": None},
+            {"id": "call_1", "type": "function", "function": {"name": "code_exec", "arguments": ""}},
+        ),
+    ),
+    ids=("custom", "function"),
+)
+def test_token_counter_null_tool_call_payload_counts_as_empty_call(
+    null_call: dict[str, object], empty_call: dict[str, object]
+):
+    assert token_counter(model="gpt-4o", messages=_tool_call_turn(null_call)) == token_counter(
+        model="gpt-4o", messages=_tool_call_turn(empty_call)
+    )
+
+
+def test_token_counter_rejects_tool_call_without_function_or_custom_payload():
+    with pytest.raises(ValueError, match="must contain a function or custom key"):
+        token_counter(model="gpt-4o", messages=_tool_call_turn({"id": "call_1", "type": "function"}))
+
+
+def test_token_counter_counts_custom_tool_definition_description_and_grammar():
+    messages = [{"role": "user", "content": "run the code"}]
+    grammar = "start: " + " | ".join(f'"command_{index}"' for index in range(100))
+
+    def custom_tool(**fields: object) -> dict[str, object]:
+        return {"type": "custom", "custom": {"name": "code_exec", **fields}}
+
+    no_tools = token_counter(model="gpt-4o", messages=messages)
+    bare = token_counter(model="gpt-4o", messages=messages, tools=[custom_tool()])
+    described = token_counter(
+        model="gpt-4o",
+        messages=messages,
+        tools=[
+            custom_tool(
+                description="Runs one shell command",
+                format={"type": "grammar", "grammar": {"syntax": "lark", "definition": grammar}},
+            )
+        ],
+    )
+
+    assert bare > no_tools, f"a custom tool's name must count, got {bare} vs {no_tools} without tools"
+    assert described - bare > 300, f"description and grammar must count, got {described} vs {bare} bare"
+
+
+def test_token_counter_counts_responses_shaped_custom_tool_like_the_chat_shape():
+    messages = [{"role": "user", "content": "run the code"}]
+    grammar = "start: " + " | ".join(f'"command_{index}"' for index in range(100))
+    chat_tool = {
+        "type": "custom",
+        "custom": {
+            "name": "code_exec",
+            "description": "Runs one shell command",
+            "format": {"type": "grammar", "grammar": {"syntax": "lark", "definition": grammar}},
+        },
+    }
+    responses_tool = {
+        "type": "custom",
+        "name": "code_exec",
+        "description": "Runs one shell command",
+        "format": {"type": "grammar", "syntax": "lark", "definition": grammar},
+    }
+
+    assert token_counter(model="gpt-4o", messages=messages, tools=[responses_tool]) == token_counter(
+        model="gpt-4o", messages=messages, tools=[chat_tool]
+    )
 
 
 @pytest.mark.parametrize(
@@ -744,6 +890,7 @@ def test_token_counter_counts_anthropic_tool_choices_like_openai_choices(
         {**_anthropic_tool(_WEATHER_FUNCTION), "strict": True},
         {**_anthropic_tool(_WEATHER_FUNCTION), "defer_loading": True, "input_examples": [{"location": "Paris"}]},
         {**_anthropic_tool(_WEATHER_FUNCTION), "custom": {"eager_input_streaming": True}},
+        {**_anthropic_tool(_WEATHER_FUNCTION), "type": "custom", "custom": {"eager_input_streaming": True}},
         _anthropic_tool(_WEB_SEARCH_FUNCTION),
     ],
 )
