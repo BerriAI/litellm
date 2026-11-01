@@ -90,7 +90,7 @@ from mcp.types import (
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl, TypeAdapter
+from pydantic import AnyUrl, Field, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -243,6 +243,14 @@ def as_mcp_read_timeout(exc: BaseException) -> TimeoutError | None:
 TSessionResult = TypeVar("TSessionResult")
 _ListPage = TypeVar("_ListPage", ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult)
 _ListItem = TypeVar("_ListItem")
+
+
+class _LenientListPromptsResult(ListPromptsResult):
+    prompts: list[Prompt] = Field(default_factory=list)  # mutable-ok: MCP result model owns the decoded list
+
+
+class _LenientListResourcesResult(ListResourcesResult):
+    resources: list[Resource] = Field(default_factory=list)  # mutable-ok: MCP result model owns the decoded list
 
 
 async def _run_bounded_cleanup(operation: Callable[[], Awaitable[TSessionResult]], deadline: float) -> TSessionResult:
@@ -1310,7 +1318,8 @@ class MCPClient:
                 return ListPromptsResult(prompts=[])
             try:
                 items, freshness = await self._list_optional_pages(
-                    lambda params: session.list_prompts(params=params), lambda page: page.prompts
+                    lambda params: session.send_request(ListPromptsRequest(params=params), _LenientListPromptsResult),
+                    lambda page: page.prompts,
                 )
                 return ListPromptsResult(prompts=items, ttl_ms=freshness.ttl_ms, cache_scope=freshness.cache_scope)
             except MCPError as error:
@@ -1423,7 +1432,10 @@ class MCPClient:
                 return ListResourcesResult(resources=[])
             try:
                 items, freshness = await self._list_optional_pages(
-                    lambda params: session.list_resources(params=params), lambda page: page.resources
+                    lambda params: session.send_request(
+                        ListResourcesRequest(params=params), _LenientListResourcesResult
+                    ),
+                    lambda page: page.resources,
                 )
                 return ListResourcesResult(resources=items, ttl_ms=freshness.ttl_ms, cache_scope=freshness.cache_scope)
             except MCPError as error:
