@@ -4112,6 +4112,64 @@ async def test_stream_without_provider_usage_logs_the_estimate_with_the_final_ch
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_final_chunk_mcp_metadata_survives_include_usage_on_sync_and_async(sync_mode: bool) -> None:
+    """
+    stream_options.include_usage must not suppress the final chunk's MCP metadata.
+
+    The sync path used to gate _add_mcp_metadata_to_final_chunk behind
+    `stream_options is None`, so sync consumers iterating with include_usage lost
+    the mcp_tool_calls / mcp_call_results that the async path kept surfacing on
+    the finish_reason chunk (e.g. metadata stashed by the proxy MCP gateway).
+    """
+    model: Final = "gpt-4o"
+    text: Final = "The quick brown fox jumps over the lazy dog."
+    tool_calls: Final = [{"name": "lookup_fox", "arguments": "{}"}]
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion" if sync_mode else "acompletion",
+        start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+        litellm_call_id="mcp-include-usage-call",
+        function_id="mcp-include-usage-fn",
+    )
+    logging_obj.update_environment_variables(
+        model=model, user=None, optional_params={}, litellm_params={"litellm_call_id": "mcp-include-usage-call"}
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[
+                ModelResponseStream(id="chatcmpl-mcp-usage", created=1741037890, model=model, choices=choices)
+                for choices in (
+                    [StreamingChoices(index=0, delta=Delta(role="assistant", content=text))],
+                    [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+                )
+            ]
+        ),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+    _add_mcp_metadata_to_response(wrapper, openai_tools=None, tool_calls=tool_calls)
+
+    yielded: Final = [chunk for chunk in wrapper] if sync_mode else [chunk async for chunk in wrapper]
+
+    finish_chunks: Final = [chunk for chunk in yielded if chunk.choices and chunk.choices[0].finish_reason is not None]
+    assert len(finish_chunks) == 1
+    assert finish_chunks[0].choices[0].delta.provider_specific_fields == {"mcp_tool_calls": tool_calls}
+
+    # Content chunks stay untouched, mirroring the async path.
+    content_chunks: Final = [
+        chunk for chunk in yielded if chunk.choices and chunk.choices[0].finish_reason is None
+    ]
+    assert content_chunks
+    for chunk in content_chunks:
+        assert (getattr(chunk.choices[0].delta, "provider_specific_fields", None) or {}).get("mcp_tool_calls") is None
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("ends_with_finish_chunk", [True, False])
 @pytest.mark.parametrize("reported_tokens", [(30, 12), (0, 0)])
 @pytest.mark.asyncio
