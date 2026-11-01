@@ -396,6 +396,10 @@ AIOHTTP_CONNECTOR_LIMIT: Final = get_env_int("AIOHTTP_CONNECTOR_LIMIT", 1000)
 AIOHTTP_CONNECTOR_LIMIT_PER_HOST: Final = get_env_int("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 500)
 AIOHTTP_KEEPALIVE_TIMEOUT: Final = get_env_int("AIOHTTP_KEEPALIVE_TIMEOUT", 15)
 AIOHTTP_TTL_DNS_CACHE: Final = get_env_int("AIOHTTP_TTL_DNS_CACHE", 300)
+# Raised above aiohttp's 8190 default so large response headers (e.g. GitHub CSP on OAuth
+# token exchange) parse instead of raising LineTooLong. https://github.com/BerriAI/litellm/issues/48468
+AIOHTTP_MAX_FIELD_SIZE: Final = get_env_int("AIOHTTP_MAX_FIELD_SIZE", 32768)
+AIOHTTP_MAX_LINE_SIZE: Final = get_env_int("AIOHTTP_MAX_LINE_SIZE", 32768)
 # TCP keep-alive (SO_KEEPALIVE) — opt-in. Required when running behind NAT/LBs
 # whose idle timeout is shorter than provider response timeouts (e.g. AWS NAT
 # Gateway: 350s vs OpenAI/Azure: 600s). Without this, the kernel sends nothing
