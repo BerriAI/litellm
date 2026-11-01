@@ -541,6 +541,9 @@ jobs:
       - name: test_workflow_job_name_collisions
         run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_workflow_job_name_collisions.py
 
+      - name: test_migration_impact
+        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_migration_impact.py
+
       - name: test_unit_passed_gate
         run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_unit_passed_gate.py
 
