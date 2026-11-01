@@ -6,7 +6,14 @@ import pytest
 from click.testing import CliRunner
 
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
-from litellm.proxy.rust_gateway import child_argv, cli_command, gateway_binary, inherited_fd, startup_error
+from litellm.proxy.rust_gateway import (
+    child_argv,
+    cli_command,
+    gateway_binary,
+    inherited_fd,
+    metrics_host,
+    startup_error,
+)
 
 
 @pytest.mark.parametrize(
@@ -39,6 +46,19 @@ def test_missing_binary_gives_install_instruction() -> None:
     assert startup_error(None, {}) == (
         "--rust_gateway requires the litellm-gateway binary. Install litellm[proxy] in this environment"
     )
+
+
+@pytest.mark.parametrize("supervised", [False, True])
+@pytest.mark.parametrize("host", ["0.0.0.0", "192.0.2.1", "::"])
+def test_metrics_keep_configured_host_separate_from_private_listener(
+    supervised: bool, host: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("_LITELLM_GATEWAY_METRICS_HOST", host)
+    if supervised:
+        monkeypatch.setenv("_LITELLM_GATEWAY_FD", "17")
+    else:
+        monkeypatch.delenv("_LITELLM_GATEWAY_FD", raising=False)
+    assert metrics_host("127.0.0.1") == (host if supervised else "127.0.0.1")
 
 
 def test_current_environment_binary_wins_over_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

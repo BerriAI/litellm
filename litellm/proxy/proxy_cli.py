@@ -819,7 +819,7 @@ class ProxyInitializationHelpers:
     _run_ollama_serve = run_ollama_serve
 
     @staticmethod
-    def is_port_in_use(port):
+    def is_port_in_use(port: int):
         import socket
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -1221,8 +1221,8 @@ class ProxyInitializationHelpers:
 )
 def run_server(
     cli_args,
-    host,
-    port,
+    host: str,
+    port: int,
     api_base,
     api_version,
     model,
@@ -1252,7 +1252,7 @@ def run_server(
     setup,
     version,
     run_gunicorn,
-    rust_gateway,
+    rust_gateway: bool,
     run_hypercorn,
     run_granian,
     ssl_keyfile_path,
@@ -1298,7 +1298,7 @@ def run_server(
         from litellm.proxy.rust_gateway import cli_command, gateway_binary, startup_error, supervise
 
         binary: Final = gateway_binary()
-        error: Final = startup_error(
+        gateway_error: Final = startup_error(
             binary,
             {
                 "--ssl_keyfile_path": ssl_keyfile_path,
@@ -1308,10 +1308,13 @@ def run_server(
                 "--run_granian": run_granian,
             },
         )
-        if error is not None:
-            raise click.ClickException(error)
+        if gateway_error is not None:
+            raise click.ClickException(gateway_error)
         assert binary is not None
-        raise SystemExit(supervise(binary, cli_command(sys.argv[1:]), host, port))
+        public_port: Final = (
+            random.randint(1024, 49152) if port == 4000 and ProxyInitializationHelpers.is_port_in_use(port) else port
+        )
+        raise SystemExit(supervise(binary, cli_command(sys.argv[1:]), host, public_port))
 
     args: Final = locals()
     try:
@@ -1761,15 +1764,17 @@ def run_server(
 
         if prometheus_metrics_port is not None and prometheus_multiproc_dir is not None:
             from litellm.proxy.prometheus_metrics_server import MetricsServerStartupError, start_metrics_server_process
+            from litellm.proxy.rust_gateway import metrics_host
 
+            metrics_bind_host: Final = metrics_host(host)
             try:
                 metrics_process: Final = start_metrics_server_process(
-                    host=host, port=prometheus_metrics_port, multiproc_dir=prometheus_multiproc_dir
+                    host=metrics_bind_host, port=prometheus_metrics_port, multiproc_dir=prometheus_multiproc_dir
                 )
             except MetricsServerStartupError as error:
                 raise click.ClickException(str(error)) from error
             print_startup_message(
-                f"\033[1;32mLiteLLM: Serving Prometheus metrics on {host}:{prometheus_metrics_port}/metrics "
+                f"\033[1;32mLiteLLM: Serving Prometheus metrics on {metrics_bind_host}:{prometheus_metrics_port}/metrics "
                 f"(pid {metrics_process.pid})\033[0m"
             )
 
