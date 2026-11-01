@@ -3092,14 +3092,19 @@ def token_counter(
 
 def supports_httpx_timeout(custom_llm_provider: str) -> bool:
     """
-    Helper function to know if a provider implementation supports httpx timeout
+    Helper function to know if a provider implementation supports httpx.Timeout.
+
+    LiteLLM's own httpx handlers (and the OpenAI/Azure/Bedrock SDKs) accept
+    ``httpx.Timeout`` objects, preserving connect/read/write/pool components.
+    Returning False collapses the object to a single float (the read timeout),
+    which drops the connect timeout and is incorrect for every provider that
+    uses httpx under the hood.
+
+    Historically this was an allowlist of three providers; that caused
+    connect timeouts to be ignored for mistral and many others. Prefer True
+    unless a specific provider is known to reject ``httpx.Timeout``.
     """
-    supported_providers: Final = ["openai", "azure", "bedrock"]
-
-    if custom_llm_provider in supported_providers:
-        return True
-
-    return False
+    return True
 
 
 def supports_system_messages(model: str, custom_llm_provider: str | None) -> bool:
