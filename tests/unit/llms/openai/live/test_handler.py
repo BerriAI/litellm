@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from datetime import datetime
 from typing import Final, NoReturn, cast
 
@@ -13,11 +13,13 @@ from websockets.frames import Close
 from websockets.http11 import Response
 
 import litellm
+from litellm import Router
 from litellm.constants import REALTIME_SESSION_SUCCESS_LOGGED_KEY, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.cost_calculator import handle_realtime_stream_cost_calculation
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.openai.live import handler as live_handler
 from litellm.llms.openai.live.handler import LiveSessionStart, OpenAILiveSessions, parse_live_session_start
+from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.types.utils import LiteLLMRealtimeStreamLoggingObject, Usage
 
 _LIVE_EVENT_FRAME_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -1206,3 +1208,91 @@ async def test_async_live_session_reports_redacted_server_error_and_bounds_close
     finally:
         if worker.coroutine is not None:
             await worker.coroutine
+
+
+_LIVE_SESSION_STARTED: Final = '{"type":"session.started","session":{"model":"gpt-live-1"}}'
+_LIVE_SESSION_CLOSED: Final = '{"type":"session.closed","usage":{"seconds":4}}'
+
+
+def _upstream_closing_the_session() -> _FakeUpstream:
+    return _FakeUpstream(client_frames=(), upstream_frames=(_LIVE_SESSION_STARTED, _LIVE_SESSION_CLOSED))
+
+
+def _upstream_failing_after_a_frame() -> _FakeUpstream:
+    return _FakeUpstream(
+        client_frames=(),
+        upstream_frames=(_LIVE_SESSION_STARTED,),
+        close_error=ConnectionClosedError(Close(code=1011, reason="upstream failed"), None),
+    )
+
+
+def _upstream_dropping_after_a_frame() -> _FakeUpstream:
+    return _FakeUpstream(
+        client_frames=(), upstream_frames=(_LIVE_SESSION_STARTED,), close_error=ConnectionClosedError(None, None)
+    )
+
+
+def _upstream_failing_a_client_send() -> _FakeUpstream:
+    return _FakeUpstream(
+        client_frames=(),
+        upstream_frames=(_LIVE_SESSION_STARTED,),
+        close_response=_LIVE_SESSION_CLOSED,
+        fail_on_send_type="conversation.item.create",
+        send_error=OSError("upstream socket write failed"),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("upstream_factory", "counted_successes"),
+    [
+        (_upstream_closing_the_session, 1),
+        (_upstream_failing_after_a_frame, 0),
+        (_upstream_dropping_after_a_frame, 0),
+        (_upstream_failing_a_client_send, 0),
+    ],
+    ids=["session-closed", "upstream-1011-after-a-frame", "upstream-1006-after-a-frame", "upstream-send-failed"],
+)
+async def test_live_session_counts_a_router_success_only_when_it_ended_cleanly(
+    upstream_factory: Callable[[], _FakeUpstream], counted_successes: int
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": "live-voice", "litellm_params": {"model": "openai/gpt-live-1"}, "model_info": {"id": "live-a"}}
+        ],
+        num_retries=0,
+    )
+    worker: Final = _FakeLoggingWorker()
+
+    async def _arealtime(litellm_logging_obj: Logging, **kwargs: object) -> None:
+        await OpenAILiveSessions(
+            logging_worker=worker, websocket_connector=_FakeConnector(upstream_factory())
+        ).async_live_session(
+            model="gpt-live-1",
+            websocket=_FakeClientWebSocket(messages=('{"type":"conversation.item.create"}',)),
+            logging_obj=litellm_logging_obj,
+            session_start={"type": "session.start", "session": {"model": "gpt-live-1"}},
+            api_base="https://api.openai.com/",
+            api_key="live-test-key",
+        )
+
+    await asyncio.wait_for(
+        router._ageneric_api_call_with_fallbacks(
+            model="live-voice",
+            original_function=_arealtime,
+            litellm_logging_obj=Logging(
+                model="gpt-live-1",
+                messages=[],
+                stream=False,
+                call_type="_arealtime",
+                start_time=datetime.now(),
+                litellm_call_id="live-session",
+                function_id="live-session",
+            ),
+        ),
+        timeout=5,
+    )
+
+    if worker.coroutine is not None:
+        worker.coroutine.close()
+    assert get_deployment_successes_for_current_minute(router, "live-a") == counted_successes

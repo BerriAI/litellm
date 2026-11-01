@@ -451,6 +451,7 @@ OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES: Final = frozenset(
     {"response.completed", "response.incomplete", "response.failed"}
 )
 REALTIME_SESSION_FAILURE_LOGGED_KEY: Final = "realtime_session_failure_logged"
+REALTIME_SESSION_ENDED_ABNORMALLY_KEY: Final = "realtime_session_ended_abnormally"
 
 # SSL/TLS cipher configuration for faster handshakes
 # Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones

@@ -84,6 +84,8 @@ from litellm.constants import (
     MID_STREAM_FAILURE_LOG_WAIT_SECONDS,
     OUTPUT_TOKEN_CEILING_PARAMS,
     PROMPT_CACHE_PIN_CACHE_MAX_SIZE,
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
@@ -668,6 +670,7 @@ _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType
 _NO_DEFAULT_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_CALL_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
@@ -6865,6 +6868,22 @@ class PythonCore(DeprecatedRouterMembers):
                 raise safeguard_refusal_error(model=model, stop_details=refusal_details)
 
             self.success_calls[model_name] += 1
+            realtime_session_logging: Final = (
+                _CALL_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_logging_obj")
+                if generic_function_name == "_arealtime"
+                else None
+            )
+            realtime_session_deployment_id: Final = (
+                _MODEL_INFO_ADAPTER.validate_python(kwargs["model_info"]).get("id")
+                if isinstance(realtime_session_logging, LiteLLMLogging)
+                and realtime_session_logging.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
+                and realtime_session_logging.model_call_details.get(REALTIME_SESSION_ENDED_ABNORMALLY_KEY) is not True
+                else None
+            )
+            if realtime_session_deployment_id is not None:
+                increment_deployment_successes_for_current_minute(
+                    ctx=self._core_ctx, deployment_id=str(realtime_session_deployment_id)
+                )
             verbose_router_logger.info("ageneric_api_call_with_fallbacks(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
             return response

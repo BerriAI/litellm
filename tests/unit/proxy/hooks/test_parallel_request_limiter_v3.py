@@ -3712,6 +3712,41 @@ async def test_failure_event_refunds_reservation_for_input_only_estimate_v3():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_first", [True, False])
+@pytest.mark.parametrize(
+    ("response_obj", "used_tokens"),
+    [
+        ([], 0),
+        (ModelResponse(usage=Usage(prompt_tokens=20, completion_tokens=10, total_tokens=30)), 30),
+    ],
+)
+async def test_a_request_logging_a_failure_and_a_success_settles_its_reservation_once_v3(
+    failure_first: bool, response_obj: object, used_tokens: int
+) -> None:
+    api_key: Final = hash_token("sk-failure-and-success")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key: Final = handler.create_rate_limit_keys(key="api_key", value=api_key, rate_limit_type="tokens")
+    await _reserve_tpm_for_owner_call(handler, local_cache, api_key, "dropped-call")
+    kwargs: Final = {
+        "litellm_call_id": "dropped-call",
+        "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
+    }
+    now: Final = datetime.now()
+    log_failure: Final = partial(
+        handler.async_log_failure_event, kwargs=dict(kwargs), response_obj=None, start_time=now, end_time=now
+    )
+    log_success: Final = partial(
+        handler.async_log_success_event, kwargs=dict(kwargs), response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    for log_event in (log_failure, log_success) if failure_first else (log_success, log_failure):
+        await log_event()
+
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == used_tokens
+
+
+@pytest.mark.asyncio
 async def test_post_call_failure_hook_settles_reservation_at_recovered_partial_usage_v3():
     """
     Pass-through streams report a mid-stream failure through the proxy-level
@@ -4197,6 +4232,125 @@ async def test_failure_event_settles_project_itpm_otpm_at_recovered_partial_usag
     assert int(await local_cache.async_get_cache(key=itpm_key) or 0) == 20
     assert int(await local_cache.async_get_cache(key=otpm_key) or 0) == 7
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_first", [True, False])
+async def test_a_request_logging_a_failure_and_a_success_settles_its_project_itpm_otpm_once_v3(
+    failure_first: bool,
+) -> None:
+    api_key: Final = hash_token("sk-failure-and-success-project-io")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    await handler.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=api_key,
+            project_id="proj-dropped",
+            project_metadata={
+                "model_itpm_limit": {"gpt-4o-mini": 10_000},
+                "model_otpm_limit": {"gpt-4o-mini": 10_000},
+            },
+        ),
+        cache=local_cache,
+        data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 50,
+            "litellm_call_id": "dropped-project-call",
+        },
+        call_type="completion",
+    )
+    itpm_key: Final = handler.create_rate_limit_keys(
+        key="model_per_project_itpm", value="proj-dropped:gpt-4o-mini", rate_limit_type="tokens"
+    )
+    otpm_key: Final = handler.create_rate_limit_keys(
+        key="model_per_project_otpm", value="proj-dropped:gpt-4o-mini", rate_limit_type="tokens"
+    )
+    kwargs: Final = {
+        "litellm_call_id": "dropped-project-call",
+        "model": "gpt-4o-mini",
+        "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
+    }
+    now: Final = datetime.now()
+    log_failure: Final = partial(
+        handler.async_log_failure_event, kwargs=dict(kwargs), response_obj=None, start_time=now, end_time=now
+    )
+    log_success: Final = partial(
+        handler.async_log_success_event,
+        kwargs=dict(kwargs),
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=20, completion_tokens=7, total_tokens=27)),
+        start_time=now,
+        end_time=now,
+    )
+
+    for log_event in (log_failure, log_success) if failure_first else (log_success, log_failure):
+        await log_event()
+
+    assert int(await local_cache.async_get_cache(key=itpm_key) or 0) == 20
+    assert int(await local_cache.async_get_cache(key=otpm_key) or 0) == 7
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_made_after_a_released_one_in_the_same_context_settles_at_its_usage_v3() -> None:
+    api_key: Final = hash_token("sk-second-reservation")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key=api_key,
+        tpm_limit=10_000,
+        project_id="proj-second",
+        project_metadata={
+            "model_itpm_limit": {"gpt-4o-mini": 10_000},
+            "model_otpm_limit": {"gpt-4o-mini": 10_000},
+        },
+    )
+    now: Final = datetime.now()
+
+    async def reserve(call_id: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 50,
+                "litellm_call_id": call_id,
+            },
+            call_type="completion",
+        )
+
+    def logged(call_id: str) -> dict[str, object]:
+        return {
+            "litellm_call_id": call_id,
+            "model": "gpt-4o-mini",
+            "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
+        }
+
+    await reserve("first-call")
+    await handler.async_log_failure_event(kwargs=logged("first-call"), response_obj=None, start_time=now, end_time=now)
+    await reserve("second-call")
+    await handler.async_log_success_event(
+        kwargs=logged("second-call"),
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=20, completion_tokens=7, total_tokens=27)),
+        start_time=now,
+        end_time=now,
+    )
+
+    counters: Final = {
+        "tokens": ("api_key", api_key),
+        "itpm": ("model_per_project_itpm", "proj-second:gpt-4o-mini"),
+        "otpm": ("model_per_project_otpm", "proj-second:gpt-4o-mini"),
+    }
+    settled: Final = {
+        name: int(
+            await local_cache.async_get_cache(
+                key=handler.create_rate_limit_keys(key=key, value=value, rate_limit_type="tokens")
+            )
+            or 0
+        )
+        for name, (key, value) in counters.items()
+    }
+    assert settled == {"tokens": 27, "itpm": 20, "otpm": 7}
 
 # ----------------------- Per-MCP-server rate limiting (v3) -----------------------
 

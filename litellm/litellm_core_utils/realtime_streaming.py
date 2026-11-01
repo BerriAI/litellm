@@ -19,6 +19,7 @@ from litellm.constants import (
     REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS,
     REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
     REALTIME_METERED_USAGE_KEY,
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
@@ -56,6 +57,10 @@ else:
 class BackendClose:
     code: int
     reason: str
+
+    @property
+    def ended_cleanly(self) -> bool:
+        return self.code == 1000
 
     @property
     def message(self) -> str:
@@ -2025,7 +2030,10 @@ class RealTimeStreaming:
             await asyncio.wait((forward_task, client_task), return_when=asyncio.FIRST_COMPLETED)
             if client_task.done() and client_task.result() is ClientLoopExit.CLIENT_DISCONNECTED:
                 return
-            await self._close_client(await forward_task)
+            close: Final = await forward_task
+            if not close.ended_cleanly and self.logging_obj:
+                self.logging_obj.model_call_details[REALTIME_SESSION_ENDED_ABNORMALLY_KEY] = True
+            await self._close_client(close)
         finally:
             forward_task.cancel()
             client_task.cancel()
@@ -2035,7 +2043,7 @@ class RealTimeStreaming:
         redacted_message: Final = redact_internal_details_from_client_message(close.message)
         redacted_reason: Final = redact_internal_details_from_client_message(close.reason)
         try:
-            if close.code != 1000:
+            if not close.ended_cleanly:
                 await self.websocket.send_text(realtime_error_event(redacted_message, error_type="server_error"))
             await self.websocket.close(
                 code=client_close_code(close.code),

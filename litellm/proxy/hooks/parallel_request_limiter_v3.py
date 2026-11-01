@@ -749,6 +749,17 @@ class RequestRateLimiterStash:
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
     socket_agent_windows: tuple[RateLimitDescriptor, ...] = ()
 
+    def clear_reserved_tokens(self) -> None:
+        self.reserved_tokens = 0
+        self.ptu_reserved_tokens = 0
+        self.itpm_reserved_tokens = 0
+        self.otpm_reserved_tokens = 0
+
+    def discard_released_reservation(self) -> None:
+        if self.reservation_released:
+            self.clear_reserved_tokens()
+            self.reservation_released = False
+
 
 @dataclass(frozen=True, slots=True)
 class CounterRefund:
@@ -4238,6 +4249,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 requested_model=requested_model,
             )
 
+        stash.discard_released_reservation()
         if itpm_reserved > 0:
             itpm_scopes: Final = tuple(
                 (d["key"], d["value"]) for d in io_token_descriptors if d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY
@@ -4597,6 +4609,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     # incremented so post-call reconciliation only applies
                     # the (actual - reserved) delta to those — unreserved
                     # scopes get charged the full actual usage instead.
+                    stash.discard_released_reservation()
                     stash.reserved_tokens = estimated_tokens
                     stash.ptu_reserved_tokens = ptu_estimated_tokens
                     stash.ptu_reserved_window_identities = frozenset(
@@ -5402,7 +5415,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             total_tokens = self._aggregate_only_total_tokens(usage=_usage)
 
         stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
-        reserved_tokens: Final = stash.reserved_tokens if stash is not None else 0
+        open_reservation: Final = stash if stash is not None and not stash.reservation_released else None
+        reserved_tokens: Final = open_reservation.reserved_tokens if open_reservation is not None else 0
         reserved_model: Final = stash.reserved_model if stash is not None else None
         reserved_scopes: Final[frozenset[tuple[str, str]]] = stash.reserved_scopes if stash is not None else frozenset()
         # Reconciliation must target the same model-scoped counter that the
@@ -5464,7 +5478,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 reconcile_model=reconcile_model,
                 reserved_scopes=reserved_scopes,
                 reserved_ceiling=stash.ptu_ceiling if stash is not None else None,
-                reserved_tokens=stash.ptu_reserved_tokens if stash is not None else 0,
+                reserved_tokens=open_reservation.ptu_reserved_tokens if open_reservation is not None else 0,
                 reserved_windows=stash.ptu_reserved_window_identities if stash is not None else frozenset(),
                 total_tokens=0 if ptu_skips_socket_usage else total_tokens,
             )
@@ -5584,6 +5598,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         pipeline_operations=io_token_operations,
                         parent_otel_span=litellm_parent_otel_span,
                     )
+            if stash is not None:
+                stash.clear_reserved_tokens()
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit success event: %s", e)
