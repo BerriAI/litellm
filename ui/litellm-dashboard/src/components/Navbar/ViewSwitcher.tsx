@@ -1,3 +1,4 @@
+import { useTranslation } from "@/i18n/useTranslation";
 import { useTerminology } from "@/contexts/TerminologyContext";
 import React from "react";
 import Image from "next/image";
@@ -32,8 +33,9 @@ function activeWorkspaceFor(
   isMoyaiRoute: boolean,
   pluginLabel: string | undefined,
   gatewayLabel: string,
+  chatLabel: string,
 ): { label: string; icon: WorkspaceIconName } {
-  if (isChatRoute) return { label: "Chat", icon: CHAT };
+  if (isChatRoute) return { label: chatLabel, icon: CHAT };
   if (isMoyaiRoute) return { label: "Moyai", icon: MOYAI };
   return { label: pluginLabel ?? gatewayLabel, icon: GATEWAY };
 }
@@ -81,6 +83,7 @@ interface ViewSwitcherProps {
 }
 
 export default function ViewSwitcher({ className, contentClassName }: ViewSwitcherProps) {
+  const { t } = useTranslation();
   const term = useTerminology();
   const { mode, setMode, plugins } = usePluginMode();
   const { data: uiSettings } = useUISettings();
@@ -94,12 +97,13 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
   const isMoyaiRoute = isWorkspaceRoute(normalizedPathname, MOYAI);
   const isStandaloneRoute = isChatRoute || isMoyaiRoute;
 
-  const gatewayLabel = term("AI Gateway");
+  const gatewayLabel = term(t("AI Gateway"));
   const { label: activeLabel, icon: activeIcon } = activeWorkspaceFor(
     isChatRoute,
     isMoyaiRoute,
     plugins.find((p) => p.name === mode)?.display_name,
     gatewayLabel,
+    t("Chat"),
   );
 
   const modeEntries = [
@@ -122,11 +126,13 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
         <span className="flex items-center gap-2">
           <WorkspaceIcon workspace={CHAT} />
           <span className="flex max-w-[220px] flex-col">
-            <span className="font-medium">Chat</span>{" "}
-            <span className="text-xs leading-snug text-muted-foreground">Chat UI for using LLMs, MCPs, Agents</span>{" "}
+            <span className="font-medium">{t("Chat")}</span>{" "}
+            <span className="text-xs leading-snug text-muted-foreground">
+              {t("Chat UI for using LLMs, MCPs, Agents")}
+            </span>{" "}
             {!chatEnabled && (
               <span className="whitespace-normal text-xs leading-snug text-muted-foreground">
-                Admins can enable in Settings
+                {t("Admins can enable in Settings")}
               </span>
             )}
           </span>
@@ -160,7 +166,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
             <WorkspaceIcon workspace={MOYAI} />
             <span className="flex flex-col">
               <span className="font-medium">Moyai</span>{" "}
-              <span className="text-xs leading-snug text-muted-foreground">Cloud Coding Agent</span>
+              <span className="text-xs leading-snug text-muted-foreground">{t("Cloud Coding Agent")}</span>
             </span>
           </span>
           {isMoyaiRoute && <Check className="size-4 text-info" />}
@@ -173,7 +179,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label={`Switch workspace, current: ${activeLabel}`}
+        aria-label={t("Switch workspace, current: {{workspace}}", { workspace: activeLabel })}
         render={
           <Button
             type="button"
