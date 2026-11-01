@@ -4567,6 +4567,7 @@ class LlmProviders(str, Enum):
     PERPLEXITY = "perplexity"
     TYPESAFE = "typesafe"
     NACE = "nace"
+    TURION = "turion"
     STRANDS_DECIDER = "strands_decider"
     LAYA = "laya"
     BESPOKE = "bespoke"

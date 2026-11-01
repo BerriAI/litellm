@@ -347,7 +347,7 @@ def test_a_box_answer_without_confidence_reaches_the_caller_unchanged() -> None:
     assert response.model_dump(mode="json") == payload
 
 
-@pytest.mark.parametrize("provider", ("nace", "openrouter", "fireworks_ai", "typesafe"))
+@pytest.mark.parametrize("provider", ("nace", "openrouter", "fireworks_ai", "typesafe", "turion"))
 @pytest.mark.parametrize("legend", (["low", "high"], {"0": "low", "1": "high"}))
 def test_score_legends_preserve_labels_probabilities_and_metadata(provider: str, legend: object) -> None:
     config: Final = ProviderConfigManager.get_provider_decisions_config("drex-v2.0", LlmProviders(provider))
@@ -393,7 +393,7 @@ def test_score_legends_preserve_labels_probabilities_and_metadata(provider: str,
 @pytest.mark.parametrize(
     "payload", ([], {"answers": []}, {"answers": {"a": None}}, {"answers": {"a": {"type": "score", "legend": [1]}}})
 )
-@pytest.mark.parametrize("provider", ("nace", "openrouter", "fireworks_ai", "typesafe"))
+@pytest.mark.parametrize("provider", ("nace", "openrouter", "fireworks_ai", "typesafe", "turion"))
 def test_invalid_provider_response_is_an_api_error(payload: object, provider: str) -> None:
     config: Final = ProviderConfigManager.get_provider_decisions_config("drex-v2.0", LlmProviders(provider))
     assert config is not None
@@ -457,7 +457,7 @@ def test_score_probabilities_preserve_missing_entries_and_explicit_zeros(
 
 
 @pytest.mark.parametrize("raw_content", (b"", b"not-json", b'{"answers":'))
-@pytest.mark.parametrize("provider", ("nace", "openrouter", "fireworks_ai", "typesafe", "openai"))
+@pytest.mark.parametrize("provider", ("nace", "openrouter", "fireworks_ai", "typesafe", "turion", "openai"))
 def test_non_json_provider_response_is_an_api_error(raw_content: bytes, provider: str) -> None:
     config: Final = ProviderConfigManager.get_provider_decisions_config("drex-v2.0", LlmProviders(provider))
     assert config is not None

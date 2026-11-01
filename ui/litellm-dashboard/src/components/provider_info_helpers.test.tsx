@@ -263,6 +263,7 @@ describe("provider_info_helpers", () => {
         Providers.PREDIBASE,
         Providers.Sail,
         Providers.StreamLake,
+        Providers.Turion,
         Providers.WANDB,
         Providers.ZAI,
         Providers.ZeroGPU,
@@ -585,6 +586,20 @@ describe("provider_info_helpers", () => {
       expect(getProviderModels(Providers.Nace, modelMap)).toEqual(["nace/drex-latest"]);
       expect(getProviderLogoAndName("nace").displayName).toBe("Nace");
       expect(getPlaceholder("Nace")).toBe("nace/drex-latest");
+    });
+
+    it("lists Turion's decision and extraction models and resolves the provider name and model placeholder", () => {
+      const modelMap = {
+        "turion/turion-jev-31b": { litellm_provider: "turion", mode: "evaluation" },
+        "turion/turion-extract-alpha": { litellm_provider: "turion", mode: "extraction" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+      };
+      expect(getProviderModels(Providers.Turion, modelMap)).toEqual([
+        "turion/turion-jev-31b",
+        "turion/turion-extract-alpha",
+      ]);
+      expect(getProviderLogoAndName("turion").displayName).toBe("Turion");
+      expect(getPlaceholder("Turion")).toBe("turion/turion-jev-31b");
     });
 
     it("should list only typesafe decision models for the 'TypeSafe' provider key, not the OpenRouter-hosted one", () => {
