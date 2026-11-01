@@ -4118,7 +4118,6 @@ class PrometheusLogger(CustomLogger):
         """
         Initialize API key budget metrics by reusing the generic pagination logic.
         """
-        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             list_key_helper,
         )
@@ -4142,7 +4141,6 @@ class PrometheusLogger(CustomLogger):
                 team_id=None,
                 key_alias=None,
                 key_hash=None,
-                exclude_team_id=UI_SESSION_TOKEN_TEAM_ID,
                 return_full_object=True,
                 organization_id=None,
             )
