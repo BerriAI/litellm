@@ -112,6 +112,7 @@ _EXPLICIT_SESSION_HEADERS: Final = frozenset({"x-litellm-trace-id", "x-litellm-s
 # ``session-id``/``thread-id``; builds before the codex-api split sent
 # ``session_id``/``conversation_id``. Ordered session before thread.
 _CODEX_SESSION_ID_HEADERS: Final = ("session-id", "session_id", "thread-id", "conversation_id")
+_BEDROCK_SESSION_ID_METADATA_KEYS: Final = ("sessionId", "threadId", "conversationId")
 # Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
@@ -1055,6 +1056,22 @@ def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
     return session_id
 
 
+def _get_bedrock_session_id_from_request_metadata(
+    normalized_headers: Mapping[str, str], request_body: Mapping[str, object]
+) -> str | None:
+    """Read the conversation id a Bedrock SDK client tags its calls with: Converse's ``requestMetadata``
+    body field or InvokeModel's ``X-Amzn-Bedrock-Request-Metadata`` JSON header. Only the Bedrock
+    pass-through route nests the client's body under ``data``."""
+    if request_body.get("custom_llm_provider") != "bedrock" or not isinstance(request_body.get("data"), Mapping):
+        return None
+    header: Final = normalized_headers.get("x-amzn-bedrock-request-metadata")
+    body_tags: Final = _request_fields(_request_fields(request_body.get("data")).get("requestMetadata"))
+    header_tags: Final = _request_fields(safe_json_loads(header) if header else None)
+    tag_sources: Final = itertools.product((body_tags, header_tags), _BEDROCK_SESSION_ID_METADATA_KEYS)
+    values: Final = (tags.get(key) for tags, key in tag_sources)
+    return next((value for value in values if isinstance(value, str) and value), None)
+
+
 def _is_llm_inference_route(request: Request) -> bool:
     route: Final = get_request_route(request)
     return RouteChecks.is_llm_api_route(route=route) and not RouteChecks.check_route_access(
@@ -1966,6 +1983,14 @@ class LiteLLMProxyRequestSetup:
                 if isinstance(body_metadata, dict) and isinstance(body_metadata.get("user_id"), dict):
                     body_metadata["user_id"] = session_id
                 verbose_proxy_logger.debug("Extracted session_id from Anthropic metadata.user_id")
+
+        if "litellm_session_id" not in data:
+            bedrock_session_id: Final = _get_bedrock_session_id_from_request_metadata(normalized_headers, request_body)
+            metadata_session_id: Final = _caller_trace_field(request_body, _metadata_variable_name, "session_id")
+            if bedrock_session_id and metadata_session_id in (None, bedrock_session_id):
+                metadata_from_headers["session_id"] = bedrock_session_id
+                data["litellm_session_id"] = bedrock_session_id  # rebind-ok: data is an out-param
+                verbose_proxy_logger.debug("Extracted session_id from Bedrock request metadata")
 
         # Last-resort fallback: the W3C standards for trace/session propagation
         # (https://www.w3.org/TR/trace-context/, https://www.w3.org/TR/baggage/).
@@ -3266,7 +3291,7 @@ def _fallback_edges(
     and its provider-stripped suffix, plus the router matcher run over the fuzzy
     entries that have not fired yet (tracked in ``fired_fuzzy`` by
     ``(list_index, entry_index)``), so each entry's targets are expanded once."""
-    from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+    from litellm.router_api import fallback_chain
 
     stripped: Final = model_group.split("/", 1)[1] if "/" in model_group else None
     targets: Final[set[str]] = set()  # mutable-ok: accumulates fallback targets
@@ -3277,7 +3302,7 @@ def _fallback_edges(
         pending = tuple(index for index in range(len(fuzzy)) if (list_index, index) not in fired_fuzzy)
         if not pending:
             continue
-        resolved = get_fallback_model_group(fallbacks=[fuzzy[index] for index in pending], model_group=model_group)[0]
+        resolved = fallback_chain([fuzzy[index] for index in pending], model_group)[0]
         values = resolved if isinstance(resolved, list) else ([resolved] if resolved is not None else [])
         targets.update(name for value in values if (name := _fallback_target_name(value)) is not None)
         if resolved is not None:
@@ -3464,7 +3489,7 @@ async def _resolve_user_provider_credentials_for_request(
             status_code=400,
             detail=(f"fallback lists in the request body cannot exceed {_FALLBACK_DISCOVERY_LIMIT} entries"),
         )
-    from litellm.router_utils.common_utils import resolve_model_group_alias
+    from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 
     # Discovery must see the group the router actually routes to, so include the
     # post-alias name from every alias map that may still rewrite data["model"]

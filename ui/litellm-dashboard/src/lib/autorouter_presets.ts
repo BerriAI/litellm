@@ -29,6 +29,7 @@ import {
 } from "@/components/add_model/complexity_router_tiers";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
+import { wildcardRoutes } from "@/lib/wildcard_routes";
 
 // `key` is the stable JSON object key (e.g. "anthropic_family"); `label` is display text and
 // never an identity.
@@ -68,6 +69,7 @@ export interface DeploymentModelRef {
   modelGroup: string;
   underlyingModels: readonly string[];
   provider?: string;
+  blocked?: boolean;
 }
 
 export interface ModelAvailability {
@@ -110,29 +112,14 @@ const normalizeUnderlyingModel = (model: string): string | null => {
   return stripped.toLowerCase() || null;
 };
 
-// A linear glob scan rather than a RegExp: patterns are admin-controlled model_name values, and a
-// backtracking regex built from one ("a*a*a*...") can freeze another admin's dashboard.
-const matchesWildcard = (pattern: string, name: string): boolean => {
-  const parts = pattern.split("*");
-  if (parts.length === 1) return pattern === name;
-  const head = parts[0];
-  const tail = parts[parts.length - 1];
-  if (!name.startsWith(head) || !name.endsWith(tail)) return false;
-  if (name.length < head.length + tail.length) return false;
-  const scanEnd = name.length - tail.length;
-  const scanResult = parts.slice(1, -1).reduce((searchFrom: number, part: string) => {
-    if (searchFrom < 0) return -1;
-    const found = name.indexOf(part, searchFrom);
-    return found === -1 || found + part.length > scanEnd ? -1 : found + part.length;
-  }, head.length);
-  return scanResult >= 0;
-};
-
 export const buildModelAvailability = (
   modelGroups: Iterable<string>,
   deployments: readonly DeploymentModelRef[],
+  groupProviders: ReadonlyMap<string, readonly string[]> = new Map(),
+  aliasTargets: ReadonlyMap<string, string> = new Map(),
 ): ModelAvailability => {
   const groups = new Set(modelGroups);
+  const routedGroup = (group: string): string => aliasTargets.get(group) ?? group;
   const deploymentGroups = new Set(deployments.map((deployment) => deployment.modelGroup));
   const deploymentProviders = new Map<string, Set<string>>();
   for (const deployment of deployments) {
@@ -140,27 +127,33 @@ export const buildModelAvailability = (
     providers.add(deploymentProvider(deployment));
     deploymentProviders.set(deployment.modelGroup, providers);
   }
-  const literalEntries = deployments
-    .filter((deployment) => groups.has(deployment.modelGroup))
-    .flatMap((deployment) =>
+  const routableDeployments = deployments.filter((deployment) => !deployment.blocked);
+  const routableByGroup = new Map<string, DeploymentModelRef[]>();
+  for (const deployment of routableDeployments) {
+    routableByGroup.set(deployment.modelGroup, [...(routableByGroup.get(deployment.modelGroup) ?? []), deployment]);
+  }
+  const literalEntries = Array.from(groups).flatMap((group) =>
+    (routableByGroup.get(routedGroup(group)) ?? []).flatMap((deployment) =>
       deployment.underlyingModels
         .map(normalizeUnderlyingModel)
-        .map((key) => ({ key, modelGroup: deployment.modelGroup, sourceGroup: deployment.modelGroup })),
-    );
-  // Mirrors get_known_models_from_wildcard: a bare "*" model_name expands via its underlying
-  // wildcard (or not at all), and a wildcard without a "/" expands to nothing.
-  const wildcardPatterns = deployments.flatMap((deployment) =>
-    (deployment.modelGroup === "*" ? deployment.underlyingModels : [deployment.modelGroup])
-      .filter((pattern) => pattern !== "*" && pattern.includes("*") && pattern.includes("/"))
-      .map((pattern) => ({ pattern, sourceGroup: deployment.modelGroup })),
+        .map((key) => ({ key, modelGroup: group, sourceGroup: deployment.modelGroup })),
+    ),
   );
-  const wildcardEntries = Array.from(groups)
-    .filter((group) => !group.includes("*") && !deploymentGroups.has(group))
-    .flatMap((group) =>
-      wildcardPatterns
-        .filter(({ pattern }) => matchesWildcard(pattern, group))
-        .map(({ sourceGroup }) => ({ key: normalizeUnderlyingModel(group), modelGroup: group, sourceGroup })),
-    );
+  const pausedGroups = new Set(Array.from(deploymentGroups).filter((group) => !routableByGroup.has(group)));
+  const servedGroups = new Set(Array.from(groups).filter((group) => !pausedGroups.has(routedGroup(group))));
+  const unlistedGroups = Array.from(groups).filter(
+    (group) => !group.includes("*") && !deploymentGroups.has(routedGroup(group)),
+  );
+  const patternDeployments = deployments.filter(({ modelGroup }) => modelGroup.includes("*"));
+  const wildcardEntries = unlistedGroups.flatMap((group) =>
+    wildcardRoutes(routedGroup(group), patternDeployments, groupProviders.get(group) ?? [])
+      .filter(({ paused }) => !paused)
+      .map(({ model, sourceGroup }) => ({
+        key: normalizeUnderlyingModel(model),
+        modelGroup: group,
+        sourceGroup,
+      })),
+  );
   const entries = [...literalEntries, ...wildcardEntries];
   const grouped = new Map<string, Set<string>>();
   const providersByGroup = new Map<string, Set<string>>();
@@ -186,14 +179,14 @@ export const buildModelAvailability = (
       }),
     ]),
   );
-  return { modelGroups: groups, underlyingIndex, nativeUnderlyingIndex };
+  return { modelGroups: servedGroups, underlyingIndex, nativeUnderlyingIndex };
 };
 
 export const deploymentRefsFromModelInfo = (
   rows: readonly {
     model_name?: string | null;
     litellm_params?: { model?: string | null; base_model?: string | null; custom_llm_provider?: string | null } | null;
-    model_info?: { base_model?: string | null } | null;
+    model_info?: { base_model?: string | null; blocked?: boolean | null } | null;
   }[],
 ): DeploymentModelRef[] =>
   rows.flatMap((row) => {
@@ -204,9 +197,17 @@ export const deploymentRefsFromModelInfo = (
     ].filter((model): model is string => Boolean(model));
     const provider = row.litellm_params?.custom_llm_provider || routingProvider(row.litellm_params?.model ?? "");
     return row.model_name && underlyingModels.length > 0
-      ? [{ modelGroup: row.model_name, underlyingModels, provider }]
+      ? [{ modelGroup: row.model_name, underlyingModels, provider, blocked: row.model_info?.blocked || undefined }]
       : [];
   });
+
+export const modelGroupAliasTargets = (aliases: unknown): ReadonlyMap<string, string> =>
+  new Map(
+    Object.entries(typeof aliases === "object" && aliases !== null ? aliases : {}).flatMap(([alias, entry]) => {
+      const target: unknown = typeof entry === "object" && entry !== null && "model" in entry ? entry.model : entry;
+      return typeof target === "string" && target ? [[alias, target] as const] : [];
+    }),
+  );
 
 export const resolveAvailableModels = (requiredModel: string, availability: ModelAvailability): readonly string[] => {
   const { modelGroups, underlyingIndex } = availability;

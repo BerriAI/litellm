@@ -1256,6 +1256,6 @@ def test_router_model_group_encrypted_content_affinity_callback_registration():
         ]
         assert len(encrypted_content_callbacks) == 1
         assert encrypted_content_callbacks[0].enable_global_affinity is True
-        assert encrypted_content_callbacks[0].router is router
+        assert encrypted_content_callbacks[0].ctx is router._core_ctx
     finally:
         router.discard()

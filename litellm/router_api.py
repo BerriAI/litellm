@@ -33,19 +33,30 @@ as they were.
 # repeat them unchanged, and typing the members themselves is the core's job.
 
 import hashlib
+import inspect
 import json
+import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias, overload
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, overload
+
+from litellm.router_config import detached
 
 if TYPE_CHECKING:
     from typing import Any  # noqa: TID251  # only to spell the cores' untyped (Unknown) containers and one Any type
 
+    from opentelemetry.trace import Span
+
     from litellm.caching.caching import DualCache, RedisCache
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
+    from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.messages.dispatch import MessagesResult
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
     from litellm.router import Router
     from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
     from litellm.router_strategy.auto_router.auto_router import AutoRouter
@@ -53,12 +64,14 @@ if TYPE_CHECKING:
     from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
     from litellm.router_strategy.quality_router.quality_router import QualityRouter
     from litellm.router_utils.cooldown_cache import CooldownCache
+    from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets as _AttemptedFallbackTargets
     from litellm.router_utils.health_state_cache import DeploymentHealthCache
     from litellm.router_utils.kubernetes_pod_discovery import KubernetesPodDiscovery
-    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
-    from litellm.router_utils.ptu_shares import PTUTeamCeiling
+    from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
+    from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.router import (
         AllowedFailsPolicy,
+        CustomRoutingStrategyBase,
         Deployment,
         DeploymentModelListingInfo,
         DeploymentTypedDict,
@@ -74,13 +87,16 @@ if TYPE_CHECKING:
         SearchToolTypedDict,
         TaggedPreRoutingStrategy,
     )
-    from litellm.types.utils import BudgetConfig
+    from litellm.types.utils import BudgetConfig, EmbeddingResponse, ModelResponse
     from litellm.types.utils import ModelInfo as ModelMapInfo
 
     # The cores' untyped containers (bare ``list`` / ``dict``, element types Unknown), spelled with Any:
     # an overload set with one partially-unknown overload makes every call through it partially unknown.
     UntypedList: TypeAlias = list[Any]  # pyright: ignore[reportExplicitAny]  # see above
     UntypedDict: TypeAlias = dict[Any, Any]  # pyright: ignore[reportExplicitAny]  # see above
+
+    # Re-exported for litellm.types, which may not import router_utils.
+    AttemptedFallbackTargets: TypeAlias = _AttemptedFallbackTargets
 
     # What registry().plugins(kind) returns, one member per kind.
     RegistryPlugins: TypeAlias = (
@@ -162,9 +178,9 @@ def deployment_usable_by_team(deployment: "Mapping[str, object] | Deployment", t
     Whether ``team_id`` may use ``deployment``: a team-scoped deployment (``model_info.team_id``
     set) only by that team, any other deployment by everyone. Needs no router instance.
     """
-    from litellm.router import Router
+    from litellm.router_python_core import PythonCore
 
-    return Router._core_deployment_usable_by_team(deployment, team_id)
+    return PythonCore._core_deployment_usable_by_team(deployment, team_id)
 
 
 def deployment_id(model_group: str, litellm_params: Mapping[str, object]) -> str:
@@ -184,10 +200,77 @@ def deployment_id(model_group: str, litellm_params: Mapping[str, object]) -> str
     return hashlib.sha256("".join(parts).encode()).hexdigest()
 
 
-def _json_default_stable_id(obj: object) -> str:
-    from litellm.router import Router
+def router_init_args() -> tuple[str, ...]:
+    """The arguments ``Router.__init__`` accepts (was ``Router.get_valid_args``). Needs no router instance."""
+    from litellm.router_python_core import PythonCore
 
-    return Router._json_default_stable_id(obj)
+    return tuple(PythonCore.get_valid_args())
+
+
+def mark_advisor_orchestration_failure(exception: BaseException) -> None:
+    """Tag an advisor orchestration failure, so the router does not cool down the deployment it picked."""
+    from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure as mark
+
+    mark(exception)
+
+
+def fallback_chain(
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: the fallbacks config shape
+    model_group: str,
+) -> tuple[list[str] | None, int | None]:  # mutable-ok: get_fallback_model_group's type, unchanged
+    """
+    The fallbacks configured for a model group, and the index of the generic ``*`` entry (was
+    ``get_fallback_model_group``). Needs no router instance.
+    """
+    from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+
+    return get_fallback_model_group(fallbacks=fallbacks, model_group=model_group)
+
+
+def request_fallback_chain(
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: the fallbacks config shape
+    request_kwargs: Mapping[str, object],
+    model_group: str | None,
+) -> tuple[list[str] | None, int | None]:  # mutable-ok: get_fallback_model_group's type, unchanged
+    """
+    ``fallback_chain`` for a request: the group a pre-routing hook picked first, then the routed,
+    requested and original groups (was ``get_fallback_model_group_for_lookup_groups``).
+    """
+    from litellm.router_utils.fallback_event_handlers import (
+        fallback_lookup_groups,
+        get_fallback_model_group_for_lookup_groups,
+    )
+
+    return get_fallback_model_group_for_lookup_groups(
+        fallbacks=fallbacks, lookup_groups=fallback_lookup_groups(kwargs=request_kwargs, model_group=model_group)
+    )
+
+
+def fallbacks_disabled(request_kwargs: Mapping[str, object]) -> bool:
+    """Whether the request opted out of fallbacks (was ``fallbacks_disabled_for_request``)."""
+    from litellm.router_utils.fallback_event_handlers import fallbacks_disabled_for_request
+
+    return fallbacks_disabled_for_request(kwargs=request_kwargs)
+
+
+def references_provider_scoped_resource(request_kwargs: Mapping[str, object]) -> bool:
+    """Whether the request names a file, batch or fine-tuning job that only its own provider knows."""
+    from litellm.router_utils.fallback_event_handlers import PROVIDER_SCOPED_RESOURCE_KEYS
+
+    return any(request_kwargs.get(key) for key in PROVIDER_SCOPED_RESOURCE_KEYS)
+
+
+def deployment_metadata(request_kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+    """The metadata bucket the router stamped the picked deployment into (was ``find_deployment_metadata``)."""
+    from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
+
+    return find_deployment_metadata(request_kwargs)
+
+
+def _json_default_stable_id(obj: object) -> str:
+    from litellm.router_python_core import PythonCore
+
+    return PythonCore._json_default_stable_id(obj)
 
 
 class RouterRegistry:
@@ -451,10 +534,10 @@ class RouterRegistry:
         ``should_include_deployment``), or, without ``model_name``, whether the team may use it at
         all (was ``deployment_usable_by_team``).
         """
-        from litellm.router import Router
+        from litellm.router_python_core import PythonCore
 
         if model_name is None:
-            return Router._core_deployment_usable_by_team(deployment, team_id)
+            return PythonCore._core_deployment_usable_by_team(deployment, team_id)
         return self._router._core_should_include_deployment(model_name=model_name, model=deployment, team_id=team_id)
 
     @overload
@@ -553,7 +636,8 @@ class RouterRegistry:
         - ``group_set``: the set of configured group names (was the ``model_names`` attribute)
         - ``ids``: deployment ids, of one group or all (was ``get_model_ids``)
         - ``deployment_names``: (was the ``deployment_names`` attribute)
-        - ``team_public``: team public model names (was ``team_public_model_names``)
+        - ``team_public``: team public model names (was ``team_public_model_names``), or only the
+          ones ``team_id`` serves its own deployments under (was ``team_public_model_names_of``)
         - ``litellm_models``: upstream model names a group resolves to (was ``resolved_litellm_models``)
         - ``litellm_base_models``: the same, with each deployment's ``base_model`` where it sets one
           (was ``resolved_litellm_models(..., use_base_model=True)``)
@@ -571,7 +655,7 @@ class RouterRegistry:
         if kind == "deployment_names":
             return r._core_deployment_names
         if kind == "team_public":
-            return r._core_team_public_model_names
+            return r._core_team_public_model_names if team_id is None else r.team_public_model_names_of(team_id)
         if model_name is None:
             raise TypeError(f"registry().names(kind={kind!r}) needs a model_name")
         if kind == "litellm_models":
@@ -835,6 +919,14 @@ class RouterRegistry:
         """Routing groups by name (was the ``routing_groups`` attribute)."""
         return self._router._core_routing_groups
 
+    def routing_group(self, name: str) -> "RoutingGroup | None":
+        """The routing group callable as ``name``, or None (was ``get_routing_group``)."""
+        return self._router.get_routing_group(name)
+
+    def client(self, deployment: Mapping[str, object], *, client_type: str | None = None) -> object:
+        """The SDK client the router cached for a deployment, or None (was ``_get_client``)."""
+        return self._router._get_client(deployment=deployment, kwargs={}, client_type=client_type)
+
     def access_groups(
         self,
         model_name: str | None = None,
@@ -966,6 +1058,12 @@ SETTING_FIELDS: Final[tuple[str, ...]] = (
     "cache_responses",
 )
 
+# Runtime settings kept as plain router attributes rather than ``settings()`` fields. A write
+# to one (``router.num_retries = 2``) is a changeset too: ``ChangeSet(assign={...})``.
+PLAIN_SETTING_ATTRIBUTES: Final[frozenset[str]] = frozenset({"num_retries", "max_fallbacks", "retry_after", "timeout"})
+# Former attributes whose value lives under another name, assignable through a changeset.
+ASSIGNABLE_ALIASES: Final[Mapping[str, str]] = MappingProxyType({"model_group_alias": "_core_model_group_alias"})
+
 _MISSING: Final = object()
 
 
@@ -1081,16 +1179,16 @@ class RouterHealth:
     @staticmethod
     def is_blocked(deployment: "Deployment") -> bool:
         """Whether an admin paused this deployment (was ``is_deployment_blocked``)."""
-        from litellm.router import Router
+        from litellm.router_python_core import PythonCore
 
-        return Router._core_is_deployment_blocked(deployment)
+        return PythonCore._core_is_deployment_blocked(deployment)
 
     @staticmethod
     def all_blocked(deployments: "Sequence[DeploymentTypedDict]") -> bool:
         """Whether every deployment in the list is paused (was ``are_all_deployments_blocked``)."""
-        from litellm.router import Router
+        from litellm.router_python_core import PythonCore
 
-        return Router._core_are_all_deployments_blocked(deployments)
+        return PythonCore._core_are_all_deployments_blocked(deployments)
 
     def fully_blocked_model_names(self) -> set[str]:  # mutable-ok: the core's type, a fresh set
         """Groups whose every deployment is paused (was ``get_fully_blocked_model_names``)."""
@@ -1130,6 +1228,41 @@ class RouterHealth:
     def split_priority(self, model: str, kwargs: Mapping[str, object]) -> tuple[int | None, Mapping[str, object]]:
         """The request priority and the kwargs without it (was ``split_request_priority``)."""
         return self._router._core_split_request_priority(model, kwargs)
+
+    def failures_this_minute(self, deployment_id: str) -> int:
+        """Failures counted against a deployment this minute (was ``get_deployment_failures_for_current_minute``)."""
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            get_deployment_failures_for_current_minute,
+        )
+
+        return get_deployment_failures_for_current_minute(self._router._core_ctx, deployment_id)
+
+    def record_failure(self, deployment_id: str, exception: Exception, exception_status: str | int) -> bool:
+        """
+        Count a failure against a deployment this minute and cool it down once it is over its allowed
+        fails (was ``increment_deployment_failures_for_current_minute`` then ``set_cooldown_deployments``).
+        Returns whether the deployment was cooled down.
+        """
+        from litellm.router_utils.cooldown_handlers import set_cooldown_deployments
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            increment_deployment_failures_for_current_minute,
+        )
+
+        ctx: Final = self._router._core_ctx
+        increment_deployment_failures_for_current_minute(ctx, deployment_id)
+        return set_cooldown_deployments(
+            ctx,
+            original_exception=exception,
+            exception_status=exception_status,
+            deployment=deployment_id,
+            time_to_cooldown=self._router._core_cooldown_time,
+        )
+
+    def priority_header_fields(
+        self, model: str, kwargs: Mapping[str, object], header: str | None
+    ) -> Mapping[str, int | str]:
+        """The request fields a priority header sets (was ``priority_header_update``)."""
+        return self._router.priority_header_update(model=model, kwargs=kwargs, header=header)
 
 
 @dataclass
@@ -1174,13 +1307,17 @@ class RoutingObservers:
 def apply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
     if changes.refresh_model_info:
         raise TypeError("ChangeSet(refresh_model_info=True) needs aapply()")
-    unknown: Final = sorted(set(changes.assign) - set(SETTING_FIELDS))
+    unknown: Final = sorted(set(changes.assign) - {*SETTING_FIELDS, *PLAIN_SETTING_ATTRIBUTES, *ASSIGNABLE_ALIASES})
     if unknown:
         raise ValueError(f"not assignable router settings: {unknown}")
     for name, value in changes.assign.items():
-        setattr(router, "_core_" + name, value)
+        setattr(
+            router,
+            name if name in PLAIN_SETTING_ATTRIBUTES else ASSIGNABLE_ALIASES.get(name, "_core_" + name),
+            detached(value),
+        )
     if changes.settings:
-        router._core_update_settings(**changes.settings)
+        router._core_update_settings(**{name: detached(value) for name, value in changes.settings.items()})
     upserted: Final = [router._core_upsert_deployment(deployment=d) for d in changes.upsert]
     deleted: Final = [router._core_delete_deployment(id=i) for i in changes.delete]
     if changes.redis_cache is not None:
@@ -1205,6 +1342,40 @@ async def aapply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
     return result
 
 
+def _takes_legacy_llm_router(check: object) -> bool:
+    """Whether a fallback check still declares ``llm_router`` instead of ``ctx`` (the pre-RoutingContext shape)."""
+    try:
+        params: Final = inspect.signature(check).parameters  # pyright: ignore[reportArgumentType]  # any callable
+    except (TypeError, ValueError):
+        return False
+    return "ctx" not in params and "llm_router" in params
+
+
+async def _run_fallback_check(
+    check: "FallbackAccessCheck | FallbackBudgetCheck",
+    ctx: "RoutingContext",
+    *,
+    model: str,
+    request_kwargs: Mapping[str, object],
+) -> bool:
+    if _takes_legacy_llm_router(check):
+        warnings.warn(
+            f"{type(check).__name__} takes llm_router=; fallback checks now receive ctx: RoutingContext. "
+            "Passing llm_router is deprecated and will be removed",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        legacy: Final = check  # pyright: ignore[reportAny]  # the old protocol shape, checked above
+        return await legacy(model=model, request_kwargs=request_kwargs, llm_router=ctx._router)  # pyright: ignore[reportCallIssue, reportPrivateUsage]  # see above
+    return await check(model=model, request_kwargs=request_kwargs, ctx=ctx)
+
+
+class RegistryReader(Protocol):
+    """Anything that answers ``registry()``: a Router or a RoutingContext. What proxy auth helpers read."""
+
+    def registry(self) -> "RouterRegistry": ...
+
+
 class RoutingContext:
     """
     What a routing plugin (strategy, pre-call check, sub-router) may use of the router. Plugins get
@@ -1219,11 +1390,106 @@ class RoutingContext:
     def registry(self) -> RouterRegistry:
         return self._router.registry()
 
+    def deployment_params(self, request: Mapping[str, object], deployment: "Deployment | None") -> Mapping[str, object]:
+        return self._router._params_sent_to_deployment(request, deployment)
+
     def settings(self) -> RouterSettings:
         return self._router.settings()
 
     def health(self) -> RouterHealth:
         return self._router.health()
+
+    def observers(self) -> RoutingObservers:
+        return self._router.observe()
+
+    def belongs_to(self, router: "Router") -> bool:
+        return self._router is router or router.__dict__.get("_core") is self._router
+
+    @property
+    def explicit_allowed_fails(self) -> int | None:
+        """``allowed_fails`` as the caller passed it, ``None`` when it came from the global default."""
+        return self._router.explicit_allowed_fails
+
+    async def select(
+        self,
+        model: str,
+        request_kwargs: dict[str, object] | None = None,  # mutable-ok: the selection cores take a dict
+        *,
+        kind: SelectKind = "pick",
+        messages: list[dict[str, str]] | None = None,  # mutable-ok: the selection cores take a list
+        input: str | list[object] | None = None,  # mutable-ok: the selection cores take a list
+        specific_deployment: bool | None = False,
+        parent_otel_span: "Span | None" = None,
+        health_check_probe: bool = False,
+    ) -> object:
+        return await self._router.select(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportCallIssue, reportArgumentType]  # the selection cores return untyped deployment dicts
+            model,
+            request_kwargs,
+            kind=kind,  # pyright: ignore[reportArgumentType]  # forwarded as given, the overloads narrow it
+            messages=messages,
+            input=input,
+            specific_deployment=specific_deployment,
+            parent_otel_span=parent_otel_span,
+            health_check_probe=health_check_probe,
+        )
+
+    async def with_fallbacks(
+        self,
+        *args: object,
+        **kwargs: object,  # kwargs-ok: the router's fallback loop takes the request's own keyword payload
+    ) -> object:
+        """Run a call through the router's retry and fallback loop (was ``async_function_with_fallbacks``)."""
+        return await self._router.async_function_with_fallbacks(*args, **kwargs)
+
+    async def acompletion(
+        self,
+        **kwargs: object,  # kwargs-ok: forwarded to the router endpoint as given
+    ) -> "ModelResponse | CustomStreamWrapper":
+        return await self._router.acompletion(**kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]  # forwarded as given
+
+    async def aresponses(
+        self,
+        **kwargs: object,  # kwargs-ok: forwarded to the router endpoint as given
+    ) -> "ResponsesAPIResponse | BaseResponsesAPIStreamingIterator":
+        return await self._router.aresponses(**kwargs)  # pyright: ignore[reportReturnType, reportArgumentType]  # factory-built endpoint, returns what litellm.aresponses returns
+
+    async def aembedding(
+        self,
+        **kwargs: object,  # kwargs-ok: forwarded to the router endpoint as given
+    ) -> "EmbeddingResponse":
+        return await self._router.aembedding(**kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]  # forwarded as given
+
+    def embedding(
+        self,
+        **kwargs: object,  # kwargs-ok: forwarded to the router endpoint as given
+    ) -> "EmbeddingResponse":
+        return self._router.embedding(**kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]  # forwarded as given
+
+    async def adecisions(
+        self,
+        **kwargs: object,  # kwargs-ok: forwarded to the router endpoint as given
+    ) -> "OpenAIDecisionResponse | DecisionsResponse":
+        return await self._router.adecisions(**kwargs)  # pyright: ignore[reportReturnType, reportArgumentType]  # factory-built endpoint, returns what litellm.adecisions returns
+
+    async def aanthropic_messages(
+        self,
+        **kwargs: object,  # kwargs-ok: forwarded to the router endpoint as given
+    ) -> "MessagesResult":
+        return await self._router.aanthropic_messages(**kwargs)  # pyright: ignore[reportReturnType, reportArgumentType]  # factory-built endpoint, returns what litellm.anthropic_messages returns
+
+    def apply(self, changes: ChangeSet) -> ApplyResult:
+        return self._router.apply(changes)
+
+    def register_plugin(self, plugin: "CustomRoutingStrategyBase") -> None:
+        self._router.register_plugin(plugin)
+
+    async def fallback_access_allowed(self, *, model: str, request_kwargs: Mapping[str, object]) -> bool:
+        check: Final = self._router.settings().fallback_access_check
+        return check is None or await _run_fallback_check(check, self, model=model, request_kwargs=request_kwargs)
+
+    async def fallback_budget_allowed(self, *, model: str, request_kwargs: Mapping[str, object]) -> bool:
+        check: Final = self._router.settings().fallback_budget_check
+        return check is None or await _run_fallback_check(check, self, model=model, request_kwargs=request_kwargs)
 
     def pre_call_checks(
         self,
@@ -1292,7 +1558,7 @@ class RoutingContext:
         self,
         kwargs: dict[str, object],  # mutable-ok: Router._core_log_retry records the retry into the request kwargs
         e: Exception,
-    ) -> Mapping[str, object]:
+    ) -> dict:  # mutable-ok: the fallback loop edits it; Router._core_log_retry's type
         return self._router._core_log_retry(kwargs=kwargs, e=e)
 
 

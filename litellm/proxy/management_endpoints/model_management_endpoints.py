@@ -1515,14 +1515,10 @@ def update_db_model(
 
     # convert to prisma compatible format
 
-    for key, value in merged_model_info.items():
-        if isinstance(value, datetime.datetime):
-            merged_model_info[key] = value.isoformat()
-
     prisma_compatible_model_dict: Final = PrismaCompatibleUpdateDBModel(
         model_name=merged_model_name,
         litellm_params=json.dumps(merged_litellm_params),
-        model_info=json.dumps(merged_model_info),
+        model_info=TypeAdapter(dict[str, object]).dump_json(merged_model_info).decode(),
     )
 
     if updated_patch.blocked is not None:

@@ -4,8 +4,9 @@ import inspect
 import json
 import socket
 from collections.abc import AsyncIterator, Iterator, Mapping
+from datetime import datetime, time, timezone
 from types import MappingProxyType, SimpleNamespace
-from typing import Dict, Final, Optional
+from typing import Dict, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -46,7 +47,14 @@ from litellm.proxy.management_helpers.model_quota_policy import REQUIRE_BOTH_LIM
 from litellm.proxy.utils import PrismaClient
 from litellm.router import Router
 from litellm.router_api import ApplyResult, ChangeSet
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment, updateLiteLLMParams
+from litellm.types.router import (
+    Deployment,
+    LiteLLM_Params,
+    ModelAccessWindow,
+    ModelInfo,
+    updateDeployment,
+    updateLiteLLMParams,
+)
 
 
 async def _passthrough_row(update_data):
@@ -4046,6 +4054,45 @@ class TestUpdateDBModelBlocked:
             updated_patch=updateDeployment(),
         )
         assert "blocked" not in result
+
+
+@pytest.mark.parametrize("window_patch", ["omit", "echo", "replace", "clear"])
+def test_model_edit_preserves_or_explicitly_changes_access_windows(
+    window_patch: Literal["omit", "echo", "replace", "clear"],
+) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    saved_window: Final = ModelAccessWindow(
+        start=time(13), end=time(17), timezone="Asia/Almaty", team_ids=("team-window", "team-shared")
+    )
+    replacement_window: Final = ModelAccessWindow(
+        start=time(22, 0, 0, 123456), end=time(6, 0, 0, 654321),
+        timezone="America/New_York", team_ids=("team-other",),
+    )
+    created_at: Final = datetime(2026, 1, 2, 3, 4, 5, 123456, tzinfo=timezone.utc)
+    requested_windows: Final = {
+        "omit": None,
+        "echo": (saved_window,),
+        "replace": (replacement_window,),
+        "clear": (),
+    }[window_patch]
+    expected_windows: Final = (saved_window,) if requested_windows is None else requested_windows
+    result: Final = update_db_model(
+        db_model=Deployment(
+            model_name="window-model",
+            litellm_params=LiteLLM_Params(model="openai/test-model"),
+            model_info=ModelInfo(id="window-deployment", access_windows=(saved_window,), created_at=created_at),
+        ),
+        updated_patch=updateDeployment(
+            litellm_params=updateLiteLLMParams(max_parallel_requests=7),
+            model_info=None if requested_windows is None else ModelInfo(access_windows=requested_windows),
+        ),
+    )
+
+    assert json.loads(result["litellm_params"])["max_parallel_requests"] == 7
+    saved_info: Final = ModelInfo.model_validate_json(result["model_info"])
+    assert saved_info.access_windows == expected_windows
+    assert saved_info.created_at == created_at
 
 
 class TestUpdateDBModelKeepsLegacyDropParams:

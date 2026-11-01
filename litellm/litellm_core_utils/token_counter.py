@@ -56,9 +56,9 @@ from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEnc
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace
+from litellm.litellm_core_utils.deployment_pricing import deployment_pricing_models
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import get_httpx_client, header_value
-from litellm.router_utils.deployment_pricing import deployment_pricing_models
 from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
     AnthropicContentParamSource,

@@ -167,6 +167,7 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
+from litellm.router_api import RegistryReader
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
@@ -525,7 +526,7 @@ def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
     )
 
 
-def _get_router_zero_cost_cache(llm_router: Router) -> dict[str, bool] | None:
+def _get_router_zero_cost_cache(llm_router: RegistryReader) -> dict[str, bool] | None:
     """
     Return the router's per-instance zero-cost cache, or ``None`` for objects
     that don't expose one (e.g. ``MagicMock`` stand-ins in unit tests).
@@ -541,7 +542,7 @@ def _get_router_zero_cost_cache(llm_router: Router) -> dict[str, bool] | None:
     return cache if isinstance(cache, dict) else None
 
 
-def is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None) -> bool:
+def is_model_cost_zero(model: str | list[str] | None, llm_router: RegistryReader | None) -> bool:
     """
     Check if a model has zero cost (no configured pricing).
 
@@ -667,7 +668,7 @@ _NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
 _TEAM_GRANT_RELATIONS: Final[Mapping[str, object]] = MappingProxyType({"litellm_model_table": True})
 
 
-def _deployments_served_for(model: str, llm_router: "Router") -> Sequence[DeploymentTypedDict]:
+def _deployments_served_for(model: str, llm_router: RegistryReader) -> Sequence[DeploymentTypedDict]:
     """
     The deployments a request to ``model`` routes to, for the gates that waive budget checks.
 
@@ -1085,13 +1086,31 @@ def model_max_budget_of(holder: ModelMaxBudgetHolder) -> Mapping[str, object] | 
 
 
 def route_skips_budget_checks(route: str) -> bool:
-    return route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES and (
-        route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route)
+    if route in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES:
+        return False
+    if route in MODEL_DISCOVERY_ROUTES:
+        return True
+    if RouteChecks.is_llm_api_route(route=route):
+        return False
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415  # pass-through endpoints import the auth stack
+        InitPassThroughEndpointHelpers,
     )
 
+    return not InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=route)
 
-def request_skips_budget_checks(route: str, model: str | list[str] | None, llm_router: Router | None) -> bool:
-    return route_skips_budget_checks(route=route) or is_model_cost_zero(model=model, llm_router=llm_router)
+
+def request_skips_budget_checks(
+    route: str,
+    model: str | list[str] | None,
+    llm_router: Router | None,
+    *,
+    request_body: Mapping[str, object] | None = None,
+) -> bool:
+    if route_skips_budget_checks(route=route):
+        return True
+    if request_body is not None and is_mcp_discovery_request(route=route, request_body=request_body):
+        return True
+    return is_model_cost_zero(model=model, llm_router=llm_router)
 
 
 async def common_checks(
@@ -1141,10 +1160,11 @@ async def common_checks(
         team_id=valid_token.team_id if valid_token is not None else None,
     )
 
-    skip_all_budget_checks: Final = (
-        skip_budget_checks
-        or route_skips_budget_checks(route=route)
-        or is_mcp_discovery_request(route=route, request_body=_typed_request_body(request_body))
+    skip_all_budget_checks: Final = skip_budget_checks or request_skips_budget_checks(
+        route=route,
+        model=_model,
+        llm_router=llm_router,
+        request_body=_typed_request_body(request_body),
     )
 
     membership_user_id: Final = (
@@ -4842,7 +4862,7 @@ async def get_skill_names_from_access_groups(
 
 def _resolve_all_team_model_sentinel_for_auth_check(
     models: list[str],
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     team_id: str | None,
 ) -> list[str]:
     if SpecialModelNames.all_team_models.value not in models or team_id is None or llm_router is None:
@@ -4856,7 +4876,7 @@ def _resolve_all_team_model_sentinel_for_auth_check(
 
 def check_model_access_helper(
     model: str,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     models: list[str],
     team_model_aliases: dict[str, str] | None = None,
     team_id: str | None = None,
@@ -4907,7 +4927,7 @@ _check_model_access_helper: Final = check_model_access_helper
 
 def _owning_team_names_for_team_deployment(
     model: str,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     team_id: str | None,
     team_model_aliases: Mapping[str, str] | None,
 ) -> tuple[str, ...]:
@@ -4925,7 +4945,7 @@ def _owning_team_names_for_team_deployment(
 
 def _can_object_call_model(
     model: str | list[str],
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     models: list[str],
     team_model_aliases: dict[str, str] | None = None,
     team_id: str | None = None,
@@ -5052,7 +5072,7 @@ def _resolve_team_alias(
 
 
 def _live_team_alias_target(
-    model: str, team_model_aliases: Mapping[str, str], team_id: str | None, llm_router: Router | None
+    model: str, team_model_aliases: Mapping[str, str], team_id: str | None, llm_router: RegistryReader | None
 ) -> str:
     target: Final = team_model_aliases.get(model)
     if target is None:
@@ -5539,7 +5559,7 @@ async def can_key_call_model(
     model: str | list[str],
     llm_model_list: Sequence[object] | None,
     valid_token: UserAPIKeyAuth,
-    llm_router: litellm.Router | None,
+    llm_router: RegistryReader | None,
     prisma_client: DatabaseClient | None = None,
 ) -> Literal[True]:
     """
@@ -5618,7 +5638,7 @@ async def can_key_call_resolved_model(
     model: str,
     llm_model_list: Sequence[object] | None,
     valid_token: UserAPIKeyAuth,
-    llm_router: litellm.Router | None,
+    llm_router: RegistryReader | None,
 ) -> None:
     from litellm.proxy.proxy_server import (
         prisma_client,
@@ -5766,7 +5786,7 @@ def can_org_access_model(
 async def can_team_access_model(
     model: str | list[str],
     team_object: LiteLLM_TeamTable | None,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     team_model_aliases: dict[str, str] | None = None,
     key_model_aliases: Mapping[str, str] | None = None,
     prisma_client: DatabaseClient | None = None,
@@ -5869,7 +5889,7 @@ async def key_access_group_grants_model(
     model: str | list[str],
     valid_token: UserAPIKeyAuth | None,
     team_object: LiteLLM_TeamTable | None,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     key_model_aliases: Mapping[str, str] | None = None,
 ) -> bool:
     """
@@ -5905,7 +5925,7 @@ _key_access_group_grants_model: Final = key_access_group_grants_model
 def can_project_access_model(
     model: str | list[str],
     project_object: LiteLLM_ProjectTable,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     key_model_aliases: Mapping[str, str] | None = None,
 ) -> Literal[True]:
     """
@@ -5926,7 +5946,7 @@ def can_project_access_model(
 def can_customer_access_model(
     model: str | list[str],
     end_user_object: LiteLLM_EndUserTable,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     valid_token: UserAPIKeyAuth | None,
 ) -> Literal[True]:
     team_model_aliases: Final = team_model_aliases_for_auth_check(valid_token) if valid_token is not None else None
@@ -6089,7 +6109,7 @@ async def _team_grants_personal_key_model(
     model: str,
     team_object: LiteLLM_TeamTableCachedObj,
     valid_token: UserAPIKeyAuth,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -6127,7 +6147,7 @@ async def _loaded_teams_allow_model(
     model: str,
     teams: tuple[LiteLLM_TeamTableCachedObj | None, ...],
     valid_token: UserAPIKeyAuth,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -6393,7 +6413,7 @@ async def can_personal_key_call_model_via_teams(
     model: str | Sequence[str],
     user_object: LiteLLM_UserTable | None,
     valid_token: UserAPIKeyAuth,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -7185,7 +7205,7 @@ async def check_team_member_model_access(
     model: str | list[str],
     team_object: LiteLLM_TeamTable,
     valid_token: UserAPIKeyAuth,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     prisma_client: Optional["PrismaClient"],
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
