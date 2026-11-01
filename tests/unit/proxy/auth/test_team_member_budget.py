@@ -469,21 +469,56 @@ def test_resolve_effective_team_member_budget_preserves_member_and_default_prece
 
     assert resolve_effective_team_member_budget(member_budget, None, now) == 110
     assert resolve_effective_team_member_budget(expired_member_budget, None, now) == 100
-    assert resolve_effective_team_member_budget(
-        active_inherited_increase,
-        LiteLLM_BudgetTable(max_budget=50),
-        now,
-    ) == 60
-    assert resolve_effective_team_member_budget(
-        expired_inherited_increase,
-        LiteLLM_BudgetTable(max_budget=50),
-        now,
-    ) == 50
-    assert resolve_effective_team_member_budget(
-        LiteLLM_BudgetTable(max_budget=0),
-        LiteLLM_BudgetTable(max_budget=50),
-        now,
-    ) == 0
+    assert (
+        resolve_effective_team_member_budget(
+            active_inherited_increase,
+            LiteLLM_BudgetTable(max_budget=50),
+            now,
+        )
+        == 60
+    )
+    assert (
+        resolve_effective_team_member_budget(
+            expired_inherited_increase,
+            LiteLLM_BudgetTable(max_budget=50),
+            now,
+        )
+        == 50
+    )
+    assert (
+        resolve_effective_team_member_budget(
+            LiteLLM_BudgetTable(max_budget=0),
+            LiteLLM_BudgetTable(max_budget=50),
+            now,
+        )
+        == 0
+    )
     assert resolve_effective_team_member_budget(None, LiteLLM_BudgetTable(max_budget=50), now) == 50
     assert resolve_effective_team_member_budget(None, LiteLLM_BudgetTable(max_budget=0), now) is None
     assert resolve_effective_team_member_budget(None, None, now) is None
+
+
+@pytest.mark.asyncio
+async def test_jwt_member_without_user_row_still_enforces_default_windows() -> None:
+    from litellm.models.team import TeamMemberBudgetDuration, TeamMemberBudgetWindow
+    from litellm.proxy.auth.auth_checks import _check_team_member_budget
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    cache = UserApiKeyCache()
+    team = LiteLLM_TeamTable(
+        team_id="jwt-member-budget-team",
+        team_member_budget_limits=(
+            TeamMemberBudgetWindow(budget_duration=TeamMemberBudgetDuration.DAILY, max_budget=0),
+        ),
+    )
+    with pytest.raises(litellm.BudgetExceededError, match="24h"):
+        await _check_team_member_budget(
+            team_object=team,
+            user_object=None,
+            valid_token=UserAPIKeyAuth(user_id="jwt-member-only", team_id=team.team_id),
+            prisma_client=None,
+            user_api_key_cache=cache,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+            team_membership_loaded=True,
+        )

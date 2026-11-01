@@ -1,3 +1,11 @@
+import type { BudgetWindowEntry } from "../key_team_helpers/BudgetWindowsEditor";
+import { MemberBudgetWindows } from "./MemberBudgetWindows";
+import {
+  memberBudgetWindowsSchema,
+  memberBudgetWindowsUpdate,
+  type MemberBudgetWindow,
+} from "./memberBudgetWindowSchema";
+import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import type { components } from "@/lib/http/schema";
 import useCan from "@/app/(dashboard)/hooks/useCan";
@@ -277,6 +285,7 @@ export const mcpUnresolvableSaveError = (reason: string): string =>
 export type TeamMemberBudgetSource = components["schemas"]["TeamMemberResetBudgetResponse"]["budget_source"];
 
 export interface TeamMembership {
+  budget_limits?: BudgetWindowEntry[] | null;
   user_id: string;
   team_id: string;
   budget_id: string | null;
@@ -302,6 +311,7 @@ export interface TeamMembership {
 export interface TeamData {
   team_id: string;
   team_info: {
+    team_member_budget_limits?: MemberBudgetWindow[] | null;
     team_alias: string;
     team_id: string;
     organization_id: string | null;
@@ -376,6 +386,7 @@ const teamUpdateFieldsSchema = z.object({
   soft_budget_alerting_emails: z.union([z.string(), z.array(z.string())]).optional(),
   default_team_member_models: z.array(z.string()).optional(),
   team_member_budget: numericInputSchema,
+  team_member_budget_limits: memberBudgetWindowsSchema.optional(),
   team_member_budget_duration: z.string().nullish(),
   team_member_key_duration: z.string().optional(),
   team_member_tpm_limit: numericInputSchema,
@@ -472,6 +483,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   soft_budget_alerting_emails: "",
   default_team_member_models: [],
   team_member_budget: undefined,
+  team_member_budget_limits: [],
   team_member_budget_duration: undefined,
   team_member_key_duration: undefined,
   team_member_tpm_limit: undefined,
@@ -524,6 +536,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
     : "",
   default_team_member_models: info.default_team_member_models || [],
   team_member_budget: info.team_member_budget_table?.max_budget,
+  team_member_budget_limits: info.team_member_budget_limits ?? [],
   team_member_budget_duration: info.team_member_budget_table?.budget_duration,
   team_member_key_duration: info.metadata?.team_member_key_duration,
   team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
@@ -828,6 +841,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         user_email: values.user_email,
         user_id: values.user_id,
         role: values.role,
+        budget_limits: memberBudgetWindowsUpdate(values.budget_limits),
       };
 
       await teamMemberAddCall(accessToken, teamId, member);
@@ -867,6 +881,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         user_email: values.user_email,
         user_id: values.user_id,
         role: values.role,
+        budget_limits: memberBudgetWindowsUpdate(values.budget_limits, selectedEditMember?.budget_limits),
         max_budget_in_team: values.max_budget_in_team,
         tpm_limit: values.tpm_limit,
         rpm_limit: values.rpm_limit,
@@ -1101,6 +1116,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       };
 
       updateData.team_member_budget_duration = values.team_member_budget_duration;
+      if (
+        values.team_member_budget_limits !== undefined &&
+        (form.getFieldState("team_member_budget_limits").isDirty || info.team_member_budget_limits != null)
+      ) {
+        updateData.team_member_budget_limits = values.team_member_budget_limits;
+      }
 
       const newTeamMemberBudget =
         values.team_member_budget !== undefined ? numberOrNull(values.team_member_budget) : undefined;
@@ -1313,6 +1334,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           soft_budget: info.soft_budget,
           team_member_budget: info.team_member_budget_table?.max_budget,
           team_member_budget_duration: info.team_member_budget_table?.budget_duration,
+          team_member_budget_limits: info.team_member_budget_limits ?? [],
           team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
           team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
         }}
@@ -1688,6 +1710,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                               placeholder="Leave empty — all team models accessible to every member"
                             />
                           )}
+                        </FormField>
+                        <FormField
+                          control={form.control}
+                          name="team_member_budget_limits"
+                          label="Default member budget windows"
+                        >
+                          {({ value, onChange }) => <MemberBudgetWindows value={value ?? []} onChange={onChange} />}
                         </FormField>
                         <FormField
                           control={form.control}
@@ -2413,6 +2442,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Info className="ml-1 inline size-3.5 align-text-bottom" />
                   </SimpleTooltip>
                 </p>
+                {Boolean(info.team_member_budget_limits?.length) && (
+                  <div>
+                    Default member budget windows:{" "}
+                    {(info.team_member_budget_limits ?? [])
+                      .map((window) => `$${window.max_budget} ${getBudgetDurationLabel(window.budget_duration)}`)
+                      .join(", ")}
+                  </div>
+                )}
                 <div>Max Budget: {info.team_member_budget_table?.max_budget ?? "No Limit"}</div>
                 <div>Budget Duration: {info.team_member_budget_table?.budget_duration || "No Limit"}</div>
                 {modelMaxBudgetToEntries(
@@ -2571,6 +2608,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         mode="edit"
         config={{
           title: "Edit Member",
+          showBudgetWindows: true,
+          defaultBudgetWindows: info.team_member_budget_limits ?? [],
           showEmail: true,
           showUserId: true,
           roleOptions: [
@@ -2700,6 +2739,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         onSubmit={handleMemberCreate}
         accessToken={accessToken}
         teamId={teamId}
+        defaultBudgetWindows={info.team_member_budget_limits ?? []}
       />
 
       {/* Delete Member Confirmation Modal */}

@@ -1,3 +1,4 @@
+import type { BudgetWindowEntry } from "./key_team_helpers/BudgetWindowsEditor";
 // Shared date formatter for daily activity endpoints
 export const formatDate = (date: Date) => {
   const year = date.getFullYear();
@@ -2611,6 +2612,7 @@ export const modelPatchUpdateCall = async (
 };
 
 export interface Member {
+  budget_limits?: BudgetWindowEntry[];
   role: string;
   user_id: string | null;
   user_email?: string | null;
@@ -2627,6 +2629,7 @@ export interface Member {
 
 export const teamMemberAddCall = async (accessToken: string, teamId: string, formValues: Member) => {
   try {
+    const { budget_limits, ...member } = formValues;
     const url = proxyBaseUrl ? `${proxyBaseUrl}/team/member_add` : `/team/member_add`;
 
     const response = await fetch(url, {
@@ -2637,7 +2640,8 @@ export const teamMemberAddCall = async (accessToken: string, teamId: string, for
       },
       body: JSON.stringify({
         team_id: teamId,
-        member: formValues,
+        member,
+        ...(budget_limits !== undefined ? { budget_limits } : {}),
       }),
     });
 
@@ -2737,6 +2741,9 @@ export const teamMemberUpdateCall = async (
       role: formValues.role,
       user_id: formValues.user_id,
     };
+    if (formValues.budget_limits !== undefined) {
+      requestBody.budget_limits = formValues.budget_limits;
+    }
 
     const orNull = (value: unknown) => (value === undefined || value === null || value === "" ? null : value);
     if (formValues.user_email !== undefined) {

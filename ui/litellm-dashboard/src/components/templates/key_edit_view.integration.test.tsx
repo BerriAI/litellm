@@ -999,7 +999,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const deleteWindowButton = await screen.findByRole("button", { name: "✕" });
+    const deleteWindowButton = await screen.findByRole("button", { name: "Remove budget window 1" });
     await userEvent.click(deleteWindowButton);
 
     const submitButton = screen.getByRole("button", { name: /save changes/i });

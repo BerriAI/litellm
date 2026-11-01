@@ -7142,6 +7142,35 @@ async def _check_team_member_budget(
                 proxy_logging_obj=proxy_logging_obj,
             )
         loaded_membership = team_membership
+        from litellm.proxy.common_utils.team_member_budget import MemberBudgetCounter, get_team_member_budget_windows
+        from litellm.proxy.proxy_server import ensure_window_spend_counter_initialized, get_current_spend
+
+        for window in get_team_member_budget_windows(team_object, loaded_membership):
+            counter = MemberBudgetCounter.for_member(valid_token.user_id, team_object.team_id, window.budget_duration)
+            await ensure_window_spend_counter_initialized(
+                counter_key=counter.key,
+                entity_type="TeamMember",
+                entity_id=counter.entity_id,
+                window_duration=counter.duration.value,
+                window_start=counter.start,
+            )
+            spend = await get_current_spend(
+                counter_key=counter.key,
+                fallback_spend=0.0,
+                max_budget=window.max_budget,
+                window_entity_type="TeamMember",
+                window_entity_id=counter.entity_id,
+                window_duration=counter.duration.value,
+                window_start=counter.start,
+            )
+            if spend >= window.max_budget:
+                raise litellm.BudgetExceededError(
+                    current_cost=spend,
+                    max_budget=window.max_budget,
+                    message=f"User={valid_token.user_id} in Team={team_object.team_id} exceeded {window.budget_duration.value} budget",
+                    entity_type=Litellm_EntityType.TEAM_MEMBER.value,
+                    entity_id=counter.entity_id,
+                )
 
         # Per-member override wins; otherwise fall back to the team-level
         # default configured via team.metadata["team_member_budget_id"].

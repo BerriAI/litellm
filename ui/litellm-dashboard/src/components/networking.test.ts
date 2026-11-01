@@ -3,6 +3,50 @@ import { clearTokenCookies } from "@/utils/cookieUtils";
 import * as Networking from "./networking";
 import { uiHref } from "@/utils/uiHref";
 
+describe("member budget window requests", () => {
+  const windows = [
+    { budget_duration: "24h", max_budget: 20 },
+    { budget_duration: "30d", max_budget: 200 },
+  ];
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("should send member windows beside the member when adding a member", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({}));
+    vi.stubGlobal("fetch", fetchMock);
+    await Networking.teamMemberAddCall("test-session", "team", {
+      user_id: "member",
+      role: "user",
+      budget_limits: windows,
+    });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      team_id: "team",
+      member: { user_id: "member", role: "user" },
+      budget_limits: windows,
+    });
+  });
+
+  it.each([windows, []])("should send configured or cleared member windows on update", async (budget_limits) => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({}));
+    vi.stubGlobal("fetch", fetchMock);
+    await Networking.teamMemberUpdateCall("test-session", "team", { user_id: "member", role: "user", budget_limits });
+    const expected = {
+      team_id: "team",
+      user_id: "member",
+      role: "user",
+      budget_limits,
+    };
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(expected);
+  });
+
+  it("should omit windows when an older caller does not supply them", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({}));
+    vi.stubGlobal("fetch", fetchMock);
+    await Networking.teamMemberUpdateCall("test-session", "team", { user_id: "member", role: "user" });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ team_id: "team", user_id: "member", role: "user" });
+  });
+});
+
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
   getCookie: vi.fn(),

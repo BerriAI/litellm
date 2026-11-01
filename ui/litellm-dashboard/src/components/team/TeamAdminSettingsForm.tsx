@@ -19,6 +19,8 @@ import MetadataKeyValueFields, {
   metadataPairsSchema,
 } from "../common_components/MetadataKeyValueFields";
 import NumericalInput from "../shared/numerical_input";
+import { MemberBudgetWindows } from "./MemberBudgetWindows";
+import { isMemberBudgetWindows, memberBudgetWindowsSchema } from "./memberBudgetWindowSchema";
 import {
   isTeamAdminDurationSettingsField,
   TEAM_ADMIN_METADATA_FIELD,
@@ -42,6 +44,7 @@ const teamAdminSettingsShape = {
   soft_budget: numericInputSchema,
   team_member_budget: numericInputSchema,
   team_member_budget_duration: z.string().nullish(),
+  team_member_budget_limits: memberBudgetWindowsSchema.optional(),
   team_member_tpm_limit: numericInputSchema,
   team_member_rpm_limit: numericInputSchema,
 };
@@ -128,7 +131,16 @@ function TeamAdminSettingsFormFields({
   const form = useZodForm(schema, { defaultValues: { ...initialValues, metadata: [...(metadata?.pairs ?? [])] } });
   const draft = useWatch({ control: form.control });
   const changesFrom = (values: typeof draft): TeamAdminSettingsChanges => ({
-    ...teamAdminSettingsChanges(values, initialValues, editableFields),
+    ...teamAdminSettingsChanges(
+      {
+        ...values,
+        team_member_budget_limits: isMemberBudgetWindows(values.team_member_budget_limits)
+          ? values.team_member_budget_limits
+          : undefined,
+      },
+      initialValues,
+      editableFields,
+    ),
     ...(editsMetadata ? teamAdminMetadataChange(values.metadata, metadata.context) : {}),
   });
   const hasChanges = Object.keys(changesFrom(draft)).length > 0;
@@ -170,6 +182,15 @@ function TeamAdminSettingsFormFields({
             }
           </FormField>
         ))}
+        {editableFields.has("team_member_budget_limits") && (
+          <FormField
+            control={form.control}
+            name="team_member_budget_limits"
+            label={teamAdminFieldLabel("team_member_budget_limits")}
+          >
+            {({ value, onChange }) => <MemberBudgetWindows value={value ?? []} onChange={onChange} />}
+          </FormField>
+        )}
         {editsMetadata && (
           <Field>
             <FieldLabel>{teamAdminFieldLabel(TEAM_ADMIN_METADATA_FIELD)}</FieldLabel>

@@ -415,6 +415,28 @@ describe("TeamInfoView - member budget reset prompt", () => {
     return await screen.findByLabelText("Default Budget (USD)");
   };
 
+  it("should submit cleared default member windows after their section is collapsed", async () => {
+    const user = userEvent.setup({ delay: null });
+    const data = createMockTeamData({
+      team_member_budget_limits: [
+        { budget_duration: "24h", max_budget: 20 },
+        { budget_duration: "30d", max_budget: 200 },
+      ],
+    });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(data);
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: savedTeam, team_id: "123" });
+    renderWithProviders(<TeamInfoView {...props} />);
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(screen.getByRole("button", { name: "Remove budget window 2" }));
+    await user.click(screen.getByRole("button", { name: "Remove budget window 1" }));
+    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].team_member_budget_limits).toEqual([]);
+  });
+
   const submitNewDefault = async (user: ReturnType<typeof userEvent.setup>, input: HTMLElement, value: string) => {
     fireEvent.change(input, { target: { value } });
     await user.click(screen.getByRole("button", { name: /save changes/i }));

@@ -171,6 +171,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     team_member_has_permission,
     update_metadata_fields,
     upsert_budget_and_membership,
+    upsert_team_member_budget_windows,
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_team_model_max_budget,
@@ -533,7 +534,14 @@ def _team_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamTable]"
     )
 
 
-def _team_membership_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_TeamMembership]":
+def _team_membership_db(
+    prisma_client: PrismaClient | None,
+    tx: "MemberWriteTx | Prisma | None" = None,
+) -> "TableActions[prisma_models.LiteLLM_TeamMembership]":
+    if tx is not None:
+        return cast(  # cast-ok: Prisma JSON writes are strings; TableActions widens inputs at the transaction boundary
+            "TableActions[prisma_models.LiteLLM_TeamMembership]", tx.litellm_teammembership
+        )
     return TeamMembershipRepository(prisma_client).table
 
 
@@ -1658,6 +1666,7 @@ async def new_team(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+    - team_member_budget_limits: Optional[list] - Default concurrent spending caps for each member, e.g. [{"budget_duration": "24h", "max_budget": 20}, {"budget_duration": "30d", "max_budget": 200}]. Each window resets independently at its UTC calendar boundary. A member override replaces these defaults; an empty list disables the defaults.
     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -1961,10 +1970,7 @@ async def new_team(
             )
 
         ## ADD TO TEAM TABLE
-        complete_team_data: Final = LiteLLM_TeamTable(
-            **data_json,
-            model_id=_model_id,
-        )
+        complete_team_data: Final = LiteLLM_TeamTable.model_validate({**data_json, "model_id": _model_id})
 
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
@@ -2436,6 +2442,7 @@ async def update_team(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+    - team_member_budget_limits: Optional[list] - Default concurrent spending caps for each member, e.g. [{"budget_duration": "24h", "max_budget": 20}, {"budget_duration": "30d", "max_budget": 200}]. Each window resets independently at its UTC calendar boundary. A member override replaces these defaults; an empty list disables the defaults.
     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -3147,6 +3154,8 @@ async def _validate_team_member_add_permissions(
     # budget and model controls stay admin-only.  Reject them here so a
     # self-joining non-admin cannot set their own cap, reset window, or model
     # scope via the bypass.
+    if data.budget_limits is not None:
+        raise HTTPException(status_code=403, detail="Only admins may set member budget windows")
     if data.max_budget_in_team is not None or data.budget_duration is not None or data.allowed_models is not None:
         raise HTTPException(
             status_code=403,
@@ -3237,6 +3246,13 @@ async def _process_team_members(
             raise HTTPException(
                 status_code=500,
                 detail={"error": f"Unable to add user - {m}, to team - {data.team_id}, for reason - {e}"},
+            )
+        if data.budget_limits is not None:
+            updated_tm = await upsert_team_member_budget_windows(
+                table=_team_membership_db(prisma_client, tx),
+                team_id=data.team_id,
+                user_id=updated_user.user_id,
+                windows=data.budget_limits,
             )
         updated_users.append(updated_user)
         if updated_tm is not None:
@@ -3710,6 +3726,8 @@ async def team_member_add(
     If user doesn't exist, new user row will also be added to User Table
 
     Only proxy_admin or admin of team, allowed to access this endpoint.
+
+    - budget_limits: Optional[list] - Concurrent caps for the added member, using budget_duration (1h, 24h, 7d, or 30d) and max_budget. Omit or send [] to inherit team defaults.
     ```
 
     curl -X POST 'http://0.0.0.0:4000/team/member_add' \
@@ -4119,6 +4137,8 @@ async def team_member_update(
     [BETA]
 
     Update team member budgets and team member role
+
+    - budget_limits: Optional[list] - Replace this member's concurrent spending caps. Each entry has budget_duration (1h, 24h, 7d, or 30d) and max_budget. Omit to preserve the override; send [] to restore team defaults.
     """
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
@@ -4233,7 +4253,14 @@ async def team_member_update(
             budget_patch=budget_patch,
             team_default_budget_id=team_default_budget_id,
         )
-    if budget_patch:
+        if data.budget_limits is not None:
+            await upsert_team_member_budget_windows(
+                table=_team_membership_db(prisma_client, tx),
+                team_id=data.team_id,
+                user_id=received_user_id,
+                windows=data.budget_limits,
+            )
+    if budget_patch or data.budget_limits is not None:
         await invalidate_team_member_spend_state(
             user_id=received_user_id,
             team_id=data.team_id,
@@ -4257,6 +4284,7 @@ async def team_member_update(
         user_id=received_user_id,
         user_email=data.user_email,
         max_budget_in_team=data.max_budget_in_team,
+        budget_limits=data.budget_limits,
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,
         budget_duration=data.budget_duration,
@@ -5185,6 +5213,7 @@ def _transform_teams_to_deleted_records(
             "litellm_model_table",
             "object_permission",
             "id",
+            "team_member_budget_limits",
             "budget_limits",  # not in LiteLLM_DeletedTeamTable schema
             "default_team_member_models",  # not in LiteLLM_DeletedTeamTable schema
         ):

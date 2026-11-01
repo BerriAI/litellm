@@ -3783,15 +3783,67 @@ async def _increment_spend_counters_batched(
         scope_user_id: str, scope_team_id: str
     ) -> tuple[PendingSpendIncrement | BaseException, ...]:
         team_member_counter_key: Final = f"spend:team_member:{scope_user_id}:{scope_team_id}"
-        if team_member_counter_key in reserved_counter_keys:
-            return ()
-        return (
-            await _prepare_spend_counter_increment(
-                counter_key=team_member_counter_key,
-                source_cache_key=f"team_membership:{scope_user_id}:{scope_team_id}",
-                increment=cost,
-            ),
+        primary_pending: Final = (
+            ()
+            if team_member_counter_key in reserved_counter_keys
+            else (
+                await _prepare_spend_counter_increment(
+                    counter_key=team_member_counter_key,
+                    source_cache_key=f"team_membership:{scope_user_id}:{scope_team_id}",
+                    increment=cost,
+                ),
+            )
         )
+        if prisma_client is None:
+            return primary_pending
+        from litellm.models.team import TeamMemberBudgetWindow
+        from litellm.proxy.auth.auth_checks import TeamNotFoundError, get_team_membership, get_team_object
+        from litellm.proxy.common_utils.team_member_budget import MemberBudgetCounter, get_team_member_budget_windows
+
+        try:
+            team: Final = await get_team_object(
+                team_id=scope_team_id, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+            )
+        except TeamNotFoundError:
+            # A team deleted during an in-flight request has no window settings to apply.
+            return primary_pending
+        membership: Final = await get_team_membership(
+            user_id=scope_user_id,
+            team_id=scope_team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+
+        async def member_window_increment(window: TeamMemberBudgetWindow) -> PendingSpendIncrement | None:
+            counter: Final = MemberBudgetCounter.for_member(scope_user_id, scope_team_id, window.budget_duration)
+            pending: Final = (
+                await _prepare_window_spend_counter_increment(
+                    counter_key=counter.key,
+                    entity_type="TeamMember",
+                    entity_id=counter.entity_id,
+                    window_duration=counter.duration.value,
+                    window_start=counter.start,
+                    increment=cost,
+                )
+                if counter.key not in reserved_counter_keys
+                else None
+            )
+            await _enqueue_window_spend_row_update(
+                entity_type=Litellm_EntityType.TEAM_MEMBER,
+                entity_id=counter.entity_id,
+                reset_at=counter.reset_at,
+                window_duration=counter.duration.value,
+                window_start=counter.start,
+                increment=cost,
+                request_started_at=request_started_at,
+            )
+            return pending
+
+        window_pending: Final = await asyncio.gather(
+            *(member_window_increment(window) for window in get_team_member_budget_windows(team, membership)),
+            return_exceptions=True,
+        )
+        return primary_pending + tuple(item for item in window_pending if item is not None)
 
     async def _user_scope(scope_user_id: str) -> tuple[PendingSpendIncrement | BaseException, ...]:
         user_counter_key: Final = f"spend:user:{scope_user_id}"
