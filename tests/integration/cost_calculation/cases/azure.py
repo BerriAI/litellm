@@ -6070,6 +6070,21 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     *bridge_pairs(
+        (AZURE_GPT_6_ASTRA_RESPONSES_JSON,),
+        ("/v1/chat/completions",),
+        deployment=Deployment(model="azure/responses/gpt-6-astra"),
+    ),
+    *bridge_pairs(
+        (AZURE_GPT_6_LUNA_RESPONSES_JSON,),
+        ("/v1/chat/completions",),
+        deployment=Deployment(model="azure/responses/gpt-6-luna"),
+    ),
+    *bridge_pairs(
+        (AZURE_GPT_6_1_SOL_RESPONSES_JSON,),
+        ("/v1/chat/completions",),
+        deployment=Deployment(model="azure/responses/gpt-6.1-sol"),
+    ),
+    *bridge_pairs(
         (AZURE_GPT_5_6_INPUT_TEXT, AZURE_GPT_5_6_CACHE_READ, AZURE_GPT_5_6_STREAM, AZURE_GPT_5_6_REASONING),
         ("/v1/messages",),
     ),
