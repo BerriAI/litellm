@@ -2013,3 +2013,123 @@ async def test_update_cache_still_adds_spend_to_the_others_when_one_cached_objec
         1.25,
         10.25,
     )
+
+
+# ---------------------------------------------------------------------------
+# budget-window spend survives an auth-cache miss (issue #49179)
+# ---------------------------------------------------------------------------
+
+_EVICTED_KEY_BUDGET_LIMITS: Final = (
+    '[{"budget_duration": "1mo", "reset_at": "2026-12-01T00:00:00+00:00"}]'
+)
+
+
+def _mock_db_serving_budget_limits(
+    monkeypatch,
+    *,
+    key_row: object = None,
+    team_row: object = None,
+) -> AsyncMock:
+    """Stand-in prisma client whose ``get_data`` serves a key or team row."""
+    prisma = MagicMock()
+
+    async def _get_data(**kwargs):
+        if kwargs.get("token") is not None:
+            return key_row
+        if kwargs.get("team_id") is not None:
+            return team_row
+        return None
+
+    prisma.get_data = AsyncMock(side_effect=_get_data)
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+    return prisma
+
+
+def _pipeline_recorder(fake_cache) -> dict[str, float]:
+    recorded: dict[str, float] = {}
+
+    async def _record_pipeline(increment_list, **_):
+        results = []
+        for op in increment_list:
+            recorded[op["key"]] = recorded.get(op["key"], 0.0) + op["increment_value"]
+            results.append(recorded[op["key"]])
+        return results
+
+    fake_cache.redis_cache.async_increment_pipeline = AsyncMock(side_effect=_record_pipeline)
+    return recorded
+
+
+@pytest.fixture
+def window_spend_env(monkeypatch):
+    """Common fakes for the cache-miss window tests: cold counters, no Redis seed source."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    fake_user_cache = _make_user_api_key_cache(get_value=None)  # the update evicted every object
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced_window", AsyncMock(return_value=0.0))
+    enqueued: Final = AsyncMock()
+    monkeypatch.setattr(ps, "_enqueue_window_spend_row_update", enqueued)
+    return {"cache": fake_cache, "enqueued": enqueued}
+
+
+@pytest.mark.asyncio
+async def test_key_cache_miss_still_bills_the_row_budget_window(window_spend_env, monkeypatch):
+    """A request that started before /key/update finished after the eviction must
+    still charge its cost to the key's budget-window total (issue #49179)."""
+    from types import SimpleNamespace
+
+    _mock_db_serving_budget_limits(
+        monkeypatch,
+        key_row=SimpleNamespace(budget_limits=_EVICTED_KEY_BUDGET_LIMITS),
+    )
+    recorded = _pipeline_recorder(window_spend_env["cache"])
+
+    await ps.increment_spend_counters(token="hashed-tok", team_id=None, user_id=None, response_cost=5.0)
+
+    window_spend_env["enqueued"].assert_awaited_once()
+    enqueue_kwargs = window_spend_env["enqueued"].await_args.kwargs
+    assert enqueue_kwargs["entity_type"] == ps.Litellm_EntityType.KEY
+    assert enqueue_kwargs["entity_id"] == "hashed-tok"
+    assert enqueue_kwargs["window_duration"] == "1mo"
+    assert enqueue_kwargs["increment"] == 5.0
+    assert recorded["spend:key:hashed-tok"] == 5.0
+    assert recorded["spend:key:hashed-tok:window:1mo"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_team_cache_miss_still_bills_the_row_budget_window(window_spend_env, monkeypatch):
+    """Same eviction race as the key scope: /team/update during an in-flight
+    request must not drop that request's cost from the team's window total."""
+    from types import SimpleNamespace
+
+    _mock_db_serving_budget_limits(
+        monkeypatch,
+        team_row=SimpleNamespace(budget_limits=_EVICTED_KEY_BUDGET_LIMITS),
+    )
+    recorded = _pipeline_recorder(window_spend_env["cache"])
+
+    await ps.increment_spend_counters(token=None, team_id="team-1", user_id=None, response_cost=5.0)
+
+    window_spend_env["enqueued"].assert_awaited_once()
+    enqueue_kwargs = window_spend_env["enqueued"].await_args.kwargs
+    assert enqueue_kwargs["entity_type"] == ps.Litellm_EntityType.TEAM
+    assert enqueue_kwargs["entity_id"] == "team-1"
+    assert enqueue_kwargs["window_duration"] == "1mo"
+    assert enqueue_kwargs["increment"] == 5.0
+    assert recorded["spend:team:team-1"] == 5.0
+    assert recorded["spend:team:team-1:window:1mo"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_key_cache_miss_with_no_db_row_skips_the_window_without_failing(window_spend_env, monkeypatch):
+    """A key deleted mid-flight has no row to charge: the window stays silent and
+    the plain key counter still moves."""
+    prisma = _mock_db_serving_budget_limits(monkeypatch, key_row=None)
+    recorded = _pipeline_recorder(window_spend_env["cache"])
+
+    await ps.increment_spend_counters(token="hashed-tok", team_id=None, user_id=None, response_cost=5.0)
+
+    window_spend_env["enqueued"].assert_not_awaited()
+    assert prisma.get_data.await_count == 1
+    assert recorded == {"spend:key:hashed-tok": 5.0}
