@@ -293,6 +293,24 @@ async def test_claude_count_rejects_a_lone_responses_tool_without_calling_bedroc
     assert bedrock.posted_hosts() == ()
 
 
+@pytest.mark.asyncio
+async def test_claude_count_rejects_a_text_attachment_it_cannot_decode_without_calling_bedrock() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+    text_attachment: Final = "data:text/plain;charset=bogus-cs;base64," + base64.b64encode(b"hello").decode()
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="bedrock_mantle/anthropic.claude-opus-5-5",
+        messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": text_attachment}}]}],
+        contents=None,
+        deployment=DEPLOYMENT,
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert "bogus-cs" in (result.error_message or "")
+    assert bedrock.posted_hosts() == ()
+
+
 _CLAUDE_REPLY: Final = {
     "id": "msg_1",
     "type": "message",

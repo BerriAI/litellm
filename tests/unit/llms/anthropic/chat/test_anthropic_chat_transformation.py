@@ -1,3 +1,4 @@
+import base64
 import copy
 import json
 import logging
@@ -10218,14 +10219,14 @@ def test_chat_transform_request_keeps_a_conversion_error_that_a_dropped_orphan_a
                     "tool_calls": [
                         {
                             **_WEATHER_CALL["tool_calls"][0],
-                            "function": {"name": "get_weather", "arguments": {"city": "Paris"}},
+                            "function": {"name": "get_weather", "arguments": ["Paris"]},
                         }
                     ],
                 },
                 {"role": "tool", "tool_call_id": "toolu_01", "content": "rain"},
             ],
-            "'dict' object has no attribute 'strip'",
-            id="object_tool_call_arguments",
+            "'list' object has no attribute 'strip'",
+            id="list_tool_call_arguments",
         ),
         pytest.param(
             [{"role": "user", "content": [{"type": "image_url", "image_url": ["x"]}]}],
@@ -10479,3 +10480,27 @@ def test_claude_cache_control_cap_does_not_count_a_message_level_hint_that_list_
 
     assert sorted(_cached_texts(body)) == ["system prompt", "turn 1", "turn 2", "turn 3"]
     assert json.dumps(body).count('"cache_control"') == 4
+
+
+def test_completion_rejecting_a_text_attachment_does_not_echo_the_request_back(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=httpx.Response(500))
+    attachment_data: Final = base64.b64encode(b"attachment body that stays out of the error " * 64).decode()
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model="anthropic/claude-sonnet-4-5-20250929",
+            api_key="mock_api_key",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Summarize this file"},
+                        {"type": "file", "file": {"file_data": f"data:text/plain;charset=punycode;base64,{attachment_data}"}},
+                    ],
+                }
+            ],
+        )
+
+    assert "unsupported encoding: punycode" in str(exc_info.value)
+    assert attachment_data not in str(exc_info.value)
+    assert route.call_count == 0

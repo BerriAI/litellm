@@ -16,6 +16,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
     _EMPTY_TEXT_PLACEHOLDER,
@@ -38,6 +39,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     make_valid_bedrock_tool_name,
     ollama_pt,
     parse_mime_type,
+    requires_inline_base64_media,
     sanitize_messages_for_tool_calling,
     THOUGHT_SIGNATURE_SEPARATOR,
 )
@@ -3189,6 +3191,35 @@ def test_convert_to_anthropic_tool_result_image_with_cache_control():
     assert result["content"][1]["cache_control"]["type"] == "ephemeral"
 
 
+@pytest.mark.parametrize("tool_output", [{"result_key": "result_value"}, 42, 0, 3.5, True, False])
+def test_convert_to_anthropic_tool_result_serializes_non_string_content(tool_output):
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    result = convert_to_anthropic_tool_result({"role": "tool", "tool_call_id": "call_value", "content": tool_output})
+
+    assert result["type"] == "tool_result"
+    assert json.loads(result["content"]) == tool_output
+
+
+@pytest.mark.parametrize(
+    "tool_message",
+    [
+        {"role": "tool", "tool_call_id": "call_value", "content": None},
+        {"role": "tool", "tool_call_id": "call_value"},
+    ],
+)
+def test_convert_to_anthropic_tool_result_sends_an_empty_result_for_null_or_missing_content(tool_message):
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    result = convert_to_anthropic_tool_result(tool_message)
+
+    assert result == {"type": "tool_result", "tool_use_id": "call_value", "content": ""}
+
+
 def test_convert_to_anthropic_tool_result_image_without_cache_control():
     """
     Test that images without cache_control in tool results work correctly.
@@ -5203,6 +5234,7 @@ def test_group_tool_exchanges_is_linear_in_message_count():
 
 
 _PDF_DATA_URI = "data:application/pdf;base64," + base64.b64encode(b"%PDF-1.4 regression fixture").decode()
+_PNG_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\n regression fixture").decode()
 _PNG_DATA_URI = (
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
@@ -5233,6 +5265,132 @@ def test_bedrock_converse_pdf_only_user_message_gets_text_block():
     assert len(result) == 1
     assert any("document" in block for block in result[0]["content"])
     assert _text_blocks(result[0]) == [BEDROCK_DOCUMENT_PLACEHOLDER_TEXT]
+
+
+@pytest.mark.parametrize(
+    ("model", "llm_provider"),
+    [
+        ("claude-sonnet-5", "anthropic"),
+        ("invoke/us.anthropic.claude-sonnet-5", "bedrock"),
+        ("claude-sonnet-5", "vertex_ai"),
+        ("claude-sonnet-5", "snowflake"),
+    ],
+)
+def test_anthropic_messages_pt_user_pdf_data_uri_becomes_document_block(model, llm_provider):
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What word is in this document?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": _PDF_DATA_URI},
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model=model, llm_provider=llm_provider)
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": _PDF_DATA_URI.split(",", 1)[1],
+        },
+        "cache_control": {"type": "ephemeral"},
+    }
+    assert all(block["type"] != "image" for block in result[0]["content"])
+
+
+_TEXT_B64 = base64.b64encode("the secret code word is MANGO\n".encode()).decode()
+_TEXT_DATA_URI = "data:text/plain;base64," + _TEXT_B64
+_TEXT_DATA_URI_WITH_CHARSET = "data:text/plain;charset=utf-8;base64," + _TEXT_B64
+_LATIN1_TEXT_DATA_URI = "data:text/plain;charset=iso-8859-1;base64," + base64.b64encode(
+    "the secret code word is MANGÓ\n".encode("latin-1")
+).decode()
+_OCTET_TEXT_DATA_URI = "data:application/octet-stream;base64," + _TEXT_B64
+
+
+@pytest.mark.parametrize(
+    "block, expected_text",
+    [
+        ({"type": "image_url", "image_url": {"url": _TEXT_DATA_URI}}, "the secret code word is MANGO\n"),
+        ({"type": "file", "file": {"file_data": _TEXT_DATA_URI}}, "the secret code word is MANGO\n"),
+        ({"type": "image_url", "image_url": {"url": _TEXT_DATA_URI_WITH_CHARSET}}, "the secret code word is MANGO\n"),
+        ({"type": "file", "file": {"file_data": _TEXT_DATA_URI_WITH_CHARSET}}, "the secret code word is MANGO\n"),
+        ({"type": "file", "file": {"file_data": _LATIN1_TEXT_DATA_URI}}, "the secret code word is MANGÓ\n"),
+        (
+            {"type": "image_url", "image_url": {"url": "data:TEXT/PLAIN;base64," + _TEXT_B64}},
+            "the secret code word is MANGO\n",
+        ),
+        (
+            {"type": "image_url", "image_url": {"url": _LATIN1_TEXT_DATA_URI.replace("text/plain", "TEXT/PLAIN", 1)}},
+            "the secret code word is MANGÓ\n",
+        ),
+        ({"type": "file", "file": {"file_data": "data:TEXT/PLAIN;base64," + _TEXT_B64}}, "the secret code word is MANGO\n"),
+        (
+            {"type": "file", "file": {"file_data": _OCTET_TEXT_DATA_URI, "format": "Text/Plain"}},
+            "the secret code word is MANGO\n",
+        ),
+        (
+            {"type": "image_url", "image_url": {"url": _OCTET_TEXT_DATA_URI, "format": "Text/Plain"}},
+            "the secret code word is MANGO\n",
+        ),
+    ],
+    ids=[
+        "image_url",
+        "file",
+        "image_url_charset",
+        "file_charset",
+        "file_latin1",
+        "image_url_uppercase",
+        "uppercase_latin1",
+        "file_uppercase",
+        "file_mixed_case_format",
+        "image_url_mixed_case_format",
+    ],
+)
+def test_anthropic_messages_pt_text_plain_data_uri_becomes_text_source_document(block, expected_text):
+    messages = [{"role": "user", "content": [{"type": "text", "text": "What is the code word?"}, block]}]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "text", "media_type": "text/plain", "data": expected_text},
+    }
+
+
+def test_anthropic_messages_pt_user_png_data_uri_stays_an_image_block():
+    messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": _PNG_DATA_URI}}]}]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": _PNG_DATA_URI.split(",", 1)[1]},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "llm_provider", "expected"),
+    [
+        ("invoke/us.anthropic.claude-sonnet-5", "bedrock", True),
+        ("claude-sonnet-5", "vertex_ai", True),
+        ("claude-sonnet-5", "vertex_ai_beta", True),
+        ("claude-sonnet-5", "snowflake", False),
+        ("claude-sonnet-5", "anthropic", False),
+        ("us.anthropic.claude-sonnet-5", "bedrock", False),
+        ("claude-sonnet-5", None, False),
+    ],
+)
+def test_requires_inline_base64_media(model, llm_provider, expected):
+    assert requires_inline_base64_media(model, llm_provider) is expected
 
 
 def test_bedrock_converse_document_with_text_gets_no_extra_text_block():
@@ -9008,3 +9166,683 @@ def test_wrong_type_template_field_in_requests_leaves_the_deployments_in_rotatio
     response = router.completion(model="template-group", messages=TEMPLATE_MESSAGES, mock_response="Blue")
 
     assert response.choices[0].message.content == "Blue"
+
+
+def test_anthropic_messages_pt_keeps_assistant_tool_use_content_block():
+    messages = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "let me look that up"},
+                {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {"type": "text", "text": "let me look that up"},
+        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}},
+    ]
+    assert result[2]["content"] == [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "sunny"}]
+
+
+def test_anthropic_messages_pt_does_not_duplicate_a_tool_use_present_in_both_shapes():
+    messages = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "get_weather", "input": {"city": "paris"}}
+            ],
+            "tool_calls": [
+                {
+                    "id": "functions.Bash:0",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "paris"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "functions.Bash:0", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {"type": "tool_use", "id": "functions_Bash_0", "name": "get_weather", "input": {"city": "paris"}}
+    ]
+
+
+def test_anthropic_messages_pt_sanitizes_a_native_tool_use_id_like_its_tool_result():
+    messages = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "get_weather", "input": {"city": "paris"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "functions.Bash:0", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {"type": "tool_use", "id": "functions_Bash_0", "name": "get_weather", "input": {"city": "paris"}}
+    ]
+    assert result[2]["content"] == [
+        {"type": "tool_result", "tool_use_id": "functions_Bash_0", "content": "sunny"}
+    ]
+
+
+def test_anthropic_messages_pt_normalizes_a_native_tool_use_block():
+    messages = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "index": 0,
+                    "id": "toolu_01",
+                    "name": "get_weather",
+                    "input": '{"city": "paris"}',
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {
+            "type": "tool_use",
+            "id": "toolu_01",
+            "name": "get_weather",
+            "input": {"city": "paris"},
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("url", "format_override", "expected"),
+    [
+        (
+            "data:application/pdf;base64," + _PNG_B64,
+            "image/png",
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _PNG_B64}},
+        ),
+        (
+            "data:image/png;base64,JVBERi0=",
+            "application/pdf",
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="}},
+        ),
+        (
+            _PDF_DATA_URI,
+            "image/png",
+            {
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": _PDF_DATA_URI.split(",", 1)[1]},
+            },
+        ),
+    ],
+    ids=["png_bytes_under_a_pdf_uri_declared_png", "png_uri_declared_pdf", "pdf_bytes_declared_png"],
+)
+def test_anthropic_messages_pt_honours_an_explicit_format_over_the_data_uri(url, format_override, expected):
+    messages = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": url, "format": format_override}}]}
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [expected]
+
+
+def test_anthropic_messages_pt_collapses_native_tool_use_blocks_sharing_an_id():
+    messages = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "get_weather", "input": {"city": "paris"}},
+                {"type": "tool_use", "id": "functions_Bash_0", "name": "get_weather", "input": {"city": "london"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "functions.Bash:0", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {"type": "tool_use", "id": "functions_Bash_0", "name": "get_weather", "input": {"city": "paris"}}
+    ]
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    [{"url": _PDF_DATA_URI}, {"url": _PDF_DATA_URI, "format": "image/png"}],
+    ids=["no-format", "declared-png"],
+)
+def test_anthropic_messages_pt_tool_result_pdf_data_uri_becomes_a_document_block(image_url):
+    messages = [
+        {"role": "user", "content": "fetch the invoice"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "fetch_invoice", "input": {}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01",
+            "content": [{"type": "image_url", "image_url": image_url}],
+        },
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[2]["content"] == [
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": _PDF_DATA_URI.split(",", 1)[1],
+                    },
+                }
+            ],
+        }
+    ]
+
+
+def test_anthropic_messages_pt_text_document_keeps_charset_named_by_the_data_uri():
+    latin1_data_uri: Final = "data:text/plain;charset=iso-8859-1;base64," + base64.b64encode(
+        "café".encode("iso-8859-1")
+    ).decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": latin1_data_uri, "format": "text/plain"}}],
+        }
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [
+        {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "café"}}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("charset", "text"),
+    [("shift_jis", "日本語"), ("windows-1252", "café"), ("KOI8-R", "привет"), ("utf-16", "naïve")],
+)
+def test_anthropic_messages_pt_reads_a_text_attachment_in_a_legacy_encoding_its_data_uri_names(charset, text):
+    data_uri: Final = f"data:text/plain;charset={charset};base64," + base64.b64encode(text.encode(charset)).decode()
+    messages = [{"role": "user", "content": [{"type": "file", "file": {"file_data": data_uri}}]}]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [
+        {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": text}}
+    ]
+
+
+@pytest.mark.parametrize("charset", ["punycode", "utf-7"])
+def test_anthropic_messages_pt_rejects_a_text_attachment_charset_that_is_not_a_supported_text_encoding(charset):
+    data_uri: Final = f"data:text/plain;charset={charset};base64," + base64.b64encode(b"abc").decode()
+    messages = [{"role": "user", "content": [{"type": "file", "file": {"file_data": data_uri}}]}]
+
+    with pytest.raises(litellm.BadRequestError, match=f"unsupported encoding: {charset}"):
+        anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+
+def test_anthropic_messages_pt_native_tool_use_input_survives_guardrail_redaction():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": REDACTED_BY_LITELLM}],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]
+
+
+def test_anthropic_messages_pt_drops_a_native_tool_use_nobody_answered():
+    messages = [
+        {"role": "user", "content": "what is the weather"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "checking"},
+                {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}},
+            ],
+        },
+        {"role": "user", "content": "never mind, tell me a joke"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [{"type": "text", "text": "checking"}]
+
+
+def _empty_text_beside_native_tool_use(follow_up: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "what is the weather"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": " "},
+                {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}},
+            ],
+        },
+        follow_up,
+    ]
+
+
+@pytest.mark.parametrize("modify_params", [False, True])
+def test_anthropic_messages_pt_drops_empty_text_beside_an_answered_native_tool_use(monkeypatch, modify_params):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    messages: Final = _empty_text_beside_native_tool_use({"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"})
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]
+
+
+@pytest.mark.parametrize("modify_params", [False, True])
+def test_anthropic_messages_pt_keeps_the_placeholder_beside_an_unanswered_native_tool_use(monkeypatch, modify_params):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    messages: Final = _empty_text_beside_native_tool_use({"role": "user", "content": "never mind"})
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
+
+
+def _answered_native_tool_use(tool_use: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "what is the weather"},
+        {"role": "assistant", "content": [tool_use]},
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "tool_use",
+    [
+        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": "[1, 2]"},
+        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": [1, 2]},
+        {"type": "tool_use", "id": "toolu_01", "name": "get_weather"},
+        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": "{not json"},
+    ],
+    ids=["json-array-string", "list", "missing", "unparseable"],
+)
+def test_anthropic_messages_pt_native_tool_use_input_that_is_not_an_object_follows_drop_params(tool_use):
+    messages: Final = _answered_native_tool_use(tool_use)
+
+    with pytest.raises(ValueError, match="get_weather"):
+        anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+    dropped: Final = anthropic_messages_pt(
+        messages=messages, model="claude-sonnet-5", llm_provider="anthropic", drop_params=True
+    )
+
+    assert dropped[1]["content"] == [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]
+
+
+def test_anthropic_messages_pt_unparseable_tool_call_arguments_follow_drop_params():
+    messages: Final = [
+        {"role": "user", "content": "what is the weather"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "toolu_01", "type": "function", "function": {"name": "get_weather", "arguments": "{not json"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+    with pytest.raises(ValueError, match="get_weather"):
+        anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+    dropped: Final = anthropic_messages_pt(
+        messages=messages, model="claude-sonnet-5", llm_provider="anthropic", drop_params=True
+    )
+
+    assert dropped[1]["content"] == [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]
+
+
+_NAMED_PDF_DATA_URI = "data:application/pdf;name=report.pdf;base64," + base64.b64encode(b"%PDF-1.4 named").decode()
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"type": "image_url", "image_url": {"url": _NAMED_PDF_DATA_URI}},
+        {"type": "file", "file": {"file_data": _NAMED_PDF_DATA_URI}},
+    ],
+    ids=["image_url", "file"],
+)
+def test_anthropic_messages_pt_sends_a_named_pdf_under_its_bare_media_type(block):
+    result = anthropic_messages_pt(
+        messages=[{"role": "user", "content": [block]}], model="claude-sonnet-5", llm_provider="anthropic"
+    )
+
+    assert result[0]["content"] == [
+        {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": _NAMED_PDF_DATA_URI.split(",", 1)[1],
+            },
+        }
+    ]
+
+
+def test_anthropic_messages_pt_keeps_a_pdf_a_document_when_the_format_is_generic():
+    messages = [
+        {"role": "user", "content": "fetch the invoice"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "fetch_invoice", "input": {}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": _PDF_DATA_URI, "format": "application/octet-stream"},
+                }
+            ],
+        },
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[2]["content"] == [
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": _PDF_DATA_URI.split(",", 1)[1],
+                    },
+                }
+            ],
+        }
+    ]
+
+
+def test_anthropic_messages_pt_drops_data_uri_parameters_the_format_replaces():
+    png_data_uri: Final = "data:image/png;name=diagram.png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n").decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": png_data_uri, "format": "image/png"}}],
+        }
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": png_data_uri.split(",", 1)[1]},
+        }
+    ]
+
+
+def test_anthropic_messages_pt_rejects_a_text_attachment_it_cannot_decode():
+    undeclared_latin1: Final = "data:text/plain;base64," + base64.b64encode(
+        "the secret code word is caf\xe9".encode("iso-8859-1") * 200
+    ).decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": undeclared_latin1, "format": "text/plain"}}],
+        }
+    ]
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert "utf-8" in str(raised.value)
+    assert undeclared_latin1.split(",", 1)[1] not in str(raised.value)
+    assert "file block's format" in str(raised.value)
+
+
+def test_anthropic_messages_pt_reads_a_text_file_block_in_the_charset_its_format_names():
+    undeclared_latin1: Final = "data:text/plain;base64," + base64.b64encode("caf\xe9".encode("iso-8859-1")).decode()
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "file", "file": {"file_data": undeclared_latin1, "format": "text/plain;charset=iso-8859-1"}}
+            ],
+        }
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [
+        {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "café"}}
+    ]
+
+
+@pytest.mark.parametrize("native_input", [{"city": "lyon"}, "[1, 2]"])
+def test_anthropic_messages_pt_sends_tool_calls_arguments_over_a_native_tool_use_with_the_same_id(native_input):
+    messages: Final = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": native_input}],
+            "tool_calls": [
+                {
+                    "id": "toolu_01",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "paris"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}}
+    ]
+
+
+@pytest.mark.parametrize(("drop_params", "expected_input"), [(True, {}), (False, [1, 2])])
+def test_anthropic_messages_pt_tool_call_arguments_that_are_not_an_object_follow_drop_params(
+    drop_params, expected_input
+):
+    messages: Final = [
+        {"role": "user", "content": "what is the weather"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "toolu_01", "type": "function", "function": {"name": "get_weather", "arguments": "[1, 2]"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+    result: Final = anthropic_messages_pt(
+        messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic", drop_params=drop_params
+    )
+
+    assert result[1]["content"][0]["input"] == expected_input
+
+
+_PDF_PAYLOAD: Final = _PDF_DATA_URI.split(",", 1)[1]
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"type": "file", "file": {"file_data": "data:application/octet-stream;base64," + _PDF_PAYLOAD}},
+        {"type": "file", "file": {"file_data": "data:image/png;base64," + _PDF_PAYLOAD}},
+        {"type": "file", "file": {"file_data": _PDF_DATA_URI, "format": "text/plain"}},
+        {"type": "image_url", "image_url": {"url": _PDF_DATA_URI, "format": "text/plain"}},
+    ],
+    ids=["file-octet-stream", "file-image-png", "file-format-text", "image-url-format-text"],
+)
+def test_anthropic_messages_pt_sends_pdf_bytes_as_a_pdf_document_whatever_the_label(block):
+    result: Final = anthropic_messages_pt(
+        messages=[{"role": "user", "content": [block]}], model="claude-sonnet-5-5", llm_provider="anthropic"
+    )
+
+    assert result[0]["content"] == [
+        {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": _PDF_PAYLOAD}}
+    ]
+
+
+def test_gemini_inline_data_carries_the_format_it_was_given():
+    text_data_uri: Final = "data:text/plain;charset=utf-8;base64," + base64.b64encode(b"MANGO").decode()
+    messages: Final = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": text_data_uri, "format": "text/plain"}}]}
+    ]
+
+    contents: Final = gemini_convert_messages_with_history(messages=messages, model="gemini-3.8-flash")
+
+    assert contents[0]["parts"][0]["inline_data"]["mime_type"] == "text/plain"
+
+
+def _parallel_native_tool_use_seconds(calls: int) -> float:
+    answers: Final = tuple(
+        {"role": "tool", "tool_call_id": f"functions.get_weather:{index}", "content": "sunny"} for index in range(calls)
+    )
+    messages: Final = [
+        {"role": "user", "content": "weather everywhere"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": f"functions.get_weather:{index}", "name": "get_weather", "input": {}}
+                for index in range(calls)
+            ],
+        },
+        *answers,
+    ]
+
+    def once() -> float:
+        started: Final = time.perf_counter()
+        result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
+        elapsed: Final = time.perf_counter() - started
+        assert [block["id"] for block in result[1]["content"]] == [
+            f"functions_get_weather_{index}" for index in range(calls)
+        ]
+        return elapsed
+
+    return min(once() for _ in range(3))
+
+
+def test_anthropic_messages_pt_cost_grows_linearly_with_parallel_native_tool_uses():
+    growth: Final = _parallel_native_tool_use_seconds(1600) / _parallel_native_tool_use_seconds(400)
+
+    assert growth < 11.0, f"cost grew {growth:.1f}x for 4x the tool uses"
+
+
+def test_anthropic_messages_pt_keeps_a_native_tool_use_answered_by_a_tool_message_under_modify_params(monkeypatch):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    messages = [
+        {"role": "user", "content": "what is the weather"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]},
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1:] == [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "sunny"}]},
+    ]
+
+
+@pytest.mark.parametrize(
+    "pdf_format, content_type",
+    ((None, "application/pdf"), ("Application/PDF", "application/pdf"), (None, "image/png"), ("image/png", "application/pdf")),
+)
+def test_create_anthropic_image_param_sends_a_downloaded_pdf_as_a_document(monkeypatch, pdf_format, content_type):
+    from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
+
+    pdf_bytes = b"%PDF-1.4\n1 0 obj\n"
+    mock_client = MagicMock()
+    mock_client.get.return_value = httpx.Response(200, content=pdf_bytes, headers={"Content-Type": content_type})
+    monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
+    monkeypatch.setattr(litellm, "module_level_client", mock_client, raising=False)
+    in_memory_cache.flush_cache()
+
+    block = create_anthropic_image_param(
+        {"url": "https://example.com/report.pdf", "format": pdf_format}, is_bedrock_invoke=True
+    )
+
+    assert block == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": base64.b64encode(pdf_bytes).decode()},
+    }
+
+
+def test_create_anthropic_image_param_links_an_https_pdf_as_a_document_only_when_format_says_pdf():
+    url = "https://example.com/report.pdf"
+
+    assert create_anthropic_image_param({"url": url, "format": "application/pdf"}) == {
+        "type": "document",
+        "source": {"type": "url", "url": url},
+    }
+    assert create_anthropic_image_param({"url": url, "format": "Application/PDF"}) == {
+        "type": "document",
+        "source": {"type": "url", "url": url},
+    }
+    assert create_anthropic_image_param({"url": url, "format": "image/png"}) == {
+        "type": "image",
+        "source": {"type": "url", "url": url},
+    }
+
+
+@pytest.mark.parametrize("bad_format", (7, ["image/png"]), ids=("int", "list"))
+@pytest.mark.parametrize(
+    "block, expected",
+    (
+        (
+            {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+            {"type": "image", "source": {"type": "url", "url": "https://example.com/cat.png"}},
+        ),
+        (
+            {"type": "image_url", "image_url": {"url": _PNG_DATA_URI}},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _PNG_DATA_URI.split(",", 1)[1]}},
+        ),
+        (
+            {"type": "file", "file": {"file_id": "file_abc"}},
+            {"type": "container_upload", "file_id": "file_abc"},
+        ),
+    ),
+    ids=("https_link", "data_uri", "file_id"),
+)
+def test_anthropic_messages_pt_ignores_a_format_that_is_not_a_string(bad_format, block, expected):
+    payload_key = "image_url" if block["type"] == "image_url" else "file"
+    messages = [{"role": "user", "content": [{**block, payload_key: {**block[payload_key], "format": bad_format}}]}]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [expected]
