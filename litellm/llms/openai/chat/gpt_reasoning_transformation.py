@@ -99,7 +99,7 @@ def unsupported_reasoning_effort_message(param: str, level: str, model: str) -> 
 
 def is_gpt_reasoning_series_name(model: str) -> bool:
     normalized: Final = model.split("/")[-1]
-    return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) and "gpt-5-chat" not in normalized
+    return any(marker in normalized for marker in GPT_REASONING_SERIES_MARKERS) and "gpt-5-chat" not in normalized
 
 
 class OpenAIGPT5Config(OpenAIGPTConfig):
