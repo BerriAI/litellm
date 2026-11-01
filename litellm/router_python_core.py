@@ -350,6 +350,7 @@ from litellm.router_utils.fallback_event_handlers import (
     record_disable_fallbacks,
     record_pre_routing_selection,
     record_retry_attempt,
+    reopen_success_logging_for_next_attempt,
     routed_deployment_id,
     run_async_fallback,
 )
@@ -9627,6 +9628,7 @@ class PythonCore(DeprecatedRouterMembers):
                     # Update retry tracking metadata before each retry attempt
                     _metadata["attempted_retries"] = current_attempt + 1
                     _metadata["max_retries"] = num_retries
+                    reopen_success_logging_for_next_attempt(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs))
                     # if the function call is successful, no exception will be raised and we'll break out of the loop
                     response = await self.make_call(original_function, *args, **kwargs)
                     if coroutine_checker.is_async_callable(response):  # async errors are often returned as coroutines

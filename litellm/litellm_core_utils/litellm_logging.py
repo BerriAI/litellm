@@ -922,6 +922,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_scheduled: bool = False
         self._async_success_enqueued: bool = False
         self._sync_success_scheduled: bool = False
+        self._superseded_success_logs_in_flight: frozenset[str] = frozenset()
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self._stream_failure_claimed: bool = False
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
@@ -2895,6 +2896,9 @@ class Logging(LiteLLMLoggingBaseClass):
             Ignore check on stream, as there can be multiple chunks
             """
             return
+        if event_type in self._superseded_success_logs_in_flight:
+            self._superseded_success_logs_in_flight = self._superseded_success_logs_in_flight - frozenset((event_type,))
+            return
         self.model_call_details[f"has_logged_{event_type}"] = True
         if event_type == "async_failure":
             self.model_call_details["async_failure_logged_attempt"] = self.model_call_details.get(
@@ -3483,6 +3487,26 @@ class Logging(LiteLLMLoggingBaseClass):
                 settled_hidden_params.pop(poll_scoped_key, None)
         self._reset_success_emission_dedupe()
         await self.async_success_handler(result=result)
+
+    def reopen_success_logging_for_next_attempt(self) -> None:
+        """The router discarded an earlier attempt's response, so the next attempt logs and prices its own
+        response. A success log the discarded attempt parked for the proxy to dispatch later is dropped, since
+        it describes a response the caller never receives. One it already dispatched still runs, and its late
+        completion must not mark the next attempt as logged."""
+        self._superseded_success_logs_in_flight = frozenset(
+            event_type
+            for event_type, scheduled in (
+                ("async_success", self._async_success_scheduled),
+                ("sync_success", self._sync_success_scheduled),
+            )
+            if scheduled
+            and self.deferred_success_result is None
+            and self.model_call_details.get(f"has_logged_{event_type}") is not True
+        )
+        self._reset_success_emission_dedupe()
+        self._async_success_scheduled = False
+        self.deferred_success_result = None
+        self.enqueue_deferred_logging = None
 
     def _reset_success_emission_dedupe(self) -> None:
         """

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+from datetime import datetime
 from typing import Final
 from unittest.mock import AsyncMock
 
@@ -13,6 +15,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.router import AllowedFailsPolicy, RetryPolicy
 import os
 
@@ -334,6 +337,100 @@ async def test_authentication_errors_are_not_retried(
         )
 
     assert len(route.calls) == 1
+
+
+class _SuccessLogRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: tuple[tuple[object, object], ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        payload: Final = TypeAdapter(dict[str, object]).validate_python(kwargs["standard_logging_object"])
+        self.logged = (*self.logged, (payload["id"], payload["response_cost"]))
+
+
+def _chat_completion(response_id: str, finish_reason: str, completion_tokens: int) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": response_id,
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {"index": 0, "finish_reason": finish_reason, "message": {"role": "assistant", "content": "hi"}}
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": completion_tokens,
+                "total_tokens": 10 + completion_tokens,
+            },
+        },
+    )
+
+
+async def _wait_until(condition: Callable[[], bool]) -> None:
+    for _ in range(200):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.parametrize("deferred", [False, True])
+@pytest.mark.parametrize("redispatch", ["retry", "content_policy_fallback"])
+@pytest.mark.asyncio
+async def test_attempt_after_a_discarded_response_logs_its_own_cost(
+    deferred: bool,
+    redispatch: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=[
+            _chat_completion("chatcmpl-filtered", "content_filter", completion_tokens=40),
+            _chat_completion("chatcmpl-served", "stop", completion_tokens=4),
+        ]
+    )
+    recorder: Final = _SuccessLogRecorder()
+    messages: Final = [{"role": "user", "content": "hi"}]
+    logging_obj: Final = Logging(
+        model="retry-test-model",
+        messages=messages,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="discarded-attempt",
+        function_id="discarded-attempt",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.defer_async_logging = deferred
+    retry_policy: Final = (
+        {"retry_policy": RetryPolicy(ContentPolicyViolationErrorRetries=1)} if redispatch == "retry" else {}
+    )
+    router: Final = Router(
+        model_list=[
+            {"model_name": group, "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"}}
+            for group in ("retry-test-model", "fallback-model")
+        ],
+        content_policy_fallbacks=[{"retry-test-model": ["fallback-model"]}],
+        **retry_policy,
+    )
+
+    response: Final = await router.acompletion(
+        model="retry-test-model", messages=messages, litellm_logging_obj=logging_obj
+    )
+    if deferred:
+        assert logging_obj.enqueue_deferred_logging is not None
+        logging_obj.enqueue_deferred_logging()
+    expected_ids: Final = ("chatcmpl-served",) if deferred else ("chatcmpl-filtered", "chatcmpl-served")
+    await _wait_until(lambda: len(recorder.logged) >= len(expected_ids))
+
+    assert response.id == "chatcmpl-served"
+    assert tuple(logged_id for logged_id, _ in recorder.logged) == expected_ids
+    assert recorder.logged[-1][1] == response._hidden_params["response_cost"]
 
 
 def test_retry_rate_limit_error_with_healthy_deployments():
