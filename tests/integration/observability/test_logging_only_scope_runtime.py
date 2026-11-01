@@ -1085,7 +1085,7 @@ def test_X2_scope_patch_toggles_during_concurrent_requests_keep_one_scan_per_res
         with wire_server(policy) as edge:
             config: Final = _empty_proxy_configuration(tmp_path, identity)
             with (
-                _database_guardrail(identity, edge.url, "output", mode="logging_only"),
+                _database_guardrail(gateway, identity, edge.url, "output", mode="logging_only"),
                 owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate,
             ):
                 guardrails: Final = candidate.get("/v2/guardrails/list")["guardrails"]
