@@ -13,7 +13,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY, LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations._types.open_inference import (
     OpenInferenceSpanKindValues,
 )
@@ -1701,9 +1701,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             return key not in self._metric_attr_exclude
         return True
 
-    def _record_metrics(self, kwargs, response_obj, start_time, end_time):
-        duration_s: Final = (end_time - start_time).total_seconds()
-        params: Final = kwargs.get("litellm_params") or {}
+    def _metric_common_attributes(
+        self,
+        kwargs: dict[str, Any],  # mutable-ok: the v1 logging kwargs contract
+    ) -> dict[str, Any]:  # mutable-ok: the v1 metric helpers take a dict of attributes
+        params: Final[Mapping[str, Any]] = kwargs.get("litellm_params") or {}
         provider: Final = _provider_label(params.get("custom_llm_provider"))
 
         common_attrs = {
@@ -1731,7 +1733,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if hidden_params:
             common_attrs["hidden_params"] = safe_dumps(hidden_params)
 
-        common_attrs = self._filter_metric_attributes(common_attrs)
+        return self._filter_metric_attributes(common_attrs)
+
+    def _record_metrics(self, kwargs, response_obj, start_time, end_time):
+        duration_s: Final = (end_time - start_time).total_seconds()
+        params: Final = kwargs.get("litellm_params") or {}
+        common_attrs: Final = self._metric_common_attributes(kwargs)
 
         if self._operation_duration_histogram:
             self._operation_duration_histogram.record(duration_s, attributes=common_attrs)
@@ -2244,6 +2251,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         )
         self._create_guardrail_span(kwargs=kwargs, context=guardrail_ctx)
 
+        self._record_failure_metrics(kwargs, start_time, end_time)
+
         # Do NOT end parent span - it should be managed by its creator
         # External spans (from Langfuse, user code, HTTP headers, global context) must not be closed by LiteLLM
         # However, proxy-created spans should be closed here
@@ -2253,6 +2262,25 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             and parent_otel_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
         ):
             parent_otel_span.end(end_time=self._to_ns(end_time))
+
+    def _record_failure_metrics(
+        self,
+        kwargs: dict[str, Any],  # mutable-ok: the v1 logging kwargs contract
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
+        histogram: Final = self._operation_duration_histogram
+        if histogram is None or kwargs.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL):
+            return
+        # Imported here: the v2 metrics module imports this module at load time.
+        from litellm.integrations.otel.plumbing.metrics import resolve_error_type
+
+        # hidden_params carries the provider's error response headers, a new value per request
+        attributes: Final = {
+            **{k: v for k, v in self._metric_common_attributes(kwargs).items() if k != "hidden_params"},
+            "error.type": resolve_error_type(kwargs),
+        }
+        histogram.record((end_time - start_time).total_seconds(), attributes=attributes)
 
     def _record_exception_on_span(self, span: Span, kwargs: _FailureKwargsView) -> str | None:
         """

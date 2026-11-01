@@ -25,7 +25,7 @@ from opentelemetry.sdk._logs import ReadableLogRecord
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogExporter, LogRecordExportResult, SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader, MetricsData
+from opentelemetry.sdk.metrics.export import HistogramDataPoint, InMemoryMetricReader, MetricsData
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor, SpanExportResult
@@ -55,7 +55,11 @@ from litellm.proxy._types import ManagementEndpointLoggingPayload, ProxyExceptio
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from collections.abc import AsyncIterator, Callable, Mapping
-from litellm.constants import KUBERNETES_POD_ROUTING_KEY, LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.constants import (
+    KUBERNETES_POD_ROUTING_KEY,
+    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
+    LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import ChatCompletionMessageToolCall, Function
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -1888,6 +1892,79 @@ class TestOpenTelemetry(unittest.TestCase):
         # ─── no events when only metrics enabled ─────────────────────────────────
         logs = log_exporter.get_finished_logs()
         self.assertFalse(logs, "Did not expect any logs")
+
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
+    def test_handle_failure_records_duration_with_error_type(self):
+        """A failed call records one operation duration point tagged with error.type."""
+        for kwargs, expected in (
+            (
+                {"standard_logging_object": {"error_information": {"error_class": "RateLimitError"}}},
+                "RateLimitError",
+            ),
+            ({"exception": ValueError("boom")}, "ValueError"),
+        ):
+            with self.subTest(expected=expected):
+                tracer_provider = TracerProvider()
+                metric_reader = InMemoryMetricReader()
+                otel = OpenTelemetry(
+                    tracer_provider=tracer_provider,
+                    meter_provider=MeterProvider(metric_readers=[metric_reader]),
+                )
+                otel.tracer = tracer_provider.get_tracer(__name__)
+                start = datetime.now()
+                end = start + timedelta(seconds=2)
+
+                otel.log_failure_event(
+                    {"model": self.MODEL, "litellm_params": {"custom_llm_provider": "openai"}, **kwargs},
+                    None,
+                    start,
+                    end,
+                )
+
+                duration_metric = self.wait_for_metric(metric_reader, "gen_ai.client.operation.duration")
+                assert duration_metric is not None, "failure duration was not recorded"
+                points = [p for p in duration_metric.data.data_points if isinstance(p, HistogramDataPoint)]
+                self.assertEqual(len(points), 1)
+                self.assertEqual(points[0].count, 1)
+                self.assertEqual(points[0].sum, 2.0)
+                self.assertEqual(dict(points[0].attributes or {}).get("error.type"), expected)
+                self.assertEqual(dict(points[0].attributes or {}).get("gen_ai.request.model"), self.MODEL)
+
+    def _failure_metric_points(self, failures: list[dict[str, object]]) -> list[HistogramDataPoint]:
+        tracer_provider = TracerProvider()
+        metric_reader = InMemoryMetricReader()
+        otel = OpenTelemetry(tracer_provider=tracer_provider, meter_provider=MeterProvider(metric_readers=[metric_reader]))
+        otel.tracer = tracer_provider.get_tracer(__name__)
+        start = datetime.now()
+        for kwargs in failures:
+            otel.log_failure_event(kwargs, None, start, start + timedelta(seconds=1))
+        metric = self.wait_for_metric(metric_reader, "gen_ai.client.operation.duration")
+        if metric is None:
+            return []
+        return [p for p in metric.data.data_points if isinstance(p, HistogramDataPoint)]
+
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
+    def test_handle_failure_error_headers_do_not_split_series(self):
+        def failure(request_id: str) -> dict[str, object]:
+            return {
+                "model": self.MODEL,
+                "exception": ValueError("boom"),
+                "standard_logging_object": {
+                    "hidden_params": {"additional_headers": {"x-request-id": request_id, "date": request_id}}
+                },
+            }
+
+        points = self._failure_metric_points([failure("req-1"), failure("req-2")])
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0].count, 2)
+        self.assertNotIn("hidden_params", dict(points[0].attributes or {}))
+
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
+    def test_handle_failure_skips_proxy_gate_rejections(self):
+        points = self._failure_metric_points(
+            [{"model": "client-chosen", "exception": ValueError("bad key"), LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: True}]
+        )
+        self.assertEqual(points, [])
 
     def test_get_span_name_with_generation_name(self):
         """Test _get_span_name returns generation_name when present"""
