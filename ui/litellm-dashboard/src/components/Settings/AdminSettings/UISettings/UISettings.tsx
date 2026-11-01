@@ -16,6 +16,7 @@ import { relativeTimeOptions } from "@/components/shared/date_range_presets";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import PageVisibilitySettings from "./PageVisibilitySettings";
+import BackgroundChatSettings from "./BackgroundChatSettings";
 
 interface SettingRowProps {
   ariaLabel: string;
@@ -429,12 +430,14 @@ export default function UISettings() {
               disabled={isUpdating}
               onCheckedChange={handleToggleEnableChatUI}
               ariaLabel={enableChatUIProperty?.description ?? "Enable Chat page"}
-              label="[BETA] Enable Chat page (page will refresh)"
+              label="Enable Chat page (page will refresh)"
               description={
                 enableChatUIProperty?.description ??
                 "If enabled, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth."
               }
             />
+
+            <BackgroundChatSettings />
 
             <Separator />
             <div className="flex items-start justify-between gap-3">

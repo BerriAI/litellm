@@ -66,7 +66,7 @@ describe("chat page URL state with ChatShellProvider", () => {
 
     expect(await screen.findByRole("button", { name: /gpt-5\.4-mini/ })).toBeInTheDocument();
     act(() => {
-      fireEvent.change(screen.getByPlaceholderText("Describe a change, paste an error, or ask a question…"), {
+      fireEvent.change(screen.getByPlaceholderText("Ask a question, attach a file, or paste something to work on…"), {
         target: { value: "How much did this cost?" },
       });
     });
@@ -87,9 +87,9 @@ describe("chat page URL state with ChatShellProvider", () => {
     await waitFor(() => expect(window.location.search).toBe(""));
 
     expect(
-      await screen.findByPlaceholderText("Describe a change, paste an error, or ask a question…"),
+      await screen.findByPlaceholderText("Ask a question, attach a file, or paste something to work on…"),
     ).toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 1, name: "What are we building?" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "What are we working on?" })).toBeInTheDocument();
     expect(screen.queryByText("The estimated cost is one cent.")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "How much did this cost?" })).toBeInTheDocument();
     expect(window.location.pathname).toBe("/chat");
