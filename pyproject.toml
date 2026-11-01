@@ -369,6 +369,8 @@ constraint-dependencies = [
     "httplib2>=0.32.0",
     "setuptools>=84.1.0",
     "dnspython>=2.9.0; python_version >= '3.11'",
+    "filelock<3.20.4; python_version < '3.11'",
+    "filelock>=4.2.1; python_version >= '3.11'",
 ]
 override-dependencies = [
     # a2a-sdk 1.x requires packaging>=24.0; lunary 1.4.x still caps at <24.0.

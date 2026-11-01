@@ -1,67 +1,12 @@
 [[IgnoredVulns]]
-id = "GHSA-v4x8-3wr5-3wq8"
-ignoreUntil = 2026-11-20
-reason = "filelock ReadWriteLock advisory, which no package in the lock takes (litellm and huggingface_hub, filelock's only dependents, use just FileLock and SoftFileLock); fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
-
-[[IgnoredVulns]]
-id = "GHSA-567q-5qvw-pf92"
-ignoreUntil = 2026-11-20
-reason = "Windows-only local DoS (CVSS 2.5) in filelock soft locks; litellm never takes SoftFileLock, but huggingface_hub falls back to it in the Hugging Face cache when the filesystem has no flock, which litellm reaches only to download the Kimi K3 tokenizer for Bedrock token counting, and the attack needs another local user who can write that cache; fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
-
-[[IgnoredVulns]]
-id = "GHSA-9vhv-jxww-xfm5"
-ignoreUntil = 2026-11-20
-reason = "Windows-only local DoS (CVSS 3.3) in filelock ReadWriteLock, which no package in the lock takes (litellm and huggingface_hub, filelock's only dependents, use just FileLock and SoftFileLock); fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
-
-[[IgnoredVulns]]
-id = "GHSA-6627-m3xw-93mp"
-ignoreUntil = 2026-11-20
-reason = "filelock StrictSoftFileLock claim directories ignore the lock mode, which no package in the lock takes (litellm and huggingface_hub, filelock's only dependents, use just FileLock and SoftFileLock); fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
-
-[[IgnoredVulns]]
 id = "GHSA-69hj-f68j-2879"
 ignoreUntil = 2026-11-20
-reason = "filelock UnixFileLock truncates and chmods a file another user renames or hard-links in at the lock path; litellm's CLI takes FileLock only inside ~/.litellm, which it creates owner-only, and huggingface_hub takes it in the Hugging Face cache, which litellm reaches only to download the Kimi K3 tokenizer for Bedrock token counting; the attack needs another local user who can rename or link files in that cache; fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
+reason = "filelock UnixFileLock truncates and chmods a file another user renames or hard-links in at the lock path, in every release before 4.2.1, which needs Python >= 3.11. Python 3.11+ now locks 4.2.4 and only the Python 3.10 resolution stays on 3.20.3, held below 3.20.4 by a [tool.uv] constraint because every newer 3.10-compatible release carries more filelock advisories. litellm's CLI takes FileLock only inside ~/.litellm, which it creates owner-only, and huggingface_hub takes it in the Hugging Face cache, which litellm reaches only to download the Kimi K3 tokenizer for Bedrock token counting, so the attack needs another local user who can rename or link files in that cache. Remove once 3.10 is dropped"
 
 [[IgnoredVulns]]
 id = "GHSA-8mx5-7m5m-r77g"
 ignoreUntil = 2026-11-20
-reason = "filelock WindowsFileLock ignores mode; the proxy image is Linux, so only Windows installs run it; there litellm's CLI takes FileLock only inside the owner-only ~/.litellm, whose lock file holds no data, and huggingface_hub takes it in the Hugging Face cache, which litellm reaches only to download the Kimi K3 tokenizer for Bedrock token counting; fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
-
-[[IgnoredVulns]]
-id = "GHSA-9c4x-gm8v-wgc4"
-ignoreUntil = 2026-11-20
-reason = "filelock StrictSoftFileLock and SoftReadWriteLock adopt another user's protocol directory, which no package in the lock takes (litellm and huggingface_hub, filelock's only dependents, use just FileLock and SoftFileLock); fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
-
-[[IgnoredVulns]]
-id = "GHSA-9j6q-wvj5-jgjg"
-ignoreUntil = 2026-11-20
-reason = "filelock SoftFileLock symlink swap leaks whether a path exists; litellm never takes SoftFileLock, but huggingface_hub falls back to it in the Hugging Face cache when the filesystem has no flock, which litellm reaches only to download the Kimi K3 tokenizer for Bedrock token counting, and the attack needs another local user who can write that cache; fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
-
-[[IgnoredVulns]]
-id = "GHSA-cwqr-hh33-gh44"
-ignoreUntil = 2026-11-20
-reason = "filelock ReadWriteLock stalls on a crafted lock database, which no package in the lock takes (litellm and huggingface_hub, filelock's only dependents, use just FileLock and SoftFileLock); fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
-
-[[IgnoredVulns]]
-id = "GHSA-fq56-3cx3-fjxp"
-ignoreUntil = 2026-11-20
-reason = "filelock SoftFileLock stale-lock break removes a live lock on a reused inode; litellm never takes SoftFileLock, but huggingface_hub falls back to it in the Hugging Face cache when the filesystem has no flock, which litellm reaches only to download the Kimi K3 tokenizer for Bedrock token counting, and the attack needs another local user who can write that cache; fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
-
-[[IgnoredVulns]]
-id = "GHSA-j8f7-rjxc-mr56"
-ignoreUntil = 2026-11-20
-reason = "filelock ReadWriteLock follows a symlink into SQLite, which no package in the lock takes (litellm and huggingface_hub, filelock's only dependents, use just FileLock and SoftFileLock); fixed in 4.0.9, which litellm's own filelock<4.0 cap blocks on every Python until it is lifted (#48635, #48802); remove once that lands"
-
-[[IgnoredVulns]]
-id = "GHSA-m462-7rxw-wvpg"
-ignoreUntil = 2026-11-20
-reason = "filelock StrictSoftFileLock follows a symlink swapped in at <path>.filelock, which no package in the lock takes (litellm and huggingface_hub, filelock's only dependents, use just FileLock and SoftFileLock); fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
-
-[[IgnoredVulns]]
-id = "GHSA-rfpc-qcw5-3pc4"
-ignoreUntil = 2026-11-20
-reason = "filelock SoftFileLock removes a live holder's marker when another user forges its PID; litellm never takes SoftFileLock, but huggingface_hub falls back to it in the Hugging Face cache when the filesystem has no flock, which litellm reaches only to download the Kimi K3 tokenizer for Bedrock token counting, and the attack needs another local user who can write that cache; fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
+reason = "filelock WindowsFileLock ignores mode in every release from 3.10.0 before 4.2.1, which needs Python >= 3.11. Python 3.11+ now locks 4.2.4 and only the Python 3.10 resolution stays on 3.20.3, held below 3.20.4 by a [tool.uv] constraint because every newer 3.10-compatible release carries more filelock advisories. The proxy image is Linux, so only Windows installs on Python 3.10 run it, and there litellm's CLI takes FileLock only inside the owner-only ~/.litellm, whose lock file holds no data, while huggingface_hub takes it in the Hugging Face cache, which litellm reaches only to download the Kimi K3 tokenizer. Remove once 3.10 is dropped"
 
 [[IgnoredVulns]]
 id = "GHSA-pcg2-g6cj-q92c"
