@@ -270,6 +270,23 @@ def test_genai_mapper_cache_token_attrs():
     assert GenAI.USAGE_CACHE_READ_INPUT_TOKENS not in uncached
 
 
+def test_genai_mapper_reasoning_token_attr():
+    reasoning = replace(
+        _full_llm_call(),
+        usage=LLMUsage(input_tokens=10, output_tokens=50, total_tokens=60, reasoning_tokens=40),
+    )
+    assert GenAIMapper().map(reasoning)[GenAI.USAGE_REASONING_OUTPUT_TOKENS] == 40
+
+    explicit_zero = replace(
+        _full_llm_call(),
+        usage=LLMUsage(input_tokens=10, output_tokens=5, total_tokens=15, reasoning_tokens=0),
+    )
+    assert GenAIMapper().map(explicit_zero)[GenAI.USAGE_REASONING_OUTPUT_TOKENS] == 0
+
+    # No reported reasoning count keeps the key off the span.
+    assert GenAI.USAGE_REASONING_OUTPUT_TOKENS not in GenAIMapper().map(_full_llm_call())
+
+
 def test_genai_mapper_stamps_input_output_messages():
     data = LLMCallSpanData(
         operation=GenAIOperation.CHAT,
