@@ -7,7 +7,7 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import timedelta
-from typing import Any
+from typing import Any, Final
 
 import pytest
 from redis.exceptions import NoScriptError
@@ -50,6 +50,10 @@ class FakePipeline:
 
     def evalsha(self, sha: str, numkeys: int, *keys_and_args: object) -> FakePipeline:
         self.commands.append(("EVALSHA", sha, numkeys, *keys_and_args))
+        return self
+
+    def script_load(self, script: str) -> FakePipeline:
+        self.commands.append(("SCRIPT LOAD", script))
         return self
 
     def incrbyfloat(self, name: str, amount: float) -> FakePipeline:
@@ -134,6 +138,8 @@ def replies(command: tuple[Any, ...]) -> Any:
     match command[0]:
         case "MGET":
             return [json.dumps({"k": key}) if key.endswith("hit") else None for key in command[1:]]
+        case "SCRIPT LOAD":
+            return hashlib.sha1(str(command[1]).encode()).hexdigest()
         case "EVALSHA":
             return [1, 2]
         case "INCRBYFLOAT":
@@ -286,6 +292,79 @@ async def test_noscript_reply_reruns_that_script_through_the_registered_executor
     assert await script == ["alone", "w", 1]
     assert await incr == 3.5
     assert batch.flushes == 1
+
+
+@pytest.mark.asyncio
+async def test_scripts_missing_on_the_server_are_loaded_and_rerun_together_so_concurrent_reservations_stay_whole() -> None:
+    class ReservationServer:
+        def __init__(self) -> None:
+            self.loaded: set[str] = set()
+            self.counters: dict[str, int] = {"key": 0, "team": 0}
+            self.arrivals: list[
+                tuple[
+                    tuple[str, ...],
+                    tuple[str | bytes | int | float, ...],
+                    asyncio.Future[object],
+                ]
+            ] = []
+
+        def reserve(self, key: str, increment: int, limit: int) -> int:
+            current: Final = self.counters[key]
+            if current + increment > limit:
+                return 0
+            self.counters[key] = current + increment
+            return 1
+
+        def reply(self, command: tuple[object, ...]) -> object:
+            match command[0]:
+                case "SCRIPT LOAD":
+                    source: Final = command[1]
+                    assert isinstance(source, str)
+                    loaded_sha: Final = hashlib.sha1(source.encode()).hexdigest()
+                    self.loaded.add(loaded_sha)
+                    return loaded_sha
+                case "EVALSHA":
+                    script_sha: Final = command[1]
+                    key: Final = command[3]
+                    increment: Final = command[4]
+                    limit: Final = command[5]
+                    assert isinstance(script_sha, str)
+                    assert isinstance(key, str)
+                    assert isinstance(increment, int)
+                    assert isinstance(limit, int)
+                    if script_sha not in self.loaded:
+                        return NoScriptError("NOSCRIPT No matching script")
+                    return self.reserve(key, increment, limit)
+                case _:
+                    return replies(command)
+
+        async def run(
+            self, keys: Sequence[str], args: Sequence[str | bytes | int | float]
+        ) -> object:
+            self.loaded.add(SHA)
+            result: Final[asyncio.Future[object]] = asyncio.get_running_loop().create_future()
+            self.arrivals.append((tuple(keys), tuple(args), result))
+            if len(self.arrivals) == 4:
+                for index in (0, 3, 1, 2):
+                    arrival_keys, arrival_args, pending = self.arrivals[index]
+                    pending.set_result(
+                        self.reserve(arrival_keys[0], int(arrival_args[0]), int(arrival_args[1]))
+                    )
+            return await result
+
+    server: Final = ReservationServer()
+    cache: Final = FakeRedisCache(FakeClient(server.reply))
+    batch_a: Final = RedisBatch(cache)
+    batch_b: Final = RedisBatch(cache)
+    a_key: Final = batch_a.script(SCRIPT, server.run, ["key"], [72, 100])
+    a_team: Final = batch_a.script(SCRIPT, server.run, ["team"], [72, 100])
+    b_key: Final = batch_b.script(SCRIPT, server.run, ["key"], [72, 100])
+    b_team: Final = batch_b.script(SCRIPT, server.run, ["team"], [72, 100])
+
+    async with asyncio.timeout(5):
+        await asyncio.gather(batch_a.flush(), batch_b.flush())
+
+    assert sorted(((await a_key, await a_team), (await b_key, await b_team))) == [(0, 0), (1, 1)]
 
 
 @pytest.mark.asyncio
