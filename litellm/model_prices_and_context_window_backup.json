@@ -15555,18 +15555,20 @@
         "input_cost_per_token": 2.65e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 8000,
-        "max_output_tokens": 2048,
+        "max_output_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 3.5e-06,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-70b-instruct.md",
         "supports_pdf_input": true
     },
     "bedrock/us-gov-west-1/meta.llama3-8b-instruct-v1:0": {
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 8000,
-        "max_output_tokens": 2048,
+        "max_output_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-8b-instruct.md",
         "supports_pdf_input": true
     },
     "bedrock/us-west-1/meta.llama3-70b-instruct-v1:0": {
