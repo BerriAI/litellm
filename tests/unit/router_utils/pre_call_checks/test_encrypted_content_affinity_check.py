@@ -3201,3 +3201,46 @@ async def test_affinity_pins_to_the_same_key_peer_on_the_default_endpoint_when_t
 
     assert result == [peer]
     assert reasoning_input[0] == original_reasoning
+
+
+@pytest.mark.asyncio
+async def test_repeated_pins_to_a_default_endpoint_peer_ask_the_secret_manager_once(monkeypatch: pytest.MonkeyPatch):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", OPENAI_SHARED_KEY),
+            _default_endpoint_deployment("peer", OPENAI_SHARED_KEY),
+            _default_endpoint_deployment("other-org", {**OPENAI_SHARED_KEY, "api_key": "other-key"}),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    peer: Final = _deployment_of(ctx, "peer")
+    healthy_deployments: Final = [peer, _deployment_of(ctx, "other-org")]
+    secret_reads: Final = _SecretReadCounter()
+    monkeypatch.setattr(litellm, "secret_manager_client", secret_reads)
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+    EncryptedContentAffinityCheck._encryption_boundary_in_refresh_window.cache_clear()
+    affinity: Final = EncryptedContentAffinityCheck(ctx=ctx)
+
+    async def pin_a_turn_minted_by_the_origin() -> tuple[list[dict[str, object]], Mapping[str, object]]:
+        reasoning_input: Final = _reasoning_input_minted_by("origin")
+        result: Final[list[dict[str, object]]] = await affinity.async_filter_deployments(
+            model="gpt-5.5",
+            healthy_deployments=list(healthy_deployments),
+            messages=None,
+            request_kwargs={"litellm_metadata": {}, "input": reasoning_input},
+        )
+        return result, reasoning_input[0]
+
+    first_pin, first_reasoning = await pin_a_turn_minted_by_the_origin()
+    reads_for_the_first_pin: Final = secret_reads.reads
+    second_pin, second_reasoning = await pin_a_turn_minted_by_the_origin()
+
+    assert first_pin == second_pin == [peer]
+    assert first_reasoning == second_reasoning == _reasoning_input_minted_by("origin")[0]
+    assert reads_for_the_first_pin > 0
+    assert secret_reads.reads == reads_for_the_first_pin

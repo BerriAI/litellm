@@ -36,9 +36,11 @@ Safe to enable globally:
 - No cache required.
 """
 
+import hashlib
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from functools import cache, partial
+from functools import cache, lru_cache, partial
+from time import monotonic
 from typing import TYPE_CHECKING, Final, Optional, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -58,6 +60,7 @@ from litellm.litellm_core_utils.routing_common_utils import as_excluded_deployme
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
+from litellm.secret_managers.main import secret_manager_would_be_consulted
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import Deployment, GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -70,6 +73,8 @@ _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _HEADERS_ADAPTER: Final = TypeAdapter(Mapping[object, object])
 _ACCOUNT_SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project", "cookie"})
 _SINGLE_VENDOR_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value})
+_DEFAULT_ROUTE_SECRETS: Final = ("USE_LITELLM_PROXY", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE")
+_SECRET_MANAGER_REFRESH_SECONDS: Final = 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +98,13 @@ class _EncryptionBoundary:
         if self.explicit_pair and other.explicit_pair:
             return True
         return self.account_scope == other.account_scope and self.model() == other.model()
+
+
+@dataclass(frozen=True, slots=True)
+class _ParamsInRefreshWindow:
+    digest: str
+    window: int
+    params: Mapping[str, object] = field(compare=False)
 
 
 class EncryptedContentAffinityCheck(CustomLogger):
@@ -256,10 +268,30 @@ class EncryptedContentAffinityCheck(CustomLogger):
         ``isinstance(dict)`` guard would silently drop the latter from
         boundary matching and fall back to the full pool — i.e. trigger the
         exact ``invalid_encrypted_content`` failure this check exists to prevent.
+
+        When a secret manager would be asked for the provider defaults, a deployment's boundary is
+        reused for up to a minute, so a run of pin misses does not ask it again for every candidate.
         """
         params: Final = EncryptedContentAffinityCheck._params_mapping(litellm_params)
         if params is None:
             return None
+        if not any(secret_manager_would_be_consulted(name) for name in _DEFAULT_ROUTE_SECRETS):
+            return EncryptedContentAffinityCheck._resolve_encryption_boundary(params)
+        return EncryptedContentAffinityCheck._encryption_boundary_in_refresh_window(
+            _ParamsInRefreshWindow(
+                hashlib.sha256(repr(params).encode()).hexdigest(),
+                int(monotonic() // _SECRET_MANAGER_REFRESH_SECONDS),
+                params,
+            )
+        )
+
+    @staticmethod
+    @lru_cache(maxsize=1024)
+    def _encryption_boundary_in_refresh_window(key: _ParamsInRefreshWindow) -> _EncryptionBoundary | None:
+        return EncryptedContentAffinityCheck._resolve_encryption_boundary(key.params)
+
+    @staticmethod
+    def _resolve_encryption_boundary(params: Mapping[str, object]) -> _EncryptionBoundary | None:
         effective_params: Final = with_named_credential(params)
         explicit_api_key: Final = effective_params.get("api_key")
         explicit_api_base: Final = effective_params.get("api_base")
