@@ -12,22 +12,19 @@ if TYPE_CHECKING:
 
 def setup_proxy_callbacks(app: "FastAPI", callbacks: Iterable[object]) -> None:
     """Run each configured logger once; a failed setup must fail startup."""
-    seen: set[int] = set()
-    for callback in tuple(callbacks):
-        if isinstance(callback, CustomLogger) and id(callback) not in seen:
-            seen.add(id(callback))
-            callback.setup_proxy(app)
-    # A hook may have added routes after another startup component built OpenAPI.
-    app.openapi_schema = None
+    for callback in _unique_callbacks(callbacks):
+        callback.setup_proxy(app)
+    app.openapi_schema = None  # rebind-ok: routes added by startup hooks invalidate FastAPI's cached schema
 
 
 async def close_proxy_callbacks(callbacks: Iterable[object]) -> None:
     """One failing callback must not prevent the remaining cleanup hooks."""
-    seen: set[int] = set()
-    for callback in tuple(callbacks):
-        if isinstance(callback, CustomLogger) and id(callback) not in seen:
-            seen.add(id(callback))
-            try:
-                await callback.async_close()
-            except Exception:
-                verbose_proxy_logger.exception("Error closing callback %s", type(callback).__name__)
+    for callback in _unique_callbacks(callbacks):
+        try:
+            await callback.async_close()
+        except Exception:  # noqa: BLE001  # Third-party cleanup failures must not skip other callbacks
+            verbose_proxy_logger.exception("Error closing callback %s", type(callback).__name__)
+
+
+def _unique_callbacks(callbacks: Iterable[object]) -> tuple[CustomLogger, ...]:
+    return tuple({id(callback): callback for callback in callbacks if isinstance(callback, CustomLogger)}.values())
