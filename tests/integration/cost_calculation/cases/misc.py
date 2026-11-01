@@ -271,7 +271,7 @@ COHERE_RERANK_V4_TOTAL_TOKENS_FALLBACK: Final = CostTrackingTestCase(
             "meta": {"billed_units": {"total_tokens": 99}},
         },
     ),
-    expected=ExactExpected(spend=0.0, input_cost=0.0, output_cost=0.0, prompt_tokens=0, completion_tokens=0),
+    expected=ExactExpected(spend=0.0, input_cost=0.0, output_cost=0.0, prompt_tokens=99, completion_tokens=0),
 )
 
 
