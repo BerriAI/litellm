@@ -918,6 +918,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # post_call guardrails have run; the @client decorator then stores the
         # enqueue closure here instead of firing it immediately.
         self.defer_async_logging: bool = False
+        self.drops_stream_token_ids: bool = False
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
         self._async_success_enqueued: bool = False

@@ -3,7 +3,8 @@ import json
 import re
 import time
 import traceback
-from collections.abc import Generator, Iterator, Mapping, Sequence
+from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import Final, Literal, cast
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
@@ -11,7 +12,12 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import (
+    RESPONSE_FORMAT_TOOL_NAME,
+    STREAM_CHUNK_CHOICE_FIELDS,
+    STREAM_FINISH_CHOICE_FIELDS,
+    VLLM_CHOICE_FIELDS,
+)
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_reasoning_content,
@@ -170,6 +176,28 @@ def _split_assembled_content_for_replay(content: str | None) -> list[str]:
     return _REPLAY_CONTENT_SLICE_RE.findall(content)
 
 
+def _drop_choice_fields(choice: StreamingChoices, fields: Iterable[str]) -> None:
+    for field in fields:
+        if hasattr(choice, field):
+            delattr(choice, field)
+
+
+def _vllm_choice_fields(choice: Mapping[str, object]) -> Mapping[str, object]:
+    cached_fields: Final = _choice_provider_specific_fields(choice)
+    return MappingProxyType(
+        {
+            field: choice[field] if field in choice else cached_fields[field]
+            for field in VLLM_CHOICE_FIELDS
+            if field in choice or field in cached_fields
+        }
+    )
+
+
+def _choice_provider_specific_fields(choice: Mapping[str, object]) -> Mapping[str, object]:
+    fields: Final = choice.get("provider_specific_fields")
+    return _FIELD_MAP.validate_python(fields) if isinstance(fields, dict) else MappingProxyType({})
+
+
 _REPLAY_REASONING_FIELDS: Final = frozenset({"reasoning_content", "thinking_blocks", "reasoning_items"})
 _REPLAY_LEAD_FIELDS: Final = _REPLAY_REASONING_FIELDS | {"role", "provider_specific_fields"}
 _REPLAY_TOOL_FIELDS: Final = frozenset({"tool_calls", "function_call"})
@@ -220,8 +248,9 @@ def _replay_frame(
     choice.finish_reason = finish_reason
     if not keeps_choice_metadata:
         choice.logprobs = None
-        if hasattr(choice, "enhancements"):
-            del choice.enhancements
+        _drop_choice_fields(choice, ("enhancements", *STREAM_CHUNK_CHOICE_FIELDS))
+    if finish_reason is None:
+        _drop_choice_fields(choice, STREAM_FINISH_CHOICE_FIELDS)
     return frame
 
 
@@ -325,7 +354,9 @@ async def convert_to_streaming_response_async(
 
         logprobs = choice.get("logprobs", None)
 
-        choice = StreamingChoices(finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs)
+        choice = StreamingChoices(
+            finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs, **_vllm_choice_fields(choice)
+        )
         choice_list.append(choice)
 
     model_response_object.choices = choice_list
@@ -388,6 +419,7 @@ def convert_to_streaming_response(
             delta=delta,
             logprobs=logprobs,
             enhancements=enhancements,
+            **_vllm_choice_fields(choice),
         )
 
         choice_list.append(choice)
@@ -872,6 +904,7 @@ def convert_to_model_response_object(
                     logprobs=logprobs,
                     enhancements=enhancements,
                     provider_specific_fields=provider_specific_fields,
+                    **_vllm_choice_fields(choice),
                 )
                 if provider_sent_logprobs and logprobs is None:
                     choice.logprobs = None

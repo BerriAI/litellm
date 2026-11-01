@@ -88,6 +88,7 @@ from litellm.constants import (
     LITELLM_UI_SESSION_DURATION,
     OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
+    VLLM_CHOICE_FIELDS,
 )
 from litellm.litellm_core_utils.access_windows import access_windows_config_error
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
@@ -10211,6 +10212,11 @@ def _restamp_nested_response_model_in_sse_line(line: bytes, target_model: str) -
     return _SSE_DATA_FIELD + b" " + serialized_event.encode() + line_ending
 
 
+def _vllm_choice_fields(choice: BaseModel) -> Mapping[str, object]:
+    choice_extras: Final = choice.model_extra or {}
+    return MappingProxyType({field: choice_extras[field] for field in VLLM_CHOICE_FIELDS if field in choice_extras})
+
+
 def _fast_serialize_simple_model_response_stream(
     chunk: ModelResponseStream,
 ) -> bytes | None:
@@ -10231,7 +10237,11 @@ def _fast_serialize_simple_model_response_stream(
         return None
 
     choice: Final = choices[0]
-    if getattr(choice, "logprobs", None) is not None or getattr(choice, "enhancements", None) is not None:
+    if (
+        not isinstance(choice, BaseModel)
+        or getattr(choice, "logprobs", None) is not None
+        or getattr(choice, "enhancements", None) is not None
+    ):
         return None
 
     delta: Final[object] = getattr(choice, "delta", None)
@@ -10260,7 +10270,7 @@ def _fast_serialize_simple_model_response_stream(
     if content is not None:
         delta_dict["content"] = content
 
-    choice_dict: Final = {"index": getattr(choice, "index", 0), "delta": delta_dict}
+    choice_dict: Final = {"index": getattr(choice, "index", 0), "delta": delta_dict, **_vllm_choice_fields(choice)}
     finish_reason: Final = getattr(choice, "finish_reason", None)
     if finish_reason is not None:
         choice_dict["finish_reason"] = finish_reason
@@ -10295,7 +10305,33 @@ def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
         if serialized_chunk is not None:
             return serialized_chunk
 
-    return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+    choices: Final = _streaming_chunk_choices(chunk)
+    if not any(_null_vllm_choice_fields(choice) for choice in choices):
+        return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+    return json.dumps(
+        {
+            **_dump_set_fields(chunk, exclude=frozenset({"choices"})),
+            "choices": [{**_dump_set_fields(choice), **_null_vllm_choice_fields(choice)} for choice in choices],
+        },
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
+def _streaming_chunk_choices(chunk: BaseModel) -> Sequence[BaseModel]:
+    match chunk:
+        case ModelResponseStream() | TextCompletionResponse():
+            return chunk.choices
+        case _:
+            return ()
+
+
+def _null_vllm_choice_fields(choice: BaseModel) -> Mapping[str, None]:
+    return MappingProxyType({field: None for field, value in _vllm_choice_fields(choice).items() if value is None})
+
+
+def _dump_set_fields(model: BaseModel, exclude: AbstractSet[str] = frozenset()) -> Mapping[str, object]:
+    return model.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=set(exclude))
 
 
 async def _apply_streaming_chunk_hooks(

@@ -12,6 +12,7 @@ from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import VLLM_CHOICE_FIELDS
 from litellm.litellm_core_utils.core_helpers import (
     PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS,
     UPSTREAM_USAGE_COST,
@@ -31,6 +32,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
 )
+from litellm.litellm_core_utils.redact_messages import drop_token_ids
 from litellm.litellm_core_utils.token_counter import usage_tokenizer_model
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -434,6 +436,8 @@ class ChunkProcessor:
                 chunks, unreported="tool_calls" if _carries_tool_calls(chunks) else "stop"
             ),
             message={"role": ChunkProcessor._get_role_from_chunks(chunks), "content": ""},
+            provider_specific_fields=None,
+            **_streamed_vllm_choice_fields(chain.from_iterable(chunk.get("choices") or () for chunk in chunks)),
         )
 
     @staticmethod
@@ -504,6 +508,7 @@ class ChunkProcessor:
                             "index": 0,
                             "message": {"role": role, "content": ""},
                             "finish_reason": finish_reason,
+                            **_streamed_vllm_choice_fields(_first_choices_of_index_zero(chunks)),
                         }
                     ]
                 ),
@@ -1371,6 +1376,7 @@ def _rebuilt_text_choice(index: int, choices: Sequence[TextChoices]) -> TextChoi
         index=index,
         logprobs=_merged_logprobs(choices),
         finish_reason=next((choice.finish_reason for choice in reversed(choices) if choice.finish_reason), None),
+        **_streamed_vllm_choice_fields(choices),
     )
 
 
@@ -1502,6 +1508,32 @@ def _field_of(value: object, name: str) -> object:
     if isinstance(value, dict):
         return cast(Mapping[str, object], value).get(name)  # cast-ok: chunk dicts are untyped JSON
     return getattr(value, name, None)
+
+
+def _first_choices_of_index_zero(chunks: Iterable[object]) -> tuple[object, ...]:
+    first_choices: Final = (next(iter(object_items(_field_of(chunk, "choices"))), None) for chunk in chunks)
+    return tuple(choice for choice in first_choices if _field_of(choice, "index") in (0, None))
+
+
+def _choice_extras(choice: object) -> Mapping[str, object]:
+    if isinstance(choice, BaseModel):
+        return choice.model_extra or {}
+    return object_mapping(choice) or {}
+
+
+def _streamed_vllm_choice_fields(choices: Iterable[object]) -> Mapping[str, object]:
+    extras: Final = tuple(map(_choice_extras, choices))
+    token_id_runs: Final = tuple(object_items(fields.get("token_ids")) for fields in extras)
+    stop_reasons: Final = tuple(reason for fields in extras if (reason := fields.get("stop_reason")) is not None)
+    has_token_ids: Final = any(fields.get("token_ids") is not None for fields in extras)
+    streamed_values: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            "token_ids": list(chain.from_iterable(token_id_runs)) if has_token_ids else None,
+            "stop_reason": stop_reasons[-1] if stop_reasons else None,
+        }
+    )
+    present_fields: Final = frozenset(chain.from_iterable(fields.keys() for fields in extras))
+    return MappingProxyType({field: streamed_values[field] for field in VLLM_CHOICE_FIELDS if field in present_fields})
 
 
 def _delta_reasoning_items(delta: object) -> Sequence[object]:
@@ -1777,6 +1809,19 @@ def stream_chunk_builder(
     logging_obj: Optional["Logging"] = None,
     count_prompt_tokens: Callable[[], int] | None = None,
 ) -> ModelResponse | TextCompletionResponse | None:
+    response: Final = _assembled_stream_response(chunks, messages, logging_obj, count_prompt_tokens)
+    if response is not None and getattr(logging_obj, "drops_stream_token_ids", False) is True:
+        for choice in response.choices:
+            drop_token_ids(choice)
+    return response
+
+
+def _assembled_stream_response(
+    chunks: Sequence[object],
+    messages: Sequence[AllMessageValues | Message] | None,
+    logging_obj: Optional["Logging"],
+    count_prompt_tokens: Callable[[], int] | None,
+) -> ModelResponse | TextCompletionResponse | None:
     try:
         if chunks is None:
             raise litellm.APIError(
@@ -1788,7 +1833,7 @@ def stream_chunk_builder(
         if not chunks:
             return None
 
-        processor: Final = ChunkProcessor(chunks, messages)
+        processor: Final = ChunkProcessor(list(chunks), messages)
         chunks = processor.chunks
 
         ### BASE-CASE ###

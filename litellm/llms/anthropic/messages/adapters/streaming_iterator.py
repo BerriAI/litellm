@@ -493,10 +493,23 @@ class _CombinedChunkSplitter:
             for position, block in enumerate(blocks)
         )
 
+    @staticmethod
+    def _without_sibling_finish(chunk: "ModelResponseStream") -> "ModelResponseStream":
+        choices: Final = _optional_attr_sequence(chunk, "choices")
+        if (
+            len(choices) != 1
+            or _optional_attr(choices[0], "index") in (None, 0)
+            or _optional_attr(choices[0], "finish_reason") is None
+        ):
+            return chunk
+        unfinished: Final = copy.deepcopy(chunk)
+        unfinished.choices[0].finish_reason = None
+        return unfinished
+
     def _expand(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
         split_chunks: Final = tuple(
             split_chunk
-            for combined_chunk in self._split(chunk)
+            for combined_chunk in self._split(self._without_sibling_finish(chunk))
             for split_chunk in self._split_by_payload_kind(combined_chunk)  # comprehension-ok: flattens nested splits
         )
         block_chunks: Final = tuple(itertools.chain.from_iterable(map(self._split_thinking_blocks, split_chunks)))
