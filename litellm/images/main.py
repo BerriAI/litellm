@@ -38,6 +38,7 @@ from openai.types.audio.transcription_create_params import FileTypes
 # BFL handlers
 from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
 from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_generation
+from litellm.llms.modelscope.image_generation.handler import modelscope_image_generation
 from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
 from litellm.main import (
     azure_chat_completions,
@@ -508,6 +509,23 @@ def image_generation(
                 extra_headers=extra_headers,
                 client=client,
                 aimg_generation=aimg_generation,
+            )
+        elif custom_llm_provider == "modelscope":
+            if api_base is not None and api_key is None:
+                raise ValueError("api_key must be provided when api_base is overridden for modelscope")
+            litellm_params_dict["api_key"] = api_key
+            litellm_params_dict["api_base"] = api_base
+            return modelscope_image_generation.image_generation(
+                model=model,
+                prompt=prompt,
+                model_response=model_response,
+                optional_params=optional_params,  # pyright: ignore[reportArgumentType]  # get_optional_params_image_gen returns dict[str, object]; values are JSON
+                litellm_params=litellm_params_dict,  # pyright: ignore[reportUnknownArgumentType]  # kwargs plumbing is untyped upstream
+                logging_obj=litellm_logging_obj,
+                timeout=timeout,
+                extra_headers=extra_headers,  # pyright: ignore[reportUnknownArgumentType]  # kwargs plumbing is untyped upstream
+                client=client,  # pyright: ignore[reportUnknownArgumentType]  # kwargs plumbing is untyped upstream
+                aimg_generation=aimg_generation,  # pyright: ignore[reportUnknownArgumentType]  # kwargs plumbing is untyped upstream
             )
         elif custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import (
