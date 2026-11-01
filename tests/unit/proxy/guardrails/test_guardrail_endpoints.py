@@ -2635,20 +2635,25 @@ async def test_apply_guardrail_attaches_key_identity_when_caller_sends_no_metada
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_omits_metadata_when_not_sent(mocker):
-    """Without metadata, request_data stays empty (backward-compatible)."""
-    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+async def test_apply_guardrail_sends_the_key_identity_when_the_caller_sends_no_metadata(mocker):
+    """A caller that sends no metadata still arrives with the key's identity attached, because
+    pre-call processing fills it in. An empty request_data is not a shape the pipeline produces."""
+    mock_guardrail = _patch_apply_guardrail_env(
+        mocker,
+        {"texts": ["ok"]},
+        processed_data={"guardrail_name": "test-guardrail", "metadata": {"user_api_key_alias": "billing-app"}},
+    )
 
     request = ApplyGuardrailRequest(guardrail_name="test-guardrail", text="hello")
     await apply_guardrail(
         fastapi_request=mocker.Mock(),
         request=request,
-        user_api_key_dict=UserAPIKeyAuth(),
+        user_api_key_dict=UserAPIKeyAuth(key_alias="billing-app"),
     )
 
     mock_guardrail.apply_guardrail.assert_awaited_once_with(
         inputs={"texts": ["hello"]},
-        request_data={},
+        request_data={"metadata": {"user_api_key_alias": "billing-app"}},
         input_type="request",
     )
 
