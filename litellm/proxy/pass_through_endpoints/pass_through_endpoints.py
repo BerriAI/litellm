@@ -6,15 +6,17 @@ import posixpath
 import re
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from itertools import chain, count, groupby
+from functools import reduce
+from itertools import chain, count, groupby, takewhile
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
-from urllib.parse import urlencode, urlparse
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
+import orjson
 from fastapi import (
     APIRouter,
     Depends,
@@ -24,6 +26,7 @@ from fastapi import (
     Response,
     UploadFile,
     WebSocket,
+    WebSocketDisconnect,
     status,
 )
 from fastapi.responses import StreamingResponse
@@ -34,7 +37,7 @@ from starlette.routing import BaseRoute, Match, Route
 from starlette.types import Scope
 from starlette.websockets import WebSocketState
 from typing_extensions import ReadOnly
-from websockets.asyncio.client import connect
+from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import (
     ConnectionClosedError,
     ConnectionClosedOK,
@@ -60,6 +63,8 @@ from litellm.integrations.custom_guardrail import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
     bind_budget_reservation_to_callbacks,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
@@ -69,6 +74,7 @@ from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import get_masked_values
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.realtime_errors import realtime_error_event
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.anthropic.common_utils import (
@@ -154,6 +160,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
     WebSocketSessionMeter,
     WebSocketSessionUsage,
+    WebsocketUpstreamFrameKind,
 )
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, CallTypes, Usage
 
@@ -2574,11 +2581,16 @@ def _resolved_vertex_live_setup(
     return {**setup_data, "model": setup_model_rewriter(setup_model)}
 
 
+def _decoded_frame(frame: str | bytes) -> object:
+    try:
+        return _DECODED_JSON.validate_python(orjson.loads(frame))
+    except orjson.JSONDecodeError:
+        return _DECODED_JSON.validate_python(json.loads(frame if isinstance(frame, str) else frame.decode("utf-8")))
+
+
 def _json_object_frame(frame: str | bytes) -> dict[str, object] | None:
     try:
-        decoded: Final[object] = _DECODED_JSON.validate_python(
-            json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
-        )
+        decoded: Final = _decoded_frame(frame)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
     return decoded if isinstance(decoded, dict) else None
@@ -2637,6 +2649,331 @@ def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict
     return inject_trace_context(headers, parent_span=parent_span)
 
 
+@dataclass(frozen=True, slots=True)
+class WebsocketFrameModelAllowed:
+    access_groups: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WebsocketFrameModelRefused:
+    message: str
+    error_type: str
+
+
+WebsocketFrameModelVerdict: TypeAlias = WebsocketFrameModelAllowed | WebsocketFrameModelRefused
+
+
+class WebsocketFrameModelGate(Protocol):
+    async def __call__(self, websocket: WebSocket, model: str, /) -> WebsocketFrameModelVerdict: ...
+
+
+WebsocketUpstreamFrameClassifier: TypeAlias = Callable[[Mapping[str, object]], WebsocketUpstreamFrameKind]
+_SESSION_FRAMES_EVERY_ROW_CARRIES: Final[frozenset[WebsocketUpstreamFrameKind]] = frozenset(
+    {"opens_session", "updates_session"}
+)
+_FrameT: Final = TypeVar("_FrameT", bound=Mapping[str, object])
+
+
+@dataclass(frozen=True, slots=True)
+class _TurnAuthorization:
+    requested_model: str | None
+    access_groups: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ForwardClientFrame:
+    starts_turn: bool
+    turn: _TurnAuthorization | None
+    lane: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _RefuseClientFrame:
+    refusal: WebsocketFrameModelRefused
+
+
+@dataclass(frozen=True, slots=True)
+class _ClientFrameRequests:
+    starts_turn: bool
+    lane: str | None
+    turn_model: str | None
+    models: tuple[str, ...]
+    unverifiable_model_refusal: str | None
+
+
+_NO_CLIENT_FRAME_REQUESTS: Final = _ClientFrameRequests(
+    starts_turn=False, lane=None, turn_model=None, models=(), unverifiable_model_refusal=None
+)
+_FORWARD_WITHOUT_TURN: Final = _ForwardClientFrame(starts_turn=False, turn=None, lane=None)
+_TURN_STARTING_FRAME: Final = "response.create"
+_FRAME_TEXT_WORTH_PARSING: Final = (f'"{_TURN_STARTING_FRAME}"', '"model"', '"prompt"', '"tools"', "\\")
+_TURN_MODEL_PLACEMENTS: Final = (("model",), ("response", "model"), ("session", "model"))
+_TRANSCRIPTION_MODEL_PLACEMENTS: Final = (
+    ("session", "input_audio_transcription", "model"),
+    ("session", "audio", "input", "transcription", "model"),
+)
+_STORED_PROMPT_PLACEMENTS: Final = (("prompt",), ("response", "prompt"), ("session", "prompt"))
+_TOOL_LIST_PLACEMENTS: Final = (("tools",), ("response", "tools"), ("session", "tools"))
+_TOOL_THAT_RUNS_A_MODEL: Final = "image_generation"
+STORED_PROMPT_PROBE_MODEL: Final = "litellm-unverifiable-stored-prompt-model"
+_STORED_PROMPT_REFUSAL: Final = (
+    "This key is limited to specific models, so it cannot run a stored prompt. "
+    "The gateway cannot check which model a stored prompt runs."
+)
+_UNNAMED_TOOL_MODEL_REFUSAL: Final = (
+    "This key is limited to specific models, so an image_generation tool has to name its model. "
+    "The gateway cannot check which model an unnamed one runs."
+)
+_FIRST_SENTENCE: Final = re.compile(r".*?[.!?](?=\s|$)")
+
+
+def _may_name_a_model(text_data: str) -> bool:
+    return any(marker in text_data for marker in _FRAME_TEXT_WORTH_PARSING)
+
+
+def _frame_lane(frame: Mapping[str, object]) -> str | None:
+    stream_id: Final = frame.get("stream_id")
+    return stream_id if isinstance(stream_id, str) else None
+
+
+def _frames_of_lane(lane: str | None) -> Callable[[Mapping[str, object]], bool]:
+    def in_lane(frame: Mapping[str, object]) -> bool:
+        return _frame_lane(frame) == lane
+
+    return in_lane
+
+
+def _every_frame(_frame: Mapping[str, object]) -> bool:
+    return True
+
+
+def _without_earlier_session_updates(
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier,
+    frames: Sequence[_FrameT],
+    latest_update: _FrameT,
+) -> tuple[_FrameT, ...]:
+    return tuple(
+        frame
+        for index, frame in enumerate(frames)
+        if frame is latest_update
+        or upstream_frame_kind(frame) != "updates_session"
+        or _unbilled_usage_ran_under(map(upstream_frame_kind, frames[index + 1 :]))
+    )
+
+
+def _unbilled_usage_ran_under(later_kinds: Iterable[WebsocketUpstreamFrameKind]) -> bool:
+    return "bills_usage" in takewhile(lambda kind: kind != "updates_session", later_kinds)
+
+
+def _nested_frame(frame: Mapping[str, object] | None, key: str) -> Mapping[str, object] | None:
+    return None if frame is None else as_str_mapping(frame.get(key))
+
+
+def _placed_value(frame: Mapping[str, object], placement: Sequence[str]) -> object:
+    *parents, leaf = placement
+    container: Final = reduce(_nested_frame, parents, frame)
+    return None if container is None else container.get(leaf)
+
+
+def _placed_models(frame: Mapping[str, object], placements: Iterable[Sequence[str]]) -> tuple[str, ...]:
+    placed: Final = (_placed_value(frame, placement) for placement in placements)
+    return tuple(value for value in placed if isinstance(value, str))
+
+
+def _placed_tools(frame: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    tool_lists: Final = (_placed_value(frame, placement) for placement in _TOOL_LIST_PLACEMENTS)
+    tools: Final = chain.from_iterable(as_object_list(tool_list) or () for tool_list in tool_lists)
+    return tuple(tool for tool in map(as_str_mapping, tools) if tool is not None)
+
+
+def _unverifiable_model_refusal(frame: Mapping[str, object], tools: Sequence[Mapping[str, object]]) -> str | None:
+    prompts: Final = (_placed_value(frame, placement) for placement in _STORED_PROMPT_PLACEMENTS)
+    if any(isinstance(prompt, Mapping) for prompt in prompts):
+        return _STORED_PROMPT_REFUSAL
+    if any(tool.get("type") == _TOOL_THAT_RUNS_A_MODEL and not isinstance(tool.get("model"), str) for tool in tools):
+        return _UNNAMED_TOOL_MODEL_REFUSAL
+    return None
+
+
+def _client_frame_requests(frame_data: str | bytes) -> _ClientFrameRequests:
+    if isinstance(frame_data, str) and not _may_name_a_model(frame_data):
+        return _NO_CLIENT_FRAME_REQUESTS
+    frame: Final = _json_object_frame(frame_data)
+    if frame is None:
+        return _NO_CLIENT_FRAME_REQUESTS
+    turn_models: Final = _placed_models(frame, _TURN_MODEL_PLACEMENTS)
+    tools: Final = _placed_tools(frame)
+    tool_models: Final = (model for model in (tool.get("model") for tool in tools) if isinstance(model, str))
+    return _ClientFrameRequests(
+        starts_turn=frame.get("type") == _TURN_STARTING_FRAME,
+        lane=_frame_lane(frame),
+        turn_model=next(iter(turn_models), None),
+        models=tuple(
+            dict.fromkeys((*turn_models, *_placed_models(frame, _TRANSCRIPTION_MODEL_PLACEMENTS), *tool_models))
+        ),
+        unverifiable_model_refusal=_unverifiable_model_refusal(frame, tools),
+    )
+
+
+def _unverifiable_model_probe_refusal(probe: WebsocketFrameModelRefused, message: str) -> WebsocketFrameModelRefused:
+    if probe.error_type.endswith("_model_access_denied"):
+        return WebsocketFrameModelRefused(message=message, error_type=probe.error_type)
+    return probe
+
+
+async def _client_frame_verdict(
+    websocket: WebSocket, frame_data: str | bytes, gate: WebsocketFrameModelGate | None
+) -> _ForwardClientFrame | _RefuseClientFrame:
+    if gate is None:
+        return _FORWARD_WITHOUT_TURN
+    requests: Final = _client_frame_requests(frame_data)
+    verdicts: Final = tuple([await gate(websocket, model) for model in requests.models])
+    refusal: Final = next((verdict for verdict in verdicts if isinstance(verdict, WebsocketFrameModelRefused)), None)
+    if refusal is not None:
+        return _RefuseClientFrame(refusal=refusal)
+    if requests.unverifiable_model_refusal is not None and isinstance(
+        probe := await gate(websocket, STORED_PROMPT_PROBE_MODEL), WebsocketFrameModelRefused
+    ):
+        return _RefuseClientFrame(refusal=_unverifiable_model_probe_refusal(probe, requests.unverifiable_model_refusal))
+    allowed: Final = tuple(verdict for verdict in verdicts if isinstance(verdict, WebsocketFrameModelAllowed))
+    return _ForwardClientFrame(
+        starts_turn=requests.starts_turn,
+        lane=requests.lane,
+        turn=(
+            _TurnAuthorization(requested_model=requests.turn_model, access_groups=allowed[0].access_groups)
+            if requests.turn_model is not None and allowed
+            else None
+        ),
+    )
+
+
+def _refusal_close_reason(message: str) -> str:
+    first_sentence: Final = _FIRST_SENTENCE.match(message)
+    return truncated_close_reason(message if first_sentence is None else first_sentence.group(0))
+
+
+async def refuse_websocket(websocket: WebSocket, refusal: WebsocketFrameModelRefused) -> None:
+    await websocket.send_text(realtime_error_event(refusal.message, error_type=refusal.error_type))
+    await websocket.close(code=CloseCode.POLICY_VIOLATION, reason=_refusal_close_reason(refusal.message))
+
+
+def _stamp_billed_turn(kwargs: Mapping[str, object], turn: _TurnAuthorization) -> None:
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params"))
+    metadata: Final = None if litellm_params is None else litellm_params.get("metadata")
+    if not isinstance(metadata, MutableMapping):
+        return
+    metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = list(turn.access_groups)
+    if turn.requested_model is not None:
+        metadata["model_group"] = turn.requested_model
+
+
+def _opening_model(target: str) -> str | None:
+    return next(iter(parse_qs(urlparse(target).query).get("model", ())), None)
+
+
+class _WebsocketTurnLedger:
+    def __init__(self, opening: _TurnAuthorization, started: datetime) -> None:
+        self.opening = opening
+        self.queued_turns: Mapping[str | None, tuple[_TurnAuthorization | None, ...]] = MappingProxyType({})
+        self.session_opened = False
+        self.started = started
+        self.logged_turns = 0
+        self.unstarted_turns = 0
+
+    def current(self, lane: str | None) -> _TurnAuthorization:
+        oldest: Final = next(iter(self.queued_turns.get(lane, ())), None)
+        return self.opening if oldest is None else oldest
+
+    def queue_turn(self, lane: str | None, turn: _TurnAuthorization | None) -> None:
+        self.unstarted_turns += 1
+        if not self.session_opened:
+            self.queued_turns = MappingProxyType({**self.queued_turns, lane: (*self.queued_turns.get(lane, ()), turn)})
+
+    def open_session(self) -> None:
+        self.session_opened = True
+        self.queued_turns = MappingProxyType({})
+
+    def close_turn(self, lane: str | None, end_time: datetime) -> None:
+        self.logged_turns += 1
+        self.started = end_time
+        self._forget_turn(lane, 0)
+
+    def start_turn(self) -> None:
+        self.unstarted_turns = max(0, self.unstarted_turns - 1)
+
+    def drop_refused_turn(self, lane: str | None, lane_is_running_a_turn: bool) -> None:
+        self.start_turn()
+        self._forget_turn(lane, 1 if lane_is_running_a_turn else 0)
+
+    def _forget_turn(self, lane: str | None, position: int) -> None:
+        turns: Final = self.queued_turns.get(lane, ())
+        self.queued_turns = MappingProxyType({**self.queued_turns, lane: (*turns[:position], *turns[position + 1 :])})
+
+
+def _session_end_needs_a_row(
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier | None,
+    unlogged_frames: Sequence[Mapping[str, object]],
+    ledger: _WebsocketTurnLedger,
+) -> bool:
+    if upstream_frame_kind is None:
+        return True
+    kinds: Final = frozenset(map(upstream_frame_kind, unlogged_frames))
+    return "starts_turn" in kinds or (ledger.logged_turns == 0 and bool(kinds - {"opens_session"}))
+
+
+def _turn_in_flight(
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier | None, unlogged_frames: Sequence[Mapping[str, object]]
+) -> bool:
+    return upstream_frame_kind is not None and any(
+        upstream_frame_kind(frame) == "starts_turn" for frame in unlogged_frames
+    )
+
+
+def _turn_owed(
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier | None,
+    unlogged_frames: Sequence[Mapping[str, object]],
+    ledger: _WebsocketTurnLedger,
+) -> bool:
+    return _turn_in_flight(upstream_frame_kind, unlogged_frames) or (
+        upstream_frame_kind is not None and ledger.unstarted_turns > 0
+    )
+
+
+def _lanes_in_flight(
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier, unlogged_frames: Sequence[Mapping[str, object]]
+) -> tuple[str | None, ...]:
+    started: Final = (frame for frame in unlogged_frames if upstream_frame_kind(frame) == "starts_turn")
+    return tuple(dict.fromkeys(map(_frame_lane, started)))
+
+
+async def _relay_client_frame(
+    websocket: WebSocket,
+    upstream_ws: ClientConnection,
+    checked_frame: str | bytes,
+    forwarded_frame: str | bytes,
+    gate: WebsocketFrameModelGate | None,
+    ledger: _WebsocketTurnLedger,
+) -> _ForwardClientFrame | _RefuseClientFrame:
+    verdict: Final = await _client_frame_verdict(websocket, checked_frame, gate)
+    match verdict:
+        case _RefuseClientFrame(refusal=refusal):
+            await refuse_websocket(websocket, refusal)
+        case _ForwardClientFrame(starts_turn=True, turn=turn, lane=lane):
+            ledger.queue_turn(lane, turn)
+            await upstream_ws.send(forwarded_frame)
+        case _ForwardClientFrame():
+            await upstream_ws.send(forwarded_frame)
+    return verdict
+
+
+_EXPLICIT_SUCCESS_KWARGS: Final = frozenset({"logging_obj", "passthrough_logging_payload", "custom_llm_provider"})
+WALKOUT_TURN_DRAIN_SECONDS: Final = 600.0
+
+
+def _metered_client_text(meter: WebSocketSessionMeter | None, client_text: str) -> int:
+    return 0 if meter is None else meter.measure(client_text)
+
+
 def _log_session_usage(logging_obj: LiteLLMLoggingObj, usage: WebSocketSessionUsage) -> None:
     logging_obj.model = usage.model  # rebind-ok: the spend logger reads model and cost off the shared logging object
     logging_obj.model_call_details["model"] = usage.model  # rebind-ok: same shared logging object
@@ -2654,6 +2991,9 @@ async def websocket_passthrough_request(
     cost_per_request: float | None = None,
     accept_websocket: bool = True,
     setup_model_rewriter: Callable[[str], str] | None = None,
+    client_frame_model_gate: WebsocketFrameModelGate | None = None,
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier | None = None,
+    walkout_turn_drain_seconds: float = WALKOUT_TURN_DRAIN_SECONDS,
     builtin_provider_route: bool = False,
     model: str | None = None,
     meter: WebSocketSessionMeter | None = None,
@@ -2670,6 +3010,11 @@ async def websocket_passthrough_request(
         endpoint: The endpoint path (for logging purposes)
         cost_per_request: Optional field - cost per request to the target endpoint
         setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
+        client_frame_model_gate: Optional per-frame check of every model a client frame names
+        upstream_frame_kind: Optional sort of upstream frames into the one that ends a billable turn and the ones
+            that open the session, so each turn logs its own spend and keeps the session's provider-named model
+        walkout_turn_drain_seconds: How long to keep reading a turn the provider is still running after the client
+            left or was refused, so the provider's usage for it still reaches spend
         builtin_provider_route: Whether a built-in provider route serves the connection, so its URL names the provider
         model: The model the caller named before connecting, logged on a failure before the setup frame arrives
         meter: Prices the session from the client text frames delivered upstream, for an upstream that reports no usage
@@ -2709,26 +3054,31 @@ async def websocket_passthrough_request(
         proxy_config=proxy_config,
         route_description="websocket_passthrough",
     )
-    logging_obj: Final = Logging(
-        model="unknown",
-        messages=[{"role": "user", "content": "WebSocket connection"}],
-        stream=True,  # WebSockets are inherently streaming
-        call_type="pass_through_endpoint",
-        start_time=start_time,
-        litellm_call_id=litellm_call_id,
-        function_id="websocket_passthrough",
-        dynamic_success_callbacks=team_callbacks.success_callbacks,
-        dynamic_failure_callbacks=team_callbacks.failure_callbacks,
-        kwargs=team_callbacks.logging_kwargs,
-    )
 
-    # Create passthrough logging payload
-    passthrough_logging_payload: Final = PassthroughStandardLoggingPayload(
-        url=target,
-        request_body={},  # WebSocket doesn't have a traditional request body
-        request_method="WEBSOCKET",
-        cost_per_request=cost_per_request,
-    )
+    def new_call_logging(call_start: datetime, call_id: str) -> LiteLLMLoggingObj:
+        return Logging(
+            model="unknown",
+            messages=[{"role": "user", "content": "WebSocket connection"}],
+            stream=True,
+            call_type="pass_through_endpoint",
+            start_time=call_start,
+            litellm_call_id=call_id,
+            function_id="websocket_passthrough",
+            dynamic_success_callbacks=team_callbacks.success_callbacks,
+            dynamic_failure_callbacks=team_callbacks.failure_callbacks,
+            kwargs=team_callbacks.logging_kwargs,
+        )
+
+    def new_call_payload() -> PassthroughStandardLoggingPayload:
+        return PassthroughStandardLoggingPayload(
+            url=target,
+            request_body={},
+            request_method="WEBSOCKET",
+            cost_per_request=cost_per_request,
+        )
+
+    logging_obj: Final = new_call_logging(start_time, litellm_call_id)
+    passthrough_logging_payload: Final = new_call_payload()
 
     # Create a dummy request object for WebSocket connections to maintain compatibility
     # with the existing _init_kwargs_for_pass_through_endpoint function
@@ -2750,38 +3100,136 @@ async def websocket_passthrough_request(
     )
 
     # Initialize kwargs for logging using the same pattern as HTTP passthrough
-    kwargs: Final = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(
-        user_api_key_dict=user_api_key_dict,
-        _parsed_body={},  # WebSocket doesn't have a traditional request body
-        passthrough_logging_payload=passthrough_logging_payload,
-        litellm_call_id=litellm_call_id,
-        request=dummy_request,
-        logging_obj=logging_obj,
+    def init_call_kwargs(
+        token: UserAPIKeyAuth,
+        call_payload: PassthroughStandardLoggingPayload,
+        call_id: str,
+        call_logging: LiteLLMLoggingObj,
+    ) -> dict[str, object]:  # mutable-ok: the Vertex relay stamps the model from setup frames into these kwargs
+        return HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(
+            user_api_key_dict=token,
+            _parsed_body={},  # WebSocket doesn't have a traditional request body
+            passthrough_logging_payload=call_payload,
+            litellm_call_id=call_id,
+            request=dummy_request,
+            logging_obj=call_logging,
+        )
+
+    kwargs: Final = init_call_kwargs(user_api_key_dict, passthrough_logging_payload, litellm_call_id, logging_obj)
+
+    def start_call_logging(call_logging: LiteLLMLoggingObj, call_kwargs: Mapping[str, object]) -> None:
+        call_logging.update_environment_variables(
+            model="unknown",
+            user="unknown",
+            optional_params={},
+            litellm_params=dict(as_str_mapping(call_kwargs.get("litellm_params")) or {}),
+            call_type="pass_through_endpoint",
+        )
+        call_logging.pre_call(
+            input=[{"role": "user", "content": "WebSocket connection"}],
+            api_key="",
+            additional_args={
+                "complete_input_dict": {},
+                "api_base": target,
+                "headers": upstream_headers,
+            },
+        )
+
+    start_call_logging(logging_obj, kwargs)
+
+    class MockWebSocketRequest:
+        def __init__(self, target_url: str):
+            self.method = "WEBSOCKET"
+            self.url = target_url
+
+    class MockWebSocketResponse:
+        def __init__(self, target_url: str):
+            self.status_code = 200
+            self.text = "WebSocket connection successful"
+            self.headers: dict[str, str] = {}
+            self.request = MockWebSocketRequest(target_url)
+
+    ledger: Final = _WebsocketTurnLedger(
+        opening=_TurnAuthorization(
+            requested_model=_opening_model(target),
+            access_groups=tuple(user_api_key_dict.matched_model_access_groups or ()),
+        ),
+        started=start_time,
     )
 
-    # Update logging environment variables
-    logging_obj.update_environment_variables(
-        model="unknown",
-        user="unknown",
-        optional_params={},
-        litellm_params=dict(kwargs.get("litellm_params", {})),
-        call_type="pass_through_endpoint",
-    )
-    logging_obj.model_call_details["litellm_call_id"] = litellm_call_id
+    def log_frames(
+        call_logging: LiteLLMLoggingObj,
+        call_payload: PassthroughStandardLoggingPayload,
+        call_kwargs: Mapping[str, object],
+        end_time: datetime,
+        lane: str | None,
+        in_row: Callable[[Mapping[str, object]], bool],
+    ) -> None:
+        all_frames: Final = list(websocket_messages)
+        frames: Final = [frame for frame in all_frames if in_row(frame)]
+        websocket_messages[:] = (
+            ()
+            if upstream_frame_kind is None
+            else (
+                frame
+                for frame in all_frames
+                if not in_row(frame) or upstream_frame_kind(frame) in _SESSION_FRAMES_EVERY_ROW_CARRIES
+            )
+        )
+        logged_payload: Final[PassthroughStandardLoggingPayload] = {
+            **call_payload,
+            "response_body": frames,
+            "end_time": end_time,
+        }
+        if client_frame_model_gate is not None:
+            _stamp_billed_turn(call_kwargs, ledger.current(lane))
+        success_kwargs: Final = {
+            key: value for key, value in call_kwargs.items() if key not in _EXPLICIT_SUCCESS_KWARGS
+        }
+        custom_llm_provider: Final = call_kwargs.get("custom_llm_provider")
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
+                httpx_response=MockWebSocketResponse(target),
+                response_body=frames,
+                url_route=endpoint or "",
+                result="websocket_connection_successful",
+                start_time=ledger.started,
+                end_time=end_time,
+                logging_obj=call_logging,
+                cache_hit=False,
+                request_body={},
+                passthrough_logging_payload=logged_payload,
+                custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+                finalize_before_dispatch=False,
+                **success_kwargs,
+            )
+        )
+        bind_budget_reservation_to_callbacks(call_logging.litellm_params)
 
-    # Pre-call logging
-    logging_obj.pre_call(
-        input=[{"role": "user", "content": "WebSocket connection"}],
-        api_key="",
-        additional_args={
-            "complete_input_dict": {},
-            "api_base": target,
-            "headers": upstream_headers,
-        },
-    )
+    def log_turn(lane: str | None, in_row: Callable[[Mapping[str, object]], bool]) -> None:
+        end_time: Final = datetime.now()
+        if upstream_frame_kind is None:
+            log_frames(logging_obj, passthrough_logging_payload, kwargs, end_time, lane, in_row)
+        else:
+            turn_call_id: Final = str(uuid.uuid4())
+            turn_logging: Final = new_call_logging(ledger.started, turn_call_id)
+            turn_payload: Final = new_call_payload()
+            turn_kwargs: Final = init_call_kwargs(
+                user_api_key_dict
+                if ledger.logged_turns == 0
+                else user_api_key_dict.model_copy(update={"budget_reservation": None}),
+                turn_payload,
+                turn_call_id,
+                turn_logging,
+            )
+            start_call_logging(turn_logging, turn_kwargs)
+            log_frames(turn_logging, turn_payload, turn_kwargs, end_time, lane, in_row)
+        ledger.close_turn(lane, end_time)
 
     ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-    websocket_hook_data: Final = guardrail_request_data_with_streaming(MappingProxyType({}), is_streaming=True)
+    websocket_hook_data: Final = guardrail_request_data_with_streaming(
+        MappingProxyType({"litellm_call_id": litellm_call_id}), is_streaming=True
+    )
     await proxy_logging_obj.pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         data=websocket_hook_data,
@@ -2808,7 +3256,6 @@ async def websocket_passthrough_request(
                         message = await websocket.receive()
                         message_type = message.get("type")
                         if message_type == "websocket.disconnect":
-                            await upstream_ws.close()
                             break
 
                         text_data: str | None = message.get("text")
@@ -2871,11 +3318,29 @@ async def websocket_passthrough_request(
                                     )
                                     # Not a JSON message or doesn't contain setup data
 
-                            await upstream_ws.send(_rewrite_vertex_live_setup_model(text_data, setup_model_rewriter))
-                            if meter is not None:
-                                metered_total += meter.measure(text_data)
+                            if isinstance(
+                                await _relay_client_frame(
+                                    websocket,
+                                    upstream_ws,
+                                    text_data,
+                                    _rewrite_vertex_live_setup_model(text_data, setup_model_rewriter),
+                                    client_frame_model_gate,
+                                    ledger,
+                                ),
+                                _RefuseClientFrame,
+                            ):
+                                break
+                            metered_total += _metered_client_text(meter, text_data)
                         elif bytes_data is not None:
-                            await upstream_ws.send(bytes_data)
+                            if isinstance(
+                                await _relay_client_frame(
+                                    websocket, upstream_ws, bytes_data, bytes_data, client_frame_model_gate, ledger
+                                ),
+                                _RefuseClientFrame,
+                            ):
+                                break
+                    if not _turn_owed(upstream_frame_kind, websocket_messages, ledger):
+                        await upstream_ws.close()
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -2902,11 +3367,7 @@ async def websocket_passthrough_request(
             is_vertex_live: Final = bool(endpoint and "/vertex_ai/live" in endpoint)
             json_frame_ordinal: Final = count()
 
-            async def relay_upstream_frame(upstream_message: str | bytes) -> None:
-                if isinstance(upstream_message, bytes):
-                    await websocket.send_bytes(upstream_message)
-                else:
-                    await websocket.send_text(upstream_message)
+            def record_upstream_frame(upstream_message: str | bytes) -> None:
                 message_data: Final = _json_object_frame(upstream_message)
                 if message_data is None:
                     return
@@ -2914,6 +3375,41 @@ async def websocket_passthrough_request(
                     _extract_vertex_live_model_from_setup_response(message_data)
                     return
                 websocket_messages.append(message_data)
+                match None if upstream_frame_kind is None else upstream_frame_kind(message_data):
+                    case "opens_session":
+                        ledger.open_session()
+                    case "starts_turn":
+                        ledger.start_turn()
+                    case "updates_session" if upstream_frame_kind is not None:
+                        websocket_messages[:] = _without_earlier_session_updates(
+                            upstream_frame_kind, websocket_messages, message_data
+                        )
+                    case "ends_turn":
+                        log_turn(_frame_lane(message_data), _frames_of_lane(_frame_lane(message_data)))
+                    case "bills_usage" if not _turn_in_flight(upstream_frame_kind, websocket_messages):
+                        log_turn(_frame_lane(message_data), _frames_of_lane(_frame_lane(message_data)))
+                    case "refuses_turn" if upstream_frame_kind is not None:
+                        lane: Final = _frame_lane(message_data)
+                        ledger.drop_refused_turn(
+                            lane, lane in _lanes_in_flight(upstream_frame_kind, websocket_messages)
+                        )
+                    case _:
+                        pass
+
+            async def relay_upstream_frame(upstream_message: str | bytes) -> None:
+                record_upstream_frame(upstream_message)
+                if not _client_socket_is_open(websocket):
+                    if not _turn_owed(upstream_frame_kind, websocket_messages, ledger):
+                        await upstream_ws.close()
+                    return
+                try:
+                    if isinstance(upstream_message, bytes):
+                        await websocket.send_bytes(upstream_message)
+                    else:
+                        await websocket.send_text(upstream_message)
+                except WebSocketDisconnect:
+                    if not _turn_owed(upstream_frame_kind, websocket_messages, ledger):
+                        raise
 
             async def forward_upstream_to_client() -> Close | None:
                 try:
@@ -2922,6 +3418,11 @@ async def websocket_passthrough_request(
                 except (ConnectionClosedOK, ConnectionClosedError) as e:
                     verbose_proxy_logger.debug("Upstream WebSocket connection closed: %s", e)
                     return e.rcvd
+                except WebSocketDisconnect:
+                    verbose_proxy_logger.debug(
+                        "WebSocket passthrough (%s): client left while upstream was still sending", endpoint
+                    )
+                    return None
                 except asyncio.CancelledError:
                     verbose_proxy_logger.debug("asyncio.CancelledError in forward_upstream_to_client")
                     raise
@@ -2933,12 +3434,15 @@ async def websocket_passthrough_request(
                     raise
 
             # Create tasks for bidirectional message forwarding
-            tasks: Final = [
-                asyncio.create_task(forward_client_to_upstream()),
-                asyncio.create_task(forward_upstream_to_client()),
-            ]
+            client_task: Final = asyncio.create_task(forward_client_to_upstream())
+            upstream_task: Final = asyncio.create_task(forward_upstream_to_client())
+            tasks: Final = (client_task, upstream_task)
 
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if client_task.done() and _turn_owed(upstream_frame_kind, websocket_messages, ledger):
+                await asyncio.wait((upstream_task,), timeout=walkout_turn_drain_seconds)
+            done: Final = tuple(task for task in tasks if task.done())
+            pending: Final = tuple(task for task in tasks if not task.done())
 
             # Cancel remaining tasks
             for task in pending:
@@ -2961,64 +3465,17 @@ async def websocket_passthrough_request(
                     reason=truncated_close_reason(upstream_close.reason),
                 )
 
-            end_time: Final = datetime.now()
-
-            # Update passthrough logging payload with response data
-            passthrough_logging_payload["response_body"] = websocket_messages
-            passthrough_logging_payload["end_time"] = end_time
-
-            # Remove logging_obj from kwargs to avoid duplicate keyword argument
-            success_kwargs: Final = kwargs.copy()
-            success_kwargs.pop("logging_obj", None)
-
-            # # Add user authentication context for database logging
-            # if user_api_key_dict:
-            #     success_kwargs.setdefault('litellm_params', {})
-            #     success_kwargs['litellm_params'].update({
-            #         'proxy_server_request': {
-            #             'body': {
-            #                 'user': user_api_key_dict.user_id,
-            #                 'team_id': user_api_key_dict.team_id,
-            #                 'end_user_id': user_api_key_dict.end_user_id,
-            #             }
-            #         }
-            #     })
-            #     # Also add the user_api_key for direct access
-            #     success_kwargs['user_api_key'] = user_api_key_dict.api_key
-
-            # Create a dummy httpx.Response for WebSocket connections
-            class MockWebSocketResponse:
-                def __init__(self, target_url: str):
-                    self.status_code = 200
-                    self.text = "WebSocket connection successful"
-                    self.headers: dict[str, str] = {}
-                    self.request = MockWebSocketRequest(target_url)
-
-            class MockWebSocketRequest:
-                def __init__(self, target_url: str):
-                    self.method = "WEBSOCKET"
-                    self.url = target_url
-
-            mock_response: Final = MockWebSocketResponse(target)
             if meter is not None:
                 _log_session_usage(logging_obj, meter.price(metered_total))
 
-            # Use the same success handler as HTTP passthrough endpoints
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
-                    httpx_response=mock_response,
-                    response_body=websocket_messages,
-                    url_route=endpoint or "",
-                    result="websocket_connection_successful",
-                    start_time=start_time,
-                    end_time=end_time,
-                    logging_obj=logging_obj,
-                    cache_hit=False,
-                    request_body={},
-                    **success_kwargs,
+            if _session_end_needs_a_row(upstream_frame_kind, websocket_messages, ledger):
+                lanes_in_flight: Final = (
+                    () if upstream_frame_kind is None else _lanes_in_flight(upstream_frame_kind, websocket_messages)
                 )
-            )
-            bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
+                *earlier_lanes, last_lane = lanes_in_flight or (None,)
+                for lane in earlier_lanes:
+                    log_turn(lane, _frames_of_lane(lane))
+                log_turn(last_lane, _every_frame)
 
             # Call the proxy logging success hook
             if proxy_logging_obj:
