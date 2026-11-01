@@ -18,6 +18,7 @@ from litellm import router_python_core
 from litellm.router_config import RouterConfig, build_router_config
 from litellm.router_core import RouterCore, make_core
 from litellm.router_deprecated import DeprecatedRouterMembers
+from litellm.router_utils.search_api_router import SearchAPIRouter
 from litellm.router_python_core import (
     PythonCore,
     as_output_cap,
@@ -323,6 +324,7 @@ __all__ = [
     "ModelGroupInfo",
     "RetryPolicy",
     "Router",
+    "SearchAPIRouter",
     "as_output_cap",
     "model_info_is_active_for_environment",
     "router_arguments",

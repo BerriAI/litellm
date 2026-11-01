@@ -5,6 +5,7 @@ Handles search tool selection, load balancing, and fallback logic for search req
 """
 
 import asyncio
+import os
 import random
 import traceback
 from collections.abc import Callable
@@ -15,7 +16,9 @@ from typing import TYPE_CHECKING, Final
 from litellm._logging import verbose_router_logger
 from litellm.router_api import ChangeSet
 from litellm.router_deprecated import renamed_router_param
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import SearchToolLiteLLMParams, SearchToolTypedDict
+from litellm.types.utils import SearchProviders
 
 if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
@@ -45,8 +48,18 @@ class SearchAPIRouter:
         Returns:
             Tuple of (api_key, api_base) from tool configuration
         """
-        resolved_api_key: Final[str | None] = tool_litellm_params.get("api_key")
+        resolved_api_key: str | None = tool_litellm_params.get("api_key")
         resolved_api_base: Final[str | None] = tool_litellm_params.get("api_base")
+
+        if not resolved_api_key:
+            search_provider = tool_litellm_params.get("search_provider")
+            if search_provider == SearchProviders.WEBZ or search_provider == "webz":
+                resolved_api_key = (
+                    os.environ.get("WEBZ_API_TOKEN")
+                    or get_secret_str("WEBZ_API_TOKEN")
+                    or os.environ.get("WEBZ_API_KEY")
+                    or get_secret_str("WEBZ_API_KEY")
+                )
 
         return resolved_api_key, resolved_api_base
 
@@ -224,6 +237,13 @@ class SearchAPIRouter:
             api_key, api_base = SearchAPIRouter._resolve_search_provider_credentials(
                 tool_litellm_params=litellm_params,
             )
+            if (search_provider == SearchProviders.WEBZ or search_provider == "webz") and not api_key:
+                api_key = (
+                    os.environ.get("WEBZ_API_TOKEN")
+                    or get_secret_str("WEBZ_API_TOKEN")
+                    or os.environ.get("WEBZ_API_KEY")
+                    or get_secret_str("WEBZ_API_KEY")
+                )
             protected_params: Final = frozenset(("search_provider", "api_key", "api_base"))
             search_params: Final = MappingProxyType(
                 {

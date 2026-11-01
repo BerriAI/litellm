@@ -4,6 +4,7 @@ Main Search function for LiteLLM.
 
 import asyncio
 import contextvars
+import os
 from collections.abc import Coroutine, Mapping
 from functools import partial
 from types import MappingProxyType
@@ -18,6 +19,7 @@ from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import SearchProviders
 from litellm.utils import ProviderConfigManager, client, filter_out_litellm_params
 
@@ -249,6 +251,18 @@ def search(
 
         if isinstance(query, list) and not all(isinstance(q, str) for q in query):
             raise ValueError("All items in query list must be strings")
+
+        # Resolve API key for Webz if not provided
+        if (
+            search_provider == SearchProviders.WEBZ
+            or search_provider == "webz"
+        ) and api_key is None:
+            api_key = (
+                os.environ.get("WEBZ_API_TOKEN")
+                or get_secret_str("WEBZ_API_TOKEN")
+                or os.environ.get("WEBZ_API_KEY")
+                or get_secret_str("WEBZ_API_KEY")
+            )
 
         # Get provider config
         search_provider_config: Final[BaseSearchConfig | None] = ProviderConfigManager.get_provider_search_config(
