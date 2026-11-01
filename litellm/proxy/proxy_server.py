@@ -3622,6 +3622,30 @@ def _cached_budget_limits(cached: object) -> object:
     return _UNTYPED_VALUE.validate_python(json.loads(stored)) if isinstance(stored, str) else stored
 
 
+async def _budget_limits_object_from_db(*, token: str | None = None, team_id: str | None = None) -> object | None:
+    """Read the key or team row straight from the database when the auth cache no longer holds it.
+
+    `/key/update` and `/team/update` evict the cached object while requests are still in flight; the cost
+    callback of such a request still owes the row's budget windows its spend, so the windows are read from
+    the row the cache lost. Returns None when there is no database, the row is gone, or the read fails.
+    """
+    client: Final = prisma_client
+    if client is None:
+        return None
+    try:
+        if token is not None:
+            return await client.get_data(token=token)
+        if team_id is not None:
+            return await client.get_data(team_id=team_id, table_name="team")
+    except Exception:  # noqa: BLE001  # a deleted row or unreachable DB leaves spend where it was
+        verbose_proxy_logger.debug(
+            "Unable to read the key or team row for budget window spend attribution: token=%s team_id=%s",
+            token,
+            team_id,
+        )
+    return None
+
+
 async def _increment_spend_counters_batched(
     token: str | None,
     team_id: str | None,
@@ -3711,6 +3735,10 @@ async def _increment_spend_counters_batched(
             await user_api_key_cache.async_get_cache(key=hashed_token)
         )
         if key_obj is None:
+            key_obj = await _budget_limits_object_from_db(
+                token=hashed_token
+            )  # rebind-ok: DB fallback for an evicted cache entry
+        if key_obj is None:
             return key_pending
         key_budget_limits: Final = _cached_budget_limits(key_obj)
         if not isinstance(key_budget_limits, list):
@@ -3769,6 +3797,10 @@ async def _increment_spend_counters_batched(
         team_obj: Final[object] = _UNTYPED_VALUE.validate_python(
             await user_api_key_cache.async_get_cache(key=f"team_id:{scope_team_id}")
         )
+        if team_obj is None:
+            team_obj = await _budget_limits_object_from_db(
+                team_id=scope_team_id
+            )  # rebind-ok: DB fallback for an evicted cache entry
         if team_obj is None:
             return team_pending
         team_budget_limits: Final = _cached_budget_limits(team_obj)
