@@ -9,17 +9,23 @@ import asyncio
 import base64
 import json
 import logging
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 
 import pytest
-from typing import Final, Optional
+from typing import TYPE_CHECKING, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from litellm._internal_context import is_internal_call
 from litellm.llms.base_llm.files.transformation import FileListModelScope
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import BATCH_CREATE_HIDDEN_PARAM
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.llms.openai import FileListPage, OpenAIFileObject
 from litellm.types.utils import LiteLLMBatch
+
+if TYPE_CHECKING:
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
 
 def _make_file_object(file_id: str = "file-output-abc") -> OpenAIFileObject:
@@ -2268,3 +2274,286 @@ async def test_batch_create_hook_passes_the_router_deployment_as_creating_model_
     first, second = managed_files.store_unified_object_id.await_args_list
     assert first.kwargs["creating_model_id"] == "deploy-team-b"
     assert second.kwargs["creating_model_id"] is None
+
+
+class _FakeFilesRouter:
+    def __init__(
+        self,
+        deployments_by_model: Mapping[str, tuple[str, ...]],
+        delete_error: Exception | None = None,
+        delete_gate: asyncio.Event | None = None,
+        provider: str = "openai",
+        gone_file_ids: frozenset[str] = frozenset(),
+    ) -> None:
+        self.deployments_by_model = deployments_by_model
+        self.delete_error = delete_error
+        self.gone_file_ids = gone_file_ids
+        self.delete_gate = delete_gate
+        self.provider = provider
+        self.upload_count = 0
+        self.deletes: tuple[tuple[str, str, Mapping[str, object], Mapping[str, str]], ...] = ()
+        self.deletes_marked_internal: tuple[bool, ...] = ()
+
+    async def acreate_file(
+        self, model: str, file: tuple[str, bytes, str], purpose: str, litellm_metadata: Mapping[str, object]
+    ) -> OpenAIFileObject:
+        deployment_ids: Final = self.deployments_by_model[model]
+        provider_file_ids: Final = tuple(
+            f"file-upload-{self.upload_count + offset + 1}" for offset in range(len(deployment_ids))
+        )
+        self.upload_count += len(deployment_ids)
+        response: Final = _make_file_object(provider_file_ids[0]).model_copy(update={"purpose": purpose})
+        response._hidden_params = {
+            "model_id": deployment_ids[0],
+            "custom_llm_provider": self.provider,
+            "model_file_id_mapping": dict(zip(deployment_ids, provider_file_ids)),
+        }
+        return response
+
+    def registry(self) -> "_FakeFilesRouter":
+        return self
+
+    def credentials(self, model_id: str, form: str) -> dict[str, str]:
+        assert form == "with_provider"
+        return {"custom_llm_provider": self.provider, "api_key": f"key-of-{model_id}"}
+
+    async def afile_delete(
+        self,
+        model: str,
+        file_id: str,
+        litellm_metadata: Mapping[str, object],
+        _litellm_internal_model_credentials: Mapping[str, str],
+    ) -> None:
+        if self.delete_gate is not None:
+            await self.delete_gate.wait()
+        if isinstance(litellm_metadata, dict):
+            litellm_metadata.update({"model_info": {"id": model}})
+        self.deletes = (*self.deletes, (model, file_id, litellm_metadata, _litellm_internal_model_credentials))
+        self.deletes_marked_internal = (*self.deletes_marked_internal, is_internal_call.get())
+        if file_id in self.gone_file_ids:
+            raise RuntimeError(f"No such File object: {file_id}")
+        if self.delete_error is not None:
+            raise self.delete_error
+
+
+_REQUEST_METADATA: Final = MappingProxyType({"user_api_key_team_id": "test-team"})
+
+
+async def _eventually(condition: Callable[[], bool]) -> None:
+    async def _poll() -> None:
+        while not condition():
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(_poll(), timeout=1)
+
+
+async def _upload(
+    managed_files: "PROXY_LiteLLMManagedFiles",
+    router: _FakeFilesRouter,
+    target_model_names: list[str],
+    litellm_metadata: Mapping[str, object] = _REQUEST_METADATA,
+) -> OpenAIFileObject:
+    return await managed_files.acreate_file(
+        create_file_request={
+            "file": ("notes.txt", b"the launch code is ORCHID-42\n", "text/plain"),
+            "purpose": "user_data",
+            "litellm_metadata": litellm_metadata,
+        },
+        llm_router=router,
+        target_model_names_list=target_model_names,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_team_member_api_key_dict(),
+    )
+
+
+async def _create_managed_file(
+    router: _FakeFilesRouter, target_model_names: list[str]
+) -> tuple[dict[str, str], list[str], tuple[str, str]]:
+    managed_files, mock_prisma = _make_real_managed_files_instance()
+    response: Final = await _upload(managed_files, router, target_model_names)
+    stored: Final = mock_prisma.db.litellm_managedfiletable.upsert.await_args.kwargs["data"]["create"]
+    decoded: Final = base64.urlsafe_b64decode(response.id + "=" * (-len(response.id) % 4)).decode()
+    carried: Final = (
+        managed_files.get_model_id_from_unified_file_id(decoded),
+        managed_files.get_output_file_id_from_unified_file_id(decoded),
+    )
+    return json.loads(stored["model_mappings"]), stored["flat_model_file_ids"], carried
+
+
+@pytest.mark.asyncio
+async def test_acreate_file_keeps_the_upload_the_managed_id_carries_when_two_targets_share_a_deployment():
+    router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)})
+
+    model_mappings, flat_ids, carried = await _create_managed_file(router, ["gpt-a", "gpt-b"])
+    await _eventually(lambda: len(router.deletes) == 1)
+
+    assert carried == ("wildcard-dep", "file-upload-1")
+    assert model_mappings == {"wildcard-dep": "file-upload-1"}
+    assert flat_ids == ["file-upload-1"]
+    assert router.deletes == (
+        (
+            "wildcard-dep",
+            "file-upload-2",
+            _REQUEST_METADATA,
+            {"custom_llm_provider": "openai", "api_key": "key-of-wildcard-dep"},
+        ),
+    )
+    assert isinstance(router.deletes[0][3], MappingProxyType)
+
+
+@pytest.mark.asyncio
+async def test_acreate_file_deletes_only_the_repeat_upload_and_keeps_every_deployment_reached_once():
+    router: Final = _FakeFilesRouter({"gpt-a": ("dep-1", "dep-2"), "gpt-b": ("dep-2",), "gpt-c": ("dep-3",)})
+
+    model_mappings, flat_ids, carried = await _create_managed_file(router, ["gpt-a", "gpt-b", "gpt-c"])
+    await _eventually(lambda: len(router.deletes) == 1)
+
+    assert carried == ("dep-1", "file-upload-1")
+    assert list(model_mappings.items()) == [
+        ("dep-1", "file-upload-1"),
+        ("dep-2", "file-upload-2"),
+        ("dep-3", "file-upload-4"),
+    ]
+    assert flat_ids == ["file-upload-1", "file-upload-2", "file-upload-4"]
+    assert [delete[:2] for delete in router.deletes] == [("dep-2", "file-upload-3")]
+
+
+@pytest.mark.asyncio
+async def test_acreate_file_still_returns_the_managed_file_when_deleting_the_repeat_upload_fails(caplog: pytest.LogCaptureFixture):
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)},
+        delete_error=RuntimeError("provider unavailable"),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        model_mappings, flat_ids, carried = await _create_managed_file(router, ["gpt-a", "gpt-b"])
+        await _eventually(lambda: "provider unavailable" in caplog.text)
+
+    assert carried == ("wildcard-dep", "file-upload-1")
+    assert model_mappings == {"wildcard-dep": "file-upload-1"}
+    assert flat_ids == ["file-upload-1"]
+    assert [delete[:2] for delete in router.deletes] == [("wildcard-dep", "file-upload-2")]
+    assert "file-upload-2" in caplog.text and "wildcard-dep" in caplog.text
+    assert "provider unavailable" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_acreate_file_answers_before_deleting_the_repeat_upload_finishes():
+    delete_gate: Final = asyncio.Event()
+    router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)}, delete_gate=delete_gate)
+
+    model_mappings, flat_ids, carried = await asyncio.wait_for(
+        _create_managed_file(router, ["gpt-a", "gpt-b"]), timeout=1
+    )
+
+    assert carried == ("wildcard-dep", "file-upload-1")
+    assert model_mappings == {"wildcard-dep": "file-upload-1"}
+    assert flat_ids == ["file-upload-1"]
+    assert router.deletes == ()
+    delete_gate.set()
+    await _eventually(lambda: len(router.deletes) == 1)
+    assert router.deletes[0][:2] == ("wildcard-dep", "file-upload-2")
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_waits_for_the_repeat_upload_delete():
+    delete_gate: Final = asyncio.Event()
+    router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)}, delete_gate=delete_gate)
+
+    await _create_managed_file(router, ["gpt-a", "gpt-b"])
+    asyncio.get_running_loop().call_later(0.05, delete_gate.set)
+    await drain_logging_tasks(timeout=1)
+
+    assert [delete[:2] for delete in router.deletes] == [("wildcard-dep", "file-upload-2")]
+
+
+@pytest.mark.asyncio
+async def test_repeat_upload_delete_runs_as_an_internal_call_the_client_is_not_billed_or_alerted_for():
+    router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)})
+
+    await _create_managed_file(router, ["gpt-a", "gpt-b"])
+    await drain_logging_tasks(timeout=1)
+
+    assert router.deletes_marked_internal == (True,)
+    assert is_internal_call.get() is False
+
+
+@pytest.mark.asyncio
+async def test_litellm_proxy_wildcard_keeps_its_last_per_target_upload_and_deletes_nothing():
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",)}, provider="litellm_proxy"
+    )
+
+    model_mappings, flat_ids, _ = await _create_managed_file(router, ["gpt-a", "gpt-b"])
+    await drain_logging_tasks(timeout=1)
+
+    assert model_mappings == {"proxy-wildcard-dep": "file-upload-2"}
+    assert flat_ids == ["file-upload-2"]
+    assert router.deletes == ()
+
+
+async def _upload_then_delete(router: _FakeFilesRouter, target_model_names: list[str]) -> tuple[str, ...]:
+    managed_files, mock_prisma = _make_real_managed_files_instance()
+    response: Final = await _upload(managed_files, router, target_model_names)
+    await drain_logging_tasks(timeout=1)
+    deletes_during_upload: Final = len(router.deletes)
+    managed_files.internal_usage_cache.async_get_cache = AsyncMock(
+        return_value=managed_files.internal_usage_cache.async_set_cache.await_args.kwargs["value"]
+    )
+    mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=MagicMock())
+    mock_prisma.db.litellm_managedfiletable.delete = AsyncMock()
+
+    deleted: Final = await managed_files.afile_delete(
+        file_id=response.id, litellm_parent_otel_span=None, llm_router=router, litellm_metadata=_REQUEST_METADATA
+    )
+
+    assert deleted.deleted is True
+    mock_prisma.db.litellm_managedfiletable.delete.assert_awaited_once_with(where={"unified_file_id": response.id})
+    return tuple(delete[1] for delete in router.deletes[deletes_during_upload:])
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_litellm_proxy_wildcard_file_removes_the_upload_its_id_carries_too():
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",)}, provider="litellm_proxy"
+    )
+
+    assert await _upload_then_delete(router, ["gpt-a", "gpt-b"]) == ("file-upload-2", "file-upload-1")
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_wildcard_file_removes_its_kept_upload_once():
+    router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)})
+
+    assert await _upload_then_delete(router, ["gpt-a", "gpt-b"]) == ("file-upload-1",)
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_file_still_succeeds_when_the_upload_its_id_carries_is_already_gone(
+    caplog: pytest.LogCaptureFixture,
+):
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",)},
+        provider="litellm_proxy",
+        gone_file_ids=frozenset({"file-upload-1"}),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert await _upload_then_delete(router, ["gpt-a", "gpt-b"]) == ("file-upload-2", "file-upload-1")
+
+    assert "file-upload-1" in caplog.text and "No such File object" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_repeat_upload_delete_leaves_the_upload_request_metadata_unchanged():
+    router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)})
+    upload_metadata: Final = {"user_api_key_team_id": "test-team"}
+    managed_files, _ = _make_real_managed_files_instance()
+
+    await _upload(managed_files, router, ["gpt-a", "gpt-b"], upload_metadata)
+    await drain_logging_tasks(timeout=1)
+
+    assert upload_metadata == {"user_api_key_team_id": "test-team"}
+    assert [delete[2] for delete in router.deletes] == [
+        {"user_api_key_team_id": "test-team", "model_info": {"id": "wildcard-dep"}}
+    ]
