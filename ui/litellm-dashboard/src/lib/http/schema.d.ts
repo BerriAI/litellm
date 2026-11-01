@@ -45163,7 +45163,11 @@ export interface components {
             /** Supported */
             supported: boolean;
         };
-        /** SCIMGroup */
+        /**
+         * SCIMGroup
+         * @description Custom attributes stay on the model so ``scim_settings.organization_id_attribute``
+         *     can read the one that names the team's organization.
+         */
         SCIMGroup: {
             /** Displayname */
             displayName: string;
@@ -45179,6 +45183,8 @@ export interface components {
             } | null;
             /** Schemas */
             schemas: string[];
+        } & {
+            [key: string]: unknown;
         };
         /** SCIMListResponse */
         SCIMListResponse: {
