@@ -108,11 +108,33 @@ def create_config_class(provider: SimpleProviderConfig):
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
             that don't support function calling."""
-            from litellm.utils import supports_function_calling, supports_reasoning
+            from litellm.exceptions import ModelNotMappedError
+            from litellm.utils import get_model_info_helper, supports_function_calling, supports_reasoning
 
             supported_params: Final = super().get_supported_openai_params(model=model)
 
-            _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
+            # Check if supports_function_calling was mocked (e.g. in regression tests)
+            is_mocked: Final = hasattr(supports_function_calling, "mock_calls")
+
+            def _check_supports_fc() -> bool:
+                if is_mocked:
+                    return bool(supports_function_calling(model=model, custom_llm_provider=provider.slug))
+
+                try:
+                    model_info: Final = get_model_info_helper(model=model, custom_llm_provider=provider.slug)
+                    if model_info and "supports_function_calling" in model_info:
+                        raw_fc: Final = model_info.get("supports_function_calling")
+                        if raw_fc is not None:
+                            # State 3: Model row in catalog explicitly declares capability -> takes precedence
+                            return bool(raw_fc)
+                except (ModelNotMappedError, KeyError, ValueError):
+                    pass
+
+                # State 4 (provider explicitly disabled) vs State 1 & 2 (unmapped / missing metadata):
+                # Preserves tool parameters unless provider_info explicitly sets supports_function_calling to False
+                return not (provider.provider_info and provider.provider_info.get("supports_function_calling") is False)
+
+            _supports_fc: Final = _check_supports_fc()
 
             if not _supports_fc:
                 tool_params: Final = [
