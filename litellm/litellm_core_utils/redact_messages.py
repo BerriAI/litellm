@@ -242,6 +242,7 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
     return {
         **fields,
         **({"reasoning_content": REDACTED_BY_LITELLM} if fields.get("reasoning_content") is not None else {}),
+        **({"reasoning": REDACTED_BY_LITELLM} if fields.get("reasoning") is not None else {}),
         **{
             key: None
             for key in (
@@ -251,6 +252,7 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
                 "compaction_blocks",
                 "compaction_start",
                 "compaction_delta",
+                "reasoning_details",
             )
             if key in fields
         },
