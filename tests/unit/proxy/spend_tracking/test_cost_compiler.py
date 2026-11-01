@@ -1726,3 +1726,44 @@ async def test_image_capture_replays_the_existing_image_calculator(
         assert float(replay.total_cost) == pytest.approx(source)
     finally:
         await meter.stop(1)
+
+
+@pytest.mark.asyncio
+async def test_delayed_attempt_capture_keeps_its_prices_after_fallback_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.main import _set_request_pricing
+    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+    from litellm.types.utils import ModelResponse, Usage
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage
+    from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
+
+    catalog: Final = {
+        "openai/capture-model": {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+        }
+    }
+    monkeypatch.setattr(litellm, "model_cost", catalog)
+    monkeypatch.setattr(litellm, "cost_discount_config", {})
+    monkeypatch.setattr(litellm, "cost_margin_config", {})
+    logger: Final = _capture_logger()
+    failed_attempt: Final = logger.attempt_scoped_copy()
+    _set_request_pricing(logger, "capture-model", "openai", {}, None)
+    response: Final = ModelResponse(model="capture-model", usage=Usage(prompt_tokens=10, completion_tokens=4))
+    for attempt, expected in ((logger, 0.018), (failed_attempt, 0.18)):
+        database: Final = StoredUsage()
+        meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+        try:
+            assert attempt.response_cost_calculator(response, ignore_stamped_cost=True) == pytest.approx(expected)
+            capture_logging_usage(meter, attempt, response, _AT, _AT)
+            await meter.close()
+            with monkeypatch.context() as changed_catalog:
+                changed_catalog.setattr(litellm, "model_cost", {})
+                replay: Final = price_usage(database.rows[-1].envelope)
+                assert isinstance(replay, PricingSnapshot)
+                assert float(replay.total_cost) == pytest.approx(expected)
+        finally:
+            await meter.stop(1)

@@ -227,7 +227,10 @@ def test_register_model_strips_none_litellm_provider():
         registered = litellm.model_cost.get(model_key)
         assert registered is not None, f"{model_key} should be in model_cost"
         # The key may be absent entirely, but if present it must not be None.
-        assert "litellm_provider" not in registered or registered["litellm_provider"] is not None
+        assert (
+            "litellm_provider" not in registered
+            or registered["litellm_provider"] is not None
+        )
         # Downstream consumers must accept this entry for any provider,
         # mirroring what the cost calculator does.
         assert _check_provider_match(registered, "openai") is True
@@ -285,7 +288,9 @@ def test_register_model_strips_none_litellm_provider_from_get_model_info(monkeyp
         # The strip must have removed the None-valued provider that
         # ``get_model_info`` returned. The key may be absent entirely, but
         # it must never be present with value ``None``.
-        assert "litellm_provider" not in registered or (registered["litellm_provider"] is not None), (
+        assert "litellm_provider" not in registered or (
+            registered["litellm_provider"] is not None
+        ), (
             "register_model failed to strip litellm_provider=None returned "
             f"by get_model_info, got {registered.get('litellm_provider')!r}"
         )
@@ -346,8 +351,14 @@ def test_register_model_inherits_builtin_cache_pricing_for_unmapped_key(monkeypa
         )
 
         registered = litellm.model_cost[registered_key]
-        assert registered.get("cache_creation_input_token_cost") == builtin["cache_creation_input_token_cost"]
-        assert registered.get("cache_read_input_token_cost") == builtin["cache_read_input_token_cost"]
+        assert (
+            registered.get("cache_creation_input_token_cost")
+            == builtin["cache_creation_input_token_cost"]
+        )
+        assert (
+            registered.get("cache_read_input_token_cost")
+            == builtin["cache_read_input_token_cost"]
+        )
         assert registered["litellm_provider"] == "bedrock"
 
         usage = Usage(
@@ -411,7 +422,8 @@ def test_register_model_warns_when_no_builtin_match_for_cache_pricing(caplog):
             )
 
         assert any(
-            registered_key in record.message and "cache_creation_input_token_cost" in record.message
+            registered_key in record.message
+            and "cache_creation_input_token_cost" in record.message
             for record in caplog.records
         ), "expected a warning naming the unmapped key and the cache cost fields"
     finally:
@@ -598,14 +610,17 @@ def test_register_model_router_add_deployment_custom_pricing_applies():
         # the deployment's provider.
         from litellm.utils import _check_provider_match
 
-        registered_keys = [k for k in (deployment_model, model_key) if k in litellm.model_cost]
+        registered_keys = [
+            k for k in (deployment_model, model_key) if k in litellm.model_cost
+        ]
         assert registered_keys, (
-            f"Router.add_deployment did not register custom pricing for {model_key} / {deployment_model}"
+            "Router.add_deployment did not register custom pricing for "
+            f"{model_key} / {deployment_model}"
         )
         for k in registered_keys:
-            assert _check_provider_match(litellm.model_cost[k], "openai") is True, (
-                f"custom pricing for {k} was dropped by _check_provider_match"
-            )
+            assert (
+                _check_provider_match(litellm.model_cost[k], "openai") is True
+            ), f"custom pricing for {k} was dropped by _check_provider_match"
     finally:
         litellm.model_cost.pop(model_key, None)
         litellm.model_cost.pop(deployment_model, None)
@@ -1870,3 +1885,106 @@ def test_sdk_followup_prices_change_only_after_explicit_registration(call_type: 
     finally:
         _restore_model_cost_entries(original)
         litellm.open_ai_chat_completion_models.intersection_update(models_before)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ("completion", "acompletion", "embedding", "aembedding"))
+@pytest.mark.parametrize("custom_primary", (True, False))
+async def test_router_fallback_prices_belong_to_the_served_attempt(
+    monkeypatch: pytest.MonkeyPatch, call_type: str, custom_primary: bool
+) -> None:
+    import httpx
+    import respx
+    from datetime import datetime, timezone
+
+    model: Final = "openai/fallback-price-regression"
+    embedding: Final = "embedding" in call_type
+    keys: Final = (model, model.removeprefix("openai/"), "price-primary", "price-fallback")
+    original: Final = _snapshot_model_cost_entries(keys)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cost_discount_config", {})
+    monkeypatch.setattr(litellm, "cost_margin_config", {})
+    try:
+        litellm.register_model(
+            {
+                model: {
+                    "litellm_provider": "openai",
+                    "mode": "embedding" if embedding else "chat",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                }
+            },
+            persist_across_reloads=False,
+        )
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": name,
+                    "litellm_params": {
+                        "model": model,
+                        "api_key": "fake-key",
+                        "api_base": f"https://{name}.example/v1",
+                        **({"input_cost_per_token": rate, "output_cost_per_token": rate} if rate is not None else {}),
+                    },
+                    "model_info": {"id": f"price-{name}"},
+                }
+                for name, rate in (
+                    ("primary", 0.0 if custom_primary else None),
+                    ("fallback", None if custom_primary else 0.003),
+                )
+            ],
+            fallbacks=[{"primary": ["fallback"]}],
+            num_retries=0,
+        )
+        registered: Final = _snapshot_model_cost_entries(keys)
+        logger: Final = Logging(
+            model=model,
+            messages=[],
+            stream=False,
+            call_type=call_type,
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            litellm_call_id="fallback-pricing",
+            function_id="fallback-pricing",
+        )
+        endpoint: Final = "embeddings" if embedding else "chat/completions"
+        body: Final = (
+            {
+                "object": "list",
+                "model": model.removeprefix("openai/"),
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "usage": {"prompt_tokens": 10, "total_tokens": 10},
+            }
+            if embedding
+            else {
+                "id": "fallback-result",
+                "object": "chat.completion",
+                "created": 1,
+                "model": model.removeprefix("openai/"),
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            }
+        )
+        with respx.mock(assert_all_called=True) as wire:
+            primary: Final = wire.post(f"https://primary.example/v1/{endpoint}").mock(
+                return_value=httpx.Response(429, json={"error": {"message": "rate limit", "type": "rate_limit_error"}})
+            )
+            fallback: Final = wire.post(f"https://fallback.example/v1/{endpoint}").mock(
+                return_value=httpx.Response(200, json=body)
+            )
+            request: Final = {"model": "primary", "litellm_logging_obj": logger}
+            if call_type == "acompletion":
+                response = await router.acompletion(**request, messages=[{"role": "user", "content": "probe"}])
+            elif call_type == "completion":
+                response = router.completion(**request, messages=[{"role": "user", "content": "probe"}])
+            elif call_type == "aembedding":
+                response = await router.aembedding(**request, input=["probe"])
+            else:
+                response = router.embedding(**request, input=["probe"])
+            expected: Final = (0.01 if embedding else 0.02) if custom_primary else (0.03 if embedding else 0.045)
+            assert logger.response_cost_calculator(response, ignore_stamped_cost=True) == pytest.approx(expected)
+            assert response._hidden_params["response_cost"] == pytest.approx(expected)
+            assert primary.called
+            assert fallback.call_count == 1
+            assert _snapshot_model_cost_entries(keys) == registered
+    finally:
+        _restore_model_cost_entries(original)

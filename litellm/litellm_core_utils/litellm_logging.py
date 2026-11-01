@@ -2154,11 +2154,14 @@ class Logging(LiteLLMLoggingBaseClass):
         self,
         model: str,
         provider: str,
-        overrides: Mapping[str, object],
+        overrides: Mapping[str, object] | None,
         deployment_id: str | None = None,
     ) -> None:
         from litellm.utils import model_info_with_pricing_overrides
 
+        if overrides is None:
+            self.request_pricing = None
+            return
         base: Final = self._request_pricing_model_info(model, provider, overrides, deployment_id)
         normalized: Final = _REQUEST_MODEL_INFO.validate_python(
             {

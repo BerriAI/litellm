@@ -1480,10 +1480,16 @@ def _set_request_pricing(
 ) -> None:
     if not isinstance(logging_obj, LiteLLMLoggingObj):
         return
+    custom_pricing: Final = (
+        (kwargs.get("input_cost_per_token") is not None and kwargs.get("output_cost_per_token") is not None)
+        or kwargs.get("input_cost_per_second") is not None
+        or kwargs.get("output_cost_per_second") is not None
+        or kwargs.get("cost_per_second") is not None
+    )
     logging_obj.set_request_pricing(
         model,
         custom_llm_provider,
-        _build_custom_pricing_entry(custom_llm_provider, kwargs, model_info),
+        _build_custom_pricing_entry(custom_llm_provider, kwargs, model_info) if custom_pricing else None,
         _get_router_deployment_id(kwargs),
     )
 
@@ -5942,19 +5948,13 @@ def completion(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
 
-        if (
-            (input_cost_per_token is not None and output_cost_per_token is not None)
-            or input_cost_per_second is not None
-            or output_cost_per_second is not None
-            or cost_per_second is not None
-        ):
-            _set_request_pricing(
-                logging_obj=litellm_logging_obj,
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                kwargs=kwargs,
-                model_info=model_info,
-            )
+        _set_request_pricing(
+            logging_obj=litellm_logging_obj,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            kwargs=kwargs,
+            model_info=model_info,
+        )
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
         custom_prompt_dict = {}
         if initial_prompt_value or roles or final_prompt_value or bos_token or eos_token:
@@ -6961,12 +6961,6 @@ def embedding(
             headers.update(proxy_headers)
         except Exception as e:
             verbose_logger.warning("Failed to get proxy auth headers: %s", e)
-    ### CUSTOM MODEL COST ###
-    input_cost_per_token: Final = kwargs.get("input_cost_per_token", None)
-    output_cost_per_token: Final = kwargs.get("output_cost_per_token", None)
-    cost_per_second: Final = kwargs.get("cost_per_second", None)
-    input_cost_per_second: Final = kwargs.get("input_cost_per_second", None)
-    output_cost_per_second: Final = kwargs.get("output_cost_per_second", None)
     openai_params: Final = [
         "user",
         "dimensions",
@@ -7013,19 +7007,13 @@ def embedding(
         **non_default_params,
     )
 
-    if (
-        (input_cost_per_token is not None and output_cost_per_token is not None)
-        or input_cost_per_second is not None
-        or output_cost_per_second is not None
-        or cost_per_second is not None
-    ):
-        _set_request_pricing(
-            logging_obj=litellm_logging_obj,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            kwargs=kwargs,
-            model_info=kwargs.get("model_info"),
-        )
+    _set_request_pricing(
+        logging_obj=litellm_logging_obj,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        kwargs=kwargs,
+        model_info=kwargs.get("model_info"),
+    )
 
     logging: Final[LiteLLMLoggingObj] = litellm_logging_obj
     logging.update_environment_variables(

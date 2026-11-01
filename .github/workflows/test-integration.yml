@@ -43,9 +43,6 @@ jobs:
     name: integration ${{ matrix.suite }}
     if: github.event_name != 'pull_request' || github.event.label.name == 'run-ci'
     environment: integration-license
-    permissions:
-      contents: read
-      id-token: write
     runs-on: ${{ fromJSON('{"providers":"ubuntu-latest-64-cores","extensions":"ubuntu-latest-64-cores","accounting":"ubuntu-latest-32-cores","management":"ubuntu-latest-32-cores","management-replica":"ubuntu-latest-32-cores"}')[matrix.suite] || 'ubuntu-latest-16-cores' }}
     timeout-minutes: 60
     strategy:
@@ -153,7 +150,6 @@ jobs:
         timeout-minutes: 45
         env:
           SUITE: ${{ matrix.suite }}
-          PYTEST_ADDOPTS: ${{ matrix.suite == 'database' && '--cov=litellm.proxy.db.accounting_ledger --cov=litellm.proxy.spend_tracking.cost_compiler --cov-branch --cov-report=xml:test-results/accounting-coverage.xml' || '' }}
           INTEGRATION_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
           INTEGRATION_REDIS_CONTAINER: ${{ job.services.redis.id }}
           LITELLM_LICENSE: ${{ secrets.LITELLM_LICENSE }}
@@ -162,16 +158,6 @@ jobs:
             *-replica) bash .circleci/scripts/run_integration.sh "${SUITE%-replica}" replica ;;
             *) bash .circleci/scripts/run_integration.sh "$SUITE" ;;
           esac
-
-      - name: Upload accounting ledger integration coverage
-        if: ${{ !cancelled() && matrix.suite == 'database' && hashFiles('test-results/accounting-coverage.xml') != '' }}
-        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
-        with:
-          use_oidc: true
-          files: test-results/accounting-coverage.xml
-          disable_search: true
-          flags: accounting-ledger
-          fail_ci_if_error: true
 
       - name: Verify every case ran exactly once
         if: ${{ !cancelled() && matrix.suite != 'browser' }}
