@@ -148,6 +148,38 @@ def test_fold_does_not_invent_one_phase_for_mixed_responses_messages() -> None:
     assert choices[0].message.provider_specific_fields is None
 
 
+
+
+
+def test_structured_output_fold_keeps_first_message_phase() -> None:
+    commentary = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_commentary",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "Preamble.", "annotations": []}],
+        }
+    )
+    final_answer = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_final",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": "Answer.", "annotations": []}],
+        }
+    )
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (commentary, final_answer),
+        structured_output=True,
+    )
+    assert choices[0].message.content == "Preamble."
+    assert choices[0].message.provider_specific_fields == {"phase": "commentary"}
+
+
 def test_completion_over_responses_maps_anthropic_search_tool_to_openai_tool_search() -> None:
     response_body: Final = {
         "id": "resp_tool_search_bridge",
