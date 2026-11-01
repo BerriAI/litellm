@@ -57,9 +57,12 @@ These rules are shared with `crates/redis-client` (its `AGENTS.md` has the Rust 
 
 ## Moving raw access onto the transport
 
+`peek` in `litellm/proxy/mcp_server/gateway_dcr_flow.py` is the reference. It went from `init_async_client().get(check_and_fix_namespace(key))` inside `try/except Exception` to a `match` on `redis_cache.transport().execute(Get(key))`
+
 - Replace the raw client or script handle with transport calls, and delete hand-written namespacing and script registration
 - Keep the caller's outcome per failure. If it failed closed on any exception, it fails closed on any `RedisFailure`
 - Don't treat a `transport` failure on a write as "not applied"
+- If the access is really one keyspace's logic (keys, codec, decoding), it belongs behind a store, see `store.md`. Only do that if asked, otherwise keep it a straight extraction
 
 ## Not on the transport yet
 
