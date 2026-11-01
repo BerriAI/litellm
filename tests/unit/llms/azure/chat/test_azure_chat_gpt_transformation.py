@@ -806,3 +806,89 @@ def test_azure_keeps_a_later_developer_message_in_place_as_system(config: AzureO
     )
     assert [message["role"] for message in messages] == ["system", "user", "assistant", "system", "user"]
     assert messages[3]["content"] == "Answer with exactly one word."
+
+
+_MARKED_AZURE_PARTS: Final = (
+    {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}},
+    {"type": "text", "text": "Implicit", "prompt_cache_breakpoint": {"mode": "implicit"}},
+)
+_TRIMMED_AZURE_PARTS: Final = [
+    {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}},
+    {"type": "text", "text": "Implicit"},
+]
+
+
+@pytest.fixture
+def registered_azure_breakpoint_reader(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/unit-breakpoint-reader",
+        {"litellm_provider": "azure", "mode": "chat", "supports_prompt_cache_breakpoint": True},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/unit-breakpoint-ignorer",
+        {"litellm_provider": "azure", "mode": "chat", "supports_prompt_cache_breakpoint": False},
+    )
+
+
+def _azure_request_parts(
+    config: AzureOpenAIConfig, model: str, litellm_params: dict[str, object]
+) -> object:
+    request: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": list(_MARKED_AZURE_PARTS)}],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    return request["messages"][0]["content"]
+
+
+@pytest.mark.parametrize("config", [AzureOpenAIConfig(), AzureOpenAIGPT5Config()])
+@pytest.mark.parametrize(
+    "model, litellm_params",
+    [
+        ("unit-breakpoint-reader", {"drop_params": True}),
+        ("my-azure-alias", {"drop_params": True, "base_model": "azure/unit-breakpoint-reader"}),
+        ("my-azure-alias", {"drop_params": True, "model_info": {"base_model": "azure/unit-breakpoint-reader"}}),
+        ("my-azure-alias", {"drop_params": True}),
+    ],
+    ids=("deployment-name", "litellm-params-base-model", "model-info-base-model", "unknown-deployment"),
+)
+def test_azure_drop_params_cuts_part_breakpoints_down_to_what_azure_chat_accepts(
+    registered_azure_breakpoint_reader: None,
+    config: AzureOpenAIConfig,
+    model: str,
+    litellm_params: dict[str, object],
+) -> None:
+    """Azure OpenAI chat answered 400 for a content part's breakpoint ttl and for implicit mode on 2026-10-29,
+    the same as OpenAI chat completions."""
+    assert _azure_request_parts(config, model, litellm_params) == _TRIMMED_AZURE_PARTS
+
+
+@pytest.mark.parametrize("litellm_params", [{}, {"drop_params": False}], ids=("no-drop-params", "drop-params-false"))
+def test_azure_sends_part_breakpoints_as_written_without_drop_params(
+    registered_azure_breakpoint_reader: None, litellm_params: dict[str, object]
+) -> None:
+    assert _azure_request_parts(AzureOpenAIConfig(), "unit-breakpoint-reader", litellm_params) == list(
+        _MARKED_AZURE_PARTS
+    )
+
+
+@pytest.mark.parametrize(
+    "model, litellm_params",
+    [
+        ("unit-breakpoint-ignorer", {"drop_params": True}),
+        ("unit-breakpoint-reader", {"drop_params": True, "base_model": "azure/unit-breakpoint-ignorer"}),
+        ("my-azure-alias", {"drop_params": True, "model_info": {"base_model": "azure/unit-breakpoint-ignorer"}}),
+    ],
+    ids=("known-non-reader", "base-model-known-non-reader", "model-info-base-model-known-non-reader"),
+)
+def test_azure_drop_params_strips_part_breakpoints_from_a_known_non_reader(
+    registered_azure_breakpoint_reader: None, model: str, litellm_params: dict[str, object]
+) -> None:
+    assert _azure_request_parts(AzureOpenAIConfig(), model, litellm_params) == [
+        {"type": "text", "text": "Stable prefix"},
+        {"type": "text", "text": "Implicit"},
+    ]

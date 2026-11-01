@@ -15,7 +15,8 @@ role / access key / profile / web identity), signed via the shared
 BaseAWSLLM._sign_request after the request body is finalized.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 from typing import Final, cast  # noqa: TID251  # map_openai_params returns the filtered params as a bare dict
 
 import httpx
@@ -23,6 +24,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.prompt_templates.common_utils import chat_completion_prompt_cache_breakpoint_for_wire
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
@@ -112,6 +114,11 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         if litellm_params.aws_bedrock_project_id:
             headers["OpenAI-Project"] = litellm_params.aws_bedrock_project_id
         return headers
+
+    def _prompt_cache_breakpoint_to_wire(
+        self, litellm_params: GenericLiteLLMParams, reads_breakpoints: bool, known_support: bool | None
+    ) -> Callable[[object], object]:
+        return partial(chat_completion_prompt_cache_breakpoint_for_wire, drop_params=True)
 
     def supports_native_file_search(self) -> bool:
         return False

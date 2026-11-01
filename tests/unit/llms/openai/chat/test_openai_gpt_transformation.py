@@ -1659,6 +1659,125 @@ class TestOpenAIPromptCacheBreakpointChatPath:
         ]
 
 
+_CLIENT_BREAKPOINTS_AND_THEIR_CHAT_WIRE_FORM: Final = (
+    ({"mode": "explicit", "ttl": "1h"}, {"mode": "explicit"}),
+    ({"mode": "explicit", "ttl": "30m"}, {"mode": "explicit"}),
+    ({"mode": "explicit"}, {"mode": "explicit"}),
+    ({"mode": "implicit"}, None),
+    ({}, None),
+    ("explicit", None),
+)
+_CLIENT_BREAKPOINT_IDS: Final = ("ttl-1h", "ttl-30m", "explicit", "implicit", "empty", "string")
+
+
+class TestChatCompletionsClientBreakpointUnderDropParams:
+    """
+    Live OpenAI Chat Completions (gpt-6.1-sol, gpt-6.1-terra, gpt-6-sol, gpt-5.6, 2026-10-28) answers 400 on a
+    content part's prompt_cache_breakpoint carrying any ttl or a mode other than "explicit".
+    """
+
+    @staticmethod
+    def _request(marker: object, drop_params: bool) -> dict[str, object]:
+        return OpenAIGPTConfig().transform_request(
+            model="gpt-5.6",
+            messages=[
+                {"role": "system", "content": "Answer briefly"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this", "prompt_cache_breakpoint": marker},
+                        {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                        {"type": "text", "text": "and nothing else"},
+                    ],
+                },
+            ],
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai", "drop_params": drop_params},
+            headers={},
+        )
+
+    @pytest.mark.parametrize(
+        ("marker", "wire_marker"), _CLIENT_BREAKPOINTS_AND_THEIR_CHAT_WIRE_FORM, ids=_CLIENT_BREAKPOINT_IDS
+    )
+    def test_drop_params_cuts_the_breakpoint_down_to_what_chat_completions_accepts(
+        self, marker: object, wire_marker: dict[str, str] | None
+    ):
+        text_part: Final = {"type": "text", "text": "Describe this"}
+
+        assert self._request(marker, drop_params=True)["messages"] == [
+            {"role": "system", "content": "Answer briefly"},
+            {
+                "role": "user",
+                "content": [
+                    text_part if wire_marker is None else {**text_part, "prompt_cache_breakpoint": wire_marker},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                    {"type": "text", "text": "and nothing else"},
+                ],
+            },
+        ]
+
+    @pytest.mark.parametrize(
+        "marker", [marker for marker, _ in _CLIENT_BREAKPOINTS_AND_THEIR_CHAT_WIRE_FORM], ids=_CLIENT_BREAKPOINT_IDS
+    )
+    def test_without_drop_params_the_client_breakpoint_reaches_openai_unchanged(self, marker: object):
+        assert self._request(marker, drop_params=False)["messages"][1]["content"][0] == {
+            "type": "text",
+            "text": "Describe this",
+            "prompt_cache_breakpoint": marker,
+        }
+
+    def test_cache_control_still_marks_a_part_whose_client_breakpoint_was_dropped(self):
+        request: Final = OpenAIGPTConfig().transform_request(
+            model="gpt-5.6",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Describe this",
+                            "cache_control": {"type": "ephemeral"},
+                            "prompt_cache_breakpoint": {"mode": "implicit"},
+                        }
+                    ],
+                }
+            ],
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai", "drop_params": True},
+            headers={},
+        )
+
+        assert request["messages"] == [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Describe this", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+            }
+        ]
+
+
+    @pytest.mark.parametrize("stray_part", ["Answer briefly", None], ids=["string", "null"])
+    def test_drop_params_leaves_a_part_that_is_not_an_object_for_openai_to_reject(self, stray_part: object):
+        assert OpenAIGPTConfig().transform_request(
+            model="gpt-5.6",
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        stray_part,
+                        {"type": "text", "text": "and nothing else", "prompt_cache_breakpoint": {"mode": "implicit"}},
+                    ],
+                },
+                {"role": "user", "content": "Describe this"},
+            ],
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai", "drop_params": True},
+            headers={},
+        )["messages"] == [
+            {"role": "system", "content": [stray_part, {"type": "text", "text": "and nothing else"}]},
+            {"role": "user", "content": "Describe this"},
+        ]
+
+
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 
 

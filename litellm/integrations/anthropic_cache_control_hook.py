@@ -17,7 +17,7 @@ from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Se
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar, cast
 from urllib.parse import urlparse
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -73,7 +73,7 @@ MAX_CACHE_CONTROL_BLOCKS: Final = 4
 
 CACHE_BREAKPOINT_KEYS: Final = ("cache_control", "prompt_cache_breakpoint")
 OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION: Final = (5, 6)
-_GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
+_GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:[.-](0|[1-9]\d?)(?![\da-z]))?")
 _FINE_TUNED_BASE_PATTERN: Final = re.compile(r"^ft:([^:]+)")
 _O_SERIES_PATTERN: Final = re.compile(r"^o\d+(?:-|$)")
 OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
@@ -333,6 +333,30 @@ def openai_prompt_cache_breakpoint_support(model: str, custom_llm_provider: str 
     if fine_tuned_base is not None:
         return False if _named_model_breakpoint_support(fine_tuned_base.group(1)) is False else None
     return _named_model_breakpoint_support(model)
+
+
+class _DeclaredBaseModels(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+
+    base_model: object = None
+    model_info: object = None
+
+    def names(self) -> tuple[str, ...]:
+        model_info: Final = _validated_object_mapping(self.model_info) or {}
+        candidates: Final = (self.base_model, model_info.get("base_model"))
+        return tuple(name for name in candidates if isinstance(name, str) and name)
+
+
+def deployment_prompt_cache_breakpoint_support(
+    model: str, custom_llm_provider: str, litellm_params: object
+) -> bool | None:
+    """``openai_prompt_cache_breakpoint_support`` for a deployment, read from its declared base model first."""
+    declared: Final = _DeclaredBaseModels.model_validate(litellm_params)
+    supports: Final = (
+        openai_prompt_cache_breakpoint_support(name, custom_llm_provider)
+        for name in dict.fromkeys((*declared.names(), model))
+    )
+    return next((support for support in supports if support is not None), None)
 
 
 def _named_model_breakpoint_support(model: str) -> bool | None:

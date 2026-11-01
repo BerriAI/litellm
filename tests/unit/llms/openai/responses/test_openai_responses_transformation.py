@@ -4393,8 +4393,9 @@ async def test_extra_body_merges_with_request_data(extra_body_mock_response_data
         assert request_body["custom_field"] == "custom_value"
 
 
-_MALFORMED_MARKERS: Final = ("yes", 1, {"mode": "bogus"}, {"mode": "explicit", "ttl": "1h"})
-_MALFORMED_MARKER_IDS: Final = ("string", "int", "bogus-mode", "bad-ttl")
+_MALFORMED_MARKERS: Final = ("yes", 1, {"mode": "bogus"}, {"mode": "bogus", "ttl": "30m"})
+_MALFORMED_MARKER_IDS: Final = ("string", "int", "bogus-mode", "bogus-mode-with-ttl")
+_UNSUPPORTED_TTL_MARKER: Final = {"mode": "explicit", "ttl": "1h"}
 _VALID_MARKERS: Final = ({"mode": "explicit"}, {"mode": "explicit", "ttl": "30m"})
 _VALID_MARKER_IDS: Final = ("explicit", "explicit-30m")
 _PARTS: Final[Mapping[str, Mapping[str, object]]] = {
@@ -4478,6 +4479,76 @@ def test_valid_prompt_cache_breakpoint_reaches_the_wire_under_both_settings(
     monkeypatch.setattr(litellm, "drop_params", False)
     input: Final = _marked_message("input_text", marker)
     assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=drop_params)) == input
+
+
+@pytest.mark.parametrize("config", _CONFIGS, ids=_CONFIG_IDS)
+@pytest.mark.parametrize("part_type", tuple(_PARTS))
+def test_an_unsupported_ttl_is_dropped_and_the_explicit_mode_kept_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig, part_type: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message(part_type, _UNSUPPORTED_TTL_MARKER)
+    trimmed: Final = _transformed_input(config, input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(trimmed) == {**_PARTS[part_type], "prompt_cache_breakpoint": {"mode": "explicit"}}
+    assert _transformed_input(config, input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+@pytest.mark.parametrize(
+    "config, marker, wire_marker",
+    [
+        (OpenAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "12h"}, {"mode": "explicit", "ttl": "12h"}),
+        (AzureOpenAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "30m"}, {"mode": "explicit", "ttl": "30m"}),
+        (AzureOpenAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "12h"}, {"mode": "explicit"}),
+        (AzureAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "12h"}, {"mode": "explicit"}),
+    ],
+    ids=("openai-keeps-12h", "azure-keeps-30m", "azure-drops-12h", "azure-ai-drops-12h"),
+)
+def test_drop_params_keeps_only_a_ttl_the_target_responses_api_accepts(
+    monkeypatch: pytest.MonkeyPatch,
+    config: BaseResponsesAPIConfig,
+    marker: Mapping[str, str],
+    wire_marker: Mapping[str, str],
+) -> None:
+    """Azure OpenAI Responses answered 400 for a 12h breakpoint ttl and 200 for 30m on 2026-10-29, and Azure AI
+    Foundry Responses did the same on 2026-10-30."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    trimmed: Final = _transformed_input(config, input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(trimmed) == {**_PARTS["input_text"], "prompt_cache_breakpoint": wire_marker}
+    assert _transformed_input(config, input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+@pytest.mark.parametrize(
+    "config, litellm_params",
+    [
+        (XAIResponsesAPIConfig(), GenericLiteLLMParams(drop_params=True)),
+        (HostedVLLMResponsesAPIConfig(), GenericLiteLLMParams(drop_params=True, api_base="http://localhost:8000/v1")),
+        (OpenAIResponsesAPIConfig(), GenericLiteLLMParams(drop_params=True, api_base="http://localhost:8000/v1")),
+    ],
+    ids=("xai", "hosted-vllm", "openai-compatible-host"),
+)
+def test_a_responses_api_not_known_to_take_breakpoints_gets_a_marker_whole_or_not_at_all(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig, litellm_params: GenericLiteLLMParams
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    unsupported_ttl: Final = _marked_message("input_text", _UNSUPPORTED_TTL_MARKER)
+    assert _single_part(_transformed_input(config, unsupported_ttl, litellm_params)) == _PARTS["input_text"]
+    openai_ttl: Final = _marked_message("input_text", {"mode": "explicit", "ttl": "12h"})
+    assert _transformed_input(config, openai_ttl, litellm_params) == openai_ttl
+
+
+def test_a_custom_host_opted_in_with_prompt_cache_options_keeps_the_mode_of_a_marker_with_an_unsupported_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = OpenAIResponsesAPIConfig().transform_responses_api_request(
+        model="gpt-6.1-sol",
+        input=cast("ResponseInputParam", _marked_message("input_text", _UNSUPPORTED_TTL_MARKER)),
+        response_api_optional_request_params={"prompt_cache_options": {"mode": "explicit"}},
+        litellm_params=GenericLiteLLMParams(drop_params=True, api_base="https://gateway.example/v1"),
+        headers={},
+    )
+    assert _single_part(request["input"]) == {**_PARTS["input_text"], "prompt_cache_breakpoint": {"mode": "explicit"}}
 
 
 def test_prompt_cache_breakpoint_unknown_key_is_trimmed_under_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4569,10 +4640,41 @@ def test_a_valid_marker_survives_drop_params_on_a_deployment_name_with_unknown_b
     monkeypatch.setattr(litellm, "drop_params", False)
     litellm_params: Final = GenericLiteLLMParams(drop_params=True)
     valid: Final = _marked_message("input_text", {"mode": "explicit"})
-    malformed: Final = _marked_message("input_text", {"mode": "explicit", "ttl": "1h"})
+    malformed: Final = _marked_message("input_text", {"mode": "bogus"})
     assert _transformed_input_for("litellm-qa-sol-alias", valid, litellm_params, config) == valid
     dropped: Final = _transformed_input_for("litellm-qa-sol-alias", malformed, litellm_params, config)
     assert _single_part(dropped) == _PARTS["input_text"]
+
+
+@pytest.mark.parametrize("ttl", ("30m", "12h"))
+@pytest.mark.parametrize(
+    "config",
+    (OpenAIResponsesAPIConfig(), AzureOpenAIResponsesAPIConfig(), AzureAIResponsesAPIConfig()),
+    ids=("openai", "azure", "azure_ai"),
+)
+def test_a_deployment_with_unknown_breakpoint_support_gets_a_marker_whole_or_not_at_all(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig, ttl: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    litellm_params: Final = GenericLiteLLMParams(drop_params=True)
+    supported_ttl: Final = _marked_message("input_text", {"mode": "explicit", "ttl": ttl})
+    unsupported_ttl: Final = _marked_message("input_text", _UNSUPPORTED_TTL_MARKER)
+    assert _transformed_input_for("litellm-qa-sol-alias", supported_ttl, litellm_params, config) == supported_ttl
+    dropped: Final = _transformed_input_for("litellm-qa-sol-alias", unsupported_ttl, litellm_params, config)
+    assert _single_part(dropped) == _PARTS["input_text"]
+
+
+@pytest.mark.parametrize(
+    "config", (AzureOpenAIResponsesAPIConfig(), AzureAIResponsesAPIConfig()), ids=("azure", "azure_ai")
+)
+def test_an_azure_deployment_declaring_a_breakpoint_reader_keeps_the_mode_of_a_marker_with_an_unsupported_ttl(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    litellm_params: Final = GenericLiteLLMParams(drop_params=True, base_model="gpt-6.1-sol")
+    unsupported_ttl: Final = _marked_message("input_text", _UNSUPPORTED_TTL_MARKER)
+    trimmed: Final = _transformed_input_for("litellm-qa-sol-alias", unsupported_ttl, litellm_params, config)
+    assert _single_part(trimmed) == {**_PARTS["input_text"], "prompt_cache_breakpoint": {"mode": "explicit"}}
 
 
 def _declaring_base_model(where: str, base_model: str) -> GenericLiteLLMParams:
@@ -4615,10 +4717,10 @@ def test_a_model_that_takes_markers_sends_kept_parts_byte_for_byte_and_drops_onl
         {"prompt_cache_breakpoint": {"mode": "explicit"}, "type": "input_text", "text": "b"},
     ]
     rejected: Final = {"type": "input_text", "text": "c"}
-    bad_ttl: Final = {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}
+    bogus_mode: Final = {"prompt_cache_breakpoint": {"mode": "bogus"}}
     input: Final = [
         {"type": "message", "role": "user", "content": kept},
-        {"type": "message", "role": "user", "content": [{**bad_ttl, **rejected}]},
+        {"type": "message", "role": "user", "content": [{**bogus_mode, **rejected}]},
     ]
     transformed: Final = _transformed_input_for("gpt-6.1-sol", input, GenericLiteLLMParams(drop_params=True))
     assert json.dumps(transformed) == json.dumps(
