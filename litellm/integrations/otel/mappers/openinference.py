@@ -190,6 +190,8 @@ class OpenInferenceMapper:
     - ``llm.output_messages.{i}.message.role`` / ``...content``
     - ``llm.output_messages.{i}.message.tool_calls.{j}.tool_call.*``
     - ``llm.token_count.prompt`` / ``...completion`` / ``...total``
+    - ``llm.token_count.prompt_details.cache_read`` / ``...cache_write``
+    - ``llm.token_count.completion_details.reasoning``
     - ``metadata`` — JSON object of allowlisted promoted request metadata
     - ``input.value`` / ``output.value`` — JSON-serialized request / response
     """
@@ -201,6 +203,9 @@ class OpenInferenceMapper:
         "llm.token_count.prompt": lambda d: d.usage.input_tokens,
         "llm.token_count.completion": lambda d: d.usage.output_tokens,
         "llm.token_count.total": lambda d: d.usage.total_tokens,
+        "llm.token_count.prompt_details.cache_read": lambda d: d.usage.cache_read_input_tokens or None,
+        "llm.token_count.prompt_details.cache_write": lambda d: d.usage.cache_creation_input_tokens or None,
+        "llm.token_count.completion_details.reasoning": lambda d: d.usage.reasoning_tokens or None,
     }
 
     # Folded into the ``llm.invocation_parameters`` JSON blob.
