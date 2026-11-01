@@ -21,6 +21,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.opentelemetry import (
     METRIC_METADATA_KEYS,
     TOKEN_TYPE_ATTRIBUTE,
+    bounded_hidden_params_label,
     build_metric_attribute_filter,
     resolve_metric_attribute_filter,
 )
@@ -138,19 +139,6 @@ METRIC_ATTRIBUTE_CEILING: Final[frozenset[str]] = frozenset(
         "hidden_params",
     )
 )
-
-# The only ``hidden_params`` field that becomes part of the ``hidden_params`` label.
-# The object as a whole is per-request by construction -- ``response_cost``,
-# ``litellm_overhead_time_ms``, ``cache_key``, ``usage_object`` and the provider's
-# ``additional_headers`` rate-limit counters all move on every call -- so dumping it
-# whole made one series per request out of every instrument.
-#
-# ``model_id`` is the router's own deployment id, so it is bounded by the deployment
-# list and is what a per-deployment panel joins on. ``api_base`` is deliberately NOT
-# here even though it names the same thing: it is a documented per-call parameter, so
-# in SDK use it is chosen by the caller rather than provisioned by the operator, and a
-# caller varying it would put the per-request cardinality straight back.
-BOUNDED_HIDDEN_PARAM_KEYS: Final[tuple[str, ...]] = ("model_id",)
 
 
 class _TokenUsage(TypedDict, total=False):
@@ -300,14 +288,8 @@ class GenAIMetricRecorder:
             else:
                 common_attrs[f"metadata.{key}"] = str(value)
 
-        hidden_params: Final = getattr(std_log, "hidden_params", None) or (std_log or {}).get("hidden_params", {})
-        bounded_hidden_params: Final = {
-            key: hidden_params[key]
-            for key in BOUNDED_HIDDEN_PARAM_KEYS
-            if isinstance(hidden_params, Mapping) and hidden_params.get(key) is not None
-        }
-        if bounded_hidden_params:
-            common_attrs["hidden_params"] = safe_dumps(bounded_hidden_params)
+        if (hidden_params_label := bounded_hidden_params_label(std_log)) is not None:
+            common_attrs["hidden_params"] = hidden_params_label
 
         return common_attrs
 
