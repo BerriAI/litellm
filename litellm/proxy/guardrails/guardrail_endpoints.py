@@ -2337,6 +2337,56 @@ async def test_custom_code_guardrail(
         )
 
 
+_GUARDRAIL_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _metadata_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _GUARDRAIL_METADATA_ADAPTER.validate_python(value)
+    except ValidationError:
+        return {}
+
+
+_CALLER_OWNED_KEY_FIELDS: Final[frozenset[str]] = frozenset({"user_api_key_end_user_id", "user_api_key_request_route"})
+
+_RESERVED_IDENTITY_FIELDS: Final[frozenset[str]] = frozenset(
+    {"requester_ip_address", "user_agent", "agent_id", "actor_agent_id"}
+)
+
+
+def _is_key_identity_field(key: str) -> bool:
+    """Whether a metadata field attributes the authenticated caller rather than the request.
+
+    Pre-call processing owns the whole ``user_api_key_`` namespace, except the two fields that
+    describe the caller's own request: the end user it is made for, and the route it came from.
+    A guardrail needs both to decide, and on ``/apply_guardrail`` the proxy's own values say
+    nothing about the call the caller is asking about.
+
+    Attribution also reaches outside that namespace, so the fields pre-call processing fills in
+    from the key and the connection are reserved by name as well.
+    """
+    if key in _CALLER_OWNED_KEY_FIELDS:
+        return False
+    return key in _RESERVED_IDENTITY_FIELDS or key == "user_api_key" or key.startswith("user_api_key_")
+
+
+def _guardrail_request_metadata(
+    caller: object, proxy: object
+) -> dict[str, object]:  # mutable-ok: guardrails annotate the metadata they are handed
+    """Caller metadata with the identity fields taken from the authenticated key.
+
+    The result is handed to the guardrail as ``request_data["metadata"]``, which providers
+    write their own detection details into, so it cannot be a read-only mapping.
+    """
+    caller_fields: Final = tuple(
+        (key, value) for key, value in _metadata_fields(caller).items() if not _is_key_identity_field(key)
+    )
+    key_identity: Final = tuple(
+        (key, value) for key, value in _metadata_fields(proxy).items() if _is_key_identity_field(key)
+    )
+    return dict((*caller_fields, *key_identity))
+
+
 def _execution_timeout_response(timeout: float) -> TestCustomCodeGuardrailResponse:
     return TestCustomCodeGuardrailResponse(
         success=False,
@@ -2503,6 +2553,14 @@ async def apply_guardrail(
 
         response_handler: Final = GUARDRAIL_RESPONSE_HANDLERS[request.response_format]
         request_data: Final = dict(response_handler.prepare_request_data(request))
+        caller_metadata: Final = request_data.get("metadata")
+        metadata: Final = _guardrail_request_metadata(
+            caller_metadata, _GUARDRAIL_METADATA_ADAPTER.validate_python(data).get("metadata")
+        )
+        if caller_metadata is not None or metadata:
+            request_data["metadata"] = metadata
+        else:
+            request_data.pop("metadata", None)
         input_type: Final = response_handler.resolve_input_type(request, active_guardrail)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
