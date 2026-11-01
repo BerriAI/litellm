@@ -30,7 +30,8 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import turn_on_json
-from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
+from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings, UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.router_api import ApplyResult, RouterSettings
 from litellm.types.router import Deployment, LiteLLM_Params
@@ -2489,6 +2490,29 @@ def test_ProxyConfig__load_environment_variables_sets_env(monkeypatch):
         "len": 1,
     }
     assert result == {"TEST_LOAD_ENV_X": "hello", "set": True, "len": 1}
+
+
+def test_ProxyConfig__load_environment_variables_enables_detailed_timing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_DETAILED_TIMING", "false")
+    ProxyConfig()._load_environment_variables({"environment_variables": {"LITELLM_DETAILED_TIMING": "true"}})
+
+    headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        hidden_params={
+            "_response_ms": 530.0,
+            "timing_llm_api_ms": 500.0,
+            "timing_pre_processing_ms": 20.0,
+            "timing_post_processing_ms": 10.0,
+            "timing_message_copy_ms": 2.5,
+        },
+    )
+
+    assert headers["x-litellm-timing-llm-api-ms"] == "500.0"
+    assert headers["x-litellm-timing-pre-processing-ms"] == "20.0"
+    assert headers["x-litellm-timing-post-processing-ms"] == "10.0"
+    assert headers["x-litellm-timing-message-copy-ms"] == "2.5"
 
 
 def test_ProxyConfig__load_environment_variables_warns_when_the_config_replaces_a_process_value(
