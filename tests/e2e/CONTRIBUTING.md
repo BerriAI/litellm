@@ -90,16 +90,7 @@ The suites run against a live proxy, so bring one up first by running the litell
 
    They also need a proxy whose bundled UI contains the change under test, so run the proxy from your branch (an editable install serves the UI your checkout builds)
 
-Some suites need extra services the bare proxy does not start. The `logging/` OTEL trace-completeness tests read spans back from a jaeger query API at `http://localhost:16686` (override with `E2E_OTEL_QUERY_URL`); run a `jaegertracing/all-in-one` and point `PHOENIX_COLLECTOR_HTTP_ENDPOINT` at its OTLP ingest. The `mcp/` suite needs the deterministic upstream MCP server in `mcp_tests/mcp_e2e_upstream_server.py` reachable by the proxy. The presidio guardrail tests need a running Presidio analyzer and anonymizer the proxy can reach, addressed by `PRESIDIO_ANALYZER_API_BASE` / `PRESIDIO_ANONYMIZER_API_BASE`
-
-The Presidio spend-log audit test also requires prompt storage on the proxy, because its assertions inspect the detected entities and their scores. Add the following to the proxy config before starting it:
-
-```yaml
-general_settings:
-  store_prompts_in_spend_logs: true
-```
-
-Alternatively, start the proxy with `STORE_PROMPTS_IN_SPEND_LOGS=true litellm --config <your-e2e-config>.yml --port 4000`. Setting the variable only on the pytest process does not configure the proxy. With prompt storage disabled, the proxy correctly redacts `guardrail_response`, so that configuration cannot exercise this test's entity-detail assertions. Enable this only on a test stack using synthetic prompts
+Some suites need extra services the bare proxy does not start. The `logging/` OTEL trace-completeness tests read spans back from a jaeger query API at `http://localhost:16686` (override with `E2E_OTEL_QUERY_URL`); run a `jaegertracing/all-in-one` and point `PHOENIX_COLLECTOR_HTTP_ENDPOINT` at its OTLP ingest. The `mcp/` suite needs the deterministic upstream MCP server in `mcp_tests/mcp_e2e_upstream_server.py` reachable by the proxy.
 
 ### Secret manager lanes
 
