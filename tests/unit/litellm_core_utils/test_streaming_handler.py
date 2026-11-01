@@ -9244,3 +9244,167 @@ def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
     assert usage.prompt_tokens_details.cached_tokens == 80
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == 5
+
+
+class _SyncListIterator:
+    """Sync iterator over pre-built chunks.
+
+    Drives ``__anext__``'s non-async-iterable branch (the ``asyncio.to_thread``
+    path taken by boto3 bedrock streams)."""
+
+    def __init__(self, chunks: list[dict[str, object]]):
+        self._chunks = list(chunks)
+        self._index = 0
+
+    def __iter__(self) -> "_SyncListIterator":
+        return self
+
+    def __next__(self) -> dict[str, object]:
+        if self._index >= len(self._chunks):
+            raise StopIteration
+        chunk = self._chunks[self._index]
+        self._index += 1
+        return chunk
+
+
+def _generic_text_chunk(text: str, is_finished: bool, finish_reason: str | None, usage: dict | None) -> dict:
+    chunk: dict[str, object] = {
+        "text": text,
+        "is_finished": is_finished,
+        "finish_reason": finish_reason,
+        "usage": usage,
+    }
+    return chunk
+
+
+@pytest.mark.asyncio
+async def test_async_noniterable_branch_sets_completion_start_time(logging_obj: Logging):
+    """The non-async-iterable branch of __anext__ (boto3 bedrock streams) must
+    set logging_obj.completion_start_time on the first processed chunk, exactly
+    like the sync path and the main async-iterable branch. Without this, TTFT
+    logging falls back to end_time and reports the whole stream duration."""
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_SyncListIterator(
+            [_generic_text_chunk("hello", is_finished=False, finish_reason=None, usage=None)]
+        ),
+        model="gpt-4o",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    out = await wrapper.__anext__()
+
+    assert out.choices[0].delta.content == "hello"
+    assert logging_obj.completion_start_time is not None, (
+        "non-async-iterable branch never set completion_start_time - TTFT logging degrades to full stream duration"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_noniterable_branch_sets_hidden_usage_on_final_chunk(logging_obj: Logging):
+    """A provider that puts usage on the finish_reason chunk (e.g. bedrock's
+    amazon-bedrock-invocationMetrics on message_stop) keeps top-level usage on
+    the chunk when include_usage was not requested (behavior pinned by
+    test_plain_iterator_stream_keeps_usage_on_its_chunk_when_usage_was_not_requested),
+    and must ALSO carry usage in _hidden_params via _set_final_chunk_usage,
+    like the main async path with stream_options=None."""
+    usage: Final = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_SyncListIterator(
+            [
+                _generic_text_chunk("hello", is_finished=False, finish_reason=None, usage=None),
+                _generic_text_chunk("", is_finished=True, finish_reason="stop", usage=usage),
+            ]
+        ),
+        model="gpt-4o",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    first = await wrapper.__anext__()
+    assert first.choices[0].delta.content == "hello"
+
+    final_chunk = await wrapper.__anext__()
+
+    assert final_chunk.choices[0].finish_reason == "stop"
+    assert final_chunk.usage.total_tokens == 15, (
+        "top-level usage must stay on the chunk when include_usage was not requested"
+    )
+    hidden_usage: Final = getattr(final_chunk, "_hidden_params", {}).get("usage")
+    assert hidden_usage is not None, "_set_final_chunk_usage never ran - hidden usage missing on final chunk"
+    assert hidden_usage.prompt_tokens == 10
+    assert hidden_usage.completion_tokens == 5
+
+
+@pytest.mark.asyncio
+async def test_async_noniterable_branch_include_usage_final_chunk_still_carries_usage(logging_obj: Logging):
+    """Regression guard: with stream_options.include_usage, the non-iterable
+    branch must still strip per-chunk usage and deliver the final usage chunk
+    at end-of-stream, matching the main async-iterable branch."""
+    usage: Final = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_SyncListIterator(
+            [
+                _generic_text_chunk("hello", is_finished=False, finish_reason=None, usage=None),
+                _generic_text_chunk("", is_finished=True, finish_reason="stop", usage=usage),
+            ]
+        ),
+        model="gpt-4o",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        stream_options={"include_usage": True},  # mutable-ok: constructor payload
+    )
+
+    first = await wrapper.__anext__()
+    assert first.choices[0].delta.content == "hello"
+
+    final_content_chunk = await wrapper.__anext__()
+    assert final_content_chunk.choices[0].finish_reason == "stop"
+    assert getattr(final_content_chunk, "usage", None) is None, "usage was not stripped from the finish_reason chunk"
+
+    usage_chunk = await wrapper.__anext__()
+    final_usage: Final = getattr(usage_chunk, "usage", None)
+    assert final_usage is not None
+    assert final_usage.prompt_tokens == 10
+    assert final_usage.completion_tokens == 5
+
+
+@pytest.mark.asyncio
+async def test_async_noniterable_branch_final_chunk_hook_and_mcp_metadata(logging_obj: Logging):
+    """The final chunk from the non-iterable branch must flow through
+    async_post_call_streaming_deployment_hook and gain MCP metadata, like the
+    main async-iterable branch."""
+    from litellm.types.utils import ModelResponseStream as MRS
+
+    recorded_chunks: list[MRS] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_post_call_streaming_deployment_hook(self, request_data, response_chunk, call_type=None):
+            recorded_chunks.append(response_chunk)
+            return response_chunk
+
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_SyncListIterator(
+            [
+                _generic_text_chunk("hello", is_finished=False, finish_reason=None, usage=None),
+                _generic_text_chunk("", is_finished=True, finish_reason="stop", usage=None),
+            ]
+        ),
+        model="gpt-4o",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper._hidden_params["mcp_metadata"] = {"mcp_list_tools": [{"name": "get_weather"}]}
+
+    await wrapper.__anext__()
+
+    with patch.object(litellm, "callbacks", [_RecordingLogger()]):
+        final_chunk = await wrapper.__anext__()
+
+    assert final_chunk.choices[0].finish_reason == "stop"
+    provider_fields = final_chunk.choices[0].delta.provider_specific_fields
+    assert provider_fields is not None
+    assert provider_fields.get("mcp_list_tools") == [{"name": "get_weather"}], (
+        "MCP metadata was not added to the final chunk of the non-iterable branch"
+    )
+    assert len(recorded_chunks) == 1, "post-call streaming deployment hook did not run for the final chunk"
