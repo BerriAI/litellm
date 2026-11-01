@@ -1,6 +1,6 @@
 # Integration contracts
 
-These tests exercise a running gateway, PostgreSQL and Redis with an owned local upstream. CircleCI owns this suite. Tests are grouped by behavior, with no automatic test retries or fallback to paid provider calls
+These tests exercise a running gateway, PostgreSQL and Redis with an owned local upstream. CircleCI owns this suite, and `.github/workflows/test-integration.yml` runs the same groups through `run_integration.sh` on GitHub Actions for `run-ci` pull requests and scheduled main runs. Tests are grouped by behavior, with no automatic test retries or fallback to paid provider calls
 
 The ROI database contracts in `database/test_roi_observed.py` run as plain pytest outside `run_integration.sh` in CircleCI's `roi-database` Postgres job. The job uploads coverage with the `roi-postgres` flag. These contracts own temporary databases and script only the external provider transport
 

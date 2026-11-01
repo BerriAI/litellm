@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
+use litellm_secret_value::SecretValue;
 use litellm_secrets_azure::{AzureKeyVault, Error};
-use litellm_secrets_types::{Secret, SecretValue};
+use litellm_secrets_types::Secret;
+
 use rstest::{fixture, rstest};
 use serde::Deserialize;
 use wiremock::{

@@ -47,6 +47,7 @@ class RealtimeProvider:
     id: str
     alias: str
     litellm_params: LiteLLMParamsBody
+    modalities: tuple[str, ...] = ("text",)
 
 
 PROVIDERS = (
@@ -75,6 +76,7 @@ PROVIDERS = (
             model="gemini/gemini-3.1-flash-live-preview",
             api_key="os.environ/GEMINI_API_KEY",
         ),
+        modalities=("audio",),
     ),
     RealtimeProvider(
         "vertex_ai",
@@ -84,6 +86,7 @@ PROVIDERS = (
             vertex_location="us-central1",
             vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
         ),
+        modalities=("audio",),
     ),
     RealtimeProvider(
         "bedrock",

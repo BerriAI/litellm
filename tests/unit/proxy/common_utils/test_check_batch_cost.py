@@ -80,10 +80,11 @@ def _batch_cost_result(
     """Build the BatchCostUsageResult calculate_batch_cost_and_usage now returns,
     for mocking it in tests that only care about cost/usage/models."""
     from litellm.batches.batch_utils import BatchCostUsageResult
+    from litellm.types.utils import Usage
 
     return BatchCostUsageResult(
         cost=cost,
-        usage=usage,
+        usage=Usage(**usage),
         models=models,
         successful_requests=successful_requests,
         failed_requests=failed_requests,
@@ -1770,6 +1771,53 @@ class TestUnmanagedVertexRouting:
 
         assert result == ("deploy-ft", "8823717160934178816")
 
+    def _two_team_deployments(self):
+        """Two Vertex deployments sharing the base model, team A listed first."""
+        return [
+            {
+                "model_name": f"gemini-2.5-flash-team-{team}",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "custom_llm_provider": "vertex_ai"},
+                "model_info": {"id": f"deploy-team-{team}"},
+            }
+            for team in ("a", "b")
+        ]
+
+    def test_flag_on_prefers_the_deployment_stored_on_the_row_over_the_first_base_model_match(self):
+        """Regression (LIT-10326): two deployments share gemini-2.5-flash with different
+        buckets. A batch created on team B's deployment stores deploy-team-b in file_object,
+        so the poller must read it back through team B, not the first match (team A)."""
+        router: Final = MagicMock()
+        router.registry.return_value.resolve.return_value = None
+        router.registry.return_value.deployments.return_value = self._two_team_deployments()
+        router.registry.return_value.deployment = MagicMock(return_value=self._vertex_deployment())
+        instance: Final = self._instance(track_unmanaged=True, router=router)
+        job: Final = self._job(
+            file_object=json.dumps({**json.loads(_unmanaged_vertex_file_object()), "model_id": "deploy-team-b"})
+        )
+
+        with patch(_IS_B64, return_value=False):
+            result: Final = instance._resolve_job_routing(job, MagicMock())
+
+        assert result == ("deploy-team-b", "8823717160934178816")
+        router.registry.return_value.deployment.assert_called_once_with("deploy-team-b")
+
+    def test_flag_on_falls_back_to_base_model_match_when_the_stored_deployment_is_gone(self):
+        """The stored deployment was removed from the config after the batch was created:
+        the row still routes through today's base-model lookup instead of being skipped."""
+        router: Final = MagicMock()
+        router.registry.return_value.resolve.return_value = None
+        router.registry.return_value.deployments.return_value = self._two_team_deployments()
+        router.registry.return_value.deployment = MagicMock(return_value=None)
+        instance: Final = self._instance(track_unmanaged=True, router=router)
+        job: Final = self._job(
+            file_object=json.dumps({**json.loads(_unmanaged_vertex_file_object()), "model_id": "deploy-removed"})
+        )
+
+        with patch(_IS_B64, return_value=False):
+            result: Final = instance._resolve_job_routing(job, MagicMock())
+
+        assert result == ("deploy-team-a", "8823717160934178816")
+
     def test_flag_on_skips_non_vertex_deployment_sharing_model_group(self):
         """Flag on, but the only deployment for the model group is a non-vertex_ai
         provider: must not be selected, even though the model group name matches."""
@@ -3261,7 +3309,7 @@ class TestMultiPodBatchCostClaim:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=_batch_cost_result(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["gpt-4"]),
+                return_value=_batch_cost_result(0.01, {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}, ["gpt-4"]),
             ),
             patch(
                 "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
@@ -3676,7 +3724,17 @@ class TestMultiPodBatchCostClaim:
 
         assert journal == ["fetch", "claim", "bill"]
         assert row.status == "complete"
-        assert json.loads(row.file_object)["usage"] == {"prompt_tokens": 10, "completion_tokens": 5}
+        assert json.loads(row.file_object)["usage"] == {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "prompt_tokens_details": None,
+            "completion_tokens_details": None,
+            "input_tokens": 10,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 5,
+            "output_tokens_details": {"reasoning_tokens": 0},
+        }
         logging_obj.async_success_handler.assert_awaited_once()
         assert row.batch_processed is True
 

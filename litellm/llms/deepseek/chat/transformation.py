@@ -6,10 +6,12 @@ from collections.abc import Coroutine, Mapping, Sequence
 from typing import Final, Literal, cast, overload
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     extract_search_results_text,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -18,6 +20,16 @@ from litellm.utils import supports_reasoning, supports_vision
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+_NO_BUDGET_REASON: Final = "DeepSeek takes thinking only as enabled or disabled, with no budget."
+
+
+def _warn_on_dropped_budget(thinking: object, model: str) -> None:
+    fields: Final = as_str_mapping(thinking)
+    if fields is None or fields.get("type") != "enabled" or "budget_tokens" not in fields:
+        return
+    warn_dropped_reasoning(
+        "thinking.budget_tokens", fields["budget_tokens"], model, _NO_BUDGET_REASON, drop_params_gated=False
+    )
 
 
 class DeepSeekChatConfig(OpenAIGPTConfig):
@@ -53,6 +65,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         # Then re-add only if valid for DeepSeek
         thinking_value: Final = optional_params.pop("thinking", None)
         reasoning_effort: Final = optional_params.pop("reasoning_effort", None)
+        _warn_on_dropped_budget(OPAQUE_VALUE.validate_python(thinking_value), model)
 
         # Handle thinking parameter - accept both enabled and disabled, ignore budget_tokens
         if isinstance(thinking_value, dict) and thinking_value.get("type") in ("enabled", "disabled"):

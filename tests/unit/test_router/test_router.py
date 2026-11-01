@@ -4,6 +4,7 @@ import copy
 import functools
 import gc
 import itertools
+import io
 import json
 import linecache
 import logging
@@ -81,6 +82,7 @@ from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.scheduler import FlowItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
+from litellm.router_api import RoutingContext as RouterContext
 from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
@@ -377,7 +379,7 @@ def test_router_model_group_encrypted_content_affinity_callback_registration():
         ]
         assert len(encrypted_content_callbacks) == 1
         assert encrypted_content_callbacks[0].enable_global_affinity is True
-        assert encrypted_content_callbacks[0].router is router
+        assert encrypted_content_callbacks[0].ctx is router._core_ctx
     finally:
         if router is not None:
             router.discard()
@@ -1505,7 +1507,7 @@ def test_sync_deployment_callback_on_success_skips_batch_retrieves(
 
     assert key == expected_key
     assert (
-        get_deployment_successes_for_current_minute(litellm_router_instance=router, deployment_id="batch-dep")
+        get_deployment_successes_for_current_minute(ctx=router._core_ctx, deployment_id="batch-dep")
         == expected_successes
     )
 
@@ -2199,7 +2201,11 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
     )
 
     def inject_alias_into_kwargs(
-        deployment: dict, kwargs: dict, function_name: str | None = None, splits_stream_timeout: bool = False
+        deployment: dict,
+        kwargs: dict,
+        function_name: str | None = None,
+        splits_stream_timeout: bool = False,
+        opens_responses_socket: bool = False,
     ) -> None:
         # Simulate the alias leaking into kwargs (as happens when
         # _ageneric_api_call_with_fallbacks sets kwargs["model"] = alias before
@@ -2728,6 +2734,39 @@ def test_update_settings_model_group_alias_drops_cached_group_info():
     after: Final = router.cached_model_group_info("visible")
     assert after is not None
     assert after.input_cost_per_token is not None and after.input_cost_per_token > 0
+
+
+@pytest.mark.parametrize(
+    "fallback_kind, mock_testing_param",
+    [
+        ("fallbacks", "mock_testing_fallbacks"),
+        ("context_window_fallbacks", "mock_testing_context_fallbacks"),
+        ("content_policy_fallbacks", "mock_testing_content_policy_fallbacks"),
+    ],
+)
+async def test_update_settings_fallback_rule_of_every_kind_is_used_on_its_error(
+    fallback_kind: str, mock_testing_param: str
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "gpt-5.4-mini", "api_key": "fake", "mock_response": "primary answered"},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "gpt-5.4-nano", "api_key": "fake", "mock_response": "backup answered"},
+            },
+        ],
+        num_retries=0,
+    )
+
+    router.update_settings(**{fallback_kind: [{"primary": ["backup"]}]})
+
+    response: Final = await router.acompletion(
+        model="primary", messages=[{"role": "user", "content": "hi"}], **{mock_testing_param: True}
+    )
+    assert response.choices[0].message.content == "backup answered"
 
 
 _PAID_INPUT_COST_PER_TOKEN: Final = 3e-06
@@ -5102,7 +5141,10 @@ async def test_set_response_headers_is_the_only_complexity_header_source_for_pro
 
 
 @pytest.mark.asyncio
-async def test_acompletion_streaming_iterator_adopts_fallback_response_headers():
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_acompletion_streaming_iterator_adopts_fallback_response_headers(
+    close_fails: bool,
+) -> None:
     """LIT-6767: after a successful pre-first-chunk fallback, the wrapper must
     describe the deployment that served the stream, with no value left over
     from the attempt that failed."""
@@ -5149,6 +5191,7 @@ async def test_acompletion_streaming_iterator_adopts_fallback_response_headers()
 
     class FallbackStream:
         def __init__(self):
+            self.close_attempted: bool = False
             self._response_headers = {"x-request-id": "req-FALLBACK"}
             self._hidden_params = {
                 "model_id": "fallback-deployment",
@@ -5166,6 +5209,11 @@ async def test_acompletion_streaming_iterator_adopts_fallback_response_headers()
             except StopIteration:
                 raise StopAsyncIteration from None
 
+        async def aclose(self) -> None:
+            self.close_attempted = True
+            if close_fails:
+                raise RuntimeError("fallback transport failed during close")
+
     fallback_stream = FallbackStream()
     with patch.object(
         router,
@@ -5182,12 +5230,14 @@ async def test_acompletion_streaming_iterator_adopts_fallback_response_headers()
         # the very first chunk the fallback produces must already be published under
         # the fallback's identity: the proxy commits response headers once that chunk
         # is buffered, so adopting any later is adopting too late
-        await result.__anext__()
+        first_chunk: Final = await result.__anext__()
+        assert first_chunk.choices[0].delta.content == "OK"
         assert result._response_headers == {"x-request-id": "req-FALLBACK"}
         assert result._hidden_params["model_id"] == "fallback-deployment"
         async for _ in result:
             pass
 
+    assert fallback_stream.close_attempted
     assert result._response_headers == {"x-request-id": "req-FALLBACK"}
     assert result._hidden_params["model_id"] == "fallback-deployment"
     assert result._hidden_params["api_base"] == "https://fallback.example"
@@ -10054,7 +10104,7 @@ def test_pattern_match_router_remove_deployment():
     remove_deployment must drop only the deployment with the given model id and
     delete patterns whose deployment list becomes empty.
     """
-    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 
     pattern_router = PatternMatchRouter()
     pattern_router.add_pattern(
@@ -12879,7 +12929,7 @@ class TestBackgroundResponseCostPollCooldown:
             is False
         )
         assert self._cooled_down_ids(router) == []
-        value = get_deployment_failures_for_current_minute(litellm_router_instance=router, deployment_id="dep-1")
+        value = get_deployment_failures_for_current_minute(ctx=router._core_ctx, deployment_id="dep-1")
         assert not value
 
     @pytest.mark.asyncio
@@ -12969,7 +13019,7 @@ class TestCallerTimeoutCooldown:
             get_deployment_failures_for_current_minute,
         )
 
-        return get_deployment_failures_for_current_minute(litellm_router_instance=router, deployment_id="dep-1")
+        return get_deployment_failures_for_current_minute(ctx=router._core_ctx, deployment_id="dep-1")
 
     def _cooled_down_ids(self, router):
         active = router.cooldown_cache.get_active_cooldowns(model_ids=["dep-1"], parent_otel_span=None)
@@ -17451,7 +17501,7 @@ def test_model_group_info_reasoning_efforts_are_unknown_for_an_operator_declared
     operator wrote, so a mode they set themselves reads back exactly like one the map supplied. Only
     a mode the map supplied marks the deployment as known. An off-map deployment carrying an
     operator mode remains unknown and must keep the whole group's level support unknown."""
-    from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+    from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
     mapped_model = "openai/gpt-5.6-sol"
     expected = resolve_supported_reasoning_efforts(
@@ -20841,7 +20891,7 @@ class _AllowlistFallbackAccessCheck:
         self.allowed_models = allowed_models
         self.checked_models = []
 
-    async def __call__(self, *, model, request_kwargs, llm_router):
+    async def __call__(self, *, model, request_kwargs, ctx):
         self.checked_models.append(model)
         return model in self.allowed_models
 
@@ -20874,7 +20924,7 @@ def _router_with_failing_primary(fallback_access_check) -> Router:
 
 class _DenyFallbackBudgetCheck:
     async def __call__(
-        self, *, model: str, request_kwargs: Mapping[str, object], llm_router: Router
+        self, *, model: str, request_kwargs: Mapping[str, object], ctx: RouterContext
     ) -> bool:
         return False
 
@@ -21951,8 +22001,6 @@ async def test_router_non_retryable_error_fails_over_to_sibling_deployment(
 
 @pytest.mark.asyncio
 async def test_router_not_found_failover_still_cools_down_the_refusing_deployment(monkeypatch: pytest.MonkeyPatch):
-    from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments
-
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router = litellm.Router(
         model_list=[
@@ -21971,9 +22019,7 @@ async def test_router_not_found_failover_still_cools_down_the_refusing_deploymen
         )
         await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
 
-    assert await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == [
-        "rejecting"
-    ]
+    assert await async_get_cooldown_deployments(ctx=router._core_ctx, parent_otel_span=None) == ["rejecting"]
 
 
 @pytest.mark.asyncio
@@ -22118,7 +22164,7 @@ def test_router_retry_skip_stamp_feeds_deployment_ids_to_skip_on_retry(
     ],
 )
 def test_router_as_retry_skipped_deployment_ids_keeps_only_a_tuple_of_strings(value, expected):
-    from litellm.router_utils.common_utils import as_retry_skipped_deployment_ids
+    from litellm.litellm_core_utils.routing_common_utils import as_retry_skipped_deployment_ids
 
     assert as_retry_skipped_deployment_ids(value) == expected
 
@@ -22952,7 +22998,7 @@ async def test_router_max_parallel_requests_overflow_is_429_without_cooldown_or_
     assert all("capped-deployment" in r.message and "max_parallel_requests=1" in r.message for r in rejected)
     assert route.call_count == 1
     assert sibling_route.call_count == 0
-    assert await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == []
+    assert await _async_get_cooldown_deployments(ctx=router._core_ctx, parent_otel_span=None) == []
 
 
 @pytest.mark.asyncio
@@ -23071,7 +23117,7 @@ async def test_router_max_parallel_requests_overflow_takes_the_ordinary_429_fall
     assert len(results) == 3
     assert primary.call_count == 1
     assert fallback.call_count == 2
-    assert await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == []
+    assert await _async_get_cooldown_deployments(ctx=router._core_ctx, parent_otel_span=None) == []
 
 
 @pytest.mark.asyncio
@@ -28351,11 +28397,11 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
 
     if sync_mode:
         cooldown_deployments = get_cooldown_deployments(
-            litellm_router_instance=router, parent_otel_span=None
+            ctx=router._core_ctx, parent_otel_span=None
         )
     else:
         cooldown_deployments = await async_get_cooldown_deployments(
-            litellm_router_instance=router, parent_otel_span=None
+            ctx=router._core_ctx, parent_otel_span=None
         )
 
     assert len(cooldown_deployments) > 0
@@ -30002,7 +30048,7 @@ def test_router_does_not_cool_down_api_connection_errors() -> None:
 
     assert (
         _is_cooldown_required(
-            litellm_router_instance=router,
+            ctx=router._core_ctx,
             model_id="connection-deployment",
             exception_status=500,
             exception_str="litellm.APIConnectionError: connection refused",
@@ -31266,7 +31312,7 @@ def _deployment_ids(deployments: list[DeploymentTypedDict]) -> tuple[str, ...]:
             id="response_polling_provider_lookup",
         ),
         pytest.param(
-            lambda router: _models_in(router, "model-3"),
+            lambda router: _models_in(router._core_ctx, "model-3"),
             (Baseline("openai/gpt-3", "deployment-3"),),
             id="savings_baseline_candidates",
         ),
@@ -31362,7 +31408,7 @@ def test_complexity_router_adaptive_pool_during_a_concurrent_delete_prices_the_l
     router: Final = Router(model_list=[*(_concurrent_delete_deployment(index) for index in range(3)), priced])
     complexity: Final = ComplexityRouter(
         model_name="hybrid",
-        litellm_router_instance=router,
+        ctx=router._core_ctx,
         complexity_router_config={"adaptive": True, "tiers": {"SIMPLE": ["model-3"]}},
     )
 
@@ -31668,6 +31714,224 @@ def test_router_keeps_supported_fallback_shapes(
     router: Final = Router(model_list=list(_FALLBACK_VALIDATION_MODEL_LIST), **router_kwargs)
 
     assert router.fallbacks == expected_fallbacks
+
+
+_SAGEMAKER_ROUTER_CREDENTIALS: Final = MappingProxyType(
+    {"aws_region_name": "us-east-1", "aws_access_key_id": "test-key", "aws_secret_access_key": "test-secret"}
+)
+
+_PINNED_COMPONENT: Final = MappingProxyType({"model_id": "deployment-component"})
+_HEADER_PINNED_COMPONENT: Final = MappingProxyType(
+    {"extra_headers": {"x-amzn-sagemaker-inference-component": "deployment-component"}}
+)
+
+_INFERENCE_COMPONENT_PRECEDENCE: Final = pytest.mark.parametrize(
+    ("deployment_params", "sent_component"),
+    [
+        (_PINNED_COMPONENT, "deployment-component"),
+        (_HEADER_PINNED_COMPONENT, "deployment-component"),
+        (MappingProxyType({}), "client-component"),
+        (
+            MappingProxyType({**_PINNED_COMPONENT, "configurable_clientside_auth_params": ["model_id"]}),
+            "client-component",
+        ),
+    ],
+    ids=[
+        "deployment_pins_the_component",
+        "deployment_pins_the_component_with_a_header",
+        "deployment_leaves_the_component_to_the_client",
+        "deployment_lets_the_client_override_its_component",
+    ],
+)
+
+
+def _sagemaker_router(
+    model: str,
+    deployment_params: Mapping[str, object],
+    mode: str,
+    router_defaults: Mapping[str, str] = MappingProxyType({}),
+    model_name: str = "sagemaker-model",
+) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": model, **_SAGEMAKER_ROUTER_CREDENTIALS, **deployment_params},
+                "model_info": {"mode": mode},
+            }
+        ],
+        default_litellm_params=dict(router_defaults),
+    )
+
+
+_CHAT_COMPLETION_REPLY: Final = MappingProxyType(
+    {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "served-model",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+)
+
+
+def _sagemaker_chat_route(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(
+        "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/chat-endpoint/invocations"
+    ).respond(json=dict(_CHAT_COMPLETION_REPLY))
+
+
+@_INFERENCE_COMPONENT_PRECEDENCE
+@pytest.mark.asyncio
+async def test_a_client_model_id_cannot_move_a_sagemaker_chat_call_off_the_deployments_component(
+    respx_mock: respx.MockRouter,
+    _router_httpx_transport: None,
+    deployment_params: Mapping[str, object],
+    sent_component: str,
+) -> None:
+    route: Final = _sagemaker_chat_route(respx_mock)
+    router: Final = _sagemaker_router("sagemaker_chat/chat-endpoint", deployment_params, "chat")
+
+    await router.acompletion(
+        model="sagemaker-model", messages=[{"role": "user", "content": "hi"}], model_id="client-component"
+    )
+
+    assert route.calls.last.request.headers["X-Amzn-SageMaker-Inference-Component"] == sent_component
+
+
+@_INFERENCE_COMPONENT_PRECEDENCE
+def test_a_client_model_id_cannot_move_a_sync_sagemaker_text_completion_off_the_deployments_component(
+    respx_mock: respx.MockRouter, deployment_params: Mapping[str, object], sent_component: str
+) -> None:
+    route: Final = _sagemaker_chat_route(respx_mock)
+    router: Final = _sagemaker_router(
+        "sagemaker_chat/chat-endpoint", deployment_params, "completion", model_name="sagemaker_chat/chat-endpoint"
+    )
+
+    router.text_completion(model="sagemaker_chat/chat-endpoint", prompt="hi", model_id="client-component")
+
+    assert route.calls.last.request.headers["X-Amzn-SageMaker-Inference-Component"] == sent_component
+
+
+@pytest.mark.parametrize(
+    "client_header",
+    [
+        MappingProxyType({"extra_headers": {"x-amzn-sagemaker-inference-component": "client-component"}}),
+        MappingProxyType({"headers": {"x-amzn-sagemaker-inference-component": "client-component"}}),
+        MappingProxyType(
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "sagemaker_chat",
+                    "extra_headers": {"x-amzn-sagemaker-inference-component": "client-component"},
+                }
+            }
+        ),
+    ],
+    ids=["extra_headers", "headers", "provider_specific_header"],
+)
+@pytest.mark.parametrize(
+    "deployment_pin", [_PINNED_COMPONENT, _HEADER_PINNED_COMPONENT], ids=["model_id_pin", "header_pin"]
+)
+@pytest.mark.asyncio
+async def test_a_client_inference_component_header_cannot_move_a_pinned_sagemaker_chat_call(
+    respx_mock: respx.MockRouter,
+    _router_httpx_transport: None,
+    client_header: Mapping[str, object],
+    deployment_pin: Mapping[str, object],
+) -> None:
+    route: Final = _sagemaker_chat_route(respx_mock)
+    router: Final = _sagemaker_router("sagemaker_chat/chat-endpoint", deployment_pin, "chat")
+
+    await router.acompletion(model="sagemaker-model", messages=[{"role": "user", "content": "hi"}], **client_header)
+
+    assert route.calls.last.request.headers["X-Amzn-SageMaker-Inference-Component"] == "deployment-component"
+
+
+@pytest.mark.parametrize(
+    "request_component",
+    [MappingProxyType({}), MappingProxyType({"model_id": "deployment-component"})],
+    ids=["request_without_model_id", "request_with_the_pinned_model_id"],
+)
+@pytest.mark.asyncio
+async def test_a_router_default_model_id_cannot_move_a_sagemaker_call_off_the_deployments_component(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None, request_component: Mapping[str, str]
+) -> None:
+    route: Final = _sagemaker_chat_route(respx_mock)
+    router: Final = _sagemaker_router(
+        "sagemaker_chat/chat-endpoint",
+        _PINNED_COMPONENT,
+        "chat",
+        router_defaults=MappingProxyType({"model_id": "default-component"}),
+    )
+
+    await router.acompletion(model="sagemaker-model", messages=[{"role": "user", "content": "hi"}], **request_component)
+
+    assert route.calls.last.request.headers["X-Amzn-SageMaker-Inference-Component"] == "deployment-component"
+
+
+@_INFERENCE_COMPONENT_PRECEDENCE
+@pytest.mark.asyncio
+async def test_a_client_model_id_cannot_move_a_sagemaker_embedding_call_off_the_deployments_component(
+    deployment_params: Mapping[str, object], sent_component: str
+) -> None:
+    component_embeddings: Final = MappingProxyType({"deployment-component": [0.1], "client-component": [0.2]})
+
+    def invoke_endpoint(**request: str | bytes) -> Mapping[str, io.BytesIO]:
+        served: Final = component_embeddings[str(request["InferenceComponentName"])]
+        return {
+            "Body": io.BytesIO(
+                json.dumps({"object": "list", "data": [{"object": "embedding", "index": 0, "embedding": served}]}).encode()
+            )
+        }
+
+    client: Final = MagicMock(invoke_endpoint=invoke_endpoint)
+    router: Final = _sagemaker_router("sagemaker/openai/embed-endpoint", deployment_params, "embedding")
+
+    with patch("boto3.Session", return_value=MagicMock(client=MagicMock(return_value=client))):
+        response: Final = await router.aembedding(model="sagemaker-model", input=["hello"], model_id="client-component")
+
+    assert response.data[0]["embedding"] == component_embeddings[sent_component]
+
+
+@pytest.mark.asyncio
+async def test_a_header_pin_holds_when_the_deployment_names_sagemaker_through_custom_llm_provider(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None
+) -> None:
+    route: Final = _sagemaker_chat_route(respx_mock)
+    router: Final = _sagemaker_router(
+        "chat-endpoint", MappingProxyType({**_HEADER_PINNED_COMPONENT, "custom_llm_provider": "sagemaker_chat"}), "chat"
+    )
+
+    await router.acompletion(
+        model="sagemaker-model", messages=[{"role": "user", "content": "hi"}], model_id="client-component"
+    )
+
+    assert route.calls.last.request.headers["X-Amzn-SageMaker-Inference-Component"] == "deployment-component"
+
+
+@pytest.mark.asyncio
+async def test_a_component_header_on_a_non_sagemaker_deployment_leaves_the_clients_model_id_alone(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None
+) -> None:
+    route: Final = respx_mock.post("https://gateway.local/v1/chat/completions").respond(json=dict(_CHAT_COMPLETION_REPLY))
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gateway-model",
+                "litellm_params": {
+                    "model": "openai/served-model",
+                    "api_base": "https://gateway.local/v1",
+                    "api_key": "test-key",
+                    "extra_headers": {"X-Amzn-SageMaker-Inference-Component": "gateway-component"},
+                },
+            }
+        ]
+    )
+
+    await router.acompletion(model="gateway-model", messages=[{"role": "user", "content": "hi"}], model_id="client-value")
+
+    assert json.loads(route.calls.last.request.content)["model_id"] == "client-value"
 
 
 def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog: pytest.LogCaptureFixture) -> None:

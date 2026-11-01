@@ -518,9 +518,7 @@ def test_a_tpm_limit_lowered_while_the_socket_is_open_applies_to_its_next_turn(
         assert deployment.forwarded_turns() == 1
 
 
-def test_a_socket_on_an_otpm_limited_deployment_reserves_once_and_serves_every_turn(
-    limited: Gateway, cert: tuple[Path, Path]
-) -> None:
+def test_a_socket_on_an_otpm_limited_deployment_serves_every_turn(limited: Gateway, cert: tuple[Path, Path]) -> None:
     with responses_peer(cert) as peer, limited.scenario() as scenario:
         deployment: Final = _native(scenario, peer, otpm=10_000)
         key: Final = scenario.key(models=[deployment.name])
@@ -534,6 +532,115 @@ def test_a_socket_on_an_otpm_limited_deployment_reserves_once_and_serves_every_t
 
         assert [completed(received)["status"] for received in turns] == ["completed"] * 5
         assert deployment.forwarded_turns() == 5
+
+
+IO_TOKEN_LIMIT: Final = 10_000
+TOKENS_PER_TURN: Final = MappingProxyType({"itpm": USAGE["input_tokens"], "otpm": USAGE["output_tokens"]})
+
+
+def _io_tokens_counted(identity: str, kind: str, minute: str) -> int:
+    with _redis() as redis:
+        return sum(int(redis.get(key) or 0) for key in redis.scan_iter(f"global_router:{identity}:*:{kind}:{minute}"))
+
+
+def _add_io_tokens(deployment: Deployment, kind: str, minute: str, tokens: int) -> None:
+    with _redis() as redis:
+        redis.incrby(f"global_router:{deployment.identity}:openai/{PROVIDER_MODEL}:{kind}:{minute}", tokens)
+
+
+async def _say_until_counted(
+    connection: websockets.ClientConnection, deployment: Deployment, counted: Callable[[], float], expected: int
+) -> tuple[dict[str, JsonValue], ...]:
+    received: Final = await _say(connection, deployment.name)
+    await _until(counted, lambda tokens: tokens == expected)
+    return received
+
+
+@pytest.mark.parametrize("kind", ("otpm", "itpm"))
+def test_a_turn_is_refused_once_earlier_turns_fill_the_deployment_io_token_limit(
+    limited: Gateway, cert: tuple[Path, Path], kind: str
+) -> None:
+    per_turn: Final = TOKENS_PER_TURN[kind]
+    with responses_peer(cert) as peer, limited.scenario() as scenario:
+        deployment: Final = _native(scenario, peer, **{kind: IO_TOKEN_LIMIT})
+        key: Final = scenario.key(models=[deployment.name])
+        minute: Final = _fresh_minute()
+        counted: Final = partial(_io_tokens_counted, deployment.identity, kind, minute)
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(limited, key, deployment.name) as connection:
+                first: Final = await _say_until_counted(connection, deployment, counted, per_turn)
+                await asyncio.to_thread(_add_io_tokens, deployment, kind, minute, IO_TOKEN_LIMIT - 5 * per_turn)
+                answered: Final = tuple(
+                    [
+                        await _say_until_counted(
+                            connection, deployment, counted, IO_TOKEN_LIMIT - (5 - number) * per_turn
+                        )
+                        for number in range(2, 6)
+                    ]
+                )
+                return (first, *answered, await _say(connection, deployment.name))
+
+        turns: Final = asyncio.run(session())
+
+        assert [completed(received)["status"] for received in turns[:5]] == ["completed"] * 5
+        _assert_refused(turns[5])
+        assert deployment.forwarded_turns() == 5
+        assert held(counted, lambda tokens: tokens == IO_TOKEN_LIMIT, holding=3, seconds=20) == IO_TOKEN_LIMIT
+
+
+def test_a_socket_at_half_its_deployment_otpm_serves_ten_turns(limited: Gateway, cert: tuple[Path, Path]) -> None:
+    with responses_peer(cert) as peer, limited.scenario() as scenario:
+        deployment: Final = _native(scenario, peer, otpm=IO_TOKEN_LIMIT)
+        key: Final = scenario.key(models=[deployment.name])
+        minute: Final = _fresh_minute()
+        _add_io_tokens(deployment, "otpm", minute, IO_TOKEN_LIMIT // 2)
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(limited, key, deployment.name) as connection:
+                return tuple([await _say(connection, deployment.name) for _ in range(10)])
+
+        turns: Final = asyncio.run(session())
+
+        assert [completed(received)["status"] for received in turns] == ["completed"] * 10
+        assert deployment.forwarded_turns() == 10
+        expected: Final = IO_TOKEN_LIMIT // 2 + 10 * USAGE["output_tokens"]
+        counted: Final = partial(_io_tokens_counted, deployment.identity, "otpm", minute)
+        assert held(counted, lambda tokens: tokens == expected, holding=3, seconds=20) == expected
+
+
+@pytest.mark.parametrize("relay", ("native", "managed"))
+def test_every_turn_counts_its_actual_tokens_toward_the_deployment_itpm_and_otpm(
+    limited: Gateway, cert: tuple[Path, Path], relay: str
+) -> None:
+    with responses_peer(cert) as peer, limited.scenario() as scenario:
+        limits: Final = {"itpm": 1_000_000, "otpm": 1_000_000}
+        deployment: Final = _native(scenario, peer, **limits) if relay == "native" else _managed(scenario, **limits)
+        key: Final = scenario.key(models=[deployment.name])
+        minute: Final = _fresh_minute()
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(limited, key, deployment.name) as connection:
+                return tuple([await _say(connection, deployment.name) for _ in range(3)])
+
+        turns: Final = asyncio.run(session())
+
+        usages: Final = tuple(object_value(completed(received)["usage"]) for received in turns)
+        expected: Final = {
+            "itpm": sum(int(str(usage["input_tokens"])) for usage in usages),
+            "otpm": sum(int(str(usage["output_tokens"])) for usage in usages),
+        }
+        assert any(tokens > 0 for tokens in expected.values()), usages
+        counted: Final = {
+            kind: held(
+                partial(_io_tokens_counted, deployment.identity, kind, minute),
+                lambda tokens, kind=kind: tokens == expected[kind],
+                holding=3,
+                seconds=20,
+            )
+            for kind in expected
+        }
+        assert counted == expected
 
 
 def test_usage_based_routing_refuses_a_turn_only_once_earlier_turns_used_up_the_deployment_tpm(

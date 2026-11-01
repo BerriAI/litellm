@@ -22,6 +22,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
@@ -196,7 +197,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         params: Final = cast(  # cast-ok: the base signature leaves the params dict untyped
             "ResponsesAPIOptionalRequestParams", response_api_optional_request_params
         )
-        hoisted: Final = hoist_additional_tools(input, params.get("tools"))
+        hoisted: Final = hoist_additional_tools(
+            input, params.get("tools"), drop_params=drops_unsupported_params(litellm_params.drop_params)
+        )
         normalized_input, rewritten_types = normalize_codex_input_items(hoisted.input)
         if rewritten_types:
             verbose_logger.warning(

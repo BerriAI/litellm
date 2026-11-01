@@ -33,15 +33,14 @@ pytestmark: Final = pytest.mark.timeout(int(2 * graceful_stop_seconds() + 120 + 
 
 REUSE_ROWS: Final = (
     Row("reuse-chat-openai-sdk-sync", openai_deployment, chat_sdk),
-    Row("reuse-messages-rust-anthropic-sdk-sync", anthropic_deployment, messages_sdk, rust=True),
+    Row("reuse-messages-anthropic-sdk-sync", anthropic_deployment, messages_sdk),
 )
 QUIET_ROWS: Final = (
     Row("quiet-chat-openai-sdk-async-stream", openai_deployment, chat_sdk_stream, respond=quiet_stream_answer),
     Row(
-        "quiet-messages-rust-anthropic-sdk-async-stream",
+        "quiet-messages-anthropic-sdk-async-stream",
         anthropic_deployment,
         messages_sdk_stream,
-        rust=True,
         respond=quiet_stream_answer,
     ),
 )

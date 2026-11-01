@@ -14,6 +14,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.dual_cache import DualCache
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import ProxyException, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
@@ -36,6 +37,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payloa
 from litellm.proxy.utils import (
     REJECTED_BEFORE_REQUEST_SETUP,
     REJECTED_BEFORE_REQUEST_SETUP_KEY,
+    BilledFailedAttempt,
     ProxyUpdateSpend,
 )
 from litellm.types.router import Deployment, LiteLLM_Params
@@ -621,6 +623,56 @@ async def test_async_post_call_failure_hook_reads_used_client_oauth_token_from_t
         end_time=datetime.now(),
     )
     assert json.loads(payload["metadata"])["used_client_oauth_token"] is expected
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_route, body",
+    [
+        (
+            "/cursor/chat/completions",
+            {
+                "input": "Hello",
+                "metadata": {"requester_ip_address": "203.0.113.9", "user_agent": "spoofed"},
+                "litellm_metadata": {"requester_ip_address": "127.0.0.1", "user_agent": "Cursor/1.0"},
+            },
+        ),
+        (
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "Hello"}],
+                "metadata": {"requester_ip_address": "127.0.0.1", "user_agent": "Cursor/1.0"},
+                "litellm_metadata": {"requester_ip_address": "203.0.113.9", "user_agent": "spoofed"},
+            },
+        ),
+    ],
+)
+async def test_async_post_call_failure_hook_logs_the_proxy_stamped_ip_and_user_agent(request_route: str, body: dict):
+    request_data = {
+        "model": "gpt-4o",
+        "proxy_server_request": {"request_id": "test_request_id"},
+        **body,
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await ProxyDBLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("invalid api key"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", request_route=request_route),
+        )
+
+    payload = get_logging_payload(
+        kwargs=mock_update_database.call_args[1]["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert payload["requester_ip_address"] == "127.0.0.1"
+    assert json.loads(payload["metadata"])["user_agent"] == "Cursor/1.0"
 
 
 @pytest.mark.asyncio
@@ -2624,6 +2676,229 @@ async def test_async_post_call_failure_hook_records_recovered_partial_spend():
 
         mock_update_database.assert_called_once()
         assert mock_update_database.call_args[1]["response_cost"] == 3.5e-05
+
+
+@pytest.fixture()
+def live_spend_counters(monkeypatch: pytest.MonkeyPatch) -> DualCache:
+    counters: Final = DualCache()
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", counters)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    return counters
+
+
+def _failure_with_billed_attempts() -> Mapping[str, object]:
+    usage: Final = Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
+    return {
+        "combined_usage_object": usage,
+        "response_cost": 0.5,
+        "billed_failed_attempts": (
+            BilledFailedAttempt(attempted_retries=0, deployment_id="dep-a", usage=usage, response_cost=0.25),
+            BilledFailedAttempt(attempted_retries=1, deployment_id="dep-b", usage=usage, response_cost=0.5),
+        ),
+    }
+
+
+_LIVE_COUNTERS: Final = {
+    "spend:key:hashed-key": 0.2,
+    "spend:team:team-1": 0.3,
+    "spend:team_member:user-1:team-1": 0.35,
+    "spend:user:user-1": 0.4,
+    "spend:end_user:end-user-1": 0.45,
+    "spend:org:org-1": 0.5,
+    "spend:project:project-1": 0.55,
+    "spend:tag:batch-jobs": 0.6,
+    "spend:model_access_group:premium": 0.65,
+}
+
+
+async def _fail_request(logger: ProxyDBLogger, failure: Mapping[str, object]) -> None:
+    await logger.async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-4.1",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "metadata": {"tags": ["batch-jobs"], MODEL_ACCESS_GROUP_METADATA_KEY: ["premium"]},
+            "proxy_server_request": {"request_id": "rid"},
+            **failure,
+        },
+        original_exception=Exception("stream broke mid-flight"),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="hashed-key",
+            team_id="team-1",
+            user_id="user-1",
+            end_user_id="end-user-1",
+            org_id="org-1",
+            project_id="project-1",
+        ),
+    )
+
+
+async def _counter_values(counters: DualCache) -> dict[str, float]:
+    return {key: await counters.async_get_cache(key) for key in _LIVE_COUNTERS}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "charged"),
+    [
+        (
+            {
+                "combined_usage_object": Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
+                "response_cost": 0.125,
+            },
+            0.125,
+        ),
+        (_failure_with_billed_attempts(), 1.25),
+        ({}, 0.0),
+    ],
+)
+async def test_failure_spend_rows_raise_the_live_spend_counters_by_their_cost(
+    live_spend_counters: DualCache, failure: Mapping[str, object], charged: float
+):
+    """#35568: budget checks read the live counters, so a failure row's cost has to land there as well as in the
+    spend log, or an over-budget key keeps passing until the counter is next repaired from the database."""
+    for key, spend in _LIVE_COUNTERS.items():
+        await live_spend_counters.async_set_cache(key, spend)
+
+    await _fail_request(ProxyDBLogger(), failure)
+
+    assert await _counter_values(live_spend_counters) == pytest.approx(
+        {key: spend + charged for key, spend in _LIVE_COUNTERS.items()}
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_completed_cost_failure_raises_the_live_spend_counters_once(live_spend_counters: DualCache):
+    """A failure whose cost was already finalized settles through the success path's write, which raises the
+    counters itself."""
+    for key, spend in _LIVE_COUNTERS.items():
+        await live_spend_counters.async_set_cache(key, spend)
+
+    await _fail_request(
+        ProxyDBLogger(), {"standard_logging_object": {"cost_finalized": True, "response_cost": 0.125}}
+    )
+
+    assert await _counter_values(live_spend_counters) == pytest.approx(
+        {key: spend + 0.125 for key, spend in _LIVE_COUNTERS.items()}
+    )
+
+
+@pytest.mark.asyncio
+async def test_failure_spend_rows_leave_the_live_spend_counters_alone_while_spend_updates_are_disabled(
+    live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_spend_updates": True})
+    for key, spend in _LIVE_COUNTERS.items():
+        await live_spend_counters.async_set_cache(key, spend)
+
+    await _fail_request(ProxyDBLogger(), _failure_with_billed_attempts())
+
+    assert await _counter_values(live_spend_counters) == pytest.approx(_LIVE_COUNTERS)
+
+
+@pytest.mark.asyncio
+async def test_a_failing_spend_counter_store_is_still_sent_every_failure_spend_row():
+    counters: Final = AsyncMock(side_effect=RuntimeError("redis unavailable"))
+
+    await _fail_request(ProxyDBLogger(spend_counters=lambda: counters), _failure_with_billed_attempts())
+
+    assert [call.kwargs["response_cost"] for call in counters.call_args_list] == [0.5, 0.25, 0.5]
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_a_slow_spend_counter_store_lets_the_failure_out_and_raises_the_counters_once_it_answers():
+    store_answers: Final = asyncio.Event()
+    raised_cost: Final[asyncio.Future[object]] = asyncio.get_running_loop().create_future()
+
+    async def slow_counter_store(**counter_args: object) -> None:
+        await store_answers.wait()
+        raised_cost.set_result(counter_args["response_cost"])
+
+    logger: Final = ProxyDBLogger(spend_counters=lambda: slow_counter_store, failure_counter_wait_seconds=0)
+
+    await _fail_request(
+        logger,
+        {
+            "combined_usage_object": Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
+            "response_cost": 0.125,
+        },
+    )
+    assert not raised_cost.done()
+
+    store_answers.set()
+    assert await raised_cost == 0.125
+
+
+@pytest.mark.asyncio
+async def test_a_failure_spend_row_lands_in_the_key_budget_window_as_of_the_request_start(
+    live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch
+):
+    """The window row's one-time seed from the spend log stops at the request start, which keeps the failure row
+    it already logged from being counted twice."""
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    window_queue: Final = proxy_logging_obj.db_spend_update_writer.window_spend_update_queue
+    await window_queue.flush_and_get_aggregated_window_spend_transactions()
+    key_cache: Final = DualCache()
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", key_cache)
+    request_start: Final = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+    reset_at: Final = request_start + timedelta(days=10)
+    await key_cache.async_set_cache(
+        "hashed-key",
+        UserAPIKeyAuth(
+            token="hashed-key",
+            budget_limits=[{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}],
+        ),
+    )
+
+    await _fail_request(
+        ProxyDBLogger(),
+        {
+            "combined_usage_object": Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
+            "response_cost": 0.125,
+            "start_time": request_start,
+        },
+    )
+
+    assert [
+        (row["entity_type"], row["entity_id"], row["spend"], row["started_at"])
+        for row in await window_queue.flush_and_get_aggregated_window_spend_transactions()
+    ] == [("key", "hashed-key", pytest.approx(0.125), "2026-10-20T12:00:00.000000")]
+
+
+@pytest.mark.asyncio
+async def test_a_billed_attempt_on_a_deployment_the_router_dropped_debits_every_attributed_access_group(
+    live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch
+):
+    """Its spend row names the dropped deployment, which narrows nothing, so the counters must not narrow it to the
+    final attempt's groups either."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4.1",
+                    "litellm_params": {"model": "openai/gpt-4.1", "api_key": "sk-test"},
+                    "model_info": {"id": "dep-b", "access_groups": ["pool"]},
+                }
+            ]
+        ),
+    )
+
+    await _fail_request(
+        ProxyDBLogger(),
+        {
+            **_failure_with_billed_attempts(),
+            "metadata": {MODEL_ACCESS_GROUP_METADATA_KEY: ["pool", "premium"], "model_info": {"id": "dep-b"}},
+        },
+    )
+
+    assert {
+        group: await live_spend_counters.async_get_cache(f"spend:model_access_group:{group}")
+        for group in ("premium", "pool")
+    } == pytest.approx({"premium": 0.25, "pool": 1.25})
 
 
 @pytest.mark.asyncio

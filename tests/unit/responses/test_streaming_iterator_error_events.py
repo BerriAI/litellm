@@ -166,21 +166,24 @@ def test_maybe_raise_for_error_event_maps_context_length_code_to_400():
     assert not isinstance(exc_info.value, MidStreamFallbackError)
 
 
-def test_maybe_raise_for_error_event_raises_context_window_exceeded_directly():
+@pytest.mark.parametrize(
+    "message",
+    (
+        "This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens.",
+        "Your input exceeds the context window of this model. Please adjust your input and try again.",
+    ),
+)
+def test_maybe_raise_for_error_event_raises_context_window_exceeded_directly(message: str) -> None:
     """A context-length error event maps to ContextWindowExceededError exactly like the non-streaming
     path and, being a non-retriable client error, is raised directly rather than wrapped for mid-stream
     fallback, preserving the direct-SDK 400 contract from issue #15785."""
-    iterator = _make_iterator()
-    chunk = _make_error_chunk(
-        "invalid_request_error",
-        "context_length_exceeded",
-        "This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens.",
-    )
+    iterator: Final = _make_iterator()
+    chunk: Final = _make_error_chunk("invalid_request_error", "context_length_exceeded", message)
     with pytest.raises(litellm.ContextWindowExceededError) as exc_info:
         iterator._maybe_raise_for_error_event(chunk)
     assert exc_info.value.status_code == 400
     assert not isinstance(exc_info.value, MidStreamFallbackError)
-    assert "maximum context length" in str(exc_info.value)
+    assert message in str(exc_info.value)
 
 
 CONTENT_POLICY_MESSAGE = "This content was flagged for possible cybersecurity risk. The response was halted mid-stream."

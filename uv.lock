@@ -1956,15 +1956,6 @@ wheels = [
 ]
 
 [[package]]
-name = "diskcache"
-version = "5.6.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3f/21/1c1ffc1a039ddcc459db43cc108658f32c57d271d7289a2794e401d0fdb6/diskcache-5.6.3.tar.gz", hash = "sha256:2c3a3fa2743d8535d832ec61c2054a1641f41775aa7c556758a109941e33e4fc", size = 67916, upload-time = "2023-08-31T06:12:00.316Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3f/27/4570e78fc0bf5ea0ca45eb1de3818a23787af9b390c0b0a0033a1b8236f9/diskcache-5.6.3-py3-none-any.whl", hash = "sha256:5e31b2d5fbad117cc363ebaf6b689474db18a1f6438bc82358b024abd4c2ca19", size = 45550, upload-time = "2023-08-31T06:11:58.822Z" },
-]
-
-[[package]]
 name = "distro"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4995,9 +4986,6 @@ dependencies = [
 bedrock-realtime = [
     { name = "aws-sdk-bedrock-runtime", extra = ["awscrt"], marker = "python_full_version >= '3.12'" },
 ]
-caching = [
-    { name = "diskcache" },
-]
 cli = [
     { name = "inquirerpy" },
     { name = "keyring" },
@@ -5121,6 +5109,7 @@ admin-mcp = [
 benchmarks = [
     { name = "a2a-sdk" },
     { name = "mcp" },
+    { name = "pypdf" },
     { name = "pytest" },
     { name = "pytest-codspeed" },
 ]
@@ -5250,12 +5239,11 @@ requires-dist = [
     { name = "cryptography", marker = "extra == 'proxy'", specifier = ">=49.0.0,<51.0" },
     { name = "ddtrace", marker = "extra == 'proxy-runtime'", specifier = ">=4.8.2,<5.0" },
     { name = "detect-secrets", marker = "extra == 'proxy-runtime'", specifier = ">=1.5.0,<2.0" },
-    { name = "diskcache", marker = "extra == 'caching'", specifier = ">=5.6.3,<6.0" },
     { name = "expression", marker = "extra == 'proxy'", specifier = ">=5.6.0,<6.0" },
     { name = "fastapi", marker = "extra == 'proxy'", specifier = ">=0.136.3,<1.0" },
     { name = "fastapi-sso", marker = "extra == 'proxy'", specifier = ">=0.19.0,<1.0" },
     { name = "fastuuid", marker = "python_full_version < '3.15'", specifier = ">=0.14.0,<1.0" },
-    { name = "filelock", specifier = ">=3.16.1,<4.0" },
+    { name = "filelock", specifier = ">=3.16.1,<5" },
     { name = "google-cloud-aiplatform", marker = "extra == 'google'", specifier = ">=1.133.0,<2.0" },
     { name = "google-cloud-aiplatform", marker = "extra == 'proxy-runtime'", specifier = ">=1.133.0,<2.0" },
     { name = "google-cloud-iam", marker = "extra == 'extra-proxy'", specifier = ">=2.19.1,<3.0" },
@@ -5343,13 +5331,14 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.22.1,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
 ]
-provides-extras = ["proxy", "cli", "extra-proxy", "utils", "caching", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-vertex-chirp", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
+provides-extras = ["proxy", "cli", "extra-proxy", "utils", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-vertex-chirp", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
 
 [package.metadata.requires-dev]
-admin-mcp = [{ name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'", url = "https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz" }]
+admin-mcp = [{ name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'", url = "https://github.com/BerriAI/liteadmin-mcp/archive/31fb096904ae05684c0779110a93b135b5601182.tar.gz" }]
 benchmarks = [
     { name = "a2a-sdk", specifier = "==1.1.0" },
     { name = "mcp", specifier = ">=2.3.0,<3" },
+    { name = "pypdf", specifier = ">=6.21.2,<7.0" },
     { name = "pytest", specifier = "==9.0.3" },
     { name = "pytest-codspeed", specifier = "==4.3.0" },
 ]
@@ -5442,7 +5431,7 @@ proxy-dev = [
     { name = "azure-identity", specifier = "==1.25.2" },
     { name = "backports-zstd", marker = "python_full_version < '3.14'", specifier = "==1.8.0" },
     { name = "hypercorn", specifier = "==0.17.3" },
-    { name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'", url = "https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz" },
+    { name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'", url = "https://github.com/BerriAI/liteadmin-mcp/archive/31fb096904ae05684c0779110a93b135b5601182.tar.gz" },
     { name = "opentelemetry-api", specifier = "==1.45.1" },
     { name = "opentelemetry-exporter-otlp", specifier = "==1.45.1" },
     { name = "opentelemetry-instrumentation-fastapi", specifier = "==0.66b1" },
@@ -5455,14 +5444,14 @@ proxy-dev = [
 [[package]]
 name = "litellm-admin-mcp"
 version = "0.1.0"
-source = { url = "https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz" }
+source = { url = "https://github.com/BerriAI/liteadmin-mcp/archive/31fb096904ae05684c0779110a93b135b5601182.tar.gz" }
 dependencies = [
     { name = "httpx2" },
     { name = "jsonschema" },
     { name = "mcp" },
     { name = "uvicorn" },
 ]
-sdist = { hash = "sha256:86b930f6706fb2da10d53d1798ee7fd14e44fb0afdef0da122cf0e6bb88fa2c3" }
+sdist = { hash = "sha256:5803a20a00a18177f4591706956f31be311879543049b8b38143ad90bb1cb0a6" }
 
 [package.metadata]
 requires-dist = [
@@ -5478,12 +5467,12 @@ provides-extras = ["test"]
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.80"
+version = "0.1.81"
 source = { editable = "enterprise" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.111"
+version = "0.4.112"
 source = { editable = "litellm-proxy-extras" }
 dependencies = [
     { name = "psycopg" },

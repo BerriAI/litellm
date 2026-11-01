@@ -8,8 +8,8 @@ use std::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::future::try_join_all;
 use http::{HeaderName, HeaderValue};
-use litellm_auth_types::SecretValue;
 use litellm_config::{McpAuth, McpServer, McpTransport};
+use litellm_secret_value::SecretValue;
 use litellm_secrets::source::SecretSource;
 use rmcp::{
     RoleClient, ServiceExt,

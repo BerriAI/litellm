@@ -123,6 +123,7 @@ def test_is_pure_asgi_not_base_http_middleware():
         ("/azure_speech/speechtotext/v3.2/transcriptions", (BillableCategory.LLM, "/azure_speech")),
         ("/transcribe", (BillableCategory.LLM, "/transcribe")),
         ("/transcribe/StartTranscriptionJob", (BillableCategory.LLM, "/transcribe")),
+        ("/eu_jev/v1/systemone", (BillableCategory.LLM, "/eu_jev/v1/systemone")),
         ("/mcp", (BillableCategory.MCP, "/mcp")),
         ("/mcp/", (BillableCategory.MCP, "/mcp")),
         ("/mcp/tools/list", (BillableCategory.MCP, "/mcp")),
@@ -165,6 +166,8 @@ def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
         "/langfuse/api/public/ingestion",
         # a bare provider prefix is not an inference call
         "/bedrock",
+        "/eu_jev/v1/systemone/extra",
+        "/eu_jev/v1/systemone2",
         "/v1/mcp",
         "/v1/mcp/tools",
         "/v1/mcp/server",
@@ -182,6 +185,11 @@ def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
 )
 def test_classify_non_billable_returns_none(path: str):
     assert classify_billable_request(path) is None
+
+
+@pytest.mark.usefixtures("configured_eu_jev_route")
+def test_a_pass_through_configured_at_the_eu_jev_decision_path_is_not_billed() -> None:
+    assert classify_billable_request("/eu_jev/v1/systemone") is None
 
 
 @pytest.mark.parametrize(

@@ -5,10 +5,35 @@ here is the checker output parse and `introduced`, the diff scan that names the 
 endpoint behind a breach.
 """
 
+import subprocess
 from pathlib import Path
 from typing import Final
+from unittest.mock import patch
 
 import openapi_docs_gate as gate
+import pytest
+
+
+def test_base_counts_stops_when_the_native_build_fails(tmp_path: Path) -> None:
+    parent: Final = tmp_path / "oa_base"
+    parent.mkdir()
+    checker: Final = tmp_path / "check_openapi_docs.py"
+    checker.write_text("print('POST /v1/test OA001')\n")
+    with (
+        patch("openapi_docs_gate.tempfile.mkdtemp", return_value=str(parent)),
+        patch(
+            "subprocess.run",
+            side_effect=(
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                subprocess.CompletedProcess([], 1, stdout="", stderr="build failed"),
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            ),
+        ) as run,
+        patch("signal.signal"),
+    ):
+        with pytest.raises(SystemExit, match="uv exited 1"):
+            gate.base_counts("HEAD", repo_root=tmp_path, checker=checker)
+        assert run.call_count == 3
 
 
 def test_editing_the_checker_rekeys_the_base_counts(tmp_path: Path) -> None:

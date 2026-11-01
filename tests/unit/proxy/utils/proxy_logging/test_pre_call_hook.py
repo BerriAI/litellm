@@ -170,8 +170,9 @@ async def test_pre_call_hook_processes_guardrail_metadata_when_no_overrides(prox
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
     invoked = {}
 
-    def fake_process(d):
+    def fake_process(d: object, *, skip_guardrails: bool) -> None:
         invoked["data"] = d
+        invoked["skip_guardrails"] = skip_guardrails
 
     proxy_logging._process_guardrail_metadata = fake_process  # type: ignore[assignment]
     out = await proxy_logging.pre_call_hook(
@@ -180,7 +181,7 @@ async def test_pre_call_hook_processes_guardrail_metadata_when_no_overrides(prox
         call_type="completion",
     )
     assert out is data
-    assert invoked["data"] is data
+    assert invoked == {"data": data, "skip_guardrails": False}
 
 
 @pytest.mark.asyncio

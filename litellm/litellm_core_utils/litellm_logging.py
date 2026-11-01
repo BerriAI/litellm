@@ -76,6 +76,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     is_classifier_call,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    finite_cost,
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
     native_messages_reported_cost,
@@ -84,6 +85,7 @@ from litellm.litellm_core_utils.core_helpers import (
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
     set_response_cost_in_hidden_params,
+    single_log_line,
 )
 from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
@@ -163,7 +165,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.rerank import RerankResponse
+from litellm.types.rerank import RerankResponse, get_rerank_usage
 from litellm.types.router import RouterRateLimitError, SilentExperimentFlag
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
@@ -202,6 +204,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
+    batch_chat_usage,
 )
 from litellm.types.videos.main import VideoObject
 from litellm.utils import get_base_model_from_metadata, print_verbose
@@ -352,6 +355,7 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
 _METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_RESPONSE_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     ("user_api_key_auth", "user_api_key_budget_reservation")
@@ -566,7 +570,13 @@ def _resolve_mantle_region_for_cost(
 
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+_SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _REDACTED_RESULT: Final = TypeAdapter(object)
+_GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
+
+
+def _without_guardrail_information(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in metadata.items() if key != _GUARDRAIL_INFORMATION_KEY}
 
 
 def _provider_response_id(source: object) -> str | None:
@@ -2087,9 +2097,14 @@ class Logging(LiteLLMLoggingBaseClass):
                     litellm_model_name=litellm_model_name,
                     router_model_id=router_model_id or hidden_params.get("model_id"),
                 )
-                return hidden_params["response_cost"]
+                return self._recorded_response_cost(hidden_params["response_cost"])
             elif router_model_id is None and "model_id" in hidden_params:  # use model_id if not already set
                 router_model_id = hidden_params["model_id"]
+
+        if isinstance(priced_result, LiteLLMBatch) and (
+            not batch_cost_is_final(priced_result) or self._is_batch_poll_without_logging(priced_result)
+        ):
+            return 0.0
 
         # Fallback: extract router_model_id from litellm_params when not available
         # from the result object. ResponsesAPIResponse objects (used by /v1/responses
@@ -2182,7 +2197,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 litellm_model_name=litellm_model_name,
                 router_model_id=router_model_id,
             )
-            return total_response_cost
+            return self._recorded_response_cost(total_response_cost)
         except Exception as e:  # error calculating cost
             debug_info = StandardLoggingModelCostFailureDebugInformation(
                 error_str=str(e),
@@ -2207,6 +2222,15 @@ class Logging(LiteLLMLoggingBaseClass):
         return None
 
     _response_cost_calculator = response_cost_calculator
+
+    def _recorded_response_cost(self, cost: float | None) -> float | None:
+        if cost is None or finite_cost(cost) is not None:
+            return cost
+        verbose_logger.warning(
+            "Recording a non-finite response_cost as 0 for litellm_call_id=%s", single_log_line(self.litellm_call_id)
+        )
+        self.cost_breakdown = None
+        return 0.0
 
     def uncached_price(self, result: object) -> UncachedPrice:
         previous_cost_breakdown: Final = self.cost_breakdown
@@ -2559,6 +2583,23 @@ class Logging(LiteLLMLoggingBaseClass):
         attempt: Final = copy.copy(self)
         attempt.model_call_details = dict(self.model_call_details)
         return attempt
+
+    def guardrail_scoped_copy(self) -> "Logging":
+        request_params: Final = _LITELLM_PARAMS.validate_python(
+            self.litellm_params or {}  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped
+        )
+        litellm_params: Final = {
+            **request_params,
+            **{
+                key: _without_guardrail_information(_METADATA_MAPPING.validate_python(value))
+                for key, value in request_params.items()
+                if key in _PER_CALL_LITELLM_PARAM_DICTS and isinstance(value, dict)
+            },
+        }
+        scoped: Final = copy.copy(self)
+        scoped.litellm_params = litellm_params
+        scoped.model_call_details = {**self.model_call_details, "litellm_params": litellm_params}
+        return scoped
 
     def dispatch_attempt_failure_handlers(
         self, exception: Exception, traceback_exception: str
@@ -3346,6 +3387,10 @@ class Logging(LiteLLMLoggingBaseClass):
         finally:
             self._restore_correlation_context()
 
+    def _is_batch_poll_without_logging(self, result: object) -> bool:
+        litellm_metadata: Final = (self.litellm_params or {}).get("litellm_metadata") or {}
+        return isinstance(result, LiteLLMBatch) and litellm_metadata.get("batch_ignore_default_logging", False) is True
+
     def _success_handler_body(
         self,
         result: object = None,
@@ -3860,11 +3905,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         ## CALCULATE COST FOR BATCH JOBS
         if self.call_type == CallTypes.aretrieve_batch.value and isinstance(result, LiteLLMBatch):
-            litellm_params = self.litellm_params or {}
-            litellm_metadata: Final = litellm_params.get("litellm_metadata") or {}
-            if (
-                litellm_metadata.get("batch_ignore_default_logging", False) is True
-            ):  # polling job will query these frequently, don't spam db logs
+            if self._is_batch_poll_without_logging(result):
                 return
 
             batch_cost: Final = kwargs.get("batch_cost", None)
@@ -5028,13 +5069,15 @@ class Logging(LiteLLMLoggingBaseClass):
             verbose_logger.warning("LiteLLM: the anthropic_messages stream assembled no response, logging an empty one")
             return litellm.ModelResponse(model=self.model)
         else:
-            from litellm.types.llms.anthropic import AnthropicResponse
-
-            pydantic_result: Final = AnthropicResponse.model_validate({"stop_sequence": None, **(served_body or {})})
-            import httpx
-
+            anthropic_body: Final = (
+                served_body
+                if served_body is not None
+                else _SERVED_ANTHROPIC_BODY.validate_python(
+                    result.model_dump() if isinstance(result, BaseModel) else result
+                )
+            )
             result = litellm.AnthropicConfig().transform_parsed_response(
-                completion_response=pydantic_result.model_dump(),
+                completion_response={"stop_sequence": None, **anthropic_body},
                 raw_response=httpx.Response(
                     status_code=200,
                     headers={},
@@ -5623,7 +5666,7 @@ def build_custom_logger_compatible_class(
                     return callback
             otel_settings: Final = _get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
             otel_logger_v2: Final = build_otel_v2_logger(
-                config=OpenTelemetryV2Config(**otel_settings), settings=otel_settings
+                config=OpenTelemetryV2Config(**otel_settings), settings=otel_settings, console_default=True
             )
             _in_memory_loggers.append(otel_logger_v2)
             _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
@@ -6775,7 +6818,11 @@ class StandardLoggingPayloadSetup:
                 total_tokens=0,
             )
 
-        usage: Final = response_obj.get("usage", None) or {}
+        usage: Final = response_obj.get("usage", None)
+        if usage is None:
+            rerank_usage: Final = get_rerank_usage(_RESPONSE_MAPPING.validate_python(response_obj))
+            if rerank_usage is not None:
+                return Usage(**rerank_usage)
         if usage is None or (not isinstance(usage, dict) and not isinstance(usage, Usage)):
             return Usage(
                 prompt_tokens=0,
@@ -6811,7 +6858,7 @@ class StandardLoggingPayloadSetup:
             return _empty
         _raw: Final = response_obj.get("usage", None)
         if _raw is None:
-            return _empty
+            return dict(get_rerank_usage(_RESPONSE_MAPPING.validate_python(response_obj)) or _empty)
         if isinstance(_raw, ResponseAPIUsage):
             return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(_raw).model_dump()
         if isinstance(_raw, dict):
@@ -7481,7 +7528,8 @@ def get_standard_logging_object_payload(
         # Extract usage as a plain dict, avoiding Pydantic round-trip
         raw_usage_dict: Final = StandardLoggingPayloadSetup.get_usage_as_dict(
             response_obj=None if is_unbilled_non_inference_call(call_type, metadata, response_obj) else response_obj,
-            combined_usage_object=cast(Usage | None, kwargs.get("combined_usage_object")),
+            combined_usage_object=cast(Usage | None, kwargs.get("combined_usage_object"))
+            or (batch_chat_usage(init_response_obj) if isinstance(init_response_obj, LiteLLMBatch) else None),
         )
         usage_dict: Final = (
             {**raw_usage_dict, "output_image_count": len(init_response_obj.data)}
@@ -7553,7 +7601,15 @@ def get_standard_logging_object_payload(
         )
         custom_pricing: Final = False if spilled_over else logging_obj.custom_pricing_for(init_response_obj)
         raw_response_cost: Final = kwargs.get("response_cost")
-        llm_response_cost: Final[float] = raw_response_cost or 0.0
+        numeric_response_cost: Final = raw_response_cost if isinstance(raw_response_cost, int | float) else None
+        priced_response_cost: Final = finite_cost(numeric_response_cost)
+        if numeric_response_cost is not None and priced_response_cost is None:
+            verbose_logger.warning(
+                "Logging a non-finite response_cost=%s as 0 for litellm_call_id=%s",
+                numeric_response_cost,
+                single_log_line(logging_obj.litellm_call_id),
+            )
+        llm_response_cost: Final[float] = priced_response_cost or 0.0
         guardrail_cost: Final = guardrail_information_cost(metadata.get("standard_logging_guardrail_information"))
         finalized_cost: Final = _finalized_cost_of(logging_obj)
         response_cost: Final[float] = (

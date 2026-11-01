@@ -1196,8 +1196,11 @@ def should_strip_caller_authorization(
       pass-through cold-start case (RFC 9728) the bearer in
       ``Authorization`` is the upstream OAuth token and must be
       forwarded, so we keep it.
-    - **Delegated OAuth servers**: admission always runs and there is no
-      anonymous path, so the caller's separate ``Authorization`` is
+    - **Legacy delegate servers**: forward when MCP admission marked the
+      caller's ``Authorization`` as the upstream token
+      (``mcp_forwards_caller_authorization``); otherwise follow the
+      delegated OAuth rule below.
+    - **Delegated OAuth servers**: the caller's separate ``Authorization`` is
       forwarded only when a distinct ``x-litellm-api-key`` carried
       admission. Without that header the ``Authorization`` *was* the
       admission credential — a virtual key, an IdP JWT, or an SSO / OIDC /
@@ -1206,6 +1209,12 @@ def should_strip_caller_authorization(
     - **Every other auth-enabled mode**: strip when ``Authorization`` is the
       credential admission validated.
     """
+    if (
+        user_api_key_auth is not None
+        and user_api_key_auth.mcp_forwards_caller_authorization
+        and is_legacy_upstream_delegate(mcp_server)
+    ):
+        return False
     if _authorization_is_admission_jwt(raw_headers, user_api_key_auth):
         return True
     if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
@@ -1557,6 +1566,18 @@ async def _materialize_auth_headers(auth: httpx2.Auth | None) -> dict[str, str] 
     return {header_name: header_value} if header_value else None
 
 
+def is_legacy_upstream_delegate(server: MCPServer) -> bool:
+    """True for an interactive ``auth_type=oauth2`` server with ``delegate_auth_to_upstream=true``, whose
+    caller ``Authorization`` is the upstream token. The flow is resolved, not read from the column, so an
+    unstamped M2M-shaped row stays excluded: its stored client credentials drive egress, and admitting it
+    anonymously would let any caller act as LiteLLM's service account."""
+    return (
+        server.auth_type == MCPAuth.oauth2
+        and server.delegate_auth_to_upstream is True
+        and MCPServerManager.effective_oauth2_flow(server) != "client_credentials"
+    )
+
+
 def _consumes_caller_authorization(server: MCPServer) -> bool:
     """True when this server's egress forwards the caller's request-wide ``Authorization`` upstream:
     the client-forwarded token modes, legacy OAuth pass-through, and legacy upstream-delegated
@@ -1726,18 +1747,15 @@ def _warn_overlapping_tool_policies(server: MCPServer) -> None:
 
 
 def _warn_legacy_delegate_auth_if_applicable(server: MCPServer, *, source: str) -> None:
-    """Direct legacy delegated OAuth configurations to the admitted replacement."""
-    if server.auth_type != MCPAuth.oauth2:
-        return
-    if getattr(server, "delegate_auth_to_upstream", False) is not True:
-        return
-    if server.has_client_credentials:
+    """Point legacy delegated OAuth configurations at the client-forwarded replacements."""
+    if not is_legacy_upstream_delegate(server):
         return
     label: Final = get_server_prefix(server)
     verbose_logger.warning(
         "MCP server %r (id=%s, source=%s) uses deprecated auth_type=oauth2 with "
-        "delegate_auth_to_upstream=true. LiteLLM admission is now required; migrate to "
-        "auth_type=oauth_delegate for client-forwarded OAuth.",
+        "delegate_auth_to_upstream=true. It still works: a caller without a LiteLLM credential is "
+        "admitted anonymously and its upstream token is forwarded. Migrate to auth_type=true_passthrough "
+        "or auth_type=oauth_delegate.",
         label,
         server.server_id,
         source,
@@ -3766,12 +3784,12 @@ class MCPServerManager:
                 )
             )
             if is_anonymous:
-                passthrough_server_ids: Final = [
+                anonymous_server_ids: Final = [
                     server.server_id
                     for server in self.get_registry().values()
-                    if server.auth_type == MCPAuth.true_passthrough
+                    if server.auth_type == MCPAuth.true_passthrough or is_legacy_upstream_delegate(server)
                 ]
-                combined_servers.update(passthrough_server_ids)
+                combined_servers.update(anonymous_server_ids)
 
             restrict_allow_all: Final = (
                 resolved_general_settings.get("mcp_allow_all_keys_respects_mcp_scope", False)

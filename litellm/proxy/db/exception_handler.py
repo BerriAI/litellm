@@ -435,7 +435,7 @@ class PrismaDBExceptionHandler:
         return ProxyException(
             message=PrismaDBExceptionHandler.database_unavailable_message(e),
             type=ProxyErrorTypes.no_db_connection,
-            param="None",
+            param=None,
             code=HTTPStatus.SERVICE_UNAVAILABLE.value,
         )
 

@@ -724,16 +724,23 @@ class TestToolResultItemsReachTextsGuardrails:
         assert blocked.value.status_code == 400
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("empty_output", ["", None], ids=["empty_string", "null"])
-    async def test_empty_tool_output_sends_no_text_and_stays_as_sent(self, empty_output: str | None) -> None:
+    @pytest.mark.parametrize(("call_item", "output_type"), _TOOL_TURNS, ids=["function", "custom"])
+    @pytest.mark.parametrize(
+        "empty_output",
+        ["", None, [], *[[{"type": kind, "text": ""}] for kind in ("input_text", "output_text", "text")]],
+        ids=["empty_string", "null", "empty_list", "input_text", "output_text", "text"],
+    )
+    async def test_empty_tool_output_sends_no_text_and_stays_as_sent(
+        self, call_item: dict[str, str], output_type: str, empty_output: object
+    ) -> None:
         guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
-        call_item, output_type = _TOOL_TURNS[0]
 
         result: Final = await OpenAIResponsesHandler().process_input_messages(
             _tool_result_request(call_item, output_type, empty_output), guardrail
         )
 
         assert guardrail.seen_texts == [["Weather?"]]
+        assert guardrail.seen_message_contents == [["Weather?", None]]
         assert result["input"][2] == {"type": output_type, "call_id": "call_1", "output": empty_output}
 
     @pytest.mark.asyncio
@@ -1103,7 +1110,6 @@ class TestToolResultItemsReachTextsGuardrails:
                 ["visible"],
                 id="non_dict_part",
             ),
-            pytest.param([], ["[]"], id="empty"),
             pytest.param({"result": "SECRET forecast"}, ['{"result": "SECRET forecast"}'], id="dict"),
             pytest.param(
                 [{"type": "input_image", "file_id": "file-map"}],

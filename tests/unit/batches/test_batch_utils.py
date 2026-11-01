@@ -2311,6 +2311,36 @@ async def test_native_vertex_rows_route_to_vertex_cost_path_without_flag(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_raw_vertex_claude_rows_are_priced_like_with_the_native_output_flag(monkeypatch):
+    claude_message: Final = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [{"type": "text", "text": "Blue."}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 12, "output_tokens": 5},
+    }
+    rows: Final = [
+        {"custom_id": "ok", "processed_time": "2026-10-29T03:00:00Z", "response": claude_message, "status": ""},
+        {"custom_id": "bad", "processed_time": "2026-10-29T03:00:00Z", "response": {}, "status": "Bad Request"},
+    ]
+
+    async def cost_with_flag(flag: bool) -> bu.BatchCostUsageResult:
+        monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", flag, raising=False)
+        return await bu.calculate_batch_cost_and_usage(
+            file_content_dictionary=rows, custom_llm_provider="vertex_ai", model_name="vertex_ai/claude-sonnet-4-6"
+        )
+
+    unflagged: Final = await cost_with_flag(False)
+    flagged: Final = await cost_with_flag(True)
+
+    assert unflagged.cost > 0
+    assert (unflagged.successful_requests, unflagged.failed_requests) == (1, 1)
+    assert (unflagged.cost, unflagged.usage.total_tokens) == (flagged.cost, flagged.usage.total_tokens)
+
+
+@pytest.mark.asyncio
 async def test_openai_shaped_vertex_rows_keep_the_generic_path_without_flag(monkeypatch):
     monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", False, raising=False)
     monkeypatch.setattr(

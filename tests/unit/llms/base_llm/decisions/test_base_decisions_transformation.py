@@ -6,14 +6,19 @@ import httpx
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
+from litellm.llms.azure_ai.decisions.transformation import AzureAIDecisionsConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
+    BaseDecisionsConfig,
+    DecisionsInputLimits,
     ir_to_systemone_request,
     ir_to_systemone_response,
     parse_systemone_response,
     systemone_request_to_ir,
 )
 from litellm.llms.openai.decisions.transformation import openai_request_to_ir
+from litellm.llms.typesafe.decisions.transformation import TypeSafeDecisionsConfig
 from litellm.types.decisions import (
     MAX_DECISION_QUESTIONS,
     DecisionsIRRefusal,
@@ -47,6 +52,61 @@ _SYSTEMONE_REQUEST: Final[Mapping[str, object]] = {
         "severity": {"type": "score", "criteria": ["minor", {"label": "major"}]},
     },
 }
+
+
+@pytest.mark.parametrize("declared", (4096, 0, -1, True, None))
+def test_decision_input_limits_use_only_positive_catalog_limits(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, declared: int | None
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bespoke/test-input-limit",
+        {"litellm_provider": "bespoke", "mode": "evaluation", "max_input_tokens": declared},
+    )
+
+    limits: Final = BaseDecisionsConfig().get_input_limits("test-input-limit", "bespoke", {})
+
+    assert limits == DecisionsInputLimits(max_request_tokens=4096 if declared == 4096 else None)
+
+
+def test_unmapped_decision_model_limits_remain_unknown(local_model_cost_map: None) -> None:
+    assert BaseDecisionsConfig().get_input_limits("unmapped-input-limit", "databricks", {}) == DecisionsInputLimits()
+
+
+@pytest.mark.parametrize(
+    ("headers", "long_context"),
+    (
+        ({}, False),
+        ({"TypeSafe-Danger-Zone-Long-Context": "false"}, False),
+        ({"typesafe-danger-zone-long-context": " TRUE "}, True),
+        ({"TypeSafe-Danger-Zone-Long-Context": "true", "typesafe-danger-zone-long-context": "true"}, True),
+        ({"TypeSafe-Danger-Zone-Long-Context": "true", "typesafe-danger-zone-long-context": "false"}, False),
+        ({"typesafe-danger-zone-long-context": "true,false"}, False),
+    ),
+)
+def test_typesafe_limits_require_unambiguous_long_context_opt_in(
+    headers: Mapping[str, str], long_context: bool
+) -> None:
+    """Provider contract from https://docs.typesafe.ai/models, verified 2026-10-30"""
+    limits: Final = TypeSafeDecisionsConfig().get_input_limits("jev-latest", "typesafe", headers)
+
+    assert limits == (
+        DecisionsInputLimits(max_request_tokens=262144, max_question_tokens=262144)
+        if long_context
+        else DecisionsInputLimits(max_request_tokens=65536, max_question_tokens=32768)
+    )
+
+
+@pytest.mark.parametrize("model", ("Microsoft-Decision-1", "unmapped-decision-deployment"))
+def test_azure_decision_deployments_use_catalog_limits_without_typesafe_modes(
+    local_model_cost_map: None, model: str
+) -> None:
+    catalog_limit: Final = litellm.get_model_info("Microsoft-Decision-1", "azure_ai")["max_input_tokens"]
+    limits: Final = AzureAIDecisionsConfig().get_input_limits(
+        model, "azure_ai", {"TypeSafe-Danger-Zone-Long-Context": "true"}
+    )
+
+    assert limits == DecisionsInputLimits(max_request_tokens=catalog_limit)
 
 
 def _openai_ir(raw: Mapping[str, object]) -> DecisionsIRRequest:
