@@ -419,6 +419,7 @@ class ProxyInitializationHelpers:
 
         import litellm
         from litellm._logging import _get_uvicorn_json_log_config, resolve_log_level
+        from litellm.proxy.rust_gateway import inherited_fd
         from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
         uvicorn_args: Final = {
@@ -427,6 +428,7 @@ class ProxyInitializationHelpers:
             "port": port,
             "server_header": False,
             "timeout_graceful_shutdown": GracefulShutdownManager.get_timeout(),
+            **({"fd": inherited_fd()} if inherited_fd() is not None else {}),
         }
         if log_config is not None:
             print_startup_message(f"Using log_config: {log_config}")
@@ -752,7 +754,9 @@ class ProxyInitializationHelpers:
         )
         graceful_shutdown_timeout: Final = GracefulShutdownManager.get_timeout()
         gunicorn_options: Final = {
-            "bind": f"{host}:{port}",
+            "bind": (
+                f"fd://{os.environ['_LITELLM_GATEWAY_FD']}" if "_LITELLM_GATEWAY_FD" in os.environ else f"{host}:{port}"
+            ),
             "workers": num_workers,  # default is 1
             "worker_class": build_graceful_shutdown_uvicorn_worker(graceful_shutdown_timeout),
             "graceful_timeout": math.ceil(graceful_shutdown_timeout) + GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
@@ -1040,6 +1044,13 @@ class ProxyInitializationHelpers:
     help="Starts proxy via gunicorn, instead of uvicorn (better for managing multiple workers)",
 )
 @click.option(
+    "--rust_gateway",
+    envvar="LITELLM_RUST_GATEWAY",
+    default=False,
+    is_flag=True,
+    help="Run the Rust forwarding server on the public port, with Python on loopback",
+)
+@click.option(
     "--run_hypercorn",
     default=False,
     is_flag=True,
@@ -1241,6 +1252,7 @@ def run_server(
     setup,
     version,
     run_gunicorn,
+    rust_gateway,
     run_hypercorn,
     run_granian,
     ssl_keyfile_path,
@@ -1279,6 +1291,27 @@ def run_server(
 
         run_setup_wizard()
         return
+
+    if rust_gateway and not any(
+        (version, validate_config, health, test, skip_server_startup, check_migrations_against_existing_data)
+    ):
+        from litellm.proxy.rust_gateway import cli_command, gateway_binary, startup_error, supervise
+
+        binary: Final = gateway_binary()
+        error: Final = startup_error(
+            binary,
+            {
+                "--ssl_keyfile_path": ssl_keyfile_path,
+                "--ssl_certfile_path": ssl_certfile_path,
+                "--ciphers": ciphers,
+                "--run_hypercorn": run_hypercorn,
+                "--run_granian": run_granian,
+            },
+        )
+        if error is not None:
+            raise click.ClickException(error)
+        assert binary is not None
+        raise SystemExit(supervise(binary, cli_command(sys.argv[1:]), host, port))
 
     args: Final = locals()
     try:
