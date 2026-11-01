@@ -15,7 +15,7 @@ import pytest
 from uvicorn.importer import import_from_string
 from uvicorn.main import main as uvicorn_main
 
-from gateway.launch import GATEWAY_APP, main, pool_database_url, uvicorn_argv
+from gateway.launch import GATEWAY_APP, forward_listener, main, pool_database_url, uvicorn_argv
 from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 from litellm.proxy.db.pgbouncer import PGBOUNCER_POOLED_ENV_VAR, PgBouncerError, PgBouncerSettings
 from litellm.proxy.proxy_server import app as proxy_app
@@ -114,6 +114,20 @@ def _uvicorn_params(argv: tuple[str, ...]) -> dict[str, object]:
 
 
 class TestUvicornArgv:
+    @pytest.mark.parametrize("flag", ["--ssl-keyfile", "--ssl-certfile", "--ssl-ciphers"])
+    def test_forwarding_rejects_tls_before_starting_database_processes(self, flag: str):
+        with pytest.raises(SystemExit, match=flag):
+            forward_listener(("--rust_gateway", flag, "unused"))
+
+    def test_forwarding_is_opt_in(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LITELLM_RUST_GATEWAY", "false")
+        assert forward_listener(()) is None
+
+    def test_supervised_listener_uses_the_inherited_loopback_socket(self):
+        params: Final = _uvicorn_params(uvicorn_argv(("--workers", "2"), {"_LITELLM_GATEWAY_FD": "17"}))
+        assert params["fd"] == 17
+        assert params["workers"] == 2
+
     def test_keepalive_env_reaches_uvicorn(self):
         params: Final = _uvicorn_params(uvicorn_argv(("--workers", "4"), {"KEEPALIVE_TIMEOUT": "75"}))
         assert params["app"] == GATEWAY_APP

@@ -3,6 +3,9 @@
 # Declare variables to be passed into your templates.
 
 replicaCount: 1
+
+rustGateway:
+  enabled: false
 liteadmin:
   enabled: false
   existingSecret: ""

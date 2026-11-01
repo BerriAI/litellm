@@ -22,6 +22,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
+import click
 from uvicorn.main import main as uvicorn_main
 
 from litellm_cli.main import without_gc_pauses
@@ -39,9 +40,11 @@ KEEPALIVE_FLAG: Final = "--timeout-keep-alive"
 def uvicorn_argv(argv: Sequence[str], environ: Mapping[str, str]) -> tuple[str, ...]:
     """Honor ``KEEPALIVE_TIMEOUT`` like ``proxy_cli.py`` does, unless the flag was passed explicitly."""
     keepalive: Final = environ.get("KEEPALIVE_TIMEOUT")
+    fd: Final = environ.get("_LITELLM_GATEWAY_FD")
+    inherited_socket: Final = ("--fd", fd) if fd is not None else ()
     if keepalive is None or any(arg == KEEPALIVE_FLAG or arg.startswith(f"{KEEPALIVE_FLAG}=") for arg in argv):
-        return (GATEWAY_APP, "--factory", *argv)
-    return (GATEWAY_APP, "--factory", *argv, KEEPALIVE_FLAG, keepalive)
+        return (GATEWAY_APP, "--factory", *argv, *inherited_socket)
+    return (GATEWAY_APP, "--factory", *argv, KEEPALIVE_FLAG, keepalive, *inherited_socket)
 
 
 def pool_database_url(
@@ -75,7 +78,36 @@ def _serve(argv: Sequence[str]) -> None:
     uvicorn_main(tuple(argv), prog_name="uvicorn")
 
 
-def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
+def forward_listener(argv: Sequence[str]) -> tuple[str, str, int] | None:
+    if not (
+        "--rust_gateway" in argv or click.BOOL.convert(os.environ.get("LITELLM_RUST_GATEWAY", "false"), None, None)
+    ):
+        return None
+    from pydantic import TypeAdapter
+
+    from litellm.proxy.rust_gateway import gateway_binary, startup_error
+
+    forwarded: Final = tuple(arg for arg in argv if arg != "--rust_gateway")
+    params: Final[Mapping[str, object]] = uvicorn_main.make_context(
+        "uvicorn", list(uvicorn_argv(forwarded, os.environ))
+    ).params
+    binary: Final = gateway_binary()
+    error: Final = startup_error(
+        binary,
+        {
+            "--ssl-keyfile": params["ssl_keyfile"],
+            "--ssl-certfile": params["ssl_certfile"],
+            "--ssl-ciphers": any(arg.split("=")[0] == "--ssl-ciphers" for arg in forwarded),
+        },
+    )
+    if error is not None:
+        sys.exit(error)
+    host, port = TypeAdapter(tuple[str, int]).validate_python((params["host"], params["port"]))
+    assert binary is not None
+    return binary, host, port
+
+
+def configure_database() -> None:
     from litellm.proxy.db.db_url_settings import DatabaseURLSettings
     from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings, export_pooled_database_url
 
@@ -86,6 +118,18 @@ def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -
         sys.exit(f"LiteLLM gateway: in-container pgbouncer could not start: {pooled_url.reason}")
     if pooled_url is not None:
         export_pooled_database_url(pooled_url)
+
+
+def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
+    listener: Final = forward_listener(argv)
+    if "_LITELLM_GATEWAY_FD" not in os.environ:
+        configure_database()
+    if listener is not None:
+        from litellm.proxy.rust_gateway import supervise
+
+        binary, host, port = listener
+        forwarded: Final = tuple(arg for arg in argv if arg != "--rust_gateway")
+        sys.exit(supervise(binary, (sys.executable, "-m", "gateway.launch", *forwarded), host, port))
     serve(uvicorn_argv(argv, os.environ))
 
 
