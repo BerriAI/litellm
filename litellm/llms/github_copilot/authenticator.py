@@ -150,7 +150,7 @@ class Authenticator:
             try:
                 access_token = self._login()
                 try:
-                    with open(self.access_token_file, "w") as f:
+                    with open(self.access_token_file, "w", opener=self._secure_opener) as f:
                         f.write(access_token)
                 except OSError:
                     verbose_logger.error("Error saving access token to file")
@@ -192,7 +192,7 @@ class Authenticator:
             ) from e
         serialized: Final = json.dumps(api_key_info)
         try:
-            with open(self.api_key_file, "w") as f:
+            with open(self.api_key_file, "w", opener=self._secure_opener) as f:
                 f.write(serialized)
         except OSError as e:
             verbose_logger.warning(
@@ -289,10 +289,16 @@ class Authenticator:
             status_code=401,
         )
 
+    def _secure_opener(self, path: str, flags: int) -> int:
+        """Open with 0o600: file holds a GitHub access token / Copilot API key."""
+        return os.open(path, flags, 0o600)
+
     def _ensure_token_dir(self) -> None:
         """Ensure the token directory exists."""
         if not os.path.exists(self.token_dir):
-            os.makedirs(self.token_dir, exist_ok=True)
+            # 0o700: dir holds the GitHub access token + Copilot API key;
+            # default umask (022/002) would make it group/world-traversable.
+            os.makedirs(self.token_dir, mode=0o700, exist_ok=True)
 
     def _get_github_headers(self, access_token: str | None = None) -> dict[str, str]:
         """
