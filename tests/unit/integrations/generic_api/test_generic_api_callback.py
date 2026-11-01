@@ -732,6 +732,34 @@ class _InProcessLogSink:
 
 
 @pytest.mark.asyncio
+async def test_veqen_delivers_success_and_failure_as_authenticated_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VEQEN_API_KEY", "synthetic-ingest-key")
+    sink: Final = _InProcessLogSink()
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(sink.respond))
+    before_tasks: Final = frozenset(asyncio.all_tasks())
+    logger: Final = GenericAPILogger(
+        callback_name="veqen", async_httpx_client=handler, batch_size=1000, flush_interval=3600
+    )
+    owned_tasks: Final = frozenset(asyncio.all_tasks()) - before_tasks
+    try:
+        await logger.async_log_success_event({"standard_logging_object": {"id": "success"}}, None, None, None)
+        await logger.async_log_failure_event({"standard_logging_object": {"id": "failure"}}, None, None, None)
+        await logger.flush_queue()
+        assert tuple(_received_log_ids(sink.requests, "json_array")) == ("success", "failure")
+        assert len(sink.requests) == 1
+        request: Final = sink.requests[0]
+        assert request.method == "POST"
+        assert str(request.url) == "https://veqen-app.com/v1/integrations/litellm"
+        assert request.headers["authorization"] == "Bearer synthetic-ingest-key"
+        assert request.headers["content-type"] == "application/json"
+    finally:
+        for task in owned_tasks:
+            task.cancel()
+        await asyncio.gather(*owned_tasks, return_exceptions=True)
+        await handler.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("log_format", ("json_array", "ndjson", "single"))
 async def test_generic_api_keeps_failure_arriving_during_success_batch(log_format: LOG_FORMAT_TYPES) -> None:
     sink: Final = _InProcessLogSink(hold_first=True)
