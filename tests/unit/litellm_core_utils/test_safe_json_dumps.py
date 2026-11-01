@@ -169,6 +169,31 @@ def test_null_byte_stripped_in_fallback_str():
     assert json.loads(out)["obj"] == "objrepr"
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_floats_are_written_as_json_null(value: float) -> None:
+    out = safe_dumps(
+        {"cost_breakdown": {"total_cost": value, "output_cost": 0.006}, "costs": [value]}, non_finite_as_null=True
+    )
+
+    assert json.loads(out, parse_constant=lambda token: pytest.fail(f"non-JSON token {token}")) == {
+        "cost_breakdown": {"total_cost": None, "output_cost": 0.006},
+        "costs": [None],
+    }
+
+
+def test_a_set_holding_a_non_finite_float_sorts_its_finite_members_and_puts_null_last() -> None:
+    assert json.loads(safe_dumps({"costs": {2.0, float("inf"), 1.0}}, non_finite_as_null=True)) == {
+        "costs": [1.0, 2.0, None]
+    }
+
+
+def test_non_finite_floats_keep_their_value_unless_the_caller_asks_for_null() -> None:
+    assert json.loads(safe_dumps({"timeout": float("inf"), "costs": [float("-inf")]})) == {
+        "timeout": float("inf"),
+        "costs": [float("-inf")],
+    }
+
+
 def test_clean_strings_are_not_run_through_replace():
     """Regression for LIT-3910.
 

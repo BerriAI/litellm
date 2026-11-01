@@ -16,8 +16,22 @@ import {
 } from "./helpers";
 
 describe("buildMarketplaceSettingsSnippet", () => {
+  it("sends the key placeholder as a bearer header when the proxy requires a key", () => {
+    expect(JSON.parse(buildMarketplaceSettingsSnippet("https://proxy.example.com", true))).toEqual({
+      extraKnownMarketplaces: {
+        litellm: {
+          source: {
+            source: "url",
+            url: "https://proxy.example.com/claude-code/marketplace.json",
+            headers: { Authorization: "Bearer <your-litellm-key>" },
+          },
+        },
+      },
+    });
+  });
+
   it("nests the url under a source object so Claude Code accepts the marketplace", () => {
-    expect(JSON.parse(buildMarketplaceSettingsSnippet("https://proxy.example.com"))).toEqual({
+    expect(JSON.parse(buildMarketplaceSettingsSnippet("https://proxy.example.com", false))).toEqual({
       extraKnownMarketplaces: {
         litellm: {
           source: {

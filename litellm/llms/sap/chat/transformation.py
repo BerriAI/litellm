@@ -12,6 +12,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import message_with_file_parts_as_image_urls
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -25,7 +27,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-from ..credentials import get_token_creator
+from ..credentials import AICoreConfiguration, AICoreDeploymentList, get_token_creator
 from .handler import (
     AsyncSAPStreamIterator,
     GenAIHubOrchestrationError,
@@ -119,7 +121,7 @@ def _message_role_mapping(role: str) -> type[ChatMessage]:
 def _messages_to_sap_template(messages: list[AllMessageValues]) -> list:
     template: Final = []
     for message in messages:
-        folded_message = _fold_message_cache_control(message)
+        folded_message = _fold_message_cache_control(message_with_file_parts_as_image_urls(message))
         message_role_class = _message_role_mapping(str(folded_message["role"]))
         validated_message = validate_dict(folded_message, message_role_class)
         template.append(validated_message)
@@ -201,13 +203,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         # Keep a short, tight client lifecycle here to avoid fd leaks
         client: Final = litellm.module_level_client
         # with httpx.Client(timeout=30) as client:
-        deployments: Final = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
+        deployments: Final = client.get(join_api_base(self.base_url, "lm/deployments"), headers=self.headers).json()
         valid: Final[list[tuple[str, str, str]]] = []
         for dep in deployments.get("resources", []):
             if dep.get("scenarioId") == "orchestration":
                 cfg = _OrchestrationConfiguration.model_validate(
                     client.get(
-                        f"{self.base_url}/lm/configurations/{dep['configurationId']}",
+                        join_api_base(self.base_url, f"lm/configurations/{dep['configurationId']}"),
                         headers=self.headers,
                     ).json()
                 )
@@ -305,7 +307,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         deployment_url: Final = (
             explicit_url or os.environ.get("AICORE_ORCHESTRATION_DEPLOYMENT_URL") or self.deployment_url
         )
-        return f"{deployment_url.rstrip('/')}/v2/completion"
+        return join_api_base(deployment_url, "v2/completion")
 
     def _build_prompt_module(
         self,

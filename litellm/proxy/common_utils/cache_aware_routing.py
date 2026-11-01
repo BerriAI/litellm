@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_f
 from litellm.llms.anthropic.cache_aware_routing import AnthropicCacheRouting, TokenCounter
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+from litellm.router_deprecated import renamed_router_param
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import Deployment, PreRoutingHookResponse
@@ -23,6 +24,7 @@ from litellm.types.utils import StandardLoggingRoutingDecision
 
 if TYPE_CHECKING:
     from litellm.router import Router
+    from litellm.router_api import RoutingContext
 
 _MESSAGES: Final = TypeAdapter(list[Mapping[str, object]])
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
@@ -100,7 +102,7 @@ def eligible_models(
 
 
 def _candidate(router: Router, tier: str, model: str, request_kwargs: Mapping[str, object]) -> _Candidate | None:
-    deployments: Final = router.deployments_for_request(model, request_kwargs)
+    deployments: Final = router.registry().deployments(model, source="for_request", request=request_kwargs)
     if len(deployments) != 1:
         return None
     deployment: Final = Deployment.model_validate(deployments[0])
@@ -118,11 +120,12 @@ async def _available(
 ) -> bool:
     try:
         await can_key_call_resolved_model(
-            model=candidate.model, llm_model_list=router.get_model_list(), valid_token=caller, llm_router=router
+            model=candidate.model, llm_model_list=router.registry().deployments(), valid_token=caller, llm_router=router
         )
         healthy: Final = _DEPLOYMENTS.validate_python(
-            await router.async_get_healthy_deployments(  # pyright: ignore[reportUnknownMemberType]  # legacy router results are validated at this boundary
+            await router.select(  # pyright: ignore[reportCallIssue]  # messages below: router annotations predate structured native messages
                 model=candidate.model,
+                kind="healthy",
                 messages=_MESSAGES.validate_python(messages) if messages else None,  # pyright: ignore[reportArgumentType]  # router annotations predate structured native messages
                 request_kwargs=dict(request_kwargs),
             )
@@ -135,7 +138,8 @@ async def _available(
 
 def supported_router_marker(router: Router, alias: str, request_kwargs: Mapping[str, object]) -> bool:
     markers: Final = tuple(
-        Deployment.model_validate(entry) for entry in router.deployments_for_request(alias, request_kwargs)
+        Deployment.model_validate(entry)
+        for entry in router.registry().deployments(alias, source="for_request", request=request_kwargs)
     )
     return bool(markers) and all(
         marker.litellm_params.model == "auto_router/complexity_router"
@@ -229,7 +233,7 @@ async def select_cached_model(
 
 async def _choose_cached_model(
     *,
-    router: Router,
+    ctx: RoutingContext,
     config: ComplexityRouterConfig,
     params_for_model: Callable[[str, str], Mapping[str, object]],
     response: PreRoutingHookResponse | None,
@@ -247,9 +251,11 @@ async def _choose_cached_model(
     )
     from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 
+    router: Final = proxy_server.llm_router
     if (
-        proxy_server.llm_router is not router
-        or router.routing_plugins
+        router is None
+        or not ctx.belongs_to(router)
+        or router.registry().plugins("routing")
         or has_request_transforms()
         or compaction_pending(request_kwargs)
         or not supported_router_marker(router, response.routing_decision.get("router_model_name") or "", request_kwargs)
@@ -316,9 +322,10 @@ async def _choose_cached_model(
     )
 
 
+@renamed_router_param("router")
 async def choose_cached_model(
     *,
-    router: Router,
+    ctx: RoutingContext,
     config: ComplexityRouterConfig,
     params_for_model: Callable[[str, str], Mapping[str, object]],
     response: PreRoutingHookResponse | None,
@@ -330,7 +337,7 @@ async def choose_cached_model(
     try:
         return await asyncio.wait_for(
             _choose_cached_model(
-                router=router,
+                ctx=ctx,
                 config=config,
                 params_for_model=params_for_model,
                 response=response,

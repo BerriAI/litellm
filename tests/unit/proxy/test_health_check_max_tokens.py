@@ -1,4 +1,6 @@
 import asyncio
+import copy
+import io
 import json
 import logging
 from typing import Final
@@ -10,6 +12,7 @@ import respx
 
 import litellm
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
+from litellm.litellm_core_utils.llm_request_utils import RankedChatModel
 from litellm.proxy import health_check as hc_module
 from litellm.proxy.health_check import (
     _is_strategy_router_deployment,
@@ -84,8 +87,10 @@ async def test_ahealth_check_wildcard_models_respects_max_tokens():
     """
     with (
         patch(
-            "litellm.litellm_core_utils.llm_request_utils.pick_cheapest_chat_models_from_llm_provider",
-            return_value=["gpt-4o-mini"],
+            "litellm.litellm_core_utils.llm_request_utils.rank_chat_models_from_llm_provider",
+            return_value=(
+                RankedChatModel(model="gpt-4o-mini", route_rank=0, cost=0.0, is_past_deprecation_date=False),
+            ),
         ),
         patch("litellm.acompletion", new_callable=AsyncMock),
     ):
@@ -607,6 +612,101 @@ async def test_run_model_health_check_honors_an_explicit_chat_mode_on_mantle_cla
     assert fake_ahealth_check.call_args.kwargs["mode"] == "chat"
 
 
+_MANTLE_GPT_CHAT_REPLY: Final = {
+    "id": "chatcmpl-health",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "openai.gpt-5.6-terra",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+_MANTLE_GPT_RESPONSES_REPLY: Final = {
+    "id": "resp_health",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "openai.gpt-5.6-terra",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_health",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_info", "probed_api"),
+    (({"mode": "chat"}, "chat"), ({}, "responses")),
+    ids=("chat-pin", "unpinned"),
+)
+async def test_run_model_health_check_probes_the_api_a_mantle_gpt_deployment_sends_chat_to(
+    monkeypatch, model_info, probed_api
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_route: Final = respx_mock.post(
+            url__regex=r"^https://bedrock-mantle\.us-east-2\.api\.aws/.*/chat/completions$"
+        ).respond(json=_MANTLE_GPT_CHAT_REPLY)
+        responses_route: Final = respx_mock.post(
+            url__regex=r"^https://bedrock-mantle\.us-east-2\.api\.aws/.*/responses$"
+        ).respond(json=_MANTLE_GPT_RESPONSES_REPLY)
+        result: Final = await hc_module._run_model_health_check(
+            {
+                "litellm_params": {
+                    "model": "bedrock_mantle/openai.gpt-5.6-terra",
+                    "api_key": "test-bearer",
+                    "aws_region_name": "us-east-2",
+                },
+                "model_info": model_info,
+            }
+        )
+
+    assert "error" not in result, result
+    assert {"chat": chat_route.call_count, "responses": responses_route.call_count} == {
+        "chat": int(probed_api == "chat"),
+        "responses": int(probed_api == "responses"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_health_probe_of_a_custom_priced_chat_pin_leaves_plain_calls_on_responses(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    params: Final = {
+        "model": "bedrock_mantle/openai.gpt-5.6-terra",
+        "api_key": "test-bearer",
+        "aws_region_name": "us-east-2",
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_route: Final = respx_mock.post(
+            url__regex=r"^https://bedrock-mantle\.us-east-2\.api\.aws/.*/chat/completions$"
+        ).respond(json=_MANTLE_GPT_CHAT_REPLY)
+        responses_route: Final = respx_mock.post(
+            url__regex=r"^https://bedrock-mantle\.us-east-2\.api\.aws/.*/responses$"
+        ).respond(json=_MANTLE_GPT_RESPONSES_REPLY)
+        result: Final = await hc_module._run_model_health_check(
+            {
+                "litellm_params": {**params, "input_cost_per_token": 2e-05, "output_cost_per_token": 8e-05},
+                "model_info": {"mode": "chat"},
+            }
+        )
+        await litellm.acompletion(messages=[{"role": "user", "content": "Say ok"}], **params)
+
+    assert "error" not in result, result
+    assert (chat_route.call_count, responses_route.call_count) == (1, 1)
+
+
 def test_autodetected_embedding_skips_reasoning_effort():
     """reasoning_effort must not leak into an embedding probe whose mode is auto-detected.
 
@@ -742,6 +842,125 @@ def test_health_check_params_apply_to_non_chat_modes():
 
     assert updated["dimensions"] == 8
     assert "max_tokens" not in updated
+
+
+@pytest.mark.parametrize(
+    ("model_info", "litellm_params"),
+    [
+        ({}, {"model": "azure/gpt-audio-mini"}),
+        ({}, {"model": "openai/gpt-audio-mini"}),
+        ({"base_model": "azure/gpt-audio-mini"}, {"model": "azure/my-audio-deployment"}),
+        ({}, {"model": "azure/my-audio-deployment", "base_model": "azure/gpt-audio-1.5"}),
+        (
+            {"base_model": "azure/gpt-4o-mini", "health_check_model": "azure/gpt-audio-mini"},
+            {"model": "azure/my-text-deployment"},
+        ),
+        (
+            {"base_model": "gpt-4o-mini", "health_check_params": {"model": "openai/gpt-audio-mini"}},
+            {"model": "openai/my-text-model"},
+        ),
+        ({"base_model": "openai/gpt-audio-1.5"}, {"model": "azure/my-audio-deployment"}),
+    ],
+)
+def test_openai_and_azure_audio_chat_probe_asks_for_audio_output(
+    model_info: dict[str, str], litellm_params: dict[str, str]
+):
+    updated: Final = update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert updated["modalities"] == ["text", "audio"]
+    assert updated["audio"] == {"voice": "alloy", "format": "wav"}
+    assert updated["max_tokens"] == 16
+
+
+@pytest.mark.parametrize(
+    ("model_info", "litellm_params"),
+    [
+        ({}, {"model": "azure/gpt-4o-mini"}),
+        ({}, {"model": "gemini/lyria-3-clip-preview"}),
+        ({}, {"model": "azure/my-audio-deployment"}),
+        ({}, {"model": "unmapped-model-name"}),
+        ({"mode": "responses"}, {"model": "openai/gpt-audio-mini"}),
+        ({"mode": "completion"}, {"model": "openai/gpt-audio-mini"}),
+        ({"base_model": "gemini/lyria-3-clip-preview"}, {"model": "azure/my-audio-deployment"}),
+        (
+            {"base_model": "azure/gpt-audio-mini", "health_check_model": "azure/gpt-4o-mini"},
+            {"model": "azure/my-audio-deployment"},
+        ),
+        (
+            {"health_check_model": "azure/gpt-4o-mini"},
+            {"model": "azure/my-audio-deployment", "base_model": "azure/gpt-audio-mini"},
+        ),
+        (
+            {"base_model": "gpt-audio-mini", "health_check_params": {"model": "openai/gpt-5.4-mini"}},
+            {"model": "openai/gpt-audio-mini"},
+        ),
+        (
+            {"health_check_params": {"model": "openai/gpt-5.4-mini"}},
+            {"model": "openai/gpt-audio-mini", "base_model": "gpt-audio-mini"},
+        ),
+    ],
+)
+def test_probe_without_openai_audio_chat_model_asks_for_no_audio_output(
+    model_info: dict[str, str], litellm_params: dict[str, str]
+):
+    updated: Final = update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert "modalities" not in updated
+    assert "audio" not in updated
+
+
+@pytest.mark.parametrize(
+    "operator_params",
+    [
+        {"modalities": ["audio", "text"], "audio": {"voice": "verse", "format": "mp3"}},
+        {"audio": {"voice": "verse", "format": "mp3"}},
+    ],
+)
+def test_audio_chat_probe_keeps_audio_params_set_in_health_check_params(operator_params: dict[str, object]):
+    updated: Final = update_litellm_params_for_health_check(
+        {"health_check_params": operator_params}, {"model": "azure/gpt-audio-mini"}
+    )
+
+    assert {key: updated[key] for key in operator_params} == operator_params
+    assert updated["modalities"] == operator_params.get("modalities", ["text", "audio"])
+
+
+_AUDIO_OUTPUT_CHAT_MODELS: Final = tuple(
+    sorted(
+        name
+        for name, info in litellm.model_cost.items()
+        if info.get("litellm_provider") in ("openai", "azure")
+        and info.get("mode") == "chat"
+        and "audio" in (info.get("supported_output_modalities") or [])
+    )
+)
+
+
+@pytest.mark.parametrize("cost_map_model", _AUDIO_OUTPUT_CHAT_MODELS)
+def test_every_audio_output_chat_model_in_the_cost_map_gets_the_audio_probe(cost_map_model: str):
+    provider: Final = litellm.model_cost[cost_map_model]["litellm_provider"]
+    updated: Final = update_litellm_params_for_health_check(
+        {"base_model": cost_map_model}, {"model": f"{provider}/my-audio-deployment"}
+    )
+
+    assert updated["modalities"] == ["text", "audio"]
+
+
+def test_text_only_modalities_in_health_check_params_get_no_default_audio():
+    updated: Final = update_litellm_params_for_health_check(
+        {"health_check_params": {"modalities": ["text"]}}, {"model": "openai/gpt-audio-mini"}
+    )
+
+    assert updated["modalities"] == ["text"]
+    assert "audio" not in updated
+
+
+def test_audio_chat_probe_uses_health_check_voice():
+    updated: Final = update_litellm_params_for_health_check(
+        {"health_check_voice": "verse"}, {"model": "openai/gpt-audio-mini"}
+    )
+
+    assert updated["audio"] == {"voice": "verse", "format": "wav"}
 
 
 async def _pegasus_health_check_request_body(
@@ -1313,3 +1532,117 @@ async def test_background_health_check_timeout_does_not_cancel_a_sibling(
     assert fast_upstream.called
     assert healthy_model_ids == {"fast"}
     assert unhealthy_model_ids == {"slow"}
+
+
+@pytest.mark.asyncio
+async def test_a_failing_health_probe_leaves_the_deployment_serving_requests(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    deployment: Final = {
+        "model_name": "probe-group",
+        "litellm_params": {
+            "model": "openai/gpt-4o-mini",
+            "api_key": "test-key",
+            "api_base": "https://probe.example/v1",
+        },
+        "model_info": {"id": "probe-deployment", "mode": "chat"},
+    }
+    router: Final = litellm.Router(model_list=[deployment])
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.post("https://probe.example/v1/chat/completions").mock(
+            side_effect=(
+                httpx.Response(404, json={"error": {"message": "model not found", "type": "invalid_request_error"}}),
+                httpx.Response(200, json={**_MANTLE_GPT_CHAT_REPLY, "model": "gpt-4o-mini"}),
+            )
+        )
+        probe: Final = await hc_module._run_model_health_check(copy.deepcopy(deployment))
+        reply: Final = await router.acompletion(model="probe-group", messages=[{"role": "user", "content": "Say ok"}])
+
+    assert "error" in probe
+    assert reply.choices[0].message.content == "ok"
+
+
+@pytest.mark.parametrize(
+    ("component_params", "probed_component"),
+    [
+        ({"extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"}}, "header-component"),
+        (
+            {"model_id": "own-component", "extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"}},
+            "own-component",
+        ),
+        (
+            {"model_id": "own-component", "extra_headers": {1: "other", "X-Amzn-SageMaker-Inference-Component": "x"}},
+            "own-component",
+        ),
+        (
+            {"extra_headers": {1: "other", "X-Amzn-SageMaker-Inference-Component": "header-component"}},
+            "header-component",
+        ),
+        (
+            {
+                "configurable_clientside_auth_params": ["model_id"],
+                "extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"},
+            },
+            None,
+        ),
+    ],
+    ids=[
+        "header_pinned",
+        "own_model_id_beats_the_header",
+        "own_model_id_beside_a_non_string_header_key",
+        "header_pinned_beside_a_non_string_header_key",
+        "client_configurable_model_id_takes_no_header_pin",
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_model_health_check_probes_a_legacy_sagemaker_embedding_at_the_deployments_component(
+    component_params: dict[str, object], probed_component: str | None
+) -> None:
+    embedding_reply: Final = {"object": "list", "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}]}
+    invoke_endpoint: Final = MagicMock(return_value={"Body": io.BytesIO(json.dumps(embedding_reply).encode())})
+    client: Final = MagicMock(invoke_endpoint=invoke_endpoint)
+    deployment: Final = {
+        "litellm_params": {
+            "model": "sagemaker/openai/embed-endpoint",
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "test-key",
+            "aws_secret_access_key": "test-secret",
+            **component_params,
+        },
+        "model_info": {"mode": "embedding"},
+    }
+
+    with patch("boto3.Session", return_value=MagicMock(client=MagicMock(return_value=client))):
+        result: Final = await hc_module._run_model_health_check(deployment)
+
+    assert "error" not in result, result
+    assert invoke_endpoint.call_count == 1
+    assert invoke_endpoint.call_args.kwargs.get("InferenceComponentName") == probed_component
+
+
+@pytest.mark.asyncio
+async def test_run_model_health_check_reports_why_a_string_configurable_clientside_auth_params_fails() -> None:
+    invoke_endpoint: Final = MagicMock()
+    deployment: Final = {
+        "litellm_params": {
+            "model": "sagemaker/openai/embed-endpoint",
+            "model_id": "own-component",
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "test-key",
+            "aws_secret_access_key": "test-secret",
+        },
+        "model_info": {"mode": "embedding", "health_check_params": {"configurable_clientside_auth_params": "model_id"}},
+    }
+
+    client: Final = MagicMock(invoke_endpoint=invoke_endpoint)
+
+    with patch("boto3.Session", return_value=MagicMock(client=MagicMock(return_value=client))):
+        result: Final = await hc_module._run_model_health_check(deployment)
+
+    assert "configurable_clientside_auth_params" in result["error"]
+    invoke_endpoint.assert_not_called()

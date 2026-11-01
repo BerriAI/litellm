@@ -1116,7 +1116,7 @@ def test_cache_control_hook_counts_tool_call_cache_controls():
     assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 3
 
 
-def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_calls():
+def test_cache_control_hook_counts_tool_call_marks_except_server_tool_calls_the_client_did_not_answer():
     message: Final[AllMessageValues] = {
         "role": "assistant",
         "content": None,
@@ -1170,7 +1170,7 @@ def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_c
         },
     }
 
-    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 2
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 1
 
 
 _SEARCH_ANSWER: Final = {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"}
@@ -1180,6 +1180,12 @@ _SEARCH_CALL: Final = {
     "id": "srvtoolu_01Search",
     "type": "function",
     "function": {"name": "tool_search_tool_bm25", "arguments": "{}"},
+    "cache_control": {"type": "ephemeral"},
+}
+_UNRUN_WEB_SEARCH_CALL: Final = {
+    "id": "srvtoolu_01Web",
+    "type": "function",
+    "function": {"name": "web_search", "arguments": "{}"},
     "cache_control": {"type": "ephemeral"},
 }
 _WEATHER_CALL: Final = {
@@ -1238,6 +1244,8 @@ def _replayed_search_call(*tool_calls: dict[str, object]) -> AllMessageValues:
             (_SEARCH_CALL,), (_SEARCH_ANSWER, _GO_ON), False, 0, id="client_answer_replaced_by_the_kept_result"
         ),
         pytest.param((_SEARCH_CALL,), (_GO_ON,), True, 0, id="placeholder_replaced_by_the_kept_result"),
+        pytest.param((_UNRUN_WEB_SEARCH_CALL,), (), False, 0, id="trailing_unrun_search_replayed_without_its_mark"),
+        pytest.param((_UNRUN_WEB_SEARCH_CALL,), (_GO_ON,), False, 0, id="unrun_search_dropped_before_a_new_message"),
         pytest.param(
             (_SEARCH_CALL, _WEATHER_CALL),
             (_SEARCH_ANSWER,),
@@ -1703,6 +1711,39 @@ def test_cache_control_hook_does_not_overwrite_existing_cache_control():
         "ttl": "1h",
     }
     assert _count_cache_control(processed) == 1
+
+
+@pytest.mark.parametrize(
+    "content, marked_parts",
+    [
+        ([{"type": "text", "text": "Checking."}, {"type": "redacted_thinking", "data": "abc"}], [0]),
+        ([{"type": "redacted_thinking", "data": "abc"}], []),
+        ([{"type": "thinking", "thinking": "hm", "signature": "s"}], []),
+        ([{"type": "text", "text": "Checking."}, "not a content block"], [0]),
+    ],
+    ids=["text-before-trailing-redacted-thinking", "redacted-thinking-only", "signed-thinking-only", "text-before-a-string"],
+)
+def test_assistant_injection_never_marks_a_thinking_part(
+    content: list[dict[str, str] | str], marked_parts: list[int]
+):
+    """Claude 400s a cache_control on a thinking or redacted_thinking block, and Bedrock Converse 400s a cache
+    point after reasoning, so the breakpoint goes on the last part that can carry one."""
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": copy.deepcopy(content)},
+        {"role": "user", "content": "again"},
+    ]
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="anthropic/claude-sonnet-4-6",
+        messages=messages,
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "assistant"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert [index for index, part in enumerate(processed[1]["content"]) if "cache_control" in part] == marked_parts
 
 
 @pytest.mark.asyncio
@@ -3965,6 +4006,77 @@ class TestChatPathProviderStamp:
         assert params["prompt_cache_options"] == {"mode": "explicit"}
 
 
+class TestChatPathResolvesTheDeploymentProvider:
+    MODEL = "azure_ai/gpt-6-astra"
+    AMBIENT_API_BASE = "https://other-deployment.openai.azure.com"
+    FOUNDRY_API_BASE = "https://foundry.services.ai.azure.com"
+    UPSTREAM_PROXY_API_BASE = "https://upstream-proxy.example.com"
+    POINTS = [{"location": "message", "role": "system"}]
+    MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+
+    def _pin_ambient_api_base(self, monkeypatch: pytest.MonkeyPatch, pinned: bool) -> None:
+        if pinned:
+            monkeypatch.setenv("AZURE_AI_API_BASE", self.AMBIENT_API_BASE)
+        else:
+            monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+
+    def _chat(
+        self, custom_llm_provider: str | None, api_base: str, model: str = MODEL
+    ) -> tuple[list[AllMessageValues], dict[str, object]]:
+        seeded: Final[dict[str, object]] = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=seeded,
+            messages=copy.deepcopy(self.MESSAGES),
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+        )
+        _, out, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=model,
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params=seeded,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        return out, params
+
+    def test_chat_path_stamps_the_breakpoint_on_a_foundry_deployment_while_the_ambient_base_is_azure_openai(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._pin_ambient_api_base(monkeypatch, True)
+        messages, params = self._chat(None, self.FOUNDRY_API_BASE)
+        assert (messages, params) == self._chat("azure_ai", self.FOUNDRY_API_BASE)
+        assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 1
+        assert ("prompt_cache_options" in params) == supports_openai_prompt_cache_breakpoint(self.MODEL, "azure_ai")
+
+    @pytest.mark.parametrize("pinned", [True, False])
+    @pytest.mark.parametrize(
+        "api_base",
+        [FOUNDRY_API_BASE, "https://resource.cognitiveservices.azure.com", "https://resource.openai.azure.com"],
+    )
+    def test_chat_path_marks_the_deployment_like_the_provider_its_api_base_dispatches_to(
+        self, monkeypatch: pytest.MonkeyPatch, api_base: str, pinned: bool
+    ) -> None:
+        self._pin_ambient_api_base(monkeypatch, pinned)
+        dispatched_provider: Final = litellm.get_llm_provider(model=self.MODEL, api_base=api_base)[1]
+        assert self._chat(None, api_base) == self._chat(dispatched_provider, api_base)
+
+    @pytest.mark.parametrize("model", [MODEL, "bedrock_mantle/openai.gpt-5.6-sol"])
+    @pytest.mark.parametrize("set_globally", ["env", "module"])
+    def test_chat_path_marks_the_deployment_like_litellm_proxy_when_calls_route_to_one(
+        self, monkeypatch: pytest.MonkeyPatch, model: str, set_globally: str
+    ) -> None:
+        self._pin_ambient_api_base(monkeypatch, False)
+        if set_globally == "env":
+            monkeypatch.setenv("USE_LITELLM_PROXY", "True")
+        else:
+            monkeypatch.setattr(litellm, "use_litellm_proxy", True)
+        assert self._chat(None, self.UPSTREAM_PROXY_API_BASE, model) == self._chat(
+            "litellm_proxy", self.UPSTREAM_PROXY_API_BASE, model
+        )
+
+
 class TestClientBreakpointsCountedOnce:
     def test_client_message_breakpoints_are_not_double_counted(self):
         messages = [
@@ -4930,3 +5042,50 @@ def test_cache_control_hook_injects_next_to_a_malformed_message_instead_of_raisi
         {"type": "ephemeral"},
         {"type": "ephemeral"},
     ]
+
+
+def _search_conversation_with(follow_up: dict[str, object]) -> list[AllMessageValues]:
+    return [
+        cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),
+        _replayed_search_call(_SEARCH_CALL),
+        cast(AllMessageValues, follow_up),
+        cast(AllMessageValues, _GO_ON),
+    ]
+
+
+def _cache_marks_after_injection(messages: list[AllMessageValues]) -> tuple[int, tuple[int, ...]]:
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="anthropic/claude-opus-5-5",
+        messages=messages,
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "user"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+    return (
+        AnthropicCacheControlHook.count_request_cache_breakpoints(messages),
+        tuple(_marks_in(message) for message in processed),
+    )
+
+
+@pytest.mark.parametrize(
+    ("malformed", "well_formed"),
+    [
+        pytest.param(
+            {**_SEARCH_ANSWER, "tool_call_id": {"id": "srvtoolu_01Search"}},
+            {**_SEARCH_ANSWER, "tool_call_id": "toolu_01Unrelated"},
+            id="object_tool_call_id",
+        ),
+        pytest.param(
+            {**_SEARCH_ANSWER, "tool_call_id": ["srvtoolu_01Search"]},
+            {**_SEARCH_ANSWER, "tool_call_id": "toolu_01Unrelated"},
+            id="list_tool_call_id",
+        ),
+    ],
+)
+def test_cache_control_hook_reads_a_non_string_answer_id_as_answering_no_tool_call(
+    malformed: dict[str, object], well_formed: dict[str, object]
+):
+    assert _cache_marks_after_injection(_search_conversation_with(malformed)) == _cache_marks_after_injection(
+        _search_conversation_with(well_formed)
+    )

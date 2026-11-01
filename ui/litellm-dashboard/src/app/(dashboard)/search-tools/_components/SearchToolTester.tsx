@@ -60,7 +60,7 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
       setSearchHistory((prev) => [historyEntry, ...prev]);
     } catch (error) {
       console.error("Error querying search tool:", error);
-      toast.fromError("Failed to query search tool");
+      toast.fromError(error);
     } finally {
       setIsLoading(false);
     }

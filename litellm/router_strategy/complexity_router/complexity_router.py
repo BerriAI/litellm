@@ -22,19 +22,23 @@ import json
 import random
 import re
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from functools import partial
 from itertools import accumulate, chain, islice, takewhile
 from threading import Lock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
-from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, create_model
 from pydantic_core import ErrorDetails
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
-from litellm.caching.affinity_cache import ROUTER_SESSION_PINS_TARGET, claim_affinity_pin
+from litellm.caching.affinity_cache import ROUTER_SESSION_PINS_TARGET, claim_affinity_pin, read_affinity_pin
 from litellm.constants import (
+    COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY,
     EMPTY_MAPPING,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
@@ -60,6 +64,7 @@ from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG
+from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.router_strategy.complexity_router.tier_predictor import (
@@ -122,10 +127,13 @@ from .jev_classifier import (
     DEFAULT_JEV_INSTRUCTIONS,
     HttpJevClassifierClient,
     JevClassifierClient,
+    JevSystemOneRequest,
     JevVerdict,
     RouterJevClassifierClient,
     build_jev_request,
+    fit_jev_request,
     jev_classifier_cost,
+    jev_input_targets,
 )
 from .llm_v2 import LLM_V2_PROMPT_VERSION, LLMV2Decision, LLMV2TaskContext, LLMV2Verdict, llm_v2_response_format
 from .stall_detector import detect_stalled_task
@@ -133,12 +141,12 @@ from .stall_detector import detect_stalled_task
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
 
-    from litellm.router import Router
+    from litellm.router_api import RoutingContext
     from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
     from litellm.router_strategy.savings_baseline import Baseline
     from litellm.types.router import PreRoutingHookResponse
 else:
-    Router = Any
+    RoutingContext = Any
     PreRoutingHookResponse = Any
     SemanticRouter = Any
 
@@ -158,6 +166,17 @@ class _LabeledTierClassification(LiteLLMBaseModel):
 def _tier_name(tier: ComplexityTier | str) -> str:
     """The plain tier name, whether the pipeline carries a built-in tier or a defined name."""
     return tier.value if isinstance(tier, ComplexityTier) else tier
+
+
+def _callers_output_cap(request_kwargs: Mapping[str, object]) -> int | None:
+    """The smallest positive output ceiling the caller sent under any of its three names, read
+    from the stamp when an earlier routing pass already rewrote the kwargs."""
+    from litellm.router import as_output_cap, stamped_client_ceiling
+
+    stamped: Final = stamped_client_ceiling(request_kwargs)
+    carriers: Final = request_kwargs if stamped is None else stamped
+    caps: Final = tuple(as_output_cap(carriers.get(carrier)) for carrier in OUTPUT_TOKEN_CEILING_PARAMS)
+    return min((cap for cap in caps if cap is not None and cap > 0), default=None)
 
 
 def _built_in_tier_or_none(tier_name: str) -> ComplexityTier | None:
@@ -411,9 +430,19 @@ def _append_custom_keywords(base_keywords: list[str], custom_keywords: list[str]
     return [*base_keywords, *deduped_custom.values()]
 
 
-def _parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mapping[str, Any]:
+class _ParentSessionKwargs(TypedDict, total=False):
+    litellm_session_id: ReadOnly[object]
+    litellm_trace_id: ReadOnly[object]
+
+
+def _parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> _ParentSessionKwargs:
     kwargs: Final = request_kwargs or {}
-    return {k: kwargs[k] for k in ("litellm_session_id", "litellm_trace_id") if kwargs.get(k) is not None}
+    session_id: Final = kwargs.get("litellm_session_id")
+    trace_id: Final = kwargs.get("litellm_trace_id")
+    return _ParentSessionKwargs(
+        **({"litellm_session_id": session_id} if session_id is not None else {}),
+        **({"litellm_trace_id": trace_id} if trace_id is not None else {}),
+    )
 
 
 def _response_cost_or_none(response: object) -> float | None:
@@ -762,6 +791,56 @@ def _newest_turn_is_human_ask(
     return _last_human_ask_index(messages, marker_pairs) == newest_activity
 
 
+_CODEX_TURN_METADATA_KEY: Final = "x-codex-turn-metadata"
+_CODEX_COMPACTION_SUMMARY_PREFIX: Final = (
+    "Another language model started to solve this problem and produced a summary of its thinking process."
+)
+
+
+class _CodexTurnMetadata(BaseModel, frozen=True):
+    request_kind: str | None = None
+
+
+class _CodexTurnMetadataCarrier(BaseModel, frozen=True):
+    turn_metadata: str | None = Field(default=None, alias=_CODEX_TURN_METADATA_KEY)
+
+
+class _CodexProxyRequest(BaseModel, frozen=True):
+    headers: _CodexTurnMetadataCarrier | None = None
+
+
+class _CodexRequestMetadata(BaseModel, frozen=True):
+    """Codex sends its turn metadata in the Responses body's `client_metadata` and projects it onto a
+    header of the same name for transports without that field"""
+
+    client_metadata: _CodexTurnMetadataCarrier | None = None
+    proxy_server_request: _CodexProxyRequest | None = None
+
+    def turn_metadata_values(self) -> tuple[str | None, ...]:
+        headers: Final = self.proxy_server_request.headers if self.proxy_server_request else None
+        return (
+            self.client_metadata.turn_metadata if self.client_metadata else None,
+            headers.turn_metadata if headers else None,
+        )
+
+
+def _codex_request_kind(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return _CodexTurnMetadata.model_validate_json(value).request_kind
+    except ValidationError:
+        return None
+
+
+def _is_codex_compaction_request(request_kwargs: Mapping[str, object]) -> bool:
+    try:
+        request_metadata: Final = _CodexRequestMetadata.model_validate(request_kwargs)
+    except ValidationError:
+        return False
+    return any(_codex_request_kind(value) == "compaction" for value in request_metadata.turn_metadata_values())
+
+
 def _iter_system_scope_texts(
     body_system: object,
     messages: Sequence[Mapping[str, object]],
@@ -776,10 +855,9 @@ def _iter_system_scope_texts(
     must go through the staleness-aware tail scan instead -- scanning it here would floor every
     turn of a session that once planned, for any pattern whose client injects mid-conversation.
     """
-    if isinstance(body_system, str):
-        yield body_system
-    elif isinstance(body_system, list):
-        yield _message_text(body_system)
+    body_system_text: Final = _message_text(body_system)
+    if body_system_text:
+        yield body_system_text
     for msg in messages:
         if msg.get("role") != "system":
             return
@@ -1092,6 +1170,7 @@ class ClassificationOutcome(NamedTuple):
     heuristic_v2_forecast: StandardLoggingHeuristicV2Forecast | None = None
     classifier_failure_reason: ClassifierFailureReason | None = None
     classifier_error_type: str | None = None
+    classifier_input_telemetry: StandardLoggingRoutingDecision | None = None
 
 
 def _with_classifier_failure(
@@ -1133,23 +1212,24 @@ def _with_classifier_forecast(
     decision: StandardLoggingRoutingDecision, outcome: ClassificationOutcome
 ) -> StandardLoggingRoutingDecision:
     """Attach validated forecasts and their applied policy to the routing decision."""
+    with_input: Final[StandardLoggingRoutingDecision] = {**decision, **(outcome.classifier_input_telemetry or {})}
     if outcome.heuristic_v2_forecast is not None:
-        return {**decision, "heuristic_v2_forecast": outcome.heuristic_v2_forecast}
+        return {**with_input, "heuristic_v2_forecast": outcome.heuristic_v2_forecast}
     if outcome.jev_verdict is not None:
         forecasted_decision: Final[StandardLoggingRoutingDecision] = {
-            **decision,
+            **with_input,
             "classifier_probabilities": outcome.jev_verdict.probabilities,
             "classifier_confidence": outcome.jev_verdict.confidence,
         }
         return forecasted_decision
     if outcome.llm_v2_forecast is not None:
-        return _with_llm_v2_forecast(decision, outcome.llm_v2_forecast)
+        return _with_llm_v2_forecast(with_input, outcome.llm_v2_forecast)
     forecast: Final = outcome.capability_forecast
     if forecast is None:
-        return decision
+        return with_input
     verdict: Final = forecast.verdict
     enriched: Final[StandardLoggingRoutingDecision] = {
-        **decision,
+        **with_input,
         "classifier_crux": verdict.crux,
         "classifier_primary_rule": verdict.primary_rule,
         "classifier_capability_boundary": verdict.capability_boundary,
@@ -1317,6 +1397,11 @@ def _session_affinity_cache_value(model: str, tier: ComplexityTier | str | None)
     return {"model": model, "tier": tier_value}
 
 
+@dataclass(frozen=True, slots=True)
+class _JevConnectionError:
+    message: str
+
+
 class ComplexityRouter(CustomLogger):
     """
     Complexity router that classifies requests and routes to appropriate models.
@@ -1332,9 +1417,11 @@ class ComplexityRouter(CustomLogger):
     - Question complexity (multiple questions)
     """
 
-    def _build_jev_client(self, config: OpenSourceClassifierConfig) -> JevClassifierClient:
+    litellm_router_instance: Final = RenamedRouterAttribute()  # deprecated: the router attribute before ``ctx``
+
+    def _build_jev_client(self, config: OpenSourceClassifierConfig) -> JevClassifierClient | _JevConnectionError:
         if config.deployment_name is not None:
-            return RouterJevClassifierClient(self.litellm_router_instance, config.deployment_name)
+            return RouterJevClassifierClient(self.ctx, config.deployment_name)
         if config.provider in ("laya", "bespoke"):
             from litellm.llms.oss_decision import oss_connection
 
@@ -1353,22 +1440,33 @@ class ComplexityRouter(CustomLogger):
                 http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
                 provider="databricks",
             )
-        api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
-        if not api_key:
-            raise ValueError(
+        api_key: Final = (
+            get_secret_str(config.api_key)
+            if config.api_key is not None and config.api_key.startswith("os.environ/")
+            else config.api_key or get_secret_str("TYPESAFE_API_KEY")
+        )
+        if not api_key or not api_key.strip():
+            return _JevConnectionError(
                 "opensource_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'oss_classifier'"
             )
-        api_base: Final = config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+        api_base: Final = (
+            get_secret_str(config.api_base)
+            if config.api_base is not None and config.api_base.startswith("os.environ/")
+            else config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+        )
+        if not api_base or not api_base.strip():
+            return _JevConnectionError("opensource_classifier_config.api_base must resolve to a non-empty value")
         return HttpJevClassifierClient(
             api_key=api_key,
             api_base=api_base,
             http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
         )
 
+    @renamed_router_param("litellm_router_instance")
     def __init__(
         self,
         model_name: str,
-        litellm_router_instance: Router,
+        ctx: RoutingContext,
         complexity_router_config: Mapping[str, object] | None = None,
         default_model: str | None = None,
         derive_savings_baseline: bool = True,
@@ -1379,7 +1477,7 @@ class ComplexityRouter(CustomLogger):
 
         Args:
             model_name: The name of the model/deployment using this router.
-            litellm_router_instance: The LiteLLM Router instance.
+            ctx: The routing context of the owning router.
             complexity_router_config: Optional configuration dict from proxy config.
             default_model: Optional default model to use if tier cannot be determined.
             derive_savings_baseline: False for callers whose decisions are never spend
@@ -1387,7 +1485,7 @@ class ComplexityRouter(CustomLogger):
                 would leak deployment mappings the caller was not authorized for.
         """
         self.model_name = model_name
-        self.litellm_router_instance = litellm_router_instance
+        self.ctx: Final = ctx
         self._derive_savings_baseline = derive_savings_baseline
 
         # Parse config - always create a new instance to avoid singleton mutation
@@ -1401,13 +1499,18 @@ class ComplexityRouter(CustomLogger):
             self.config.default_model = default_model
 
         jev_config: Final = self.config.opensource_classifier_config
-        self._jev_client: JevClassifierClient | None = (
+        jev_client_result: Final = (
             jev_client
             if jev_client is not None
             else self._build_jev_client(jev_config)
             if self.config.classifier_type == "oss_classifier" and jev_config is not None
             else None
         )
+        match jev_client_result:
+            case _JevConnectionError(message=message):
+                raise ValueError(message)
+            case _:
+                self._jev_client: JevClassifierClient | None = jev_client_result
 
         self._tier_affinity_config = hashlib.sha256(
             self.config.model_dump_json(include=MappingProxyType({"tiers": True, "tier_model_configs": True})).encode()
@@ -1599,7 +1702,7 @@ class ComplexityRouter(CustomLogger):
         if not self._derive_savings_baseline:
             return None
         if not self._savings_baseline_derived:
-            self._savings_baseline = resolve_baseline(self.litellm_router_instance, self._hardest_tier_models())
+            self._savings_baseline = resolve_baseline(self.ctx, self._hardest_tier_models())
             self._savings_baseline_derived = True
         return self._savings_baseline
 
@@ -1880,19 +1983,21 @@ class ComplexityRouter(CustomLogger):
         `score` because the score is only interpretable against the boundaries that
         mapped it to a tier.
         """
-        decision: Final = StandardLoggingRoutingDecision(
-            router_model_name=self.model_name,
-            router_type="complexity",
-            routed_model=routed_model,
-            cause=cause,
-            conversation_continuing=conversation_continuing,
-            **(
-                {"classifier_failure_reason": classifier_failure_reason}
-                if classifier_failure_reason is not None
-                else {}
-            ),
-            **({"classifier_error_type": classifier_error_type} if classifier_error_type is not None else {}),
+        failure: Final[StandardLoggingRoutingDecision] = (
+            {"classifier_failure_reason": classifier_failure_reason} if classifier_failure_reason is not None else {}
         )
+        error: Final[StandardLoggingRoutingDecision] = (
+            {"classifier_error_type": classifier_error_type} if classifier_error_type is not None else {}
+        )
+        decision: Final[StandardLoggingRoutingDecision] = {
+            "router_model_name": self.model_name,
+            "router_type": "complexity",
+            "routed_model": routed_model,
+            "cause": cause,
+            "conversation_continuing": conversation_continuing,
+            **failure,
+            **error,
+        }
         if (baseline := self.savings_baseline) is not None:
             decision["savings_baseline_model"] = baseline.model
             if baseline.deployment_id is not None:
@@ -2277,16 +2382,6 @@ class ComplexityRouter(CustomLogger):
                 system_prompt,
                 failure_reason="unsupported_input",
             )
-        breaker: Final = self._classifier_circuit_breaker
-        permit: Final = breaker.acquire_permit() if breaker is not None else None
-        if breaker is not None and permit is None:
-            return self._classifier_failure_outcome(
-                "jev classifier circuit is open",
-                prompt,
-                system_prompt,
-                failure_reason="circuit_open",
-                signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
-            )
         criteria: Final[Mapping[str, str]] = (
             MappingProxyType(
                 {
@@ -2301,13 +2396,40 @@ class ComplexityRouter(CustomLogger):
             )
         )
         timeout_s: Final = config.timeout_ms / 1000
-        request: Final = build_jev_request(
-            prompt=self._classifier_context_payload(prompt, system_prompt, request_kwargs, messages),
-            system_prompt=None,
-            model=config.model,
-            instructions=config.instructions or DEFAULT_JEV_INSTRUCTIONS,
-            criteria=criteria,
+        from litellm.litellm_core_utils.token_counter import offload_token_count
+
+        def build_request(current_prompt: str, caller_constraints: str | None) -> JevSystemOneRequest:
+            return build_jev_request(
+                prompt=self._classifier_context_payload(
+                    current_prompt, caller_constraints, request_kwargs, messages, current_ask_for_history=prompt
+                ),
+                system_prompt=None,
+                model=config.model,
+                instructions=config.instructions or DEFAULT_JEV_INSTRUCTIONS,
+                criteria=criteria,
+            )
+
+        budgeted: Final = await offload_token_count(fit_jev_request)(
+            build_request, prompt, system_prompt, jev_input_targets(self.ctx, config), _truncate
         )
+        request: Final = budgeted.request
+        if request is None:
+            return self._classifier_failure_outcome(
+                "classifier input cannot fit the provider budget",
+                prompt,
+                system_prompt,
+                failure_reason="unsupported_input",
+            )._replace(classifier_input_telemetry=budgeted.telemetry)
+        breaker: Final = self._classifier_circuit_breaker
+        permit: Final = breaker.acquire_permit() if breaker is not None else None
+        if breaker is not None and permit is None:
+            return self._classifier_failure_outcome(
+                "jev classifier circuit is open",
+                prompt,
+                system_prompt,
+                failure_reason="circuit_open",
+                signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
+            )._replace(classifier_input_telemetry=budgeted.telemetry)
         try:
             response: Final = await asyncio.wait_for(client.evaluate(request, timeout_s, request_kwargs), timeout_s)
             answer: Final = response.answers.get("tier")
@@ -2355,6 +2477,7 @@ class ComplexityRouter(CustomLogger):
                 cause="jev_classifier",
                 classifier_cost=verdict.cost,
                 jev_verdict=verdict,
+                classifier_input_telemetry=budgeted.telemetry,
             )
         except asyncio.CancelledError:
             if breaker is not None and permit is not None:
@@ -2369,7 +2492,7 @@ class ComplexityRouter(CustomLogger):
                 system_prompt,
                 failure_reason=_classifier_failure_reason(e),
                 error_type=type(e).__name__,
-            )
+            )._replace(classifier_input_telemetry=budgeted.telemetry)
 
     def _classifier_failure_outcome(
         self,
@@ -2513,9 +2636,10 @@ class ComplexityRouter(CustomLogger):
         """The classifier-failed outcome for classifier_fallback='default_model'.
 
         The outcome still carries a tier because ClassificationOutcome requires one, so it reports
-        the tier whose pool holds default_model, and MEDIUM when no pool does. Nothing about the
-        request produced that tier, so the pre-routing hook never logs it as the request's tier: it
-        routes this cause straight to default_model rather than picking from the tier's pool, since
+        the tier whose pool holds default_model, or the first custom tier (MEDIUM for built-in
+        tiers) when no pool does. Nothing about the request produced that tier, so the
+        pre-routing hook never logs it as the request's tier: it routes this cause straight to
+        default_model rather than picking from the tier's pool, since
         a pool with several models would otherwise land somewhere else and the point of this
         fallback is a known destination when classification failed.
 
@@ -2528,14 +2652,11 @@ class ComplexityRouter(CustomLogger):
         """
         default_model: Final = self.config.default_model
         pools: Final = self._tier_pools()
-        tier: Final = next(
-            (
-                candidate
-                for candidate in self.config.active_tier_severity_order()
-                if default_model in pools.get(candidate.value, ())
-            ),
-            ComplexityTier.MEDIUM,
+        name: Final = next(
+            (candidate for candidate in self.config.tier_names() if default_model in pools.get(candidate, ())),
+            self.config.tier_names()[0] if self.config.has_custom_tiers else ComplexityTier.MEDIUM.value,
         )
+        tier: Final = name if self.config.has_custom_tiers else ComplexityTier(name)
         return ClassificationOutcome(
             tier=tier, score=None, signals=("classifier-failed:default-model",), cause="default_model_fallback"
         )
@@ -2562,6 +2683,7 @@ class ComplexityRouter(CustomLogger):
         messages: Sequence[Mapping[str, object]] | None,
         *,
         encrypted_task: bool = False,
+        current_ask_for_history: str | None = None,
     ) -> str:
         include_assistant: Final = self.config.classifier_context_include_assistant_turns
         marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
@@ -2569,7 +2691,7 @@ class ComplexityRouter(CustomLogger):
         prior_turns: Final = (
             _extract_prior_turns(
                 messages,
-                current_ask=prompt,
+                current_ask=prompt if current_ask_for_history is None else current_ask_for_history,
                 window_size=self.config.classifier_context_window_size,
                 budget_chars=self.config.classifier_context_budget_chars,
                 per_turn_chars=self.config.classifier_context_per_turn_chars,
@@ -2828,10 +2950,8 @@ class ComplexityRouter(CustomLogger):
             "originating_request_masked": masked_originating_request(request_kwargs),
             "body": {"model": llm_config.model, **payload},
         }
-        classify: Final = (
-            self.litellm_router_instance.aresponses
-            if encrypted_task is not None
-            else self.litellm_router_instance.acompletion
+        classify: Final[Callable[..., Awaitable[ModelResponse | ResponsesAPIResponse]]] = (  # pyright: ignore[reportAssignmentType]  # the context forwards the router endpoints untyped, non-streaming calls return these
+            self.ctx.aresponses if encrypted_task is not None else self.ctx.acompletion
         )
 
         classifier_timeout_s: Final[float] = llm_config.timeout_ms / 1000
@@ -2968,7 +3088,9 @@ class ComplexityRouter(CustomLogger):
 
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
 
-    def _litellm_params_for_model(self, tier: ComplexityTier | str | None, model: str) -> Mapping[str, object]:
+    def _litellm_params_for_model(
+        self, tier: ComplexityTier | str | None, model: str, request_kwargs: Mapping[str, object]
+    ) -> Mapping[str, object]:
         entries: Final = self.config.tier_model_configs.get(_tier_name(tier), ()) if tier is not None else ()
         entry: Final = next((candidate for candidate in entries if candidate.model_name == model), None)
         explicit: Final = entry.litellm_params if entry is not None else MappingProxyType({})
@@ -2977,7 +3099,12 @@ class ComplexityRouter(CustomLogger):
         ceiling: Final = self._group_output_ceiling(model)
         if ceiling is None:
             return explicit
-        return MappingProxyType({**explicit, "max_tokens": ceiling})
+        callers_cap: Final = (
+            _callers_output_cap(request_kwargs) if self.config.max_tokens_from_tier_model == "clamp" else None
+        )
+        return MappingProxyType(
+            {**explicit, "max_tokens": ceiling if callers_cap is None else min(callers_cap, ceiling)}
+        )
 
     @staticmethod
     def _pick_from_tier_value(model: str | Sequence[str], tier_key: str) -> str:
@@ -3023,7 +3150,7 @@ class ComplexityRouter(CustomLogger):
             + hashlib.sha256(json.dumps(cache_identity).encode()).hexdigest()
         )
         winner: Final = await claim_affinity_pin(
-            self.litellm_router_instance.cache,
+            self.ctx.health().store,
             cache_key,
             MappingProxyType({"model": model}),
             self.config.session_affinity_ttl_seconds,
@@ -3115,17 +3242,14 @@ class ComplexityRouter(CustomLogger):
 
         model_to_prefs: Final[dict[str, AdaptiveRouterPreferences]] = {}
         model_to_cost: Final[dict[str, float]] = {}
-        model_list: Final = getattr(self.litellm_router_instance, "model_list", None) or []
-        name_to_indices: Final = getattr(self.litellm_router_instance, "model_name_to_deployment_indices", {}) or {}
         for name in available_models:
-            indices = name_to_indices.get(name, [])
-            if not indices:
+            deployments = self.ctx.registry().deployments(name, source="named")
+            if not deployments:
                 model_to_prefs[name] = AdaptiveRouterPreferences(quality_tier=2, strengths=[])
                 model_to_cost[name] = 0.0
                 continue
-            deployment = model_list[indices[0]]
-            mi = deployment.get("model_info") if isinstance(deployment, dict) else deployment.model_info
-            mi_dict: dict[str, Any] = mi if isinstance(mi, dict) else (mi.model_dump() if mi else {})
+            deployment = deployments[0]
+            mi_dict: dict[str, Any] = deployment.get("model_info") or {}
             prefs_raw = mi_dict.get("adaptive_router_preferences")
             if prefs_raw is not None:
                 model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
@@ -3133,9 +3257,7 @@ class ComplexityRouter(CustomLogger):
                 model_to_prefs[name] = AdaptiveRouterPreferences(quality_tier=2, strengths=[])
 
             # model_info is the conventional pricing location elsewhere in LiteLLM; litellm_params wins if set.
-            lp = deployment.get("litellm_params") if isinstance(deployment, dict) else deployment.litellm_params
-            lp_dict: dict[str, Any] = lp if isinstance(lp, dict) else (lp.model_dump() if lp else {})
-            cost = lp_dict.get("input_cost_per_token")
+            cost = deployment.get("litellm_params", {}).get("input_cost_per_token")
             if cost is None:
                 cost = mi_dict.get("input_cost_per_token")
             model_to_cost[name] = float(cost) if cost is not None else 0.0
@@ -3319,8 +3441,8 @@ class ComplexityRouter(CustomLogger):
 
     def _active_tier_severity(self, tier: ComplexityTier | str) -> int:
         """Position of a tier in the active severity order: TIER_SEVERITY_ORDER for the built-in
-        set, tier_definitions list order (ascending) for a custom set -- the same order
-        keyword_tier_rules resolve severity against."""
+        set, tier_definitions list order or inferred mapping order (ascending) for a custom set --
+        the same order keyword_tier_rules resolve severity against."""
         return self.config.tier_names().index(_tier_name(tier))
 
     def _matched_plan_mode_signal(
@@ -3401,7 +3523,7 @@ class ComplexityRouter(CustomLogger):
         ):
             return None
         try:
-            model_info: Final = self.litellm_router_instance.get_router_model_info(
+            model_info: Final = self.ctx.registry().router_model_info(
                 deployment=cast(dict, deployment),  # cast-ok: router deployments are plain dicts
                 received_model_name=group,
             )
@@ -3411,8 +3533,7 @@ class ComplexityRouter(CustomLogger):
         return limit if isinstance(limit, int) else None
 
     def _group_deployments(self, group: str) -> Sequence[Mapping[str, object]]:
-        list_models: Final = getattr(self.litellm_router_instance, "get_model_list", None)
-        deployments: Final = list_models(model_name=group) if callable(list_models) else None
+        deployments: Final = self.ctx.registry().deployments(model_name=group)
         return tuple(deployments) if isinstance(deployments, list) else ()
 
     def _group_output_ceiling(self, group: str) -> int | None:
@@ -3683,7 +3804,7 @@ class ComplexityRouter(CustomLogger):
                 return declared is True
             return model_verdict((deployment.get("litellm_params") or EMPTY_MAPPING).get("model") or model_name)
 
-        deployments: Final = self.litellm_router_instance.get_model_list(model_name=model_name)
+        deployments: Final = self.ctx.registry().deployments(model_name=model_name)
         if not deployments:
             return (model_verdict(model_name),)
         return tuple(deployment_verdict(deployment) for deployment in deployments)
@@ -3713,7 +3834,7 @@ class ComplexityRouter(CustomLogger):
         response: PreRoutingHookResponse,
         messages: list[dict[str, object]] | None,  # mutable-ok: forwarded verbatim to the list-typed re-pick
         resolved_messages: Sequence[Mapping[str, object]] | None,
-        request_kwargs: dict,  # mutable-ok: same shape the hook receives
+        request_kwargs: dict[str, object],  # mutable-ok: same shape the hook receives
         context_fit: _RequestContextFit | None = None,
         retained_pin: _SessionAffinityPin | None = None,
     ) -> PreRoutingHookResponse:
@@ -3810,7 +3931,7 @@ class ComplexityRouter(CustomLogger):
             conversation_continuing=bool(decision.get("conversation_continuing", True))
             if decision is not None
             else True,
-            tier_litellm_params=self._litellm_params_for_model(new_tier, new_model),
+            tier_litellm_params=self._litellm_params_for_model(new_tier, new_model, request_kwargs),
             context_escalation_original_tier=(
                 decision.get("context_escalation_original_tier") if decision is not None else None
             ),
@@ -3821,7 +3942,7 @@ class ComplexityRouter(CustomLogger):
         return HookResponse(
             model=new_model,
             messages=response.messages,
-            litellm_params=self._litellm_params_for_model(new_tier, new_model),
+            litellm_params=self._litellm_params_for_model(new_tier, new_model, request_kwargs),
             routing_decision=new_decision,
         )
 
@@ -3849,7 +3970,7 @@ class ComplexityRouter(CustomLogger):
         model_name: str,
         messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to the router's own probe
         input: str | list | None,  # mutable-ok: mirrors the owner's own input parameter, which this forwards verbatim
-        request_kwargs: dict,  # mutable-ok: same shape the hook receives
+        request_kwargs: dict[str, object],  # mutable-ok: same shape the hook receives
     ) -> bool:
         """Whether the router would find a deployment for this group ON THIS REQUEST.
 
@@ -3880,9 +4001,10 @@ class ComplexityRouter(CustomLogger):
 
         probe_kwargs: Final = dict(request_kwargs)
         try:
-            deployments: Final = await self.litellm_router_instance.async_get_healthy_deployments(
-                model=model_name,
-                request_kwargs=probe_kwargs,
+            deployments: Final = await self.ctx.select(
+                model_name,
+                probe_kwargs,
+                kind="healthy",
                 messages=messages,
                 input=input,
                 parent_otel_span=get_parent_otel_span_from_kwargs(request_kwargs),
@@ -3907,7 +4029,7 @@ class ComplexityRouter(CustomLogger):
         messages: list[dict[str, object]] | None,  # mutable-ok: forwarded verbatim to the list-typed re-pick
         input: str | list | None,  # mutable-ok: mirrors the owner's own input parameter, which this forwards verbatim
         resolved_messages: Sequence[Mapping[str, object]] | None,
-        request_kwargs: dict,  # mutable-ok: same shape the hook receives
+        request_kwargs: dict[str, object],  # mutable-ok: same shape the hook receives
         context_fit: _RequestContextFit | None = None,
         retained_pin: _SessionAffinityPin | None = None,
     ) -> PreRoutingHookResponse:
@@ -3990,14 +4112,14 @@ class ComplexityRouter(CustomLogger):
                         classifier_model=decision.get("classifier_model"),
                         classifier_cost=decision.get("classifier_cost"),
                         conversation_continuing=bool(decision.get("conversation_continuing", True)),
-                        tier_litellm_params=self._litellm_params_for_model(candidate_tier, new_model),
+                        tier_litellm_params=self._litellm_params_for_model(candidate_tier, new_model, request_kwargs),
                         context_escalation_original_tier=decision.get("context_escalation_original_tier"),
                         previous_decision=decision,
                     )
                     return response.model_copy(
                         update={
                             "model": new_model,
-                            "litellm_params": self._litellm_params_for_model(candidate_tier, new_model),
+                            "litellm_params": self._litellm_params_for_model(candidate_tier, new_model, request_kwargs),
                             "routing_decision": new_decision,
                         }
                     )
@@ -4035,14 +4157,14 @@ class ComplexityRouter(CustomLogger):
             classifier_model=decision.get("classifier_model"),
             classifier_cost=decision.get("classifier_cost"),
             conversation_continuing=bool(decision.get("conversation_continuing", True)),
-            tier_litellm_params=self._litellm_params_for_model(None, default_model),
+            tier_litellm_params=self._litellm_params_for_model(None, default_model, request_kwargs),
             context_escalation_original_tier=decision.get("context_escalation_original_tier"),
             previous_decision=decision,
         )
         return response.model_copy(
             update={
                 "model": default_model,
-                "litellm_params": self._litellm_params_for_model(None, default_model),
+                "litellm_params": self._litellm_params_for_model(None, default_model, request_kwargs),
                 "routing_decision": default_decision,
             }
         )
@@ -4121,7 +4243,7 @@ class ComplexityRouter(CustomLogger):
         routelayer: Final = SemanticRouter(
             routes=routes,
             encoder=LiteLLMRouterEncoder(
-                litellm_router_instance=self.litellm_router_instance,
+                ctx=self.ctx,
                 model_name=embedding_model,
                 score_threshold=self.config.match_threshold,
             ),
@@ -4257,33 +4379,65 @@ class ComplexityRouter(CustomLogger):
     def _reminder_markers_for_request(self, request_kwargs: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
         if self.config.reminder_markers is not None:
             return self._reminder_markers
-        if any(
+        return _CODEX_REMINDER_MARKERS if self._is_codex_request(request_kwargs) else _DEFAULT_REMINDER_MARKERS
+
+    @staticmethod
+    def _is_codex_request(request_kwargs: Mapping[str, object]) -> bool:
+        return any(
             is_codex_user_agent(user_agent)
             for metadata_key in ("litellm_metadata", "metadata")
             if isinstance(metadata := request_kwargs.get(metadata_key), Mapping)
             if isinstance(user_agent := metadata.get("user_agent"), str)
-        ):
-            return _CODEX_REMINDER_MARKERS
-        return _DEFAULT_REMINDER_MARKERS
+        )
+
+    def _is_codex_compaction_lifecycle(
+        self,
+        request_kwargs: Mapping[str, object],
+        resolved_messages: Sequence[Mapping[str, object]] | None,
+        marker_pairs: tuple[tuple[str, str], ...],
+    ) -> bool:
+        """Codex's compaction call and the first request after it carry a synthetic user turn (the
+        summarization prompt, then the summary), so `user_turn` must read both as continuations."""
+        if _is_codex_compaction_request(request_kwargs):
+            return True
+        if not resolved_messages or not self._is_codex_request(request_kwargs):
+            return False
+        newest_ask: Final = _newest_turn_ask(resolved_messages, marker_pairs)
+        return newest_ask is not None and newest_ask.startswith(_CODEX_COMPACTION_SUMMARY_PREFIX)
 
     @staticmethod
-    def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
+    def _iter_metadata_dicts(request_kwargs: Mapping[str, object]) -> list[Mapping[str, object]]:
         """Metadata may land on `metadata` or `litellm_metadata` depending on the
         endpoint, mirroring DeploymentAffinityCheck's precedence."""
         return [
-            metadata
+            cast(Mapping[str, object], metadata)  # cast-ok: request metadata is a str-keyed JSON object
             for metadata_key in ("litellm_metadata", "metadata")
             if isinstance(metadata := request_kwargs.get(metadata_key), dict)
         ]
 
     @staticmethod
-    def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
+    def _get_session_id_from_request_kwargs(request_kwargs: Mapping[str, object]) -> str | None:
         """Resolve a client-supplied session_id."""
         for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
             session_id = metadata.get("session_id")
             if session_id is not None and not metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
                 return str(session_id)
         return None
+
+    def _get_tier_pin_session_id(self, request_kwargs: Mapping[str, object]) -> str | None:
+        if self.config.classification_mode == "user_turn" and not self.config.session_affinity:
+            child_metadata: Final = next(
+                (
+                    metadata
+                    for metadata in self._iter_metadata_dicts(request_kwargs)
+                    if COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY in metadata
+                ),
+                None,
+            )
+            if child_metadata is not None:
+                child_session: Final = child_metadata[COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY]
+                return child_session if isinstance(child_session, str) and child_session else None
+        return self._get_session_id_from_request_kwargs(request_kwargs)
 
     @staticmethod
     def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict) -> str | None:
@@ -4369,20 +4523,29 @@ class ComplexityRouter(CustomLogger):
         conversation_continuing: Final = _conversation_is_continuing(resolved_messages)
 
         use_session_affinity: Final = self._uses_tier_pin
-        session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
+        session_id: Final = self._get_tier_pin_session_id(request_kwargs) if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
         # In 'user_turn' mode a held pin is replayed only on continuation turns; a new human
         # ask falls through and re-classifies. session_affinity restores pin-first for asks too.
-        pin_replay_allowed: Final = bool(self.config.session_affinity) or not _newest_turn_is_human_ask(
-            resolved_messages, marker_pairs
+        codex_compaction: Final = self._is_codex_compaction_lifecycle(request_kwargs, resolved_messages, marker_pairs)
+        pin_replay_allowed: Final = (
+            bool(self.config.session_affinity)
+            or not _newest_turn_is_human_ask(resolved_messages, marker_pairs)
+            or codex_compaction
         )
 
         if cache_key is not None and pin_replay_allowed:
-            pinned_value: Final = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
+            pinned_value: Final = await read_affinity_pin(
+                self.ctx.health().store, cache_key, self.config.session_affinity_ttl_seconds
+            )
             pinned_pin: Final = _parse_session_affinity_pin(pinned_value, self.config.tier_names())
             if pinned_pin is not None:
-                user_message: Final = _newest_turn_ask(resolved_messages, marker_pairs) if resolved_messages else None
+                user_message: Final = (
+                    _newest_turn_ask(resolved_messages, marker_pairs)
+                    if resolved_messages and not codex_compaction
+                    else None
+                )
                 pin_escalation_keyword: Final = (
                     self._matched_escalation_keyword(user_message) if user_message is not None else None
                 )
@@ -4472,13 +4635,12 @@ class ComplexityRouter(CustomLogger):
                         if pin_placement is not None and pin_context_original_tier is not None
                         else floor_model
                     )
-                    # Refresh the TTL on every hit so an active session doesn't lose its
-                    # pin mid-conversation just because it outlives the original write.
-                    await self.litellm_router_instance.cache.async_set_cache(
-                        key=cache_key,
-                        value=_session_affinity_cache_value(session_model, resolved_pin_tier),
-                        ttl=self.config.session_affinity_ttl_seconds,
-                    )
+                    if escalated:
+                        await self.ctx.health().store.async_set_cache(
+                            key=cache_key,
+                            value=_session_affinity_cache_value(session_model, resolved_pin_tier),
+                            ttl=self.config.session_affinity_ttl_seconds,
+                        )
                     if self.config.adaptive:
                         from litellm.router_strategy.adaptive_router.config import (
                             ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
@@ -4501,7 +4663,9 @@ class ComplexityRouter(CustomLogger):
                         if pin_placement is not None and pin_context_original_tier is not None
                         else pin_source_tier
                     )
-                    session_tier_litellm_params: Final = self._litellm_params_for_model(routed_pin_tier, routed_model)
+                    session_tier_litellm_params: Final = self._litellm_params_for_model(
+                        routed_pin_tier, routed_model, request_kwargs
+                    )
                     has_original_messages: Final = messages is not None and len(messages) > 0
                     return self._with_session_deployment_affinity(
                         await self._gate_response_health(
@@ -4575,7 +4739,7 @@ class ComplexityRouter(CustomLogger):
             and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
         )
         if pinnable and cache_key is not None and response is not None:
-            await self.litellm_router_instance.cache.async_set_cache(
+            await self.ctx.health().store.async_set_cache(
                 key=cache_key,
                 value=_session_affinity_cache_value(
                     response.model,
@@ -4597,16 +4761,16 @@ class ComplexityRouter(CustomLogger):
         from litellm.proxy.common_utils.cache_aware_routing import choose_cached_model
 
         choice: Final = await choose_cached_model(
-            router=self.litellm_router_instance,
+            ctx=self.ctx,
             config=self.config,
-            params_for_model=self._litellm_params_for_model,
+            params_for_model=partial(self._litellm_params_for_model, request_kwargs=request_kwargs),
             response=response,
             request_kwargs=request_kwargs,
             messages=messages,
         )
         if choice is None or not context_fit.accepts(choice.model):
             return response
-        params: Final = self._litellm_params_for_model(choice.tier, choice.model)
+        params: Final = self._litellm_params_for_model(choice.tier, choice.model, request_kwargs)
         decision: Final[StandardLoggingRoutingDecision] = {
             **response.routing_decision,
             "routed_model": choice.model,
@@ -4635,7 +4799,7 @@ class ComplexityRouter(CustomLogger):
     async def _classify_and_route(
         self,
         model: str,
-        request_kwargs: dict,
+        request_kwargs: dict[str, object],
         messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
@@ -4693,7 +4857,7 @@ class ComplexityRouter(CustomLogger):
                     ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs
                 )
             fallback_tier: Final = None if default_model_first else ComplexityTier.MEDIUM
-            default_tier_params: Final = self._litellm_params_for_model(fallback_tier, routed_model)
+            default_tier_params: Final = self._litellm_params_for_model(fallback_tier, routed_model, request_kwargs)
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
@@ -4731,7 +4895,7 @@ class ComplexityRouter(CustomLogger):
                 _tier_name(plan_floor),
                 routed_model,
             )
-            plan_tier_params: Final = self._litellm_params_for_model(plan_floor, routed_model)
+            plan_tier_params: Final = self._litellm_params_for_model(plan_floor, routed_model, request_kwargs)
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
@@ -4760,7 +4924,9 @@ class ComplexityRouter(CustomLogger):
             )
             keyword_plan_floored: Final = routed_tier != escalated_tier
             routed_model = await self._pick_model_for_tier(routed_tier, messages, resolved_messages, request_kwargs)
-            keyword_tier_litellm_params: Final = self._litellm_params_for_model(routed_tier, routed_model)
+            keyword_tier_litellm_params: Final = self._litellm_params_for_model(
+                routed_tier, routed_model, request_kwargs
+            )
             keyword_cause: Final[RoutingDecisionCause] = (
                 "plan_mode"
                 if keyword_plan_floored
@@ -4821,7 +4987,8 @@ class ComplexityRouter(CustomLogger):
         fallback_model: Final = self.config.default_model if not self.config.plugins else None
         # A sentinel-carrying request skips the failure exit below, whether or not the floor
         # moved the tier: default_model carries no tier guarantee (its placeholder tier is the
-        # pool that holds it, or MEDIUM when none does), so a placeholder at or above the floor
+        # pool that holds it, or the first custom tier / MEDIUM when none does), so a placeholder
+        # at or above the floor
         # would otherwise route a plan-mode request to a model the floor cannot vouch for. The
         # clamped tier's pool is the destination the floor can guarantee.
         if outcome.cause == "default_model_fallback" and fallback_model is not None and plan_mode_sentinel is None:
@@ -4840,20 +5007,23 @@ class ComplexityRouter(CustomLogger):
                 outcome.signals,
                 fallback_model,
             )
-            fallback_tier_params: Final = self._litellm_params_for_model(None, fallback_model)
+            fallback_tier_params: Final = self._litellm_params_for_model(None, fallback_model, request_kwargs)
             return PreRoutingHookResponse(
                 model=fallback_model,
                 messages=messages if has_original_messages else None,
-                routing_decision=self._build_routing_decision(
-                    routed_model=fallback_model,
-                    conversation_continuing=conversation_continuing,
-                    cause=outcome.cause,
-                    signals=outcome.signals,
-                    classifier_failure_reason=outcome.classifier_failure_reason,
-                    classifier_error_type=outcome.classifier_error_type,
-                    escalation_keyword=escalation_keyword,
-                    escalated=False,
-                    tier_litellm_params=fallback_tier_params,
+                routing_decision=_with_classifier_forecast(
+                    self._build_routing_decision(
+                        routed_model=fallback_model,
+                        conversation_continuing=conversation_continuing,
+                        cause=outcome.cause,
+                        signals=outcome.signals,
+                        classifier_failure_reason=outcome.classifier_failure_reason,
+                        classifier_error_type=outcome.classifier_error_type,
+                        escalation_keyword=escalation_keyword,
+                        escalated=False,
+                        tier_litellm_params=fallback_tier_params,
+                    ),
+                    outcome,
                 ),
                 litellm_params=fallback_tier_params,
             )
@@ -4922,7 +5092,7 @@ class ComplexityRouter(CustomLogger):
                 routed_model,
             )
 
-        tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model)
+        tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model, request_kwargs)
         classifier_model: Final = (
             f"{outcome.jev_verdict.provider}/{outcome.jev_verdict.model}"
             if outcome.cause == "jev_classifier" and outcome.jev_verdict is not None

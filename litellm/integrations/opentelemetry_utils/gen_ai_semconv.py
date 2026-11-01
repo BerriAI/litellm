@@ -35,6 +35,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm.integrations.otel.mappers.utils import drop_none
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 if TYPE_CHECKING:
@@ -148,8 +149,11 @@ class OTELGenAISemconvMixin:
         """Map a LiteLLM ``call_type`` to spec ``gen_ai.operation.name``.
 
         Substring match (e.g. ``aembedding`` -> ``embeddings``); defaults to
-        ``chat``.
+        ``chat``. A pass-through call's operation, stored under ``PASSTHROUGH_OPERATION_KEY``, wins.
         """
+        passthrough_operation: Final = kwargs.get(PASSTHROUGH_OPERATION_KEY)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # kwargs is an untyped dict
+        if isinstance(passthrough_operation, GenAIOperation):
+            return passthrough_operation.value
         call_type: Final = kwargs.get("call_type", "") or ""
         match call_type:
             case s if "embedding" in s:

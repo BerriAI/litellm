@@ -3,9 +3,11 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { PasswordInput } from "@/components/shared/PasswordInput";
+import { Input } from "@/components/ui/input";
+import { MultiSelect } from "@/components/shared/MultiSelect";
 import DcrBridgeToggle from "./DcrBridgeToggle";
 import { MountedFormField } from "@/components/common_components/MountedFormField";
-import { textControl } from "./mcpFieldRules";
+import { tagsControl, textControl } from "./mcpFieldRules";
 import { credentialAuthClass, isClientForwardedTokenMode } from "@/components/mcp_tools/types";
 
 interface PassthroughOAuthFlow {
@@ -69,6 +71,7 @@ export default function PassthroughAuthorizeSection({
   const clientSecretPlaceholder = classUnchanged
     ? "Leave blank to keep the currently saved secret (if any)"
     : "Leave blank for public clients / PKCE";
+  const fieldClassName = "rounded-lg border-border focus:border-info focus:ring-ring";
   const clientIdExtra = classUnchanged
     ? "Set this to make everyone authorize through a specific app; required for upstreams without dynamic client registration (e.g. a pre-registered Slack app)."
     : "Switching the auth type discards the previously saved app; enter a client ID here or leave blank to use dynamic client registration.";
@@ -112,6 +115,39 @@ export default function PassthroughAuthorizeSection({
             groupClassName="rounded-lg border-border focus:border-info focus:ring-ring"
           />
         )}
+      </MountedFormField>
+      <MountedFormField
+        label={<span className="text-sm font-medium text-foreground">Authorization URL (optional)</span>}
+        name="authorization_url"
+        help="Set this when the upstream publishes no OAuth metadata, for example an internal server behind Microsoft Entra. Leave blank to discover it from the upstream."
+      >
+        {(control) => (
+          <Input
+            {...textControl(control)}
+            placeholder="https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/authorize"
+            className={fieldClassName}
+          />
+        )}
+      </MountedFormField>
+      <MountedFormField
+        label={<span className="text-sm font-medium text-foreground">Token URL (optional)</span>}
+        name="token_url"
+        help="Token endpoint of the same authorization server. Leave blank to discover it from the upstream."
+      >
+        {(control) => (
+          <Input
+            {...textControl(control)}
+            placeholder="https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token"
+            className={fieldClassName}
+          />
+        )}
+      </MountedFormField>
+      <MountedFormField
+        label={<span className="text-sm font-medium text-foreground">Scopes (optional)</span>}
+        name={["credentials", "scopes"]}
+        help="Scopes requested from the upstream when a user authorizes. Press enter or comma between scopes."
+      >
+        {(control) => <MultiSelect {...tagsControl(control)} placeholder="Add scopes" className="rounded-lg" />}
       </MountedFormField>
       <DcrBridgeToggle authType={authType} initialChecked={dcrBridgeInitialChecked} />
       {isEditing && onRemoveStoredAppChange && (

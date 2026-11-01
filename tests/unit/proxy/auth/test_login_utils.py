@@ -9,8 +9,9 @@ import hashlib
 import os
 from collections.abc import Mapping
 from contextlib import ExitStack
-from typing import TYPE_CHECKING, Final
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -638,10 +639,10 @@ class TestEncodeUiSessionJwt:
         this helper must now be accepted."""
         from unittest.mock import MagicMock
 
-        from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
+        from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+        from litellm.proxy.mcp_server.byok_oauth_endpoints import (
             user_id_from_session_cookie,
         )
-        from litellm.proxy.auth.login_utils import encode_ui_session_jwt
 
         token_object = {"user_id": "cornell-user", "key": "sk-abc", "login_method": "sso"}
         with patch("litellm.proxy.auth.login_utils.LITELLM_UI_SESSION_DURATION", "24h"):
@@ -676,6 +677,12 @@ def _throttle(
         blocks=blocks,
         redis_cache=redis_cache,
     )
+
+
+def _set_throttle_clock(monkeypatch: pytest.MonkeyPatch, now: float) -> None:
+    from litellm.proxy.auth import login_throttle
+
+    monkeypatch.setattr(login_throttle, "time", SimpleNamespace(time=lambda: now))
 
 
 def _stores():
@@ -756,12 +763,14 @@ async def test_too_many_failures_for_one_username_block_that_pair_and_carry_retr
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
+    _set_throttle_clock(monkeypatch, 1_000.0)
     throttle = _throttle(user_limit=2, block_seconds=77)
     keys = throttle._keys("admin")
 
     assert [await _fail(throttle) for _ in range(3)] == ["401", "401", "401"], "the limit itself is a plain 401"
     assert throttle._local_block_ttl(keys.pair_block) == 77
 
+    _set_throttle_clock(monkeypatch, 1_000.6)
     with pytest.raises(ProxyException) as blocked:
         await _guess(throttle)
     assert blocked.value.code == "429"
@@ -814,10 +823,12 @@ async def test_a_correct_password_is_refused_while_its_pair_is_blocked(monkeypat
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
     monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
+    _set_throttle_clock(monkeypatch, 1_000.0)
     throttle = _throttle(user_limit=1, block_seconds=90)
 
     assert [await _fail(throttle, username="user@corp.com") for _ in range(3)] == ["401", "401", "429"]
 
+    _set_throttle_clock(monkeypatch, 1_000.6)
     with pytest.raises(ProxyException) as refused:
         await _db_login(throttle, "user@corp.com", "right", correct=True)
     assert refused.value.code == "429"
@@ -1328,12 +1339,14 @@ async def test_a_source_block_outranks_a_pair_block_in_the_retry_after(monkeypat
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
+    _set_throttle_clock(monkeypatch, 1_000.0)
     throttle = _throttle(user_limit=1, source_limit=3, block_seconds=120, client_ip="203.0.113.45")
     assert [await _fail(throttle) for _ in range(2)] == ["401", "401"], "the admin pair is now blocked"
     throttle.blocks.set_cache(throttle._keys("admin").pair_block, 1, ttl=30)
     assert [await _fail(throttle, username=f"spray-{i}@corp.com") for i in range(3)] == ["401"] * 3
     assert throttle._local_block_ttl(throttle._keys("admin").source_block) == 120, "the source is now blocked too"
 
+    _set_throttle_clock(monkeypatch, 1_000.6)
     for name in ("admin", "spray-0@corp.com", "never-seen@corp.com"):
         with pytest.raises(ProxyException) as refused:
             await _guess(throttle, username=name)
@@ -1457,6 +1470,7 @@ async def test_a_redis_outage_falls_back_to_this_workers_own_counter(monkeypatch
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
+    _set_throttle_clock(monkeypatch, 1_000.0)
     throttle = _throttle(user_limit=2, block_seconds=300, redis_cache=_DownRedis())
 
     records: list[logging.LogRecord] = []
@@ -1465,6 +1479,7 @@ async def test_a_redis_outage_falls_back_to_this_workers_own_counter(monkeypatch
     verbose_proxy_logger.addHandler(handler)
     try:
         assert [await _fail(throttle) for _ in range(3)] == ["401"] * 3
+        _set_throttle_clock(monkeypatch, 1_000.6)
         with pytest.raises(ProxyException) as blocked:
             await _guess(throttle)
     finally:
@@ -2144,7 +2159,7 @@ class TestPasswordResetRequiredSessionMinting:
         row = _db_user_row(password="Str0ng!Passw0rd", password_reset_required=True)
         result, key_kwargs = await self._login(_prisma_with_user(row))
 
-        assert key_kwargs["allowed_routes"] == ["/user/password/change", "/session/logout"]
+        assert key_kwargs["allowed_routes"] == ["/user/password/change", "/session/logout", "/management/v1/users/me"]
         assert key_kwargs["metadata"] == {"login_method": "username_password", "password_reset_required": True}
         assert result.password_reset_required is True
 
@@ -2205,7 +2220,7 @@ class TestPasswordResetRequiredSessionMinting:
 
         result, key_kwargs, _ = await self._login_with_screen_result(mock_prisma_client, breached=True)
 
-        assert key_kwargs["allowed_routes"] == ["/user/password/change", "/session/logout"]
+        assert key_kwargs["allowed_routes"] == ["/user/password/change", "/session/logout", "/management/v1/users/me"]
         assert key_kwargs["metadata"] == {"login_method": "username_password", "password_reset_required": True}
         assert result.password_reset_required is True
 

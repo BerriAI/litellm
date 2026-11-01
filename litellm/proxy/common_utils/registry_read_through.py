@@ -15,12 +15,13 @@ or the first routed request on this replica would pick a tier it has not loaded.
 import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 
 if TYPE_CHECKING:
@@ -33,7 +34,13 @@ if TYPE_CHECKING:
     )
 
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.repositories.prisma_protocols import TableActions
     from litellm.types.agents import AgentResponse
+
+    _ModelTable: TypeAlias = TableActions[prisma_models.LiteLLM_ProxyModelTable]
+    _ModelRows: TypeAlias = Sequence[prisma_models.LiteLLM_ProxyModelTable]
+
+ModelLoadOutcome: TypeAlias = Literal["loaded", "missing", "no_router", "auto_router"]
 
 READ_THROUGH_MISS_TTL_SECONDS: Final = 2.0
 READ_THROUGH_RESYNC_WINDOW_SECONDS: Final = 5.0
@@ -123,47 +130,114 @@ async def _resync_model_deployments(model_name: str) -> bool:
         return False
     prisma_client: Final = proxy_server.prisma_client
     assert prisma_client is not None
-    table: Final = ModelRepository(prisma_client).table
-    name_filter: Final[LiteLLM_ProxyModelTableWhereInput] = {"model_name": model_name}
-    id_filter: Final[LiteLLM_ProxyModelTableWhereInput] = {"model_id": model_name}
-    rows: Final = await table.find_many(where=name_filter) or await table.find_many(where=id_filter)
+    rows: Final = await _find_rows_by_name_or_id(model_name, ModelRepository(prisma_client).table)
     if not rows:
         return False
-    router: Final = proxy_server.llm_router
-    if router is None:
-        await proxy_server.proxy_config.add_deployment(
-            prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
-        )
-        return proxy_server.llm_router is not None
-    if _holds_an_auto_router(rows):
-        await proxy_server.proxy_config.add_deployment(
-            prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
-        )
-        return _model_is_loaded(model_name)
     async with proxy_server.MODEL_RECONCILE_LOCK:
+        outcome: Final = await _install_model_rows(rows, _always)
+    if outcome in ("no_router", "auto_router"):
+        await _reload_every_model()
+    return outcome == "loaded" or _model_is_loaded(model_name)
+
+
+async def resync_model_deployments_by_ids(model_ids: tuple[str, ...]) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+    from litellm.repositories.model_repository import ModelRepository
+
+    if not _db_backed_registries_enabled("models"):
+        return
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
+    writer_table: Final = ModelRepository(WriterPinnedClient(prisma_client.db)).table
+    async with proxy_server.MODEL_RECONCILE_LOCK:
+        rows: Final = await _find_rows_by_ids(model_ids, writer_table)
+        _ = await _install_model_rows(_without_auto_routers(rows), _names_an_unloaded_credential)
+
+
+async def _find_rows_by_name_or_id(model_name: str, table: "_ModelTable") -> "_ModelRows":
+    name_filter: Final[LiteLLM_ProxyModelTableWhereInput] = {"model_name": model_name}
+    id_filter: Final[LiteLLM_ProxyModelTableWhereInput] = {"model_id": model_name}
+    return await table.find_many(where=name_filter) or await table.find_many(where=id_filter)
+
+
+async def _find_rows_by_ids(model_ids: tuple[str, ...], table: "_ModelTable") -> "_ModelRows":
+    from litellm.repositories.chunked_in import find_many_in
+
+    return list(await find_many_in(table, "model_id", model_ids))
+
+
+async def _install_model_rows(
+    rows: "_ModelRows",
+    needs_credentials: Callable[["_ModelRows"], bool],
+) -> ModelLoadOutcome:
+    from litellm.proxy import proxy_server
+
+    router: Final = proxy_server.llm_router
+    if not rows:
+        return "missing"
+    if router is None:
+        return "no_router"
+    if _holds_an_auto_router(rows):
+        return "auto_router"
+    if needs_credentials(rows):
+        prisma_client: Final = proxy_server.prisma_client
+        assert prisma_client is not None
         await proxy_server.proxy_config.get_credentials(prisma_client=prisma_client)
-        proxy_server.proxy_config._add_deployment(db_models=rows)
-        proxy_server.llm_model_list = router.get_model_list()
+    proxy_server.proxy_config._add_deployment(db_models=rows)
+    proxy_server.llm_model_list = router.registry().deployments()
+    return "loaded"
+
+
+async def _reload_every_model() -> None:
+    from litellm.proxy import proxy_server
+
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
+    await proxy_server.proxy_config.add_deployment(
+        prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
+    )
+
+
+def _always(rows: "_ModelRows") -> bool:
     return True
 
 
-def _holds_an_auto_router(rows: Sequence["prisma_models.LiteLLM_ProxyModelTable"]) -> bool:
+def _holds_an_auto_router(rows: "_ModelRows") -> bool:
     return any(_names_an_auto_router(row.litellm_params) for row in rows)
+
+
+def _without_auto_routers(rows: "_ModelRows") -> "_ModelRows":
+    return list(row for row in rows if not _names_an_auto_router(row.litellm_params))
+
+
+def _names_an_unloaded_credential(rows: "_ModelRows") -> bool:
+    return any(_names_an_unloaded_credential_param(row.litellm_params) for row in rows)
 
 
 _STORED_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
-def _names_an_auto_router(stored_litellm_params: object) -> bool:
+def _decrypted_param(stored_litellm_params: object, key: str) -> str | None:
     try:
         params: Final = _STORED_LITELLM_PARAMS.validate_python(stored_litellm_params)
     except ValidationError:
-        return False
-    stored_model: Final = params.get("model")
-    if not isinstance(stored_model, str):
-        return False
-    model: Final = decrypt_value_helper(value=stored_model, key="model", return_original_value=True)
-    return isinstance(model, str) and model.startswith("auto_router/")
+        return None
+    stored_value: Final = params.get(key)
+    if not isinstance(stored_value, str):
+        return None
+    value: Final = decrypt_value_helper(value=stored_value, key=key, return_original_value=True)
+    return value if isinstance(value, str) else None
+
+
+def _names_an_auto_router(stored_litellm_params: object) -> bool:
+    model: Final = _decrypted_param(stored_litellm_params, "model")
+    return model is not None and model.startswith("auto_router/")
+
+
+def _names_an_unloaded_credential_param(stored_litellm_params: object) -> bool:
+    credential_name: Final = _decrypted_param(stored_litellm_params, "litellm_credential_name")
+    return credential_name is not None and CredentialAccessor.find_credential(credential_name) is None
 
 
 async def _resync_guardrails(guardrail_name: str) -> bool:
@@ -231,7 +305,8 @@ def _model_is_loaded(model_name_or_id: str) -> bool:
     router: Final = proxy_server.llm_router
     if router is None:
         return False
-    return model_name_or_id in router.model_names or router.has_model_id(model_name_or_id)
+    registry: Final = router.registry()
+    return model_name_or_id in registry.names(kind="group_set") or registry.has_deployment(model_name_or_id)
 
 
 def _guardrail_is_loaded(guardrail_name: str) -> bool:

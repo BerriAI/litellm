@@ -20,7 +20,15 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    merge_consecutive_system_messages,
+    messages_with_file_parts_as_image_urls,
+    system_messages_first,
+)
+from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -51,7 +59,6 @@ from litellm.llms.oci.common_utils import (
     sign_oci_request,
     validate_oci_environment,
 )
-from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.types.llms.oci import (
     CohereChatRequest,
     OCIChatRequestPayload,
@@ -188,6 +195,7 @@ def _normalize_tool_choice(selected_params: dict) -> None:
 _TOOL_CHOICE_MODES: Final = frozenset({"auto", "none", "required", "any"})
 _TOOLS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _as_json_object(value: object) -> Mapping[str, object] | None:
@@ -425,6 +433,13 @@ class OCIChatConfig(BaseConfig):
             alias = param_map.get(key)
             if key == "reasoning_effort" and alias and not _model_supports_reasoning_effort(model):
                 if drop_params or litellm.drop_params:
+                    warn_dropped_reasoning(
+                        key,
+                        value,
+                        model,
+                        "the model map lists no reasoning_effort levels for it, so OCI would reject reasoningEffort.",
+                        drop_params_gated=True,
+                    )
                     continue
                 raise OCIError(
                     status_code=400,
@@ -448,6 +463,14 @@ class OCIChatConfig(BaseConfig):
                 if key == "n" and (value is None or value == 1):
                     continue
                 if drop_params or litellm.drop_params:
+                    if key == "reasoning_effort":
+                        warn_dropped_reasoning(
+                            key,
+                            value,
+                            model,
+                            "OCI's Cohere chat API has no reasoning effort field.",
+                            drop_params_gated=True,
+                        )
                     continue
                 raise OCIError(
                     status_code=400,
@@ -538,7 +561,7 @@ class OCIChatConfig(BaseConfig):
         stream: bool | None = None,
     ) -> str:
         base: Final = get_oci_base_url(optional_params, api_base or litellm.api_base)
-        return f"{base}/{OCI_API_VERSION}/actions/chat"
+        return join_api_base(base, f"{OCI_API_VERSION}/actions/chat")
 
     def _get_optional_params(self, vendor: OCIVendors, optional_params: dict, model: str = "") -> dict:
         param_map: Final = (
@@ -674,12 +697,18 @@ class OCIChatConfig(BaseConfig):
                 chatRequest=chat_request,
             )
         else:
+            generic_messages: Final = list(messages_with_file_parts_as_image_urls(messages))
+            normalized_messages: Final = (
+                merge_consecutive_system_messages(system_messages_first(generic_messages))
+                if model.lower().removeprefix("oci/").startswith("google.gemini")
+                else generic_messages
+            )
             data = OCICompletionPayload(
                 compartmentId=oci_compartment_id,
                 servingMode=serving_mode,
                 chatRequest=OCIChatRequestPayload(
                     apiFormat=vendor.value,
-                    messages=adapt_messages_to_generic_oci_standard(messages),
+                    messages=adapt_messages_to_generic_oci_standard(normalized_messages),
                     **self._get_optional_params(vendor, optional_params, model),
                 ),
             )
@@ -700,7 +729,7 @@ class OCIChatConfig(BaseConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        response_json: Final = raw_response.json()
+        response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
 
         if not isinstance(response_json, dict):
             raise OCIError(

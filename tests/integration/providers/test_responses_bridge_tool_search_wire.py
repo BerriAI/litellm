@@ -835,15 +835,17 @@ def test_a_claude_the_cost_map_does_not_list_gets_the_tool_dropped_on_the_anthro
         _assert_dropped_on_wire(body, _DEFERRED_NAMES)
 
 
-def test_client_execution_drops_the_tool_search_tool(gateway: Gateway) -> None:
+def test_client_execution_offers_tool_search_as_a_function_and_holds_back_the_deferred_tools(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
         tools: Final = (_tool_search(execution="client"), _function_tool(defer_loading=False), _namespace_tool())
         answer: Final = _raw_answer(gateway, _responses_body(model, marker, tools, False))
         assert _output_types(answer.payload) == ["message", "function_call"], answer
-        _, body = _only_request(wire)
-        _assert_dropped_on_wire(body, _DEFERRED_NAMES)
+        request, body = _only_request(wire)
+        assert request.target == "/v1/messages", request.target
+        _assert_dropped_on_wire(body, ("tool_search", "get_weather"))
+        assert "defer_loading" not in request.body.decode(), body
 
 
 @pytest.mark.parametrize("drop_params", [False, True], ids=["refused", "dropped"])

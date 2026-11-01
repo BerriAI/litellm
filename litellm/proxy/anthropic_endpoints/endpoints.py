@@ -2,12 +2,14 @@
 Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, Mapping
+from types import MappingProxyType
 from typing import Final
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.anthropic_interface.exceptions import (
@@ -16,11 +18,10 @@ from litellm.anthropic_interface.exceptions import (
     AnthropicExceptionMapping,
 )
 from litellm.integrations.custom_guardrail import ModifyResponseException
-from litellm.llms.anthropic.pass_through.context_management import (
+from litellm.litellm_core_utils.tool_fields import first_validation_error
+from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+from litellm.llms.anthropic.messages.context_management import (
     AnthropicContextManagementError,
-)
-from litellm.llms.base_llm.guardrail_translation.utils import (
-    blocked_response_usage as _blocked_response_usage,
 )
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -30,6 +31,7 @@ from litellm.proxy.common_request_processing import (
     log_llm_api_exception,
     proxy_exception_from_http_exception,
     proxy_exception_from_route_error,
+    resolve_counted_tool_fields,
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.error_body_call_id import error_body_call_id
@@ -40,12 +42,23 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
     error_status_code,
+    litellm_call_id_headers,
     openai_error_param,
     openai_error_type,
     with_litellm_call_id,
 )
+from litellm.proxy.common_utils.token_count_log import rejected_token_count
+from litellm.proxy.common_utils.token_count_settings import count_source_fields
+from litellm.proxy.litellm_pre_call_utils import (
+    forwarded_anthropic_oauth_token,
+    should_auto_drop_params_for_agentic_cli,
+)
+from litellm.router import Router
+from litellm.types.utils import TokenCountResponse
 
 router: Final = APIRouter()
+
+_NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 def _with_provider_specific_fields(exc: ProxyException, detail: AnthropicErrorDetail) -> AnthropicErrorDetail:
@@ -86,6 +99,31 @@ def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSO
         "error": _anthropic_error_detail(exc, envelope["error"], body_call_id),
     }
     return JSONResponse(status_code=status_code, content=content, headers=exc.headers)
+
+
+_TOKEN_COUNT_FIELDS: Final = ("model", "messages", "tools", "system")
+
+
+def _token_count_request(fields: Mapping[str, object]) -> TokenCountRequest | ProxyException:
+    try:
+        return TokenCountRequest.model_validate({name: fields[name] for name in _TOKEN_COUNT_FIELDS if name in fields})
+    except ValidationError as e:
+        return ProxyException(
+            message=first_validation_error(e),
+            type="invalid_request_error",
+            param=str(e.errors(include_url=False)[0]["loc"][0]),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+def _token_count_fields(
+    data: Mapping[str, object], auto_drop_params: bool, llm_router: Router | None, team_id: str | None
+) -> Mapping[str, object] | ProxyException:
+    fields: Final = {
+        name: data[name] for name in (*_TOKEN_COUNT_FIELDS, "drop_params", "additional_drop_params") if name in data
+    }
+    resolving: Final = {**fields, "drop_params": True} if auto_drop_params else fields
+    return resolve_counted_tool_fields(resolving, llm_router, team_id)
 
 
 def _strip_total_tokens_from_anthropic_response(response: object) -> None:
@@ -193,44 +231,22 @@ async def anthropic_response(
             request_data=_data,
         )
 
-        # Create Anthropic-formatted response with violation message
-        import uuid
+        block_headers: Final = litellm_call_id_headers(base_llm_response_processor.litellm_call_id) or _NO_HEADERS
+        block_handler: Final = AnthropicMessagesHandler()
 
-        from litellm.types.utils import AnthropicMessagesResponse
+        if data.get("stream") is True:
+            block_chunks: Final = block_handler.build_block_sse_chunks(e)
 
-        # Report the blocked LLM response's real token usage (carried on the
-        # exception) instead of discarding it; zero for pre-call blocks.
-        _usage: Final = _blocked_response_usage(e.original_response)
-
-        _anthropic_response: Final = AnthropicMessagesResponse(
-            id=f"msg_{uuid.uuid4()}",
-            type="message",
-            role="assistant",
-            content=[{"type": "text", "text": e.message}],
-            model=e.model,
-            stop_reason="end_turn",
-            usage=_usage,
-        )
-
-        if data.get("stream", None) is not None and data["stream"] is True:
-            # For streaming, use the standard SSE data generator
-            async def _passthrough_stream_generator():
-                yield _anthropic_response
-
-            selected_data_generator: Final = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-                response=_passthrough_stream_generator(),
-                user_api_key_dict=user_api_key_dict,
-                request_data=_data,
-                proxy_logging_obj=proxy_logging_obj,
-            )
+            async def _blocked_stream() -> AsyncGenerator[str, None]:
+                for chunk in block_chunks:
+                    yield chunk.decode()
 
             return await create_response(
-                generator=selected_data_generator,
-                media_type="text/event-stream",
-                headers={},
+                generator=_blocked_stream(), media_type="text/event-stream", headers=block_headers
             )
 
-        return _anthropic_response
+        fastapi_response.headers.update(block_headers)
+        return block_handler.build_block_response(e)
     except AnthropicContextManagementError as e:
         if e.status_code >= 500:
             # Server-side polyfill failures hit the failure hook for spend/alert
@@ -299,6 +315,35 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
     return output_config.get("format")
 
 
+_COUNTED_LITELLM_PARAMS: Final = ("additional_drop_params", "drop_params")
+
+
+class _CountTokensBodyOptions(TypedDict):
+    output_format: ReadOnly[JsonValue]
+    context_management: ReadOnly[JsonValue]
+    request_litellm_params: ReadOnly[Mapping[str, JsonValue]]
+
+
+def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: bool) -> _CountTokensBodyOptions:
+    sent_params: Final[Mapping[str, JsonValue]] = {key: data[key] for key in _COUNTED_LITELLM_PARAMS if key in data}
+    return {
+        "output_format": _requested_output_format(data),
+        "context_management": data.get("context_management"),
+        "request_litellm_params": MappingProxyType(
+            {"drop_params": True, **sent_params} if auto_drop_params else sent_params
+        ),
+    }
+
+
+_PROVIDER_COUNT_REPLY: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+
+
+def _provider_context_management(response: TokenCountResponse) -> Mapping[str, object]:
+    original: Final = _PROVIDER_COUNT_REPLY.validate_python(response.original_response)
+    context_management: Final = original.get("context_management") if original is not None else None
+    return {} if context_management is None else {"context_management": context_management}
+
+
 @router.post(
     "/v1/messages/count_tokens",
     tags=["[beta] Anthropic Messages Token Counting"],
@@ -328,7 +373,7 @@ async def count_tokens(
     
     Returns: {"input_tokens": <number>}
     """
-    from litellm.proxy.proxy_server import count_request_tokens
+    from litellm.proxy.proxy_server import count_request_tokens, llm_router, proxy_config
 
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
@@ -338,28 +383,37 @@ async def count_tokens(
         # Extract required fields
         model_name: Final = data.get("model")
         messages: Final = data.get("messages", [])
+        request_model: Final = model_name if isinstance(model_name, str) else None
 
         if not model_name:
-            raise HTTPException(status_code=400, detail="model parameter is required")
+            raise rejected_token_count(
+                HTTPException(status_code=400, detail="model parameter is required"), litellm_call_id, request_model
+            )
 
         if not messages:
-            raise HTTPException(status_code=400, detail="messages parameter is required")
+            raise rejected_token_count(
+                HTTPException(status_code=400, detail="messages parameter is required"), litellm_call_id, request_model
+            )
 
-        # Create TokenCountRequest for the internal endpoint
-        from litellm.proxy._types import TokenCountRequest
-
-        token_request: Final = TokenCountRequest(
-            model=model_name,
-            messages=messages,
-            tools=data.get("tools"),
-            system=data.get("system"),
+        auto_drop_params: Final = should_auto_drop_params_for_agentic_cli(
+            request.headers.get("user-agent", ""), "drop_params" in data, proxy_config
         )
+        token_fields: Final = _token_count_fields(data, auto_drop_params, llm_router, user_api_key_dict.team_id)
+        token_request: Final = (
+            token_fields if isinstance(token_fields, ProxyException) else _token_count_request(token_fields)
+        )
+        if isinstance(token_request, ProxyException):
+            return rejected_token_count(
+                _anthropic_error_json_response(token_request, request), litellm_call_id, request_model
+            )
 
         token_response: Final = await count_request_tokens(
             request=token_request,
             call_endpoint=True,
             messages_format="anthropic",
-            output_format=_requested_output_format(data),
+            litellm_call_id=litellm_call_id,
+            client_oauth_token=forwarded_anthropic_oauth_token(request.headers),
+            **_count_tokens_body_options(data, auto_drop_params),
         )
     except HTTPException as e:
         return _anthropic_error_json_response(proxy_exception_from_http_exception(e, {}), request)
@@ -369,7 +423,11 @@ async def count_tokens(
         log_llm_api_exception(e, litellm_call_id)
         return _anthropic_error_json_response(proxy_exception_from_route_error(e), request)
     else:
-        return {"input_tokens": token_response.total_tokens}
+        return {
+            "input_tokens": token_response.total_tokens,
+            **_provider_context_management(token_response),
+            **count_source_fields(token_response),
+        }
 
 
 @router.post(

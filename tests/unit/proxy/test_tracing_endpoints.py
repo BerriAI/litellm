@@ -30,7 +30,6 @@ from litellm.proxy.auth.authorization import OwnedRows, ReadScope
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
-from litellm.rust_bridge import loader
 from litellm.tracing.errors import TraceChanged
 from litellm.tracing.generated.models import TraceQueryHelp
 from litellm.tracing.generated.responses import TraceSQLResponse

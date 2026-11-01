@@ -7,6 +7,17 @@ import Layout from "./layout";
 
 const { replaceMock } = vi.hoisted(() => ({ replaceMock: vi.fn() }));
 
+const CURRENT_USER_PATH = "/management/v1/users/me";
+const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>();
+const pathOf = (input: RequestInfo | URL) =>
+  new URL(input instanceof Request ? input.url : String(input), "http://localhost").pathname;
+let currentUserReply: () => Promise<Response>;
+
+const currentUserRequests = () =>
+  fetchMock.mock.calls
+    .map(([input]) => input)
+    .filter((input): input is Request => input instanceof Request && pathOf(input) === CURRENT_USER_PATH);
+
 let searchParamsValue = new URLSearchParams();
 
 vi.mock("@/lib/telemetry/uiEvents", () => ({
@@ -79,6 +90,17 @@ describe("(dashboard) Layout", () => {
     pendingUiConfig = createDeferred();
     searchParamsValue = new URLSearchParams();
     vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
+    currentUserReply = async () =>
+      Response.json({ user_id: "normal-user", user_role: "internal_user", user_email: null });
+    fetchMock.mockReset();
+    fetchMock.mockImplementation((input) =>
+      pathOf(input) === CURRENT_USER_PATH ? currentUserReply() : Promise.resolve(Response.json({}, { status: 404 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("starts mobile navigation closed, opens a modal drawer and closes it after choosing a page", async () => {
@@ -220,6 +242,7 @@ describe("(dashboard) Layout", () => {
 
     afterEach(() => {
       document.cookie = "token=; Max-Age=0; Path=/";
+      document.cookie = "litellm_return_url=; Max-Age=0; Path=/";
     });
 
     it("routes a session flagged password_reset_required to the change-password page", async () => {
@@ -263,6 +286,100 @@ describe("(dashboard) Layout", () => {
 
       expect(await screen.findByTestId("page-content")).toBeInTheDocument();
       expect(replaceMock).not.toHaveBeenCalled();
+    });
+
+    it("shows the loading screen instead of the shell until the current user resolves", async () => {
+      let resolveCurrentUser!: (response: Response) => void;
+      currentUserReply = () => new Promise((resolve) => (resolveCurrentUser = resolve));
+      document.cookie = `token=${sessionCookie({ user_id: "normal-user", key: "sk-pending-session", user_role: "proxy_admin" })}; Path=/`;
+
+      render(
+        <AuthProvider>
+          <Layout>
+            <div data-testid="page-content" />
+          </Layout>
+        </AuthProvider>,
+      );
+      pendingUiConfig.resolve();
+
+      await waitFor(() =>
+        expect(currentUserRequests().map((request) => request.headers.get("Authorization"))).toEqual([
+          "Bearer sk-pending-session",
+        ]),
+      );
+      expect(screen.getByTestId("loading-screen")).toBeInTheDocument();
+      expect(screen.queryByTestId("sidebar")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("page-content")).not.toBeInTheDocument();
+
+      resolveCurrentUser(Response.json({ user_id: "normal-user", user_role: "internal_user", user_email: null }));
+
+      expect(await screen.findByTestId("page-content")).toBeInTheDocument();
+      expect(screen.getByTestId("sidebar")).toBeInTheDocument();
+    });
+
+    it("signs out instead of mounting the shell when the current user cannot be loaded", async () => {
+      const originalLocation = window.location;
+      const locationReplace = vi.fn();
+      Object.defineProperty(window, "location", {
+        value: { ...originalLocation, replace: locationReplace },
+        writable: true,
+      });
+      currentUserReply = async () => Response.json({ detail: "rejected" }, { status: 401 });
+      document.cookie = `token=${sessionCookie({ user_id: "gone-user", key: "sk-rejected-session" })}; Path=/`;
+
+      try {
+        render(
+          <AuthProvider>
+            <Layout>
+              <div data-testid="page-content" />
+            </Layout>
+          </AuthProvider>,
+        );
+        pendingUiConfig.resolve();
+
+        await waitFor(() => expect(locationReplace).toHaveBeenCalledWith(expect.stringContaining("/login")), {
+          timeout: 4000,
+        });
+        expect(document.cookie).not.toContain("token=");
+        expect(document.cookie).toContain("litellm_return_url=");
+        expect(screen.queryByTestId("sidebar")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("page-content")).not.toBeInTheDocument();
+        expect(currentUserRequests()).toHaveLength(2);
+      } finally {
+        Object.defineProperty(window, "location", { value: originalLocation, writable: true });
+      }
+    });
+
+    it("keeps the session of an invitation link whose current user cannot be loaded", async () => {
+      const originalLocation = window.location;
+      const locationReplace = vi.fn();
+      Object.defineProperty(window, "location", {
+        value: { ...originalLocation, replace: locationReplace },
+        writable: true,
+      });
+      searchParamsValue = new URLSearchParams("invitation_id=abc123");
+      currentUserReply = async () => Response.json({ detail: "rejected" }, { status: 401 });
+      document.cookie = `token=${sessionCookie({ user_id: "invited-user", key: "sk-invited-session" })}; Path=/`;
+
+      try {
+        render(
+          <AuthProvider>
+            <Layout>
+              <div data-testid="page-content" />
+            </Layout>
+          </AuthProvider>,
+        );
+        pendingUiConfig.resolve();
+
+        await waitFor(() => expect(currentUserRequests()).toHaveLength(2), { timeout: 4000 });
+        await waitFor(() =>
+          expect(replaceMock).toHaveBeenCalledWith(expect.stringContaining("/onboarding?invitation_id=abc123")),
+        );
+        expect(locationReplace).not.toHaveBeenCalled();
+        expect(document.cookie).toContain("token=");
+      } finally {
+        Object.defineProperty(window, "location", { value: originalLocation, writable: true });
+      }
     });
   });
 });

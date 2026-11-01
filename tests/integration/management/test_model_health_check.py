@@ -26,6 +26,20 @@ _DECISIONS_PROBE_REPLY: Final = JsonResponse(
         "usage": {"input_tokens": 10, "output_tokens": 1},
     },
 )
+_EXTRACTION_PROBE_REPLY: Final = JsonResponse(
+    content_type="application/json",
+    body={
+        "result": {
+            "model": "clairic",
+            "answers": {"reachable": {"type": "text", "value": "health", "confidence": 0.9}},
+            "truncated": False,
+            "usage": {"input_tokens": 10, "output_tokens": 0},
+        },
+        "success": True,
+        "errors": [],
+        "messages": [],
+    },
+)
 _CONFIGURED_PROBE_REPLY: Final = JsonResponse(
     content_type="application/json",
     body={
@@ -110,7 +124,7 @@ def test_health_check_of_a_model_added_through_the_api_calls_its_upstream_and_re
         assert (
             object_value(gateway.chat(model, key=key, text=f"health {uuid.uuid4().hex}")["usage"])["total_tokens"] == 40
         )
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         health: Final = gateway.request("GET", "/health", params={"model": model})
         assert health.status_code == 200, health.text
         report: Final = health.json()
@@ -282,6 +296,29 @@ def test_decisions_mode_health_check_resolves_the_mode_from_the_cost_map_and_sen
                     "model": "pplx-decider-v1-27b",
                     "state": os.environ.get("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"),
                     "questions": {"reachable": {"type": "noul", "instructions": "Is the service reachable?"}},
+                },
+            )
+        ]
+
+
+def test_extraction_mode_health_check_resolves_the_mode_from_the_cost_map_and_sends_the_extraction_probe(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = register_scenario(f"health-extraction-{uuid.uuid4().hex[:12]}", _EXTRACTION_PROBE_REPLY)
+        scenario.cleanups.callback(delete_scenario, handle)
+        model: Final = scenario.model(
+            model="cloudflare/@cf/cloudflare/clairic", api_base=handle.api_base(), api_key="synthetic-cloudflare-key"
+        )
+        report: Final = _health_report(gateway, model)
+        assert (report["healthy_count"], report["unhealthy_count"]) == (1, 0), report
+        assert _probes_sent_to(gateway, handle) == [
+            (
+                f"/{handle.scenario_id}/ai/run/@cf/cloudflare/clairic",
+                {
+                    "model": "clairic",
+                    "state": os.environ.get("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"),
+                    "fields": {"reachable": {"type": "text", "instructions": "Any word from the text"}},
                 },
             )
         ]
@@ -1352,3 +1389,40 @@ def test_evaluation_mode_health_check_of_databricks_ai_decide_resolves_the_mode_
                 },
             )
         ]
+
+
+def _openai_gpt_transcribe_health_reply(request: Request) -> Reply:
+    if _multipart_text_fields(_multipart_parts(request)).get("response_format") == "verbose_json":
+        return Reply(
+            status=400,
+            body=json.dumps(
+                {
+                    "error": {
+                        "message": "response_format 'verbose_json' is not compatible with model 'gpt-transcribe'",
+                        "type": "invalid_request_error",
+                        "param": "response_format",
+                        "code": "unsupported_value",
+                    }
+                }
+            ).encode(),
+        )
+    return Reply(body=json.dumps({"text": "healthy", "usage": {"type": "duration", "seconds": 1}}).encode())
+
+
+def test_health_check_of_gpt_transcribe_probes_without_verbose_json_and_reports_it_healthy(gateway: Gateway) -> None:
+    with wire_server(_openai_gpt_transcribe_health_reply) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/gpt-transcribe",
+            api_base=f"{wire.url}/v1",
+            api_key="synthetic-openai-key",
+            model_info={"mode": "audio_transcription"},
+        )
+        report: Final = _health_report(gateway, model)
+        requests: Final = wire.drain()
+
+    assert (report["healthy_count"], report["unhealthy_count"]) == (1, 0), report
+    assert requests, report
+    assert {
+        (request.method, request.target, tuple(sorted(_multipart_text_fields(_multipart_parts(request)).items())))
+        for request in requests
+    } == {("POST", "/v1/audio/transcriptions", (("model", "gpt-transcribe"),))}

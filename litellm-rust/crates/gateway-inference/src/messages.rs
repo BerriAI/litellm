@@ -24,7 +24,7 @@ const OPENROUTER_API_HEADERS: [&str; 2] = [
     "x-openrouter-experimental-metadata",
 ];
 const ANTHROPIC_API_HEADER_PROVIDERS: &str =
-    "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter";
+    "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
 
 pub async fn create(
     State(gateway): State<Arc<Gateway>>,
@@ -46,7 +46,7 @@ async fn handle(
     headers: &HeaderMap,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(gateway, &body)?;
+    let deployment = request::resolve_deployment(gateway, "/v1/messages", &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
     let route = gateway.messages.clone();

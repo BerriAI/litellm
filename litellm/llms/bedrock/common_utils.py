@@ -11,10 +11,15 @@ import os
 import re
 import warnings
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import (
+    ReadOnly,
+    TypedDict,
+    TypeIs,  # noqa: TID251  # narrows the caller's tools without copying them
+)
 
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
@@ -29,6 +34,8 @@ import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.litellm_core_utils.prompt_templates.common_utils import schema_property_count
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -41,6 +48,8 @@ from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 if TYPE_CHECKING:
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.types.llms.openai import AllMessageValues
+
+BEDROCK_INVOKE_TRACE_FIELD: Final = "amazon-bedrock-trace"
 
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
@@ -136,6 +145,25 @@ def merge_bedrock_aws_request_params(
     return request_params
 
 
+def configured_bedrock_control_plane_endpoint(endpoint: object) -> str | None:
+    """An ``aws_bedrock_control_plane_endpoint`` value without a trailing slash, or None when unset."""
+    if isinstance(endpoint, str) and endpoint.strip():
+        return endpoint.strip().rstrip("/")
+    return None
+
+
+def bedrock_control_plane_base_url(endpoint: object, aws_region_name: str) -> str:
+    """Base URL for Bedrock control-plane calls such as model invocation jobs.
+
+    A configured ``aws_bedrock_control_plane_endpoint`` (a VPC endpoint or a compatible gateway)
+    wins over the regional ``bedrock`` host. ``api_base`` is deliberately not used here, since on a
+    Bedrock deployment it points at the runtime host, which does not serve these APIs.
+    """
+    return configured_bedrock_control_plane_endpoint(endpoint) or (
+        f"https://bedrock.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
+    )
+
+
 def s3_static_key_pair(params: Mapping[str, object]) -> tuple[str, str] | None:
     """The s3_access_key_id / s3_secret_access_key pair when both are set, otherwise None."""
     s3_access_key_id: Final = params.get("s3_access_key_id")
@@ -183,7 +211,7 @@ def _get_local_model_cost_map() -> dict:
     return GetModelCostMap.load_local_model_cost_map()
 
 
-def pop_bedrock_invoke_output_config_format(request_body: dict) -> dict | None:
+def pop_bedrock_invoke_output_config_format(request_body: dict[str, object]) -> dict[str, object] | None:
     """
     Remove and return Anthropic's nested ``output_config.format`` field.
 
@@ -204,8 +232,8 @@ def pop_bedrock_invoke_output_config_format(request_body: dict) -> dict | None:
 
 
 def convert_bedrock_invoke_output_format_to_inline_schema(
-    output_format: dict,
-    request_body: dict,
+    output_format: Mapping[str, object],
+    request_body: dict[str, object],
 ) -> None:
     """
     Embed an Anthropic structured-output schema into the last user message.
@@ -249,15 +277,213 @@ def convert_bedrock_invoke_output_format_to_inline_schema(
     request_body["messages"] = new_messages
 
 
-def _bedrock_model_supports(model: str, key: str) -> bool:
+def _bedrock_model_supports(model: str, key: str, custom_llm_provider: str = "bedrock") -> bool:
     from litellm.utils import supports_factory
 
-    return supports_factory(model=model, custom_llm_provider="bedrock", key=key)
+    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key=key)
+
+
+_DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(dict[str, object])
+
+
+def deployment_model_info(litellm_params: Mapping[str, object] | None) -> Mapping[str, object]:
+    model_info: Final = (litellm_params or {}).get("model_info")
+    return _DEPLOYMENT_MODEL_INFO.validate_python(model_info) if isinstance(model_info, Mapping) else {}
+
+
+def _bedrock_native_output_opt_in(
+    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
+) -> bool:
+    deployment_flag: Final = (model_info or {}).get("supports_bedrock_native_structured_output")
+    if isinstance(deployment_flag, bool):
+        return deployment_flag
+    return _bedrock_model_supports(model, "supports_bedrock_native_structured_output", custom_llm_provider)
+
+
+def bedrock_supports_native_structured_output(
+    model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
+) -> bool:
+    return _bedrock_model_supports(
+        model, "supports_native_structured_output", custom_llm_provider
+    ) or _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+
+
+def bedrock_chat_uses_native_structured_output(
+    model: str,
+    thinking_requested: bool,
+    custom_llm_provider: str = "bedrock",
+    model_info: Mapping[str, object] | None = None,
+) -> bool:
+    return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) or (
+        thinking_requested and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+    )
+
+
+def bedrock_native_output_is_opt_in(
+    model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
+) -> bool:
+    return not _bedrock_model_supports(
+        model, "supports_native_structured_output", custom_llm_provider
+    ) and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+
+
+def without_bedrock_native_output_opt_in(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **litellm_params,
+        "model_info": {**deployment_model_info(litellm_params), "supports_bedrock_native_structured_output": False},
+    }
+
+
+_BEDROCK_NATIVE_OUTPUT_UNSUPPORTED: Final = "output_config.format: Extra inputs are not permitted"
+_BEDROCK_NATIVE_OUTPUT_REJECTIONS: Final = (
+    _BEDROCK_NATIVE_OUTPUT_UNSUPPORTED,
+    "compilation exceeded limits: Schema is too complex",
+    "output_config.format.schema:",
+)
+
+
+def is_bedrock_native_output_rejection(status_code: int, error_text: str) -> bool:
+    return status_code == 400 and any(rejection in error_text for rejection in _BEDROCK_NATIVE_OUTPUT_REJECTIONS)
+
+
+def warn_bedrock_native_output_rejected(model: str, error_text: str) -> None:
+    opt_out_advice: Final = (
+        " Set `supports_bedrock_native_structured_output: false` in this deployment's model_info to skip the "
+        "rejected call."
+        if _BEDROCK_NATIVE_OUTPUT_UNSUPPORTED in error_text
+        else ""
+    )
+    verbose_logger.warning(
+        "Bedrock rejected native structured output for model=%s, so litellm sent the request again without it.%s",
+        model,
+        opt_out_advice,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class NativeOutputFallback:
+    optional_params: Mapping[str, object]
+    litellm_params: Mapping[str, object]
+
+
+_TOOLS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_TOOL_SPEC_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def warn_bedrock_strict_tools_dropped(model: str) -> None:
+    verbose_logger.warning(
+        "Bedrock rejected the strict tool schemas for model=%s, so litellm sent the request again without `strict` "
+        "because drop_params is set.",
+        model,
+    )
+
+
+def _without_strict(tool: Mapping[str, object]) -> Mapping[str, object]:
+    spec_key: Final = next((key for key in ("function", "toolSpec") if key in tool), None)
+    if spec_key is None:
+        return tool
+    spec: Final = _TOOL_SPEC_ADAPTER.validate_python(tool[spec_key])
+    return {**tool, spec_key: {key: value for key, value in spec.items() if key != "strict"}}
+
+
+def _sends_strict(tool: Mapping[str, object], supports_strict_tools: bool) -> bool:
+    if "toolSpec" in tool:
+        return "strict" in _TOOL_SPEC_ADAPTER.validate_python(tool["toolSpec"])
+    if "function" not in tool:
+        return False
+    return supports_strict_tools and bool(_TOOL_SPEC_ADAPTER.validate_python(tool["function"]).get("strict"))
+
+
+def bedrock_strict_tools_fallback(
+    model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> NativeOutputFallback | None:
+    tools: Final = _TOOLS_ADAPTER.validate_python(optional_params.get("tools", ()))
+    supports_strict_tools: Final = bedrock_converse_supports_strict_tools(
+        bedrock_capability_model(model, litellm_params.get("base_model"))
+    )
+    if not any(_sends_strict(tool, supports_strict_tools) for tool in tools):
+        return None
+    return NativeOutputFallback(
+        optional_params={**optional_params, "tools": [_without_strict(tool) for tool in tools]},
+        litellm_params=litellm_params,
+    )
+
+
+def requests_output_config_format(optional_params: Mapping[str, object]) -> bool:
+    match optional_params:
+        case {"output_config": {"format": object()}}:
+            return True
+        case _:
+            return False
+
+
+def requests_opt_in_native_output(
+    model: str, anthropic_optional_params: Mapping[str, object], model_info: Mapping[str, object] | None
+) -> bool:
+    native_output_requested: Final = isinstance(
+        anthropic_optional_params.get("output_format"), Mapping
+    ) or requests_output_config_format(anthropic_optional_params)
+    return native_output_requested and bedrock_native_output_is_opt_in(model, model_info=model_info)
+
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+
+
+def json_object_or_none(value: object) -> Mapping[str, object] | None:
+    return _JSON_OBJECT.validate_python(value) if isinstance(value, Mapping) else None
+
+
+BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES: Final = 64
+
+
+def bedrock_cleaned_output_schema(
+    model: str, schema: Mapping[str, object], custom_llm_provider: str = "bedrock"
+) -> Mapping[str, object] | None:
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    if (
+        not _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider)
+        and schema_property_count(schema) > BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
+    ):
+        return None
+    return AnthropicConfig.native_output_schema(schema)
+
+
+def bedrock_native_output_schema(
+    model: str,
+    schema: Mapping[str, object],
+    custom_llm_provider: str = "bedrock",
+    model_info: Mapping[str, object] | None = None,
+) -> Mapping[str, object] | None:
+    native_schema: Final = bedrock_cleaned_output_schema(model, schema, custom_llm_provider)
+    if _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider):
+        return schema if native_schema is None else native_schema
+    if _bedrock_native_output_opt_in(model, custom_llm_provider, model_info):
+        return native_schema
+    return None
+
+
+def bedrock_native_output_format(
+    model: str,
+    output_format: Mapping[str, object],
+    custom_llm_provider: str = "bedrock",
+    model_info: Mapping[str, object] | None = None,
+) -> Mapping[str, object] | None:
+    schema: Final = output_format.get("schema")
+    if not isinstance(schema, Mapping):
+        return (
+            output_format if bedrock_supports_native_structured_output(model, custom_llm_provider, model_info) else None
+        )
+    native_schema: Final = bedrock_native_output_schema(model, schema, custom_llm_provider, model_info)
+    if native_schema is None:
+        return None
+    return {**output_format, "schema": native_schema}
 
 
 def apply_bedrock_invoke_structured_output(
     model: str,
     request_body: dict[str, object],  # mutable-ok: edited in place like siblings
+    model_info: Mapping[str, object] | None = None,
 ) -> None:
     """
     Route Anthropic structured-output params to what the Bedrock model supports.
@@ -273,21 +499,23 @@ def apply_bedrock_invoke_structured_output(
     """
     legacy_output_format: Final = request_body.pop("output_format", None)
     output_config_format: Final = pop_bedrock_invoke_output_config_format(request_body)
-    schema_format: Final = legacy_output_format if isinstance(legacy_output_format, dict) else output_config_format
+    legacy_format: Final = json_object_or_none(legacy_output_format)
+    schema_format: Final = legacy_format if legacy_format is not None else output_config_format
     if schema_format is None:
         return
 
-    if _bedrock_model_supports(model, "supports_native_structured_output"):
+    native_format: Final = bedrock_native_output_format(model, schema_format, model_info=model_info)
+    if native_format is not None:
         existing_output_config: Final = request_body.get("output_config")
         if isinstance(existing_output_config, dict):
-            existing_output_config["format"] = schema_format
+            existing_output_config["format"] = native_format
         else:
-            request_body["output_config"] = {"format": schema_format}  # rebind-ok: out-param
+            request_body["output_config"] = {"format": native_format}  # rebind-ok: out-param
         return
 
     verbose_logger.warning(
-        "Bedrock Invoke: model=%s does not advertise `supports_native_structured_output` "
-        "in model_prices_and_context_window.json, so the JSON schema was inlined into "
+        "Bedrock Invoke: model=%s does not take native structured output for this schema "
+        "per model_prices_and_context_window.json, so the JSON schema was inlined into "
         "the last user message and is NOT enforced by the model.",
         model,
     )
@@ -338,6 +566,26 @@ def strip_unsupported_bedrock_invoke_output_config_keys(
         request_body["output_config"] = {"format": preserved_format}  # rebind-ok: out-param
 
 
+_TOOL_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
+def _is_str_keyed_dict(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: JSON tool objects  # mutable-ok: fallbacks reuse tools edited in place
+    return isinstance(value, dict)
+
+
+def _normalize_custom_field_on_tool(tool: object) -> None:
+    if not _is_str_keyed_dict(tool):
+        return
+    custom: Final = tool.pop("custom", None)
+    if not _is_str_keyed_dict(custom) or "defer_loading" in tool:
+        return
+    deferred: Final = custom.get("defer_loading")
+    if isinstance(deferred, bool):
+        tool["defer_loading"] = deferred  # rebind-ok: a fallback reuses the caller's tool, as on main
+
+
 def normalize_custom_field_on_tools(request_body: dict) -> None:
     """
     Drop the ``custom`` field from each tool, first hoisting a boolean
@@ -355,15 +603,8 @@ def normalize_custom_field_on_tools(request_body: dict) -> None:
     tools: Final = request_body.get("tools")
     if not tools or not isinstance(tools, list):
         return
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-        custom: dict[str, object] | None = tool.pop("custom", None)
-        if not isinstance(custom, dict) or "defer_loading" in tool:
-            continue
-        deferred: object = custom.get("defer_loading")
-        if isinstance(deferred, bool):
-            tool["defer_loading"] = deferred
+    for tool in _TOOL_ITEMS_ADAPTER.validate_python(tools):
+        _normalize_custom_field_on_tool(tool)
 
 
 _TOOL_DICTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
@@ -857,6 +1098,11 @@ def _model_cost_entry(key: str) -> Mapping[str, object] | None:
     return None if raw is None else _MODEL_COST_ENTRY_ADAPTER.validate_python(raw)
 
 
+def _cost_map_row_names_a_provider(key: str) -> bool:
+    entry: Final = _model_cost_entry(key)
+    return entry is not None and entry.get("litellm_provider") is not None
+
+
 def _bedrock_price_map_entries(model: str) -> tuple[Mapping[str, object] | None, ...]:
     return tuple(
         _model_cost_entry(key)
@@ -1079,6 +1325,12 @@ def _mantle_api_base_from_env() -> str | None:
     return next((base[: -len(suffix)] for suffix in _MANTLE_OPENAI_BASE_SUFFIXES if base.endswith(suffix)), base)
 
 
+DROP_DISABLED_REASONING_EFFORT_WARNING: Final = (
+    "Dropping %s=%r for Bedrock model=%r (drop_params=True) because the model map marks that level unsupported. "
+    "Send a level the model supports."
+)
+
+
 def bedrock_reasoning_effort_disabled(model: str, effort: str) -> bool:
     from litellm.utils import is_explicitly_disabled_factory
 
@@ -1127,10 +1379,7 @@ def build_mantle_messages_url(
     """
     override: Final = api_base or aws_bedrock_runtime_endpoint or _mantle_api_base_from_env()
     if override:
-        base: Final = override.rstrip("/")
-        if base.endswith(MANTLE_MESSAGES_PATH):
-            return base
-        return f"{base}{MANTLE_MESSAGES_PATH}"
+        return ensure_api_route(override, MANTLE_MESSAGES_PATH)
     return f"https://bedrock-mantle.{region}.api.aws{MANTLE_MESSAGES_PATH}"
 
 
@@ -1296,7 +1545,6 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
 
 
 _BEDROCK_MODEL_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
-_DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(dict[str, object])
 
 
 def bedrock_converse_supports_strict_tools(model: str) -> bool:
@@ -1324,17 +1572,51 @@ def bedrock_model_supports_regex_lookaround(model: str, litellm_params: Mapping[
 
     The deployment's ``model_info.supports_regex_lookaround`` wins, then the
     ``model_prices_and_context_window.json`` entry of its ``base_model``, then the
-    entry of ``model`` itself. A model nobody flagged keeps its schema as sent.
+    entry of ``model`` itself. A model nobody flagged keeps its schema as sent, unless
+    no candidate names a model LiteLLM knows, whatever route prefix it carries.
     """
     params: Final = litellm_params or {}
-    model_info: Final = _DEPLOYMENT_MODEL_INFO.validate_python(params.get("model_info") or {})
-    deployment_flag: Final = model_info.get("supports_regex_lookaround")
+    deployment_flag: Final = deployment_model_info(params).get("supports_regex_lookaround")
     if isinstance(deployment_flag, bool):
         return deployment_flag
     base_model: Final = params.get("base_model")
     candidates: Final = (*((base_model,) if isinstance(base_model, str) else ()), model)
     flags: Final = (_bedrock_converse_model_flag(candidate, "supports_regex_lookaround") for candidate in candidates)
-    return next((flag for flag in flags if flag is not None), True)
+    flag: Final = next((flag for flag in flags if flag is not None), None)
+    if flag is not None:
+        return flag
+    return not all(bedrock_model_is_unknown(split_bedrock_region_path(candidate)[1]) for candidate in candidates)
+
+
+def _bedrock_model_id_without_region(model: str) -> str:
+    routed_id: Final = model.removeprefix("bedrock/")
+    region, separator, regional_id = routed_id.partition("/")
+    return regional_id if separator and region in get_all_bedrock_regions() else routed_id
+
+
+def bedrock_model_is_unknown(model: str) -> bool:
+    model_id: Final = _bedrock_model_id_without_region(model)
+    if "/" in model_id:
+        return False
+    base: Final = get_bedrock_base_model(model_id)
+    regional_ids: Final = (f"{region}.{base}" for region in get_bedrock_cross_region_inference_regions())
+    if any(_cost_map_row_names_a_provider(key) for key in (*_bedrock_model_info_candidates(model_id), *regional_ids)):
+        return False
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    return BaseAWSLLM.get_bedrock_invoke_provider(model_id) is None
+
+
+def _names_no_invoke_provider(model: str) -> bool:
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    model_id: Final = _bedrock_model_id_without_region(model)
+    names_one_model: Final = bool(model_id) and ("/" not in model_id or model_id.startswith("arn:"))
+    return names_one_model and BaseAWSLLM.get_bedrock_invoke_provider(model) is None
+
+
+def bedrock_model_reaches_converse_by_default(model: str) -> bool:
+    return BedrockModelInfo.named_bedrock_route(model, None) is None and _names_no_invoke_provider(model)
 
 
 _BedrockConverseModelFlag: TypeAlias = Literal[
@@ -1343,10 +1625,13 @@ _BedrockConverseModelFlag: TypeAlias = Literal[
 ]
 
 
-def _bedrock_converse_model_flag(model: str, key: _BedrockConverseModelFlag) -> bool | None:
+def _bedrock_model_info_candidates(model: str) -> tuple[str, ...]:
     base: Final = get_bedrock_base_model(model)
-    candidates: Final = dict.fromkeys((model, base, _BEDROCK_MODEL_VERSION_SUFFIX_RE.sub("", base)))
-    for candidate in candidates:
+    return tuple(dict.fromkeys((model, base, _BEDROCK_MODEL_VERSION_SUFFIX_RE.sub("", base))))
+
+
+def _bedrock_converse_model_flag(model: str, key: _BedrockConverseModelFlag) -> bool | None:
+    for candidate in _bedrock_model_info_candidates(model):
         with contextlib.suppress(Exception):
             model_info = get_cached_model_info()(
                 model=candidate,
@@ -1524,8 +1809,19 @@ class BedrockModelInfo(BaseLLMModelInfo):
         default (``bedrock_runtime_chat_completions_is_default``) and ``chat_completions/`` opts any other model in;
         ``request_params`` (the caller's chat params) sends such a request to Converse when it needs a
         feature only Converse serves, and ``converse/`` pins a model to Converse. Every other OpenAI-family
-        model stays on Converse without the prefix.
+        model stays on Converse without the prefix. A model the cost map does not list as Converse goes to
+        Invoke only when its id names an Invoke provider, and to Converse otherwise.
         """
+        named_route: Final = BedrockModelInfo.named_bedrock_route(model, request_params)
+        if named_route is not None:
+            return named_route
+        return "converse" if _names_no_invoke_provider(model) else "invoke"
+
+    @staticmethod
+    def named_bedrock_route(
+        model: str,
+        request_params: Mapping[str, object] | None,
+    ) -> BedrockRoute | None:
         route_mappings: dict[
             str,
             Literal[
@@ -1580,7 +1876,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
             return "converse"
         if _OPENAI_FAMILY_MODEL_RE.search(base_model):
             return "converse"
-        return "invoke"
+        return None
 
     @staticmethod
     def _explicit_converse_route(model: str) -> bool:
@@ -1847,8 +2143,13 @@ def get_bedrock_response_stream_shape():
 _BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")
 
 
+class _ModeledErrorMetadata(TypedDict, total=False):
+    httpStatusCode: ReadOnly[int]
+
+
 def _modeled_error_status(member: Shape) -> int | None:
-    status: Final = (member.metadata or {}).get("error", {}).get("httpStatusCode")
+    error: Final[_ModeledErrorMetadata] = (member.metadata or {}).get("error", {})
+    status: Final = error.get("httpStatusCode")
     return None if status is None else int(status)
 
 

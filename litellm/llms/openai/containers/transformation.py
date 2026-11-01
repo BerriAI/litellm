@@ -9,7 +9,7 @@ from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.containers.main import (
     ContainerCreateOptionalRequestParams,
@@ -23,6 +23,7 @@ from litellm.types.containers.main import (
 from litellm.types.router import GenericLiteLLMParams
 
 from ...base_llm.containers.transformation import BaseContainerConfig
+from ..workload_identity import resolve_openai_bearer_token
 from .utils import join_container_api_base_path
 
 if TYPE_CHECKING:
@@ -104,13 +105,15 @@ class OpenAIContainerConfig(BaseContainerConfig):
         self,
         headers: dict,
         api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> dict:
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
-            },
+        params: Final = litellm_params or GenericLiteLLMParams()
+        bearer_token: Final = resolve_openai_bearer_token(
+            api_key=api_key or params.api_key,
+            api_base=params.api_base,
+            litellm_params=params.model_dump(exclude_none=True),
         )
+        headers.update({"Authorization": f"Bearer {bearer_token}"})
         return headers
 
     def get_complete_url(
@@ -127,7 +130,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
             or "https://api.openai.com/v1"
         )
 
-        return f"{api_base.rstrip('/')}/containers"
+        return join_api_base(api_base, "containers")
 
     def transform_container_create_request(
         self,

@@ -13,7 +13,8 @@ import json
 import logging
 import os
 import re
-from collections.abc import Mapping
+import sys
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -22,12 +23,16 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from prisma.errors import DataError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
+from litellm._logging import turn_on_json
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.router_api import ApplyResult, RouterSettings
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.proxy.proxy_server import (
     ProxyConfig,
@@ -41,6 +46,7 @@ from litellm.proxy.proxy_server import (
     validate_deployment_complexity_router_placement,
     validate_deployment_max_agentic_loops,
 )
+from litellm.proxy.utils import evict_config_param
 from litellm.tracing.config import is_lens_tracing_enabled
 
 from .conftest import normalize
@@ -1483,7 +1489,7 @@ def _install_fake_config_repo(monkeypatch, existing_row):
             captured["value"] = json.loads(data["update"]["param_value"])
 
     class _FakeRepo:
-        def __init__(self, client):
+        def __init__(self, client, *, use_writer=False):
             self.table = _FakeTable()
 
     monkeypatch.setattr("litellm.proxy.proxy_server.ConfigRepository", _FakeRepo)
@@ -1515,6 +1521,27 @@ async def test_ProxyConfig_save_environment_variables_merges_sets_and_deletes(mo
     assert "UI_LOGO_PATH" in written and written["UI_LOGO_PATH"] != "new-logo"
     # None-valued key deleted
     assert "LITELLM_FAVICON_URL" not in written
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_environment_variables_keeps_a_key_the_read_replica_has_not_caught_up_on(monkeypatch):
+    def config_table(row):
+        return SimpleNamespace(find_first=AsyncMock(return_value=SimpleNamespace(param_value=row)), upsert=AsyncMock())
+
+    writer_table = config_table({"SAVED_A_MOMENT_AGO": "ciphertext-new"})
+    replica_table = config_table({})
+    database = SimpleNamespace(
+        writer_db=SimpleNamespace(litellm_config=writer_table), db=SimpleNamespace(litellm_config=replica_table)
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", database)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-key")
+
+    await ProxyConfig().save_environment_variables({"UI_LOGO_PATH": None})
+
+    written = replica_table.upsert.call_args.kwargs["data"]["update"]["param_value"]
+    assert json.loads(written) == {"SAVED_A_MOMENT_AGO": "ciphertext-new"}
 
 
 @pytest.mark.asyncio
@@ -1632,7 +1659,7 @@ def test_ProxyConfig__init_cache_sets_litellm_cache(monkeypatch):
 
 def test_ProxyConfig__init_cache_invalid_params_raises():
     pc = ProxyConfig()
-    with pytest.raises(AttributeError):
+    with pytest.raises(ValueError, match="Unsupported cache type 'this-cache-type-does-not-exist'"):
         pc._init_cache(cache_params={"type": "this-cache-type-does-not-exist"})
 
 
@@ -1644,13 +1671,13 @@ def test_ProxyConfig__init_cache_invalid_params_raises():
 def test_ProxyConfig_switch_on_llm_response_caching_sets_flag(monkeypatch):
     pc = ProxyConfig()
     fake_router = MagicMock()
-    fake_router.cache_responses = False
+    fake_router.settings.return_value = RouterSettings(cache_responses=False)
     fake_cache = MagicMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     monkeypatch.setattr(litellm, "cache", fake_cache, raising=False)
     pc.switch_on_llm_response_caching()
     snapshot = {
-        "cache_responses": fake_router.cache_responses,
+        "cache_responses": fake_router.apply.call_args.args[0].assign.get("cache_responses"),
         "router_set": True,
         "cache_set": True,
     }
@@ -2064,6 +2091,118 @@ def test_ProxyConfig_parse_search_tools_missing_returns_none():
     assert pc.parse_search_tools({}) is None
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig_lists_search_tools_once_at_startup_not_on_every_reparse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+):
+    """The search tools reload job and add_deployment re-parse search_tools every config reload interval, so
+    the startup listing belongs to load_config alone, or a container log repeats it every 30 seconds."""
+    config_file: Final = tmp_path / "search.yaml"
+    config_file.write_text(
+        "model_list: []\n"
+        "search_tools:\n"
+        "  - search_tool_name: web-search\n"
+        "    litellm_params:\n"
+        "      search_provider: tavily\n"
+    )
+    monkeypatch.setattr(litellm, "json_logs", False)
+    monkeypatch.setattr(litellm, "suppress_startup_output", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    proxy_config: Final = ProxyConfig()
+
+    await proxy_config.load_config(router=None, config_file_path=str(config_file))
+    for _ in range(3):
+        assert proxy_config.parse_search_tools(proxy_config.get_config_state()) is not None
+
+    out: Final = capfd.readouterr().out
+    assert out.count("Proxy initialized with Search Tools:") == 1, out
+    assert out.count("web-search (tavily)") == 1, out
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_lists_each_search_tool_as_its_own_json_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+):
+    """With json_logs on, the startup listing is a header record and one record per tool, so a pipeline that
+    reads one tool per record keeps working."""
+    config_file: Final = tmp_path / "search.yaml"
+    config_file.write_text(
+        "model_list: []\n"
+        "search_tools:\n"
+        "  - search_tool_name: web-search\n"
+        "    litellm_params:\n"
+        "      search_provider: tavily\n"
+        "  - search_tool_name: news-search\n"
+        "    litellm_params:\n"
+        "      search_provider: exa_ai\n"
+    )
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(litellm, "suppress_startup_output", False)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    turn_on_json()
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    messages: Final = [json.loads(raw)["message"] for raw in capfd.readouterr().out.splitlines() if raw.strip()]
+    listing: Final = [message for message in messages if "Search Tools" in message or "-search (" in message]
+    assert listing == [
+        "LiteLLM: Proxy initialized with Search Tools:",
+        "    web-search (tavily)",
+        "    news-search (exa_ai)",
+    ], messages
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("already_on", "config_value"),
+    [
+        pytest.param(True, False, id="env-var-on-and-config-false"),
+        pytest.param(False, True, id="config-key-below-cache"),
+    ],
+)
+async def test_ProxyConfig_load_config_keeps_startup_output_off_once_either_setting_turns_it_on(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    already_on: bool,
+    config_value: bool,
+):
+    """Only `true` turns suppress_startup_output on, from the env var or the config key, and a config `false`
+    never turns the env var back off. The key applies before any other litellm_settings key, so a `cache: true`
+    above it prints nothing either."""
+    config_file: Final = tmp_path / "suppress.yaml"
+    config_file.write_text(
+        "model_list: []\n"
+        "litellm_settings:\n"
+        "  cache: true\n"
+        "  cache_params:\n"
+        "    type: local\n"
+        f"  suppress_startup_output: {str(config_value).lower()}\n"
+        "search_tools:\n"
+        "  - search_tool_name: web-search\n"
+        "    litellm_params:\n"
+        "      search_provider: tavily\n"
+    )
+    monkeypatch.setattr(litellm, "json_logs", False)
+    monkeypatch.setattr(litellm, "suppress_startup_output", already_on)
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    out: Final = capfd.readouterr().out
+    assert litellm.suppress_startup_output is True
+    assert "Setting Cache on Proxy" not in out, out
+    assert "Proxy initialized with Search Tools:" not in out, out
+
+
+
 def test_ProxyConfig_merge_config_and_db_search_tools_returns_superset():
     config_tools = [
         {
@@ -2124,7 +2263,6 @@ def test_ProxyConfig_merge_config_and_db_search_tools_prefers_db_duplicate():
 @pytest.mark.asyncio
 async def test_ProxyConfig__init_search_tools_in_db_loads_merged_tools(monkeypatch):
     from litellm.proxy import proxy_server
-    from litellm.router_utils.search_api_router import SearchAPIRouter
 
     pc = ProxyConfig()
     pc.update_config_state(
@@ -2150,28 +2288,24 @@ async def test_ProxyConfig__init_search_tools_in_db_loads_merged_tools(monkeypat
             },
         }
     ]
-    fake_router = MagicMock()
+    router = litellm.Router()
     mock_get_db_tools = AsyncMock(return_value=db_tools)
-    mock_update_router = AsyncMock()
 
-    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
         "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
         mock_get_db_tools,
     )
-    monkeypatch.setattr(SearchAPIRouter, "update_router_search_tools", mock_update_router)
 
     await pc._init_search_tools_in_db(prisma_client=MagicMock())
 
     mock_get_db_tools.assert_awaited_once()
-    mock_update_router.assert_awaited_once()
-    update_kwargs = mock_update_router.await_args.kwargs
-    assert update_kwargs["router_instance"] is fake_router
-    assert [tool["search_tool_name"] for tool in update_kwargs["search_tools"]] == [
+    loaded_tools = router.settings().search_tools
+    assert [tool["search_tool_name"] for tool in loaded_tools] == [
         "config-only",
         "shared-search",
     ]
-    assert update_kwargs["search_tools"][1]["litellm_params"]["api_key"] == "fake-db-key"
+    assert loaded_tools[1]["litellm_params"]["api_key"] == "fake-db-key"
 
 
 @pytest.mark.asyncio
@@ -2181,11 +2315,10 @@ async def test_ProxyConfig__init_search_tools_in_db_clears_router_when_last_tool
 
     pc = ProxyConfig()
     pc.update_config_state({})
-    fake_router = MagicMock()
-    fake_router.search_tools = [{"search_tool_name": "deleted-search", "litellm_params": {}}]
+    router = litellm.Router(search_tools=[{"search_tool_name": "deleted-search", "litellm_params": {}}])
     mock_get_db_tools = AsyncMock(return_value=[])
 
-    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
         "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
         mock_get_db_tools,
@@ -2194,7 +2327,7 @@ async def test_ProxyConfig__init_search_tools_in_db_clears_router_when_last_tool
     await pc._init_search_tools_in_db(prisma_client=MagicMock())
 
     mock_get_db_tools.assert_awaited_once()
-    assert fake_router.search_tools == []
+    assert router.settings().search_tools == []
 
 
 @pytest.mark.asyncio
@@ -2208,15 +2341,16 @@ async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_par
         "search_tool_name": "rotated-search",
         "litellm_params": {"search_provider": "perplexity", "api_key": "pplx-loaded"},
     }
-    fake_router = MagicMock()
-    fake_router.search_tools = [
-        loaded_tool,
-        {
-            "search_tool_id": "typo-id",
-            "search_tool_name": "typo-search",
-            "litellm_params": {"search_provider": "tavily"},
-        },
-    ]
+    router = litellm.Router(
+        search_tools=[
+            loaded_tool,
+            {
+                "search_tool_id": "typo-id",
+                "search_tool_name": "typo-search",
+                "litellm_params": {"search_provider": "tavily"},
+            },
+        ]
+    )
     db_tools = [
         {
             "search_tool_id": "rotated-id",
@@ -2237,7 +2371,7 @@ async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_par
             "litellm_params": {"search_provider": "Tavily", "api_key": "tvly-edited"},
         },
     ]
-    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
         "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
         AsyncMock(return_value=db_tools),
@@ -2245,7 +2379,7 @@ async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_par
 
     await pc._init_search_tools_in_db(prisma_client=MagicMock())
 
-    assert [tool["litellm_params"] for tool in fake_router.search_tools] == [
+    assert [tool["litellm_params"] for tool in router.settings().search_tools] == [
         {"search_provider": "perplexity", "api_key": "pplx-loaded"},
         {"search_provider": "tavily", "api_key": "tvly-fresh"},
         {"search_provider": "Tavily", "api_key": "tvly-edited"},
@@ -2355,6 +2489,30 @@ def test_ProxyConfig__load_environment_variables_sets_env(monkeypatch):
         "len": 1,
     }
     assert result == {"TEST_LOAD_ENV_X": "hello", "set": True, "len": 1}
+
+
+def test_ProxyConfig__load_environment_variables_warns_when_the_config_replaces_a_process_value(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setenv("TEST_LOAD_ENV_OVERRIDDEN", "from-process")
+    monkeypatch.setenv("TEST_LOAD_ENV_SAME", "same-value")
+    monkeypatch.delenv("TEST_LOAD_ENV_FRESH", raising=False)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyConfig()._load_environment_variables(
+            {
+                "environment_variables": {
+                    "TEST_LOAD_ENV_OVERRIDDEN": "from-config",
+                    "TEST_LOAD_ENV_SAME": "same-value",
+                    "TEST_LOAD_ENV_FRESH": "fresh-value",
+                }
+            }
+        )
+    warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert os.environ["TEST_LOAD_ENV_OVERRIDDEN"] == "from-config"
+    assert len(warnings) == 1
+    assert "TEST_LOAD_ENV_OVERRIDDEN" in warnings[0]
+    assert "from-process" not in warnings[0] and "from-config" not in warnings[0]
+    assert "TEST_LOAD_ENV_SAME" not in warnings[0] and "TEST_LOAD_ENV_FRESH" not in warnings[0]
 
 
 def test_ProxyConfig__load_environment_variables_blocks_dangerous_keys(monkeypatch):
@@ -2498,7 +2656,9 @@ async def test_load_config_logs_disabled_budget_reservation_once(tmp_path, monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("setting", ["vector_store_deny_by_default", "search_tool_deny_by_default"])
+@pytest.mark.parametrize(
+    "setting", ["vector_store_deny_by_default", "search_tool_deny_by_default", "claude_code_marketplace_auth_required"]
+)
 @pytest.mark.parametrize(("yaml_value", "expected"), [("true", True), ("false", False)])
 async def test_load_config_yaml_deny_by_default_is_boolean(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str, yaml_value: str, expected: bool
@@ -2516,7 +2676,9 @@ async def test_load_config_yaml_deny_by_default_is_boolean(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("setting", ["vector_store_deny_by_default", "search_tool_deny_by_default"])
+@pytest.mark.parametrize(
+    "setting", ["vector_store_deny_by_default", "search_tool_deny_by_default", "claude_code_marketplace_auth_required"]
+)
 @pytest.mark.parametrize("yaml_value", ["", "enabled"], ids=["null", "string"])
 async def test_load_config_rejects_non_boolean_deny_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str, yaml_value: str
@@ -2530,6 +2692,26 @@ async def test_load_config_rejects_non_boolean_deny_by_default(
     with pytest.raises(ValidationError, match=setting):
         await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "yaml_value", ["files-api-2025-04-14", "[files-api-2025-04-14, 7]"], ids=["bare-string", "non-string-entry"]
+)
+async def test_load_config_rejects_a_malformed_vertex_drop_anthropic_betas_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, yaml_value: str
+):
+    config_file: Final = tmp_path / "vertex_drop_betas.yaml"
+    config_file.write_text(
+        "model_list: []\nlitellm_settings: {}\ngeneral_settings:\n"
+        f"  vertex_ai_pass_through_drop_anthropic_betas: {yaml_value}\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    with pytest.raises(ValidationError, match="vertex_ai_pass_through_drop_anthropic_betas"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
 @pytest.mark.asyncio
 async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path, monkeypatch):
@@ -3232,7 +3414,7 @@ def test_ProxyConfig__add_deployment_no_router_returns_zero(monkeypatch):
 
 def test_ProxyConfig__add_deployment_invalid_litellm_params_skips(monkeypatch):
     fake_router = MagicMock()
-    fake_router.upsert_deployment = MagicMock(return_value=None)
+    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[None]))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
     bad = SimpleNamespace(litellm_params="not-a-dict", model_name="x", model_id="x")
@@ -3253,7 +3435,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypa
         lambda value, key, return_original_value: value,
     )
     fake_router = MagicMock()
-    fake_router.upsert_deployment = MagicMock(return_value=True)
+    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[True]))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
     db_model = SimpleNamespace(
@@ -3269,7 +3451,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypa
     )
 
     added = pc._add_deployment(db_models=[db_model])
-    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+    (deployment,) = fake_router.apply.call_args.args[0].upsert
 
     assert added == 1
     assert deployment.litellm_params.api_key == "resolved-secret"
@@ -3289,7 +3471,7 @@ def test_ProxyConfig__add_deployment_resolves_team_env_refs(monkeypatch):
         lambda value, key, return_original_value: value,
     )
     fake_router = MagicMock()
-    fake_router.upsert_deployment = MagicMock(return_value=True)
+    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[True]))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
     db_model = SimpleNamespace(
@@ -3305,7 +3487,7 @@ def test_ProxyConfig__add_deployment_resolves_team_env_refs(monkeypatch):
     )
 
     added = pc._add_deployment(db_models=[db_model])
-    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+    (deployment,) = fake_router.apply.call_args.args[0].upsert
 
     assert added == 1
     assert deployment.litellm_params.api_key == "master-secret"
@@ -3366,7 +3548,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_for_aws_bedrock_auth_para
         lambda value, key, return_original_value: value,
     )
     fake_router = MagicMock()
-    fake_router.upsert_deployment = MagicMock(return_value=True)
+    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[True]))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
     litellm_params: Dict[str, Any] = {"model": "bedrock/anthropic.claude-v2"}
@@ -3381,7 +3563,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_for_aws_bedrock_auth_para
     )
 
     added = pc._add_deployment(db_models=[db_model])
-    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+    (deployment,) = fake_router.apply.call_args.args[0].upsert
 
     assert added == 1
     for key, (_, expected) in aws_env.items():
@@ -3398,7 +3580,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_on_arbitrary_field(monkey
         lambda value, key, return_original_value: value,
     )
     fake_router = MagicMock()
-    fake_router.upsert_deployment = MagicMock(return_value=True)
+    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[True]))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
     db_model = SimpleNamespace(
@@ -3413,7 +3595,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_on_arbitrary_field(monkey
     )
 
     added = pc._add_deployment(db_models=[db_model])
-    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+    (deployment,) = fake_router.apply.call_args.args[0].upsert
 
     assert added == 1
     assert deployment.litellm_params.some_future_field == "resolved-custom-value"
@@ -3427,7 +3609,7 @@ def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(m
     monkeypatch.setenv("LITELLM_SALT_KEY", MASTER_KEY)
     monkeypatch.setenv("DROP_PARAMS_FLAG", "true")
     fake_router = MagicMock()
-    fake_router.upsert_deployment = MagicMock(return_value=True)
+    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[True]))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
     db_model = SimpleNamespace(
@@ -3442,7 +3624,7 @@ def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(m
     )
 
     added = pc._add_deployment(db_models=[db_model])
-    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+    (deployment,) = fake_router.apply.call_args.args[0].upsert
 
     assert added == 1
     assert deployment.litellm_params.drop_params is True
@@ -3451,7 +3633,7 @@ def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(m
 def test_ProxyConfig__add_deployment_keeps_loading_rows_after_a_non_flag_drop_params(monkeypatch):
     monkeypatch.setenv("LITELLM_SALT_KEY", MASTER_KEY)
     fake_router = MagicMock()
-    fake_router.upsert_deployment = MagicMock(return_value=True)
+    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[True]))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
 
@@ -3468,7 +3650,7 @@ def test_ProxyConfig__add_deployment_keeps_loading_rows_after_a_non_flag_drop_pa
         )
 
     added = pc._add_deployment(db_models=[db_model("bad-row", 2), db_model("good-after", "true")])
-    deployments = [call.kwargs["deployment"] for call in fake_router.upsert_deployment.call_args_list]
+    deployments = [d for call in fake_router.apply.call_args_list for d in call.args[0].upsert]
 
     assert added == 2
     assert [d.litellm_params.drop_params for d in deployments] == [None, True]
@@ -4003,7 +4185,7 @@ async def test_ProxyConfig__get_hierarchical_router_settings_key_shadows_team_en
 async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
     pc = ProxyConfig()
     fake_router = MagicMock()
-    fake_router.update_settings = MagicMock()
+    fake_router.apply = MagicMock()
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_config.find_first = AsyncMock(
         return_value=SimpleNamespace(param_value={"timeout": 30, "retries": 2, "fallbacks": []})
@@ -4014,9 +4196,9 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
         prisma_client=fake_prisma,
     )
     snapshot = {
-        "called": fake_router.update_settings.called,
-        "call_count": fake_router.update_settings.call_count,
-        "kwargs_keys": sorted(list(fake_router.update_settings.call_args.kwargs.keys())),
+        "called": fake_router.apply.called,
+        "call_count": fake_router.apply.call_count,
+        "kwargs_keys": sorted(list(fake_router.apply.call_args.args[0].settings.keys())),
     }
     assert snapshot == {
         "called": True,
@@ -4046,7 +4228,7 @@ async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch
 
     pc = ProxyConfig()
     fake_router = MagicMock()
-    fake_router.get_model_list = MagicMock(return_value=[])
+    fake_router.registry.return_value.deployments.return_value = []
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_config.find_first = AsyncMock(
         return_value=SimpleNamespace(param_value={"routing_strategy": "latency-based-routing"})
@@ -4068,7 +4250,8 @@ async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch
 
     await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
 
-    fake_router.update_settings.assert_called_once_with(routing_strategy="latency-based-routing")
+    fake_router.apply.assert_called_once()
+    assert dict(fake_router.apply.call_args.args[0].settings) == {"routing_strategy": "latency-based-routing"}
 
 
 def _stub_add_deployment_collaborators(
@@ -4077,7 +4260,7 @@ def _stub_add_deployment_collaborators(
     from litellm.proxy import proxy_server
 
     fake_router = MagicMock()
-    fake_router.get_model_list = MagicMock(return_value=[])
+    fake_router.registry.return_value.deployments.return_value = []
 
     async def fake_get_config(*args: object, **kwargs: object) -> dict[str, object]:
         return {}
@@ -5076,6 +5259,418 @@ async def test_ProxyConfig_load_config_redacts_secret_litellm_setting_keeps_plai
     assert "num_retries=7" in rendered, (
         f"non-secret num_retries value was over-redacted; expected it visible in {rendered!r}"
     )
+
+
+_REVISION_TEST_KEYS: Final = (
+    "REVISION_TEST_CONFIG_FILE",
+    "REVISION_TEST_DB_ONLY",
+    "REVISION_TEST_NULLED",
+    "REVISION_TEST_KEPT",
+    "revision_test_lower",
+    "REVISION_TEST_LOWER",
+    "GOOGLE_CLIENT_ID",
+    "PROXY_BASE_URL",
+)
+
+
+def _revision_test_environment() -> dict[str, str | None]:
+    return {key: os.environ.get(key) for key in _REVISION_TEST_KEYS}
+
+
+@pytest.fixture
+def revision_test_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    for key in _REVISION_TEST_KEYS:
+        monkeypatch.setenv(key, "restored-by-monkeypatch")
+        monkeypatch.delenv(key)
+
+
+def _environment_variables_row(
+    values: Mapping[str, str | None] | None, revision: int | None
+) -> SimpleNamespace | None:
+    if values is None:
+        return None
+    return SimpleNamespace(
+        param_name="environment_variables",
+        param_value={key: None if value is None else encrypt_value_helper(value) for key, value in values.items()},
+        reload_revision=revision,
+    )
+
+
+_CONFIG_SECTIONS: Final = ("general_settings", "router_settings", "litellm_settings", "environment_variables")
+
+
+async def _evict_config_rows() -> None:
+    for section in _CONFIG_SECTIONS:
+        await evict_config_param(section)
+
+
+def _config_database(
+    environment_variables_read: Callable[[], Awaitable[SimpleNamespace | None]],
+    writer_find_unique: AsyncMock,
+    other_section_read: Callable[[], Awaitable[None]] | None = None,
+) -> MagicMock:
+    async def get_generic_data(key: str, value: str, table_name: str) -> SimpleNamespace | None:
+        if value == "environment_variables":
+            return await environment_variables_read()
+        return None if other_section_read is None else await other_section_read()
+
+    prisma_client: Final = MagicMock()
+    prisma_client.get_generic_data = get_generic_data
+    prisma_client.writer_db.litellm_config.find_unique = writer_find_unique
+    return prisma_client
+
+
+def _rows_database(cached: SimpleNamespace | None, stored: SimpleNamespace | None) -> MagicMock:
+    async def read_cached() -> SimpleNamespace | None:
+        return cached
+
+    return _config_database(read_cached, AsyncMock(return_value=stored))
+
+
+async def _sync_from(pc: ProxyConfig, prisma_client: MagicMock) -> None:
+    await _evict_config_rows()
+    await pc._update_config_from_db(prisma_client, {}, store_model_in_db=True)
+    await _evict_config_rows()
+
+
+async def _sync_cached_and_stored_environment_variables_rows(
+    pc: ProxyConfig, cached: SimpleNamespace | None, stored: SimpleNamespace | None
+) -> None:
+    await _sync_from(pc, _rows_database(cached, stored))
+
+
+async def _sync_environment_variables_row(
+    pc: ProxyConfig, values: Mapping[str, str | None] | None, revision: int | None
+) -> None:
+    row: Final = _environment_variables_row(values, revision)
+    await _sync_cached_and_stored_environment_variables_rows(pc, cached=row, stored=row)
+
+
+async def _init_non_llm_objects_from_an_empty_database(pc: ProxyConfig) -> None:
+    await _evict_config_rows()
+    await pc._init_non_llm_objects_in_db(prisma_client=_rows_database(None, None))
+    await _evict_config_rows()
+
+
+async def _sync_sso_settings_row(pc: ProxyConfig, values: Mapping[str, str] | None) -> None:
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        return_value=None
+        if values is None
+        else SimpleNamespace(sso_settings={key: encrypt_value_helper(value) for key, value in values.items()})
+    )
+    await pc._init_sso_settings_in_db(prisma_client=prisma_client)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_newer_environment_variables_row_restores_the_keys_it_no_longer_stores(monkeypatch):
+    pc: Final = ProxyConfig()
+    monkeypatch.setenv("REVISION_TEST_CONFIG_FILE", "from-config-file")
+
+    await _sync_environment_variables_row(
+        pc,
+        {
+            "REVISION_TEST_CONFIG_FILE": "from-db",
+            "REVISION_TEST_DB_ONLY": "db-only",
+            "REVISION_TEST_NULLED": "nulled-later",
+            "REVISION_TEST_KEPT": "kept-1",
+            "revision_test_lower": "lower",
+        },
+        revision=1,
+    )
+    assert _revision_test_environment() == {
+        "REVISION_TEST_CONFIG_FILE": "from-db",
+        "REVISION_TEST_DB_ONLY": "db-only",
+        "REVISION_TEST_NULLED": "nulled-later",
+        "REVISION_TEST_KEPT": "kept-1",
+        "revision_test_lower": "lower",
+        "REVISION_TEST_LOWER": "lower",
+        "GOOGLE_CLIENT_ID": None,
+        "PROXY_BASE_URL": None,
+    }
+
+    await _sync_environment_variables_row(
+        pc, {"REVISION_TEST_NULLED": None, "REVISION_TEST_KEPT": "kept-2"}, revision=2
+    )
+    assert _revision_test_environment() == {
+        "REVISION_TEST_CONFIG_FILE": "from-config-file",
+        "REVISION_TEST_DB_ONLY": None,
+        "REVISION_TEST_NULLED": None,
+        "REVISION_TEST_KEPT": "kept-2",
+        "revision_test_lower": None,
+        "REVISION_TEST_LOWER": None,
+        "GOOGLE_CLIENT_ID": None,
+        "PROXY_BASE_URL": None,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_cached_environment_variables_row_older_than_the_stored_one_changes_nothing():
+    pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(pc, {"REVISION_TEST_KEPT": "newer"}, revision=5)
+
+    await _sync_cached_and_stored_environment_variables_rows(
+        pc,
+        cached=_environment_variables_row(
+            {"REVISION_TEST_KEPT": "older", "REVISION_TEST_DB_ONLY": "older-only"}, revision=4
+        ),
+        stored=_environment_variables_row({"REVISION_TEST_KEPT": "newer"}, revision=5),
+    )
+
+    assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_DB_ONLY")) == ("newer", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+@pytest.mark.parametrize("cached_revision", [None, 4])
+@pytest.mark.parametrize(
+    "writer_error",
+    [
+        httpx.ConnectError("Can't reach database server"),
+        DataError(
+            {"user_facing_error": {"message": "Error querying the database: FATAL: sorry, too many clients already"}}
+        ),
+    ],
+    ids=["unreachable", "out_of_connections"],
+)
+async def test_a_writer_that_cannot_answer_keeps_the_applied_environment_variables_when_the_cached_row_is_behind(
+    cached_revision, writer_error
+):
+    pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(pc, {"REVISION_TEST_KEPT": "newer"}, revision=5)
+    cached: Final = _environment_variables_row(
+        {"REVISION_TEST_KEPT": "older", "REVISION_TEST_DB_ONLY": "older-only"}, revision=cached_revision
+    )
+
+    prisma_client: Final = _rows_database(cached, stored=None)
+    prisma_client.writer_db.litellm_config.find_unique = AsyncMock(side_effect=writer_error)
+    prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
+
+    await _sync_from(pc, prisma_client)
+
+    assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_DB_ONLY")) == ("newer", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_environment_variables_row_read_before_an_overlapping_newer_sync_is_not_applied_after_it():
+    pc: Final = ProxyConfig()
+    older_values: Final = {"REVISION_TEST_KEPT": "older", "REVISION_TEST_DB_ONLY": "removed-by-the-newer-row"}
+    await _sync_environment_variables_row(pc, older_values, revision=5)
+    older_row: Final = _environment_variables_row(older_values, revision=5)
+    newer_row: Final = _environment_variables_row({"REVISION_TEST_KEPT": "newer"}, revision=6)
+    older_environment_row_read: Final = asyncio.Event()
+    newer_sync_finished: Final = asyncio.Event()
+
+    async def read_older_row() -> SimpleNamespace | None:
+        older_environment_row_read.set()
+        return older_row
+
+    async def wait_for_the_newer_sync() -> None:
+        await newer_sync_finished.wait()
+
+    older_sync: Final = asyncio.create_task(
+        _sync_from(
+            pc, _config_database(read_older_row, AsyncMock(return_value=older_row), wait_for_the_newer_sync)
+        )
+    )
+    await older_environment_row_read.wait()
+    await _sync_from(pc, _rows_database(newer_row, newer_row))
+    newer_sync_finished.set()
+    await older_sync
+
+    assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_DB_ONLY")) == ("newer", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_older_row_a_later_sync_read_before_a_newer_row_applied_is_not_applied_after_it():
+    pc: Final = ProxyConfig()
+    older_values: Final = {"REVISION_TEST_KEPT": "older", "REVISION_TEST_DB_ONLY": "removed-by-the-newer-row"}
+    await _sync_environment_variables_row(pc, older_values, revision=5)
+    older_row: Final = _environment_variables_row(older_values, revision=5)
+    newer_row: Final = _environment_variables_row({"REVISION_TEST_KEPT": "newer"}, revision=6)
+    later_sync_read_the_older_row: Final = asyncio.Event()
+    earlier_sync_finished: Final = asyncio.Event()
+
+    async def read_newer_row_after_the_later_sync_read() -> SimpleNamespace | None:
+        await later_sync_read_the_older_row.wait()
+        return newer_row
+
+    async def read_older_row() -> SimpleNamespace | None:
+        later_sync_read_the_older_row.set()
+        return older_row
+
+    async def wait_for_the_earlier_sync() -> None:
+        await earlier_sync_finished.wait()
+
+    earlier_sync: Final = asyncio.create_task(
+        _sync_from(pc, _config_database(read_newer_row_after_the_later_sync_read, AsyncMock(return_value=newer_row)))
+    )
+    await asyncio.sleep(0)
+    later_sync: Final = asyncio.create_task(
+        _sync_from(pc, _config_database(read_older_row, AsyncMock(return_value=newer_row), wait_for_the_earlier_sync))
+    )
+    await earlier_sync
+    earlier_sync_finished.set()
+    await later_sync
+
+    assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_DB_ONLY")) == ("newer", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_writer_row_read_while_an_overlapping_sync_applies_a_newer_row_is_not_applied_after_it():
+    pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(pc, {"REVISION_TEST_KEPT": "applied"}, revision=5)
+    writer_values: Final = {"REVISION_TEST_KEPT": "writer", "REVISION_TEST_DB_ONLY": "removed-by-the-newest-row"}
+    writer_row: Final = _environment_variables_row(writer_values, revision=6)
+    newest_row: Final = _environment_variables_row({"REVISION_TEST_KEPT": "newest"}, revision=7)
+    writer_read_started: Final = asyncio.Event()
+    earlier_sync_finished: Final = asyncio.Event()
+
+    async def read_newest_row_once_the_writer_read_started() -> SimpleNamespace | None:
+        await writer_read_started.wait()
+        return newest_row
+
+    async def read_cached_row_behind_the_applied_one() -> SimpleNamespace | None:
+        return _environment_variables_row(writer_values, revision=4)
+
+    async def read_writer_row_finished_after_the_earlier_sync(where: Mapping[str, str]) -> SimpleNamespace | None:
+        writer_read_started.set()
+        await earlier_sync_finished.wait()
+        return writer_row
+
+    earlier_sync: Final = asyncio.create_task(
+        _sync_from(
+            pc, _config_database(read_newest_row_once_the_writer_read_started, AsyncMock(return_value=newest_row))
+        )
+    )
+    await asyncio.sleep(0)
+    later_sync: Final = asyncio.create_task(
+        _sync_from(
+            pc,
+            _config_database(
+                read_cached_row_behind_the_applied_one,
+                AsyncMock(side_effect=read_writer_row_finished_after_the_earlier_sync),
+            ),
+        )
+    )
+    await earlier_sync
+    earlier_sync_finished.set()
+    await later_sync
+
+    assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_DB_ONLY")) == ("newest", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_environment_variables_row_whose_stored_revision_went_backwards_is_applied():
+    pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(
+        pc,
+        {"REVISION_TEST_KEPT": "before-the-restore", "REVISION_TEST_DB_ONLY": "dropped-by-the-restore"},
+        revision=500,
+    )
+
+    await _sync_environment_variables_row(pc, {"REVISION_TEST_KEPT": "restored"}, revision=1)
+
+    assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_DB_ONLY")) == ("restored", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_environment_variables_row_without_a_revision_only_sets_keys_a_later_revision_can_restore():
+    pc: Final = ProxyConfig()
+
+    await _sync_environment_variables_row(
+        pc, {"REVISION_TEST_KEPT": "kept", "REVISION_TEST_NULLED": "from-an-older-pod"}, revision=None
+    )
+    assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_NULLED")) == (
+        "kept",
+        "from-an-older-pod",
+    )
+
+    await _sync_environment_variables_row(pc, {"REVISION_TEST_KEPT": "kept"}, revision=3)
+    assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_NULLED")) == ("kept", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_stale_environment_variables_row_without_a_revision_cannot_bring_back_a_removed_key():
+    pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(pc, {"REVISION_TEST_DB_ONLY": "db-only"}, revision=1)
+    await _sync_environment_variables_row(pc, {"REVISION_TEST_DB_ONLY": None}, revision=2)
+
+    await _sync_cached_and_stored_environment_variables_rows(
+        pc,
+        cached=_environment_variables_row({"REVISION_TEST_DB_ONLY": "db-only"}, revision=None),
+        stored=_environment_variables_row({"REVISION_TEST_DB_ONLY": None}, revision=2),
+    )
+
+    assert os.environ.get("REVISION_TEST_DB_ONLY") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_removed_key_does_not_come_back_with_a_value_set_after_the_first_sync_without_a_row(monkeypatch):
+    pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(pc, None, revision=None)
+
+    monkeypatch.setenv("REVISION_TEST_DB_ONLY", "set-at-runtime")
+    await _sync_environment_variables_row(pc, {"REVISION_TEST_DB_ONLY": "set-at-runtime"}, revision=1)
+    monkeypatch.delenv("REVISION_TEST_DB_ONLY")
+    await _sync_environment_variables_row(pc, {"REVISION_TEST_DB_ONLY": None}, revision=2)
+
+    assert os.environ.get("REVISION_TEST_DB_ONLY") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_sso_key_only_the_environment_variables_row_stored_is_unset_by_the_next_sso_sync():
+    pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(pc, {"PROXY_BASE_URL": "https://from-the-row"}, revision=1)
+    await _sync_sso_settings_row(pc, None)
+
+    await _sync_environment_variables_row(pc, {"PROXY_BASE_URL": None}, revision=2)
+    await _sync_sso_settings_row(pc, None)
+
+    assert os.environ.get("PROXY_BASE_URL") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_sso_key_the_sso_settings_table_holds_stays_set_while_the_environment_variables_row_drops_it():
+    pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(pc, {"GOOGLE_CLIENT_ID": "from-the-row"}, revision=1)
+    await _sync_sso_settings_row(pc, {"google_client_id": "from-the-row"})
+
+    await _sync_environment_variables_row(pc, {}, revision=2)
+    set_between_the_two_syncs: Final = os.environ.get("GOOGLE_CLIENT_ID")
+    await _sync_sso_settings_row(pc, {"google_client_id": "from-the-row"})
+
+    assert (set_between_the_two_syncs, os.environ.get("GOOGLE_CLIENT_ID")) == ("from-the-row", "from-the-row")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_sso_key_the_environment_variables_row_drops_is_unset_when_sso_settings_are_not_loaded_from_the_db(
+    monkeypatch,
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["models"]})
+    pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(pc, {"GOOGLE_CLIENT_ID": "from-the-row"}, revision=1)
+    await _init_non_llm_objects_from_an_empty_database(pc)
+
+    await _sync_environment_variables_row(pc, {}, revision=2)
+    await _init_non_llm_objects_from_an_empty_database(pc)
+
+    assert os.environ.get("GOOGLE_CLIENT_ID") is None
 
 
 # ---------------------------------------------------------------------------
