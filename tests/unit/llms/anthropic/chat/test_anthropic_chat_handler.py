@@ -3705,6 +3705,40 @@ def test_streamed_end_turn_carries_no_stop_details():
     assert "stop_reason" not in provider_fields
 
 
+def test_message_start_surfaces_input_transformations_on_the_first_chunk():
+    input_transformations: Final = [{"type": "thinking_block_binding", "count": 2}]
+    chunk: Final = {
+        "type": "message_start",
+        "message": {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-6",
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 12, "output_tokens": 1},
+            "input_transformations": input_transformations,
+        },
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+
+    first_chunk: Final = iterator.chunk_parser(chunk=chunk)
+
+    assert first_chunk.choices[0].delta.provider_specific_fields == {"input_transformations": input_transformations}
+    assert first_chunk.model == "claude-sonnet-4-6"
+
+
+def test_message_start_without_input_transformations_has_no_provider_specific_fields():
+    chunk: Final = {
+        "type": "message_start",
+        "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-6", "content": []},
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+
+    assert iterator.chunk_parser(chunk=chunk).choices[0].delta.provider_specific_fields is None
+
+
 def _anthropic_chat_request_for_bound_thinking(
     extra_headers: dict[str, str] | None, drop_params: bool | None = None
 ) -> httpx.Request:
