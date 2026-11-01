@@ -32,7 +32,7 @@ litellm_settings:
       - host: 127.0.0.1
         port: 6379
     ssl: true
-  callbacks: ["arize_phoenix", "datadog", "smtp_email", "prometheus", "otel", "websearch_interception"]
+  callbacks: ["datadog", "smtp_email", "prometheus", "otel", "websearch_interception"]
   websearch_interception_params:
     enabled_providers: ["bedrock"]
     search_tool_name: e2e-search
