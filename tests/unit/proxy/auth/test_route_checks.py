@@ -215,7 +215,9 @@ def test_user_banner_read_open_to_non_admin_roles(role):
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
     ],
 )
-def test_latest_release_info_read_open_to_non_admin_roles(role):  # test-quality-ok: allowed path returns None, not raising is the observable
+def test_latest_release_info_read_open_to_non_admin_roles(
+    role,
+):  # test-quality-ok: allowed path returns None, not raising is the observable
     user_obj = LiteLLM_UserTable(
         user_id="test_user",
         user_email="test@example.com",
@@ -4449,7 +4451,7 @@ def test_team_service_account_key_allowed_key_management_routes(route):
     assert result is None
 
 
-@pytest.mark.parametrize("route", ["/team/new", "/spend/logs", "/key/delete", "/key/regenerate"])
+@pytest.mark.parametrize("route", ["/team/new", "/key/delete", "/key/regenerate"])
 def test_team_service_account_key_rejected_outside_generate_and_update(route):
     """The service account carve-out covers only /key/generate and /key/update; other
     key-management routes lack team scoping for a userless caller and stay denied."""
@@ -5056,3 +5058,22 @@ def test_every_dashboard_role_can_send_telemetry_ui_events(
         )
     except HTTPException as exc:
         pytest.fail(f"{user_role.value} was denied {method} {route}: {exc.detail}")
+
+
+@pytest.mark.parametrize("route", ["/spend/logs", "/spend/logs/v2"])
+def test_spend_logs_routes_allowed_for_plain_virtual_key(route: str) -> None:
+    request: Final = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+    valid_token: Final = UserAPIKeyAuth(token="hashed_token_value")
+    assert (
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=None,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+        is None
+    )

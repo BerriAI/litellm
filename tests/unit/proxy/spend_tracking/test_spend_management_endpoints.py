@@ -5834,6 +5834,250 @@ async def test_view_spend_logs_date_range_hashes_sk_api_key(client, monkeypatch)
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+@pytest.mark.asyncio
+async def test_view_spend_logs_plain_virtual_key_defaults_to_own_key_hash(client, monkeypatch):
+    mock_client: Final = _CapturePrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        token="key-hash-123",
+        user_role=None,
+        user_id=None,
+    )
+    try:
+        response: Final = client.get(
+            "/spend/logs",
+            params={"start_date": "2024-01-01", "end_date": "2024-12-31", "summarize": "false"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        where: Final = mock_client.db.captured_where
+        assert where is not None
+        assert where["api_key"] == "key-hash-123"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_v2_plain_virtual_key_with_matching_sk_raw_api_key(client, monkeypatch):
+    token_hash: Final = "key-hash-123"
+    mock_spend_logs: Final = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": token_hash,
+            "user": None,
+            "team_id": None,
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        },
+    ]
+
+    def filter_by_key(where):
+        if "api_key" in where and where["api_key"] == token_hash:
+            return [mock_spend_logs[0]]
+        return []
+
+    mock_prisma: Final = make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_key)
+    mock_prisma.hash_token = lambda token: token_hash if token == "sk-raw-token" else "other"
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        token=token_hash,
+        user_role=None,
+        user_id=None,
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response: Final = client.get(
+            "/spend/logs/v2",
+            params={"api_key": "sk-raw-token", "start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        data: Final = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["api_key"] == token_hash
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_plain_virtual_key_with_matching_api_key(client, monkeypatch):
+    mock_client: Final = _CapturePrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        token="key-hash-123",
+        user_role=None,
+        user_id=None,
+    )
+    try:
+        response: Final = client.get(
+            "/spend/logs",
+            params={"api_key": "key-hash-123"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        where: Final = mock_client.db.captured_where
+        assert where is not None
+        assert where["api_key"] == "key-hash-123"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_plain_virtual_key_rejects_foreign_api_key(client, monkeypatch):
+    mock_client: Final = _CapturePrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        token="key-hash-123",
+        user_role=None,
+        user_id=None,
+    )
+    try:
+        response: Final = client.get(
+            "/spend/logs",
+            params={"api_key": "different-key-hash"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_plain_virtual_key_rejects_foreign_user_id(client, monkeypatch):
+    mock_client: Final = _CapturePrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        token="key-hash-123",
+        user_role=None,
+        user_id=None,
+    )
+    try:
+        response: Final = client.get(
+            "/spend/logs",
+            params={"user_id": "other-user"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_v2_plain_virtual_key_defaults_to_own_key_hash(client, monkeypatch):
+    mock_spend_logs: Final = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "key-hash-123",
+            "user": None,
+            "team_id": None,
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "other-key-hash",
+            "user": None,
+            "team_id": None,
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        },
+    ]
+
+    def filter_by_key(where):
+        if "api_key" in where and where["api_key"] == "key-hash-123":
+            return [mock_spend_logs[0]]
+        return mock_spend_logs
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_key),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        token="key-hash-123",
+        user_role=None,
+        user_id=None,
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response: Final = client.get(
+            "/spend/logs/v2",
+            params={"start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        data: Final = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["api_key"] == "key-hash-123"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_v2_plain_virtual_key_rejects_foreign_api_key(client, monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma([], lambda _where: []),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        token="key-hash-123",
+        user_role=None,
+        user_id=None,
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response: Final = client.get(
+            "/spend/logs/v2",
+            params={
+                "api_key": "other-key-hash",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_v2_plain_virtual_key_rejects_foreign_user_id(client, monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma([], lambda _where: []),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        token="key-hash-123",
+        user_role=None,
+        user_id=None,
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response: Final = client.get(
+            "/spend/logs/v2",
+            params={
+                "user_id": "other-user",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
 class _SpendScopeMockPrismaClient:
     def __init__(self, get_data_returns=None, find_many_returns=None):
         self._get_data_returns = get_data_returns if get_data_returns is not None else []
