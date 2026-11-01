@@ -8836,6 +8836,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/key/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Keys
+         * @description Block virtual keys that were published by accident, without an admin.
+         *
+         *     Anyone holding a key can report it, so this route takes no authentication. Every request that passes
+         *     validation gets 202 with an empty body, whether or not any submitted key exists. Each source address can
+         *     send 60 requests an hour.
+         */
+        post: operations["revoke_keys_key_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/key/service-account/generate": {
         parameters: {
             query?: never;
@@ -34233,6 +34257,16 @@ export interface components {
             /** Keys */
             keys?: string[] | null;
         };
+        /** KeyRevokeRequest */
+        KeyRevokeRequest: {
+            /**
+             * Keys
+             * @description One virtual key (sk-...) or a list of up to 100 keys to block.
+             */
+            keys: string | string[];
+        };
+        /** KeyRevokeResponse */
+        KeyRevokeResponse: Record<string, never>;
         /** KeySpendActivityRow */
         KeySpendActivityRow: {
             /** Api Key */
@@ -64168,6 +64202,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GenerateKeyResponse"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_keys_key_revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeyRevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyRevokeResponse"];
                 };
             };
             /** @description Validation Error */

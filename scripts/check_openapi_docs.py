@@ -7,7 +7,8 @@ count them per rule the same delta-vs-base way as the other lint gates. The rule
 OA001  no request body schema (the handler reads ``request.body()`` and never told FastAPI
        what is in it, see ``inline_request_body`` in custom_openapi_spec.py for the fix)
 OA002  no description (the handler has no docstring and the route no ``description=``)
-OA003  the 200 response has no schema (no ``response_model`` and no ``responses={200: ...}``)
+OA003  the success response (the lowest 2xx code) has no schema (no ``response_model`` and no
+       ``responses={200: ...}``)
 """
 
 from __future__ import annotations
@@ -35,13 +36,17 @@ def _json_schema(container: object) -> object:
     return _as_mapping(content.get("application/json")).get("schema")
 
 
+def _success_response(responses: Mapping[str, object]) -> object:
+    return next((responses[code] for code in sorted(responses) if code.startswith("2")), None)
+
+
 def _operation_codes(operation: Mapping[str, object]) -> Iterator[str]:
     if not _json_schema(operation.get("requestBody")):
         yield "OA001"
     description: Final = operation.get("description")
     if not isinstance(description, str) or not description.strip():
         yield "OA002"
-    if not _json_schema(_as_mapping(operation.get("responses")).get("200")):
+    if not _json_schema(_success_response(_as_mapping(operation.get("responses")))):
         yield "OA003"
 
 

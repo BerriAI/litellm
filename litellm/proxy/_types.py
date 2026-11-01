@@ -753,6 +753,7 @@ class LiteLLMRoutes(enum.Enum):
             "/public/skill_hub",
             "/public/litellm_model_cost_map",
             "/moyai/connect/exchange",
+            "/key/revoke",
         )
     )
 
