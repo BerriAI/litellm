@@ -7749,7 +7749,12 @@ def get_standard_logging_object_payload(
             else raw_usage_dict
         )
 
-        id = response_obj.get("id") or kwargs.get("litellm_call_id")
+        # A2A responses carry the client-chosen JSON-RPC id, which is not unique
+        # across calls. Use LiteLLM's own call id so request_id stays unique.
+        if call_type in ("asend_message", "send_message", "asend_message_streaming"):
+            id = kwargs.get("litellm_call_id") or response_obj.get("id")
+        else:
+            id = response_obj.get("id") or kwargs.get("litellm_call_id")
 
         _model_id: Final = metadata.get("model_info", {}).get("id", "")
         _model_group: Final = metadata.get("model_group", "")

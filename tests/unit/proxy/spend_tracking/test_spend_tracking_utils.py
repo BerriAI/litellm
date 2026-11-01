@@ -7587,3 +7587,16 @@ def test_spend_payload_preserves_unknown_completion_start(capture_enabled: bool,
         end if completion_start == "absent" else reported if completion_start else None
     )
     assert observations == ([payload] if capture_enabled else [])
+
+
+@pytest.mark.parametrize("call_type", ["asend_message", "send_message", "asend_message_streaming"])
+def test_get_spend_logs_id_ignores_client_chosen_jsonrpc_id_for_a2a_calls(call_type):
+    """A2A responses carry the JSON-RPC id the client picked, which is not unique across
+    calls. request_id is the LiteLLM_SpendLogs primary key and the flush inserts with
+    skip_duplicates, so two calls that reuse the same JSON-RPC id must still get
+    distinct request ids from LiteLLM's own call id."""
+    first = get_spend_logs_id(call_type, {"id": "1"}, {"litellm_call_id": "call-id-1"})
+    second = get_spend_logs_id(call_type, {"id": "1"}, {"litellm_call_id": "call-id-2"})
+
+    assert first == "call-id-1"
+    assert second == "call-id-2"

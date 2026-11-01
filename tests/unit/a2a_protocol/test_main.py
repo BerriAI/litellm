@@ -1302,3 +1302,25 @@ async def test_a2a_streaming(mock_a2a_client):
 
     assert len(chunks) > 0, "Should receive at least one chunk"
     print(f"\nTotal chunks received: {len(chunks)}")
+
+
+def test_streaming_logging_obj_call_id_ignores_client_jsonrpc_id() -> None:
+    """Two streams that reuse a JSON-RPC id must get distinct litellm_call_ids."""
+    from types import SimpleNamespace
+
+    from litellm.a2a_protocol.main import _build_streaming_logging_obj
+
+    call_ids: Final = [
+        _build_streaming_logging_obj(
+            request=SimpleNamespace(id="1"),  # type: ignore[arg-type]
+            agent_name="plain",
+            agent_id=None,
+            litellm_params=None,
+            metadata=None,
+            proxy_server_request=None,
+            start_time=datetime.datetime.now(),
+        ).litellm_call_id
+        for _ in range(2)
+    ]
+    assert call_ids[0] != call_ids[1]
+    assert "1" not in call_ids

@@ -622,7 +622,7 @@ def _build_streaming_logging_obj(
         stream=False,
         call_type="asend_message_streaming",
         start_time=start_time,
-        litellm_call_id=str(request.id),
+        litellm_call_id=str(uuid.uuid4()),
         function_id=str(request.id),
     )
     logging_obj.model = model
@@ -765,7 +765,7 @@ async def asend_message_streaming(
         if api_base is None:
             raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
         logging_trace_id: Final = getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None
-        trace_id: Final = logging_trace_id or (str(request.id) if request.id else str(uuid.uuid4()))
+        trace_id: Final = logging_trace_id or str(uuid.uuid4())
         extra_headers: Final[dict[str, str]] = {"X-LiteLLM-Trace-Id": trace_id}
         if agent_id:
             extra_headers["X-LiteLLM-Agent-Id"] = agent_id
