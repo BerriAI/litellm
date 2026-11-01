@@ -22,6 +22,7 @@ from litellm.proxy.utils import (
     ProxyLogging,
     _failure_fields_to_lift,
     handle_exception_on_proxy,
+    send_email,
 )
 from litellm.router_utils.fallback_event_handlers import carry_superseded_attempt_usage
 from litellm.types.guardrails import GuardrailEventHooks
@@ -4039,6 +4040,21 @@ class TestPrismaClientTokenAuthBehindThePool:
         assert isinstance(client.db, RoutingPrismaWrapper)
         assert client.db.writer.iam_token_db_auth is True
         assert client.db.reader.iam_token_db_auth is True
+
+
+@pytest.mark.asyncio
+async def test_send_email_raises_transport_errors_only_when_asked(monkeypatch):
+    monkeypatch.setenv("SMTP_HOST", "127.0.0.1")
+    monkeypatch.setenv("SMTP_PORT", "9")
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "proxy@example.com")
+    monkeypatch.setenv("SMTP_TIMEOUT", "5")
+    monkeypatch.delenv("SMTP_USERNAME", raising=False)
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+
+    with pytest.raises(ConnectionRefusedError):
+        await send_email(receiver_email="a@x.io", subject="s", html="<p>x</p>", raise_on_error=True)
+
+    assert await send_email(receiver_email="a@x.io", subject="s", html="<p>x</p>") is None
 
 
 @pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
