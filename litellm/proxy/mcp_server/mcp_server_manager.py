@@ -5171,8 +5171,8 @@ class MCPServerManager:
             # internal MCP servers. Do not run them through user URL
             # validation, but also do not follow redirects because the
             # redirect target would not inherit the same-authority guarantee.
-            return await client.get(url, follow_redirects=False)
-        return await async_safe_get(client, url)
+            return await asyncio.wait_for(client.get(url, follow_redirects=False), timeout=MCP_METADATA_TIMEOUT)
+        return await asyncio.wait_for(async_safe_get(client, url), timeout=MCP_METADATA_TIMEOUT)
 
     async def _descovery_metadata(
         self,
@@ -5219,8 +5219,8 @@ class MCPServerManager:
                 llm_provider=httpxSpecialProvider.MCP,
                 params={"timeout": MCP_METADATA_TIMEOUT},
             )
-            response: Final = await client.get(server_url)
-            response.raise_for_status()
+            async with client.client.stream("GET", server_url) as response:
+                response.raise_for_status()
             (
                 authorization_servers,
                 resource_scopes,
