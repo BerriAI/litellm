@@ -8,16 +8,17 @@ a vision model group, cached by image hash so later turns reuse the same text
 
 import asyncio
 import base64
-import binascii
 import hashlib
+import math
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import chain
 from typing import Final, Protocol, TypeAlias
 
 from litellm._logging import verbose_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_convert_url_to_base64
@@ -52,6 +53,7 @@ DEFAULT_IMAGE_DESCRIPTION_TIMEOUT_SECONDS: Final = 120.0
 _DESCRIPTION_MAX_TOKENS: Final = 4096
 _CACHE_TTL_SECONDS: Final = 24 * 60 * 60
 _CHAT_CALL_TYPES: Final = frozenset({CallTypes.acompletion, CallTypes.completion})
+_MAX_ENCODED_IMAGE_CHARS: Final = math.ceil(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024 / 3) * 4
 
 _describing_image: Final[ContextVar[bool]] = ContextVar("image_description_interception_describing", default=False)
 
@@ -69,8 +71,19 @@ class DescriptionFailed:
 DescriptionResult: TypeAlias = Described | DescriptionFailed
 
 
+@dataclass(frozen=True, slots=True)
+class DescriptionRequest:
+    model: str
+    prompt: str
+    image_data_uri: str
+    timeout: float
+    metadata: Mapping[str, object]
+    trace_id: str | None
+    session_id: str | None
+
+
 class ImageDescriber(Protocol):
-    async def __call__(self, model: str, prompt: str, image_data_uri: str, timeout: float) -> DescriptionResult: ...
+    async def __call__(self, request: DescriptionRequest) -> DescriptionResult: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +99,7 @@ class _ImagePart:
     url: str | None
 
 
-async def describe_with_proxy_router(model: str, prompt: str, image_data_uri: str, timeout: float) -> DescriptionResult:
+async def describe_with_proxy_router(request: DescriptionRequest) -> DescriptionResult:
     from litellm.proxy.proxy_server import llm_router
 
     if llm_router is None:
@@ -94,20 +107,23 @@ async def describe_with_proxy_router(model: str, prompt: str, image_data_uri: st
     message: Final = ChatCompletionUserMessage(
         role="user",
         content=[
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": image_data_uri}},
+            {"type": "text", "text": request.prompt},
+            {"type": "image_url", "image_url": {"url": request.image_data_uri}},
         ],
     )
     try:
         response: Final = await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads take untyped kwargs
-            model=model,
+            model=request.model,
             messages=[message],
             temperature=0,
             max_tokens=_DESCRIPTION_MAX_TOKENS,
-            timeout=timeout,
+            timeout=request.timeout,
+            metadata=dict(request.metadata),
+            litellm_trace_id=request.trace_id,
+            litellm_session_id=request.session_id,
         )
     except Exception as e:  # noqa: BLE001  # any provider failure degrades to a placeholder instead of failing the request
-        return DescriptionFailed(f"{model} call failed ({type(e).__name__})")
+        return DescriptionFailed(f"{request.model} call failed ({type(e).__name__})")
     return _description_from_response(response)
 
 
@@ -131,6 +147,43 @@ def _deployment_is_text_only(kwargs: Mapping[str, object]) -> bool:
     if not isinstance(model, str):
         return False
     return is_vision_explicitly_disabled(model, provider if isinstance(provider, str) else None)
+
+
+def _request_metadatas(kwargs: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        metadata
+        for key in ("metadata", "litellm_metadata")
+        if (metadata := as_str_mapping(kwargs.get(key))) is not None
+    )
+
+
+def _accounting_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    """Spend-tracking metadata for a description call, so its cost is billed to the key, user and team of
+    the request that carried the image. Only proxy-built fields are copied, never client metadata"""
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+    auth: Final = next(
+        (
+            candidate
+            for metadata in _request_metadatas(kwargs)
+            if isinstance(candidate := metadata.get("user_api_key_auth"), UserAPIKeyAuth)
+        ),
+        None,
+    )
+    if auth is None:
+        return {}
+    parent_request_id: Final = kwargs.get("litellm_call_id")
+    return {
+        **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=auth),
+        "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(auth),
+        "user_api_key_auth": auth,
+        **({"parent_request_id": parent_request_id} if isinstance(parent_request_id, str) else {}),
+    }
+
+
+def _nonempty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _is_list(value: object) -> bool:
@@ -195,9 +248,11 @@ async def _load_image(url: str) -> _LoadedImage | DescriptionFailed:
     _, separator, encoded = data_uri.partition(";base64,")
     if not separator:
         return DescriptionFailed("image data is not base64")
+    if MAX_IMAGE_URL_DOWNLOAD_SIZE_MB > 0 and len(encoded) > _MAX_ENCODED_IMAGE_CHARS:
+        return DescriptionFailed(f"image exceeds the {MAX_IMAGE_URL_DOWNLOAD_SIZE_MB:g}MB size limit")
     try:
         raw: Final = base64.b64decode(encoded, validate=True)
-    except binascii.Error:
+    except ValueError:  # binascii.Error, and non-ASCII input
         return DescriptionFailed("image data is not valid base64")
     return _LoadedImage(data_uri=data_uri, sha256=hashlib.sha256(raw).hexdigest())
 
@@ -254,7 +309,18 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
         image_parts: Final = _image_parts(messages)
         if not image_parts or not _deployment_is_text_only(kwargs):
             return None
-        texts: Final = [await self._replacement_text(number, part.url) for number, part in enumerate(image_parts, 1)]
+        template: Final = DescriptionRequest(
+            model=self.image_model,
+            prompt=self.prompt,
+            image_data_uri="",
+            timeout=self.timeout,
+            metadata=_accounting_metadata(kwargs),
+            trace_id=_nonempty_str(kwargs.get("litellm_trace_id")),
+            session_id=_nonempty_str(kwargs.get("litellm_session_id")),
+        )
+        texts: Final = [
+            await self._replacement_text(number, part.url, template) for number, part in enumerate(image_parts, 1)
+        ]
         replacements: Final = {
             (part.message_index, part.part_index): text for part, text in zip(image_parts, texts, strict=True)
         }
@@ -264,13 +330,13 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
             "messages": [_with_text_parts(index, message, replacements) for index, message in enumerate(messages)],
         }
 
-    async def _replacement_text(self, number: int, url: str | None) -> str:
+    async def _replacement_text(self, number: int, url: str | None, template: DescriptionRequest) -> str:
         if url is None:
             return f"[Image #{number} could not be described: the image part has no url]"
         loaded: Final = await _load_image(url)
         if isinstance(loaded, DescriptionFailed):
             return f"[Image #{number} could not be described: {loaded.reason}]"
-        result: Final = await self._describe_cached(loaded)
+        result: Final = await self._describe_cached(loaded, replace(template, image_data_uri=loaded.data_uri))
         label: Final = f"Image #{number} (sha256:{loaded.sha256[:12]})"
         match result:
             case Described(text=text):
@@ -281,24 +347,28 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
             case DescriptionFailed(reason=reason):
                 return f"[{label} could not be described: {reason}]"
 
-    async def _describe_cached(self, image: _LoadedImage) -> DescriptionResult:
+    async def _describe_cached(self, image: _LoadedImage, request: DescriptionRequest) -> DescriptionResult:
         key: Final = f"image_description:{self.image_model}:{self._prompt_hash}:{image.sha256}"
         cached: Final[object] = await self.cache.async_get_cache(key)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the legacy DualCache API is untyped
         if isinstance(cached, str):
             return Described(cached)
-        in_flight: Final = self._in_flight.get(key)
-        if in_flight is not None:
-            return await in_flight
-        task: Final = asyncio.create_task(self._describe_and_store(key, image))
-        self._in_flight[key] = task
-        try:
-            return await task
-        finally:
-            self._in_flight.pop(key, None)
+        task: Final = self._in_flight.get(key) or self._start_description(key, request)
+        # The task is shared by every request that carries this image, so one cancelled request must not cancel it
+        return await asyncio.shield(task)
 
-    async def _describe_and_store(self, key: str, image: _LoadedImage) -> DescriptionResult:
+    def _start_description(self, key: str, request: DescriptionRequest) -> "asyncio.Task[DescriptionResult]":
+        task: Final = asyncio.create_task(self._describe_and_store(key, request))
+        self._in_flight[key] = task
+        task.add_done_callback(lambda done: self._forget(key, done))
+        return task
+
+    def _forget(self, key: str, task: "asyncio.Task[DescriptionResult]") -> None:
+        if self._in_flight.get(key) is task:
+            del self._in_flight[key]
+
+    async def _describe_and_store(self, key: str, request: DescriptionRequest) -> DescriptionResult:
         _describing_image.set(True)
-        result: Final = await self.describer(self.image_model, self.prompt, image.data_uri, self.timeout)
+        result: Final = await self.describer(request)
         if isinstance(result, Described):
             await self.cache.async_set_cache(key, result.text, ttl=_CACHE_TTL_SECONDS)  # pyright: ignore[reportUnknownMemberType]  # the legacy DualCache API is untyped
         return result

@@ -9,9 +9,11 @@ import pytest
 from litellm.integrations.image_description_interception.handler import (
     Described,
     DescriptionFailed,
+    DescriptionRequest,
     DescriptionResult,
     ImageDescriptionInterceptionLogger,
 )
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.utils import CallTypes
 
 IMAGE_BYTES: Final = b"\x89PNG\r\n\x1a\nfake image bytes"
@@ -24,11 +26,24 @@ class _RecordingDescriber:
     def __init__(self, results: Sequence[DescriptionResult]) -> None:
         self.results = results
         self.requests: list[tuple[str, str]] = []  # mutable-ok: records each description call
+        self.received: list[DescriptionRequest] = []  # mutable-ok: records each full description request
 
-    async def __call__(self, model: str, prompt: str, image_data_uri: str, timeout: float) -> DescriptionResult:
-        self.requests.append((model, image_data_uri))
+    async def __call__(self, request: DescriptionRequest) -> DescriptionResult:
+        self.requests.append((request.model, request.image_data_uri))
+        self.received.append(request)
         await asyncio.sleep(0)
         return self.results[min(len(self.requests), len(self.results)) - 1]
+
+
+class _GatedDescriber:
+    def __init__(self) -> None:
+        self.release = asyncio.Event()
+        self.calls = 0
+
+    async def __call__(self, request: DescriptionRequest) -> DescriptionResult:
+        self.calls += 1
+        await self.release.wait()
+        return Described("a cat")
 
 
 def _logger(describer: _RecordingDescriber) -> ImageDescriptionInterceptionLogger:
@@ -151,11 +166,12 @@ async def test_failed_description_becomes_a_placeholder_and_is_retried_next_turn
 
 
 @pytest.mark.asyncio
-async def test_unreadable_image_data_becomes_a_placeholder_without_a_description_call():
+@pytest.mark.parametrize("payload", ["@@@", "é"])
+async def test_unreadable_image_data_becomes_a_placeholder_without_a_description_call(payload: str):
     describer: Final = _RecordingDescriber([Described("unused")])
 
     result: Final = await _logger(describer).async_pre_call_deployment_hook(
-        _request([_image_turn("hi", "data:image/png;base64,@@@")]), CallTypes.acompletion
+        _request([_image_turn("hi", f"data:image/png;base64,{payload}")]), CallTypes.acompletion
     )
 
     assert result == _request(
@@ -165,14 +181,59 @@ async def test_unreadable_image_data_becomes_a_placeholder_without_a_description
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [0, 1])
+async def test_cancelling_one_request_does_not_fail_another_waiting_on_the_same_image(cancelled: int):
+    describer: Final = _GatedDescriber()
+    logger: Final = ImageDescriptionInterceptionLogger(image_model="vision-describer", describer=describer)
+    requests: Final = [
+        asyncio.create_task(logger.async_pre_call_deployment_hook(_request([_image_turn("hi")]), CallTypes.acompletion))
+        for _ in range(2)
+    ]
+    while describer.calls == 0:
+        await asyncio.sleep(0)
+
+    requests[cancelled].cancel()
+    describer.release.set()
+    outcomes: Final = await asyncio.gather(*requests, return_exceptions=True)
+
+    assert isinstance(outcomes[cancelled], asyncio.CancelledError)
+    assert outcomes[1 - cancelled] == _request([_described_turn("hi", 1, "a cat")])
+    assert describer.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_description_call_is_billed_to_the_key_that_sent_the_image():
+    describer: Final = _RecordingDescriber([Described("a cat")])
+    auth: Final = UserAPIKeyAuth(api_key="hashed-key", user_id="user-1", team_id="team-1")
+    request: Final = {
+        **_request([_image_turn("hi")]),
+        "metadata": {"user_api_key_auth": auth, "user_api_key_team_id": "spoofed"},
+        "litellm_call_id": "call-1",
+        "litellm_trace_id": "trace-1",
+    }
+
+    await _logger(describer).async_pre_call_deployment_hook(request, CallTypes.acompletion)
+
+    sent: Final = describer.received[0]
+    assert (
+        sent.metadata["user_api_key_hash"],
+        sent.metadata["user_api_key_user_id"],
+        sent.metadata["user_api_key_team_id"],
+        sent.metadata["user_api_key_auth"],
+        sent.metadata["parent_request_id"],
+    ) == ("hashed-key", "user-1", "team-1", auth, "call-1")
+    assert (sent.trace_id, sent.session_id) == ("trace-1", None)
+
+
+@pytest.mark.asyncio
 async def test_description_call_routed_to_a_text_only_deployment_does_not_recurse():
     nested_results: Final[list[dict[str, object] | None]] = []  # mutable-ok: records the nested hook result
 
     class _MisconfiguredDescriber:
-        async def __call__(self, model: str, prompt: str, image_data_uri: str, timeout: float) -> DescriptionResult:
+        async def __call__(self, request: DescriptionRequest) -> DescriptionResult:
             nested_results.append(
                 await logger.async_pre_call_deployment_hook(
-                    _request([_image_turn(prompt, image_data_uri)]), CallTypes.acompletion
+                    _request([_image_turn(request.prompt, request.image_data_uri)]), CallTypes.acompletion
                 )
             )
             return DescriptionFailed("vision-describer call failed (BadRequestError)")

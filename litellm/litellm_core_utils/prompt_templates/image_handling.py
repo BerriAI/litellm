@@ -20,6 +20,7 @@ from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 from litellm.litellm_core_utils.prompt_templates.common_utils import infer_content_type_from_url_and_content
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, safe_get
+from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
 from litellm.types.llms.openai import AllMessageValues
 
 MAX_IMGS_IN_MEMORY: Final = 10
@@ -113,12 +114,19 @@ async def async_convert_url_to_base64(url: str, timeout: float | httpx.Timeout |
         return cached_result
 
     client: Final = litellm.module_level_aclient
+    # Bound the body while it streams in, so an oversized image never lands in memory whole
+    max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
     for attempt_timeout in _attempt_timeouts(timeout):
         try:
-            response = await async_safe_get(client, url, timeout=attempt_timeout)
+            response = await async_safe_get(client, url, timeout=attempt_timeout, max_response_bytes=max_bytes)
             return _process_image_response(response, url)
         except litellm.ImageFetchError:
             raise
+        except HTTPResponseLimitError as e:
+            raise litellm.ImageFetchError(
+                f"Error: Image exceeds maximum allowed size ({MAX_IMAGE_URL_DOWNLOAD_SIZE_MB}MB) "
+                f"or the server sent it compressed. url={url}"
+            ) from e
         except SSRFError as e:
             raise _rejected_image_fetch(url, e) from e
         except Exception:
