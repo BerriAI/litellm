@@ -322,10 +322,7 @@ def _prepare_request_data_and_content(
             # dict/Mapping stays in data= parameter
             request_data = data
 
-    if isinstance(request_content, str):
-        request_content = _repair_surrogates(request_content)
-
-    return request_data, request_content
+    return request_data, _repair_surrogates(request_content) if isinstance(request_content, str) else request_content
 
 
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
