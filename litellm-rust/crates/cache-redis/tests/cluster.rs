@@ -66,7 +66,7 @@ fn constructor_rejects_unusable_cluster_configs(
         JsonCodec::new(),
     )
     .err();
-    assert!(matches!(error, Some(Error::Unavailable)));
+    assert!(matches!(error, Some(Error::Unavailable(_))));
 }
 
 #[rstest]

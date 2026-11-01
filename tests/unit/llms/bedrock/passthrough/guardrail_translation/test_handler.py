@@ -18,7 +18,7 @@ import types
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from itertools import chain
-from typing import ClassVar, Literal, TypeAlias
+from typing import ClassVar, Final, Literal, TypeAlias
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -60,6 +60,7 @@ from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
     BedrockPassthroughGuardrailHandler,
     _extract_converse_texts,
     _is_converse_endpoint,
+    _sse_events,
     _write_back_texts,
 )
 
@@ -3997,3 +3998,14 @@ async def test_anthropic_invoke_response_masks_are_written_back():
     )
 
     assert result == {**response, "content": [{"type": "text", "text": "Charged [CARD] 1111 1111 1111"}]}
+
+
+def test_sse_events_keeps_a_data_line_whose_json_holds_unicode_line_separators() -> None:
+    event: Final = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Card\u2028on\u2029file"},
+    }
+    sse: Final = f"event: content_block_delta\ndata: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+
+    assert _sse_events(sse) == (event,)

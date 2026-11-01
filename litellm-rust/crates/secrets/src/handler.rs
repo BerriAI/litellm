@@ -5,7 +5,7 @@ use litellm_core_utils::settings::Lookup;
 use crate::{Error, KeyManagementSettings, KeyManagementSystem, Secret};
 
 #[cfg(any(feature = "aws", feature = "google"))]
-use crate::SecretValue;
+use litellm_secret_value::SecretValue;
 
 #[cfg(any(
     feature = "google",
@@ -87,7 +87,8 @@ pub async fn get_secret_from_manager(
             let plaintext = client
                 .decrypt(decode_ciphertext(&ciphertext, Base64Mode::Permissive)?)
                 .await?;
-            let value = String::from_utf8(plaintext).map_err(|_| Error::Utf8)?;
+            let value =
+                String::from_utf8(plaintext).map_err(|error| Error::Utf8(error.utf8_error()))?;
             Ok(Some(Secret::String(SecretValue::new(value.trim()))))
         }
         #[cfg(feature = "google")]
@@ -98,7 +99,8 @@ pub async fn get_secret_from_manager(
             let plaintext = client
                 .decrypt(decode_ciphertext(&ciphertext, Base64Mode::Canonical)?)
                 .await?;
-            let value = String::from_utf8(plaintext).map_err(|_| Error::Utf8)?;
+            let value =
+                String::from_utf8(plaintext).map_err(|error| Error::Utf8(error.utf8_error()))?;
             Ok(Some(Secret::String(SecretValue::new(value))))
         }
         #[cfg(feature = "aws")]
@@ -149,9 +151,9 @@ fn decode_ciphertext(value: &str, mode: Base64Mode) -> Result<Vec<u8>, Error> {
     };
     let ciphertext = STANDARD
         .decode(&encoded)
-        .map_err(|_| Error::InvalidCiphertext)?;
+        .map_err(|error| Error::InvalidCiphertext(Some(error)))?;
     if canonical && STANDARD.encode(&ciphertext) != encoded {
-        return Err(Error::InvalidCiphertext);
+        return Err(Error::InvalidCiphertext(None));
     }
     Ok(ciphertext)
 }

@@ -1,5 +1,8 @@
 import json
+import logging
 import traceback
+from collections.abc import Callable
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -8,6 +11,7 @@ import respx
 from httpx import Response
 
 import litellm
+from litellm import Router
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.azure_ai.azure_model_router.transformation import (
@@ -755,6 +759,66 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
     assert result["tools"][1]["function"]["name"] == "read_file"
 
 
+def test_extra_parameters_error_drops_reasoning_effort_with_one_warning(caplog: pytest.LogCaptureFixture) -> None:
+    import httpx
+
+    error_text: Final = json.dumps(
+        {
+            "error": {
+                "message": "Extra parameters ['reasoning_effort'] are not allowed when extra-parameters is not set "
+                "or set to be 'error'. Set extra-parameters to 'pass-through' to pass to the model."
+            }
+        }
+    )
+    error: Final = httpx.HTTPStatusError(
+        message="422",
+        request=httpx.Request("POST", "https://example.services.ai.azure.com/models/chat/completions"),
+        response=httpx.Response(422, text=error_text),
+    )
+    request_data: Final = {
+        "model": "Kimi-K2.6",
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "reasoning_effort": "high",
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        retried: Final = AzureAIStudioConfig().transform_request_on_unprocessable_entity_error(error, request_data)
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert retried == {"model": "Kimi-K2.6", "messages": [{"role": "user", "content": "Say hi."}]}
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='high'", "Kimi-K2.6"))
+    assert "drop_params" not in drop_warnings[0]
+
+
+def test_extra_inputs_error_names_drop_params_in_the_reasoning_drop_warning(caplog: pytest.LogCaptureFixture) -> None:
+    import httpx
+
+    detail: Final = [
+        {"type": "extra_forbidden", "loc": ["body", "reasoning_effort"], "msg": "Extra inputs are not permitted"}
+    ]
+    error: Final = httpx.HTTPStatusError(
+        message="422",
+        request=httpx.Request("POST", "https://example.services.ai.azure.com/models/chat/completions"),
+        response=httpx.Response(422, text=json.dumps({"error": {"message": json.dumps({"detail": detail})}})),
+    )
+    request_data: Final = {
+        "model": "Mistral-Large-3",
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "reasoning_effort": "high",
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        retried: Final = AzureAIStudioConfig().transform_request_on_unprocessable_entity_error(error, request_data)
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert retried == {"model": "Mistral-Large-3", "messages": [{"role": "user", "content": "Say hi."}]}
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0] for fragment in ("reasoning_effort='high'", "Mistral-Large-3", "(drop_params=True)")
+    )
+
+
 def _find_key_anywhere(obj, key: str) -> bool:
     if isinstance(obj, dict):
         if key in obj:
@@ -877,6 +941,360 @@ def test_azure_ai_stripping_does_not_mutate_caller_messages():
     assert original_assistant["tool_calls"][0]["function"]["provider_specific_fields"] == {
         "thought_signature": "sig-nested"
     }
+
+
+def test_azure_ai_keeps_prompt_cache_breakpoint_for_a_model_that_supports_it(_local_model_cost_map):
+    """
+    Foundry GPT-6 deployments take OpenAI explicit prompt caching, and the breakpoint only
+    counts on a content part, so a system message carrying one must reach the request body as
+    the content-part list it arrived in while the Anthropic-only fields are still stripped.
+    """
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "stable instructions",
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        ],
+        optional_params={"prompt_cache_options": {"mode": "explicit"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [
+        {"type": "text", "text": "stable instructions", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert request["messages"][1]["content"] == [{"type": "text", "text": "hi"}]
+    assert request["prompt_cache_options"] == {"mode": "explicit"}
+
+
+def test_azure_ai_still_flattens_list_content_for_a_model_without_the_breakpoint_flag(_local_model_cost_map):
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "stable ", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                    {"type": "text", "text": "instructions"},
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == "stable instructions"
+    assert request["messages"][1]["content"] == "hi"
+    assert not _find_key_anywhere(request["messages"], "prompt_cache_breakpoint")
+
+
+def test_azure_ai_drops_thinking_parts_from_history_while_keeping_the_breakpoint(_local_model_cost_map):
+    """
+    A multi-turn client can echo an assistant turn back with thinking parts inside its content
+    list. Foundry rejects those parts, and the string conversion always dropped them, so a model
+    that keeps content parts must still drop them while the text parts and the breakpoint stay.
+    """
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "stable instructions", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                ],
+            },
+            {"role": "user", "content": "read the file"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "The user wants me to read a file.", "signature": "sig"},
+                    {"type": "redacted_thinking", "data": "opaque"},
+                    {"type": "text", "text": "Reading it now."},
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "thanks"}]},
+        ],
+        optional_params={"prompt_cache_options": {"mode": "explicit"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [
+        {"type": "text", "text": "stable instructions", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert request["messages"][2]["content"] == [{"type": "text", "text": "Reading it now."}]
+    assert request["messages"][3]["content"] == [{"type": "text", "text": "thanks"}]
+    assert not _find_key_anywhere(request["messages"], "thinking")
+    assert not _find_key_anywhere(request["messages"], "data")
+
+
+
+def test_azure_ai_renames_a_cache_control_mark_to_a_breakpoint_for_a_model_that_reads_them(_local_model_cost_map):
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "stable instructions", "cache_control": {"type": "ephemeral"}}],
+            },
+            {"role": "user", "content": "hi", "cache_control": {"type": "ephemeral"}},
+        ],
+        optional_params={"prompt_cache_options": {"mode": "explicit"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [
+        {"type": "text", "text": "stable instructions", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert request["messages"][1]["content"] == [
+        {"type": "text", "text": "hi", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert not _find_key_anywhere(request["messages"], "cache_control")
+
+
+def test_azure_ai_drops_a_file_part_next_to_the_breakpoint_like_the_string_conversion(_local_model_cost_map):
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "summarize", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                {"type": "file", "file": {"file_id": "file-held-by-another-provider"}},
+            ],
+        }
+    ]
+
+    kept: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+    flattened: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-4o", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert kept["messages"][0]["content"] == [
+        {"type": "text", "text": "summarize", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert flattened["messages"][0]["content"] == "summarize"
+
+
+def test_azure_ai_sends_a_pdf_part_next_to_the_breakpoint_as_is(_local_model_cost_map):
+    content: Final = [
+        {"type": "file", "file": {"filename": "document.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"}},
+        {"type": "text", "text": "What is the codeword?", "prompt_cache_breakpoint": {"mode": "explicit"}},
+    ]
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[{"role": "user", "content": content}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": content}]
+
+
+def test_azure_ai_puts_a_message_level_mark_on_the_last_text_part_when_a_file_part_follows(_local_model_cost_map):
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[
+            {
+                "role": "user",
+                "cache_control": {"type": "ephemeral"},
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {"type": "file", "file": {"file_id": "file-held-by-another-provider"}},
+                ],
+            }
+        ],
+        optional_params={"prompt_cache_options": {"mode": "explicit"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [
+        {"type": "text", "text": "summarize", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("registered", "keeps_parts"),
+    [
+        ({"azure_ai/qa-foundry-alias": {"litellm_provider": "azure_ai", "supports_prompt_cache_breakpoint": True}}, True),
+        ({"qa-foundry-alias": {"litellm_provider": "openai", "supports_prompt_cache_breakpoint": True}}, False),
+    ],
+    ids=["azure_ai-entry-opts-in", "openai-entry-does-not-speak-for-azure_ai"],
+)
+def test_azure_ai_keeps_parts_only_when_the_azure_ai_entry_reads_breakpoints(
+    _local_model_cost_map, registered: dict[str, dict[str, object]], keeps_parts: bool
+):
+    litellm.register_model(model_cost=registered, persist_across_reloads=False, add_to_provider_model_sets=False)
+    breakpoint_part: Final = {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="qa-foundry-alias",
+        messages=[{"role": "system", "content": [breakpoint_part]}],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "azure_ai", "drop_params": True},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == ([breakpoint_part] if keeps_parts else "stable")
+
+
+@pytest.mark.parametrize(
+    "registration_order", [("opted-in", "opted-out", "unflagged"), ("unflagged", "opted-out", "opted-in")]
+)
+def test_azure_ai_deployment_reads_only_its_own_breakpoint_flag_not_a_siblings_sharing_its_model_string(
+    _local_model_cost_map, respx_mock: respx.MockRouter, registration_order: tuple[str, ...]
+) -> None:
+    breakpoint_flags: Final = MappingProxyType(
+        {
+            "opted-in": {"supports_prompt_cache_breakpoint": True},
+            "opted-out": {"supports_prompt_cache_breakpoint": False},
+        }
+    )
+    def deployment(host: str, model_info: dict[str, object]) -> dict[str, object]:
+        return {
+            "model_name": host,
+            "litellm_params": {
+                "model": "azure_ai/qa-shared-deployment",
+                "api_base": f"https://{host}.services.ai.azure.com/models",
+                "api_key": "azure-ai-test-key",
+            },
+            "model_info": model_info,
+        }
+
+    routes: Final = {
+        host: respx_mock.post(host=f"{host}.services.ai.azure.com", path="/models/chat/completions").mock(
+            return_value=Response(
+                200,
+                json={
+                    "id": "chatcmpl-azure-ai",
+                    "object": "chat.completion",
+                    "created": 1700000000,
+                    "model": "qa-shared-deployment",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+                },
+            )
+        )
+        for host in registration_order
+    }
+    router: Final = Router(
+        model_list=[
+            deployment(host, {"id": f"{host}-id", **breakpoint_flags.get(host, {})}) for host in registration_order
+        ]
+    )
+    marked_system: Final = {
+        "role": "system",
+        "content": [{"type": "text", "text": "stable", "cache_control": {"type": "ephemeral"}}],
+    }
+
+    for host in registration_order:
+        router.completion(model=host, messages=[marked_system, {"role": "user", "content": "hi"}])
+
+    def sent_system_content(host: str) -> object:
+        return json.loads(routes[host].calls.last.request.content)["messages"][0]["content"]
+
+    assert sent_system_content("opted-in") == [
+        {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert sent_system_content("opted-out") == "stable"
+    assert sent_system_content("unflagged") == "stable"
+
+
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"base_model": "azure_ai/gpt-6-astra"},
+        {"base_model": "azure_ai/gpt-6-astra", "model_info": {"id": "my-astra-deployment-id"}},
+    ],
+)
+def test_azure_ai_keeps_parts_for_a_custom_deployment_name_whose_base_model_reads_breakpoints(
+    _local_model_cost_map, litellm_params: dict[str, object]
+):
+    breakpoint_part: Final = {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="my-astra-deployment",
+        messages=[{"role": "system", "content": [breakpoint_part]}],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [breakpoint_part]
+
+
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"base_model": "azure/cost-tracking-row"},
+        {"base_model": "azure/cost-tracking-row", "model_info": {"id": "astra-deployment-id"}},
+    ],
+)
+def test_azure_ai_falls_back_to_the_model_name_when_the_base_model_row_does_not_read_breakpoints(
+    _local_model_cost_map, litellm_params: dict[str, object]
+):
+    breakpoint_part: Final = {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[{"role": "system", "content": [breakpoint_part]}],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [breakpoint_part]
+
+
+@pytest.mark.parametrize(
+    "sent_marker, litellm_params, wire_part",
+    [
+        (
+            {"mode": "explicit", "ttl": "30m"},
+            {"drop_params": True},
+            {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}},
+        ),
+        ({"type": "ephemeral"}, {"drop_params": True}, {"type": "text", "text": "stable"}),
+        (
+            {"mode": "explicit", "ttl": "30m"},
+            {},
+            {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}},
+        ),
+    ],
+)
+def test_azure_ai_reshapes_breakpoints_for_foundry_only_under_drop_params(
+    _local_model_cost_map,
+    sent_marker: dict[str, object],
+    litellm_params: dict[str, object],
+    wire_part: dict[str, object],
+):
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "stable", "prompt_cache_breakpoint": sent_marker}]}
+        ],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [wire_part]
 
 
 def test_azure_ai_reference_only_tool_result_is_sent_as_empty_text():
@@ -1098,3 +1516,77 @@ def test_map_azure_model_group(model_group_header, expected_model):
 
     config = AzureAICohereConfig()
     assert config._map_azure_model_group(model_group_header) == expected_model
+
+
+def test_azure_ai_sends_file_parts_instead_of_flattening_them_to_text() -> None:
+    file_part: Final = {
+        "type": "file",
+        "file": {"filename": "document.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+    }
+    content: Final = [file_part, {"type": "text", "text": "What is the codeword?"}]
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="Kimi-K2.6",
+        messages=[{"role": "user", "content": content}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": content}]
+
+
+def test_azure_ai_passes_dict_message_content_through_for_the_provider_to_judge() -> None:
+    content: Final = {"type": "text", "text": "Say hi"}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-5.6-sol",
+        messages=[{"role": "user", "content": content}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": content}]
+
+
+@pytest.mark.parametrize(
+    "file",
+    [
+        {"filename": "notes.txt", "file_data": "data:text/plain;base64,aGVsbG8="},
+        {"file_id": "file-abc"},
+    ],
+    ids=["text_data_url", "file_id_only"],
+)
+def test_azure_ai_flattens_a_non_pdf_file_part_to_its_text_as_before(file: dict[str, str]) -> None:
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="Llama-3.3-70B-Instruct",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "summarize"}, {"type": "file", "file": file}]}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": "summarize"}]
+
+
+def test_translate_developer_role_hoists_a_later_developer_message_for_a_model_that_rejects_it(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+) -> None:
+    declare_mid_conversation_system("azure_ai/system-first-model", False)
+    messages: Final = AzureAIStudioConfig().translate_developer_role_to_system_role(
+        messages=[
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "Hi there"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ],
+        model="system-first-model",
+        custom_llm_provider="azure_ai",
+        api_base="https://example.services.ai.azure.com/models",
+        model_info=None,
+    )
+
+    assert [message["role"] for message in messages] == ["system", "user", "assistant", "user"]
+    assert messages[0]["content"] == "You are terse.\n\nAnswer with exactly one word."

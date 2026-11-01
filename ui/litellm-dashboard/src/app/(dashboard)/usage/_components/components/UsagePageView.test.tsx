@@ -1,5 +1,4 @@
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
-import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
@@ -9,7 +8,7 @@ import type { ComponentProps } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UrlUpdateEvent } from "nuqs/adapters/testing";
-import { chooseSelectOption, renderWithProviders } from "@/../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { toast } from "@/lib/toast";
 import { processActivityData } from "@/components/activity_metrics";
 import type { Organization } from "@/components/networking";
@@ -75,6 +74,11 @@ beforeAll(() => {
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
+  formatDate: (date: Date) => date.toISOString().slice(0, 10),
+  subscriptionUsageCall: vi.fn(),
+  subscriptionAccountCreateCall: vi.fn(),
+  subscriptionAccountUpdateCall: vi.fn(),
+  subscriptionAccountDeleteCall: vi.fn(),
   dailyActivityAggregatedCall: vi.fn(),
   dailyActivityKeyPageCall: vi.fn(),
   userDailyActivityUserPageCall: vi.fn(),
@@ -96,10 +100,6 @@ vi.mock("@/components/activity_metrics", () => ({
     </div>
   ),
   processActivityData: vi.fn(),
-}));
-
-vi.mock("@/components/view_user_spend", () => ({
-  default: () => <div>View User Spend</div>,
 }));
 
 vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
@@ -141,6 +141,14 @@ vi.mock("./EntityUsage/EntityUsage", async () => {
 
 vi.mock("./EntityUsage/SpendByProvider", () => ({
   default: () => <div>Spend By Provider</div>,
+}));
+
+vi.mock("./SubscriptionCost/SubscriptionCostCard", () => ({
+  default: ({ usage, canEdit }: { usage: unknown; canEdit: boolean }) => (
+    <div data-testid="subscription-cost-card" data-usage={JSON.stringify(usage)} data-can-edit={String(canEdit)}>
+      Subscription Cost
+    </div>
+  ),
 }));
 
 vi.mock("./EndpointUsage/EndpointUsage", () => ({
@@ -244,10 +252,6 @@ vi.mock("@/components/liteadmin/LiteAdmin", () => ({
   AriaUsageComposer: () => <section aria-label="Ask Aria Agent">Shared Aria composer</section>,
 }));
 
-vi.mock("@/app/(dashboard)/hooks/customers/useCustomers", () => ({
-  useCustomers: vi.fn(),
-}));
-
 vi.mock("@/app/(dashboard)/hooks/agents/useAgents", () => ({
   useAgents: vi.fn(),
 }));
@@ -283,7 +287,7 @@ describe("UsagePage", () => {
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
   const mockRequestErrorActivityCall = vi.mocked(networking.requestErrorActivityCall);
-  const mockUseCustomers = vi.mocked(useCustomers);
+  const mockSubscriptionUsageCall = vi.mocked(networking.subscriptionUsageCall);
   const mockUseAgents = vi.mocked(useAgents);
   const mockUseAuthorized = vi.mocked(useAuthorized);
   const mockUseCurrentUser = vi.mocked(useCurrentUser);
@@ -406,19 +410,6 @@ describe("UsagePage", () => {
     },
   ];
 
-  const mockCustomers = [
-    {
-      user_id: "customer-123",
-      alias: "Test Customer",
-      spend: 0,
-      blocked: false,
-      allowed_model_region: null,
-      default_model: null,
-      budget_id: null,
-      litellm_budget_table: null,
-    },
-  ];
-
   const mockAgents = [
     {
       agent_id: "agent-123",
@@ -515,7 +506,24 @@ describe("UsagePage", () => {
     organizations: [],
   };
 
+  const mockSubscriptionUsage = {
+    subscription_providers: ["chatgpt"],
+    accounts: [
+      {
+        custom_llm_provider: "chatgpt",
+        account_id: "acct_123",
+        deployments: ["gpt-5.6-terra", "gpt-5.6-sol"],
+        fee: null,
+        billing_periods: [],
+        fixed_cost: null,
+      },
+    ],
+  };
+
   beforeEach(() => {
+    testQueryClient.clear();
+    mockSubscriptionUsageCall.mockReset();
+    mockSubscriptionUsageCall.mockResolvedValue(mockSubscriptionUsage);
     mockClientUsagePanel.mockClear();
     vi.mocked(processActivityData).mockReset();
     vi.mocked(processActivityData).mockImplementation((_data, key) => ({
@@ -590,16 +598,77 @@ describe("UsagePage", () => {
       isLoading: false,
     } as any);
     mockTagListCall.mockResolvedValue({});
-    mockUseCustomers.mockReturnValue({
-      data: [],
-      isLoading: false,
-      error: null,
-    } as any);
     mockUseAgents.mockReturnValue({
       data: { agents: [] },
       isLoading: false,
       error: null,
     } as any);
+  });
+
+  it("hands the subscription usage to the fixed cost card for an admin and never fetches it otherwise", async () => {
+    const { unmount } = renderWithProviders(<UsagePage {...defaultProps} />);
+    await waitFor(() => {
+      expect(mockSubscriptionUsageCall).toHaveBeenCalledWith("test-token", expect.any(Date), expect.any(Date));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute(
+        "data-usage",
+        JSON.stringify(mockSubscriptionUsage),
+      );
+    });
+    unmount();
+
+    for (const session of [nonAdminSession, { ...nonAdminSession, userRole: "org_admin" }]) {
+      mockSubscriptionUsageCall.mockClear();
+      mockUserDailyActivityAggregatedCall.mockClear();
+      mockUseAuthorized.mockReturnValue(session);
+      const rendered = renderWithProviders(<UsagePage {...defaultProps} />);
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+      expect(mockSubscriptionUsageCall).not.toHaveBeenCalled();
+      expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute("data-usage", "null");
+      rendered.unmount();
+    }
+  });
+
+  it("lets a proxy admin edit subscription fees but shows an admin viewer the same card read-only", async () => {
+    const adminRender = renderWithProviders(<UsagePage {...defaultProps} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute(
+        "data-usage",
+        JSON.stringify(mockSubscriptionUsage),
+      );
+    });
+    expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute("data-can-edit", "true");
+    adminRender.unmount();
+
+    const adminViewerSession = {
+      ...nonAdminSession,
+      userRole: "Admin",
+      userRoleLabel: "Admin Viewer",
+      isViewOnly: true,
+    };
+    mockUseAuthorized.mockReturnValue(adminViewerSession);
+    renderWithProviders(<UsagePage {...defaultProps} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute(
+        "data-usage",
+        JSON.stringify(mockSubscriptionUsage),
+      );
+    });
+    expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute("data-can-edit", "false");
+  });
+
+  it("never sets an account-wide subscription fee beside one user's spend when an admin filters by user", async () => {
+    renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?user=user-001" });
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+        expect.objectContaining({ entityIds: ["user-001"] }),
+      );
+    });
+    expect(mockSubscriptionUsageCall).not.toHaveBeenCalled();
+    expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute("data-usage", "null");
   });
 
   it("should render and fetch usage data on mount", async () => {
@@ -1026,12 +1095,6 @@ describe("UsagePage", () => {
   });
 
   it("should show customer usage view for admins", async () => {
-    mockUseCustomers.mockReturnValue({
-      data: mockCustomers,
-      isLoading: false,
-      error: null,
-    } as any);
-
     renderWithProviders(<UsagePage {...defaultProps} />);
 
     await waitFor(() => {
@@ -1049,9 +1112,7 @@ describe("UsagePage", () => {
     });
   });
 
-  it("should withhold the customer list while it is still loading", async () => {
-    mockUseCustomers.mockReturnValue({ data: undefined, isLoading: true, error: null } as any);
-
+  it("leaves customer discovery to the customer filter", async () => {
     renderWithProviders(<UsagePage {...defaultProps} />);
 
     act(() => {
@@ -1556,12 +1617,6 @@ describe("UsagePage", () => {
 
   describe("customer usage banner", () => {
     it("should show and be dismissible in customer view", async () => {
-      mockUseCustomers.mockReturnValue({
-        data: mockCustomers,
-        isLoading: false,
-        error: null,
-      } as any);
-
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {

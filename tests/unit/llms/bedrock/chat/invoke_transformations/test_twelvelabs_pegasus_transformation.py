@@ -1,6 +1,13 @@
+from typing import Final
+from unittest.mock import Mock
+
+import httpx
+import pytest
+
 from litellm.llms.bedrock.chat.invoke_transformations.amazon_twelvelabs_pegasus_transformation import (
     AmazonTwelveLabsPegasusConfig,
 )
+from litellm.types.utils import ModelResponse
 
 
 def _make_messages() -> list[dict]:
@@ -84,3 +91,24 @@ def test_transform_request_includes_s3_media():
     s3_location = request["mediaSource"]["s3Location"]
     assert s3_location["uri"] == "s3://test-bucket/video.mp4"
     assert s3_location["bucketOwner"] == "123456789012"
+
+
+@pytest.mark.parametrize(
+    ("finish_reason", "expected"),
+    [("length", "length"), (None, "stop")],
+)
+def test_transform_response_accepts_null_finish_reason(finish_reason: str | None, expected: str) -> None:
+    result: Final = AmazonTwelveLabsPegasusConfig().transform_response(
+        model="twelvelabs.pegasus-1-2-v1:0",
+        raw_response=httpx.Response(200, json={"message": "A cat jumps.", "finishReason": finish_reason}),
+        model_response=ModelResponse(),
+        logging_obj=Mock(),
+        request_data={},
+        messages=_make_messages(),
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.choices[0].message.content == "A cat jumps."
+    assert result.choices[0].finish_reason == expected

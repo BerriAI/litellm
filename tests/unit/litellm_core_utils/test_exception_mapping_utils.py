@@ -24,6 +24,8 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.proxy.common_utils.openai_error_payload import openai_error_type
 from litellm.types.utils import LlmProviders
 
 
@@ -53,10 +55,9 @@ def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: st
         assert caught.value.code == code
         assert caught.value.body == body
         assert caught.value.status_code == 400
-        assert caught.value.response is response
-        assert caught.value.request is request
+        assert caught.value.response.status_code == 400
+        assert caught.value.request.url == request.url
         assert caught.value.response.headers["x-request-id"] == "cyber-policy-request"
-
 
 
 def _debug_info_for_api_base(configured_api_base: str) -> str:
@@ -437,6 +438,67 @@ def test_gemini_context_window_error_mapping(error_message, should_raise_context
                 original_exception=original_exception,
                 custom_llm_provider=custom_llm_provider,
             )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("streaming", [True, False])
+@pytest.mark.parametrize(
+    ("error_message", "expected_type"),
+    [
+        (
+            (
+                "Requested token count exceeds the model's maximum context length of 131072 tokens. "
+                "You requested a total of 140000 tokens: 130000 tokens from the input messages and "
+                "10000 tokens for the completion. Please reduce the number of tokens in the input "
+                "messages or the completion to fit within the limit."
+            ),
+            litellm.ContextWindowExceededError,
+        ),
+        (
+            (
+                "requested token count exceeds the model's maximum context length of 8192 tokens. "
+                "you requested a total of 9000 tokens"
+            ),
+            litellm.ContextWindowExceededError,
+        ),
+        ("max_tokens must be a positive integer", litellm.BadRequestError),
+    ],
+    ids=["sglang-context-overflow", "lowercase-context-overflow", "unrelated-bad-request"],
+)
+@pytest.mark.asyncio
+async def test_sglang_context_window_error_mapping(
+    sync_mode: bool,
+    streaming: bool,
+    error_message: str,
+    expected_type: type[litellm.BadRequestError],
+) -> None:
+    def reject_request(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            request=request,
+            json={"object": "error", "message": error_message, "type": "BadRequestError", "param": None, "code": 400},
+        )
+
+    transport: Final = httpx.MockTransport(reject_request)
+    if sync_mode:
+        with (
+            httpx.Client(transport=transport) as http_client,
+            OpenAI(api_key="sk-test", max_retries=0, http_client=http_client) as client,
+            pytest.raises(litellm.BadRequestError) as caught,
+        ):
+            _call_openai_api_sync("openai/sglang-model", "chat_completion", streaming, client)
+    else:
+        async with (
+            httpx.AsyncClient(transport=transport) as async_http_client,
+            AsyncOpenAI(api_key="sk-test", max_retries=0, http_client=async_http_client) as async_client,
+        ):
+            with pytest.raises(litellm.BadRequestError) as caught:
+                await _call_openai_api_async("openai/sglang-model", "chat_completion", streaming, async_client)
+
+    assert type(caught.value) is expected_type
+    assert caught.value.status_code == 400
+    assert error_message in str(caught.value)
+    assert caught.value.llm_provider == "openai"
 
 
 def test_lemonade_context_window_error_mapping():
@@ -1015,6 +1077,138 @@ def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
     assert "Response with id 'resp_abc' not found." in excinfo.value.message
 
 
+@pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
+@pytest.mark.parametrize(
+    "status_code, message, expected_exception",
+    [
+        (400, "Invalid 'temperature'", litellm.BadRequestError),
+        (401, "Invalid API key", litellm.AuthenticationError),
+        (404, "The model does not exist", litellm.NotFoundError),
+    ],
+)
+def test_openai_invalid_request_error_respects_status_code(
+    provider: str, status_code: int, message: str, expected_exception: type[openai.APIStatusError]
+) -> None:
+    error_message: Final = json.dumps({"error": {"message": message, "type": "invalid_request_error"}})
+    original_exception: Final = OpenAIError(status_code=status_code, message=error_message, headers={})
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="some-model",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert type(excinfo.value) is expected_exception
+    assert excinfo.value.status_code == status_code
+    assert message in excinfo.value.message
+
+
+@pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
+def test_openai_invalid_request_error_without_a_status_code_maps_to_bad_request(provider: str) -> None:
+    message: Final = "Missing required parameter: 'input'."
+    original_exception: Final = Exception(json.dumps({"error": {"message": message, "type": "invalid_request_error"}}))
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="some-model",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert type(excinfo.value) is litellm.BadRequestError
+    assert message in excinfo.value.message
+
+
+@pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
+@pytest.mark.parametrize("status_code", [403, 409, 422, 429, 500, 503])
+def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_401_and_404(
+    provider: str, status_code: int
+) -> None:
+    message: Final = "Cannot cancel a batch that is already completed."
+    error_message: Final = json.dumps({"error": {"message": message, "type": "invalid_request_error"}})
+    original_exception: Final = OpenAIError(status_code=status_code, message=error_message, headers={})
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="some-model",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert type(excinfo.value) is litellm.BadRequestError
+    assert message in excinfo.value.message
+
+
+def _openai_sdk_error(
+    sdk_error: type[openai.APIStatusError], status_code: int, provider_error: dict[str, str | None]
+) -> openai.APIStatusError:
+    request: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    return sdk_error(
+        f"Error code: {status_code} - {{'error': {provider_error}}}",
+        response=httpx.Response(status_code, request=request),
+        body=provider_error,
+    )
+
+
+@pytest.mark.parametrize(
+    "sdk_error, status_code, expected_exception, param, code",
+    [
+        (openai.AuthenticationError, 401, litellm.AuthenticationError, "organization", "mismatched_organization"),
+        (openai.NotFoundError, 404, litellm.NotFoundError, "id", None),
+    ],
+)
+def test_openai_invalid_request_error_401_and_404_keep_the_provider_error_fields(
+    sdk_error: type[openai.APIStatusError],
+    status_code: int,
+    expected_exception: type[openai.APIStatusError],
+    param: str,
+    code: str | None,
+) -> None:
+    provider_error: Final = {
+        "message": "The request was rejected.",
+        "type": "invalid_request_error",
+        "param": param,
+        "code": code,
+    }
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="gpt-5-mini",
+            original_exception=_openai_sdk_error(sdk_error, status_code, provider_error),
+            custom_llm_provider="openai",
+        )
+
+    assert type(excinfo.value) is expected_exception
+    assert (excinfo.value.status_code, excinfo.value.type, excinfo.value.param, excinfo.value.code) == (
+        status_code,
+        "invalid_request_error",
+        param,
+        code,
+    )
+    assert excinfo.value.body == provider_error
+    assert openai_error_type(excinfo.value, status_code) == "invalid_request_error"
+    assert excinfo.value.message.count(expected_exception.__name__) == 1
+
+
+def test_openai_incorrect_api_key_keeps_the_proxy_authentication_error_type() -> None:
+    provider_error: Final = {
+        "message": "Incorrect API key provided: sk-litellmqa.",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "invalid_api_key",
+    }
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        exception_type(
+            model="gpt-5-mini",
+            original_exception=_openai_sdk_error(openai.AuthenticationError, 401, provider_error),
+            custom_llm_provider="openai",
+        )
+
+    assert openai_error_type(excinfo.value, 401) == "authentication_error"
+
+
 class _UpstreamHTTPError(Exception):
     def __init__(self, status_code: int) -> None:
         super().__init__("upstream failure")
@@ -1468,6 +1662,75 @@ def test_bedrock_mantle_400_maps_to_bad_request():
     assert type(excinfo.value) is litellm.BadRequestError
 
 
+class _ErrorWithoutResponse(Exception):
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+
+def test_bedrock_mantle_context_overflow_without_a_provider_response_answers_400():
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="openai.gpt-5.6-sol",
+            original_exception=_ErrorWithoutResponse(
+                '{"error":{"code":"context_length_exceeded","message":"too long"}}', 400
+            ),
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.response.status_code == 400
+
+
+def _invalid_model_identifier_from(url: str) -> BedrockError:
+    return BedrockError(
+        status_code=400,
+        message='{"message":"The provided model identifier is invalid."}',
+        response=httpx.Response(status_code=400, request=httpx.Request(method="POST", url=url)),
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/model/us.newvendor.typo-1/converse", "/model/us.newvendor.typo-1/converse-stream"],
+)
+def test_bedrock_converse_rejecting_an_id_with_no_invoke_provider_answers_404(path):
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        exception_type(
+            model="us.newvendor.typo-1",
+            original_exception=_invalid_model_identifier_from(f"https://bedrock-runtime.us-east-1.amazonaws.com{path}"),
+            custom_llm_provider="bedrock",
+        )
+
+    assert excinfo.value.response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "original_exception",
+    [
+        _invalid_model_identifier_from("https://bedrock-runtime.us-east-1.amazonaws.com/model/claude-typo-9/invoke"),
+        _ErrorWithoutResponse("The provided model identifier is invalid.", 400),
+    ],
+    ids=["invoke", "no-response"],
+)
+def test_bedrock_invalid_model_identifier_not_from_converse_stays_a_bad_request(original_exception):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(model="claude-typo-9", original_exception=original_exception, custom_llm_provider="bedrock")
+
+    assert excinfo.value.status_code == 400
+
+
+def test_bedrock_invalid_model_identifier_without_a_model_stays_a_bad_request():
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model=None,
+            original_exception=_ErrorWithoutResponse("The provided model identifier is invalid.", 400),
+            custom_llm_provider="bedrock",
+        )
+
+    assert excinfo.value.status_code == 400
+
+
 def test_bedrock_mantle_context_overflow_maps_to_context_window_exceeded():
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -1516,9 +1779,9 @@ def test_bedrock_mantle_openai_envelope_context_overflow_maps_to_context_window_
 
 
 def test_bedrock_mantle_streamed_context_overflow_event_maps_to_context_window_exceeded():
-    from litellm.responses.streaming_iterator import _map_stream_error_to_exception
+    from litellm.responses.streaming_iterator import map_stream_error_to_exception
 
-    mapped_exception = _map_stream_error_to_exception(
+    mapped_exception = map_stream_error_to_exception(
         {
             "code": "context_length_exceeded",
             "message": "Your input exceeds the context window of this model. Please adjust your input and try again.",
@@ -2807,3 +3070,80 @@ def test_transport_timeout_maps_to_timeout(
 
     assert exc_info.value.status_code == 408
     assert f"Request timed out. Error_str: {reason}" in str(exc_info.value)
+
+
+def test_bedrock_server_error_keeps_the_aws_body_without_the_signed_request() -> None:
+    body: Final = '{"message":"Bedrock is unable to process your request."}'
+    signed_request: Final = httpx.Request(
+        "POST",
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-opus-5-5/converse",
+        headers={"authorization": "AWS4-HMAC-SHA256 Credential=AKIDSIGNED/20261029/us-east-1/bedrock/aws4_request"},
+        content=b'{"messages":[{"role":"user","content":[{"text":"hi"}]}]}',
+    )
+    upstream: Final = httpx.Response(
+        500, content=body, headers={"x-amzn-requestid": "req-aws"}, request=signed_request
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as raised:
+        exception_type(
+            model="bedrock/anthropic.claude-opus-5-5",
+            original_exception=BedrockError(status_code=500, message=body, response=upstream),
+            custom_llm_provider="bedrock",
+        )
+
+    assert raised.value.response.text == body
+    assert raised.value.response.headers["x-amzn-requestid"] == "req-aws"
+    assert "AKIDSIGNED" not in str(raised.value.request.headers)
+    assert raised.value.request.content == b""
+
+
+@pytest.mark.parametrize("provider", ("gemini", "vertex_ai"))
+def test_gemini_server_error_response_carries_the_upstream_error_body(provider: str) -> None:
+    body: Final = '{"error":{"code":500,"message":"Internal error encountered.","status":"INTERNAL"}}'
+
+    with pytest.raises(litellm.InternalServerError) as raised:
+        exception_type(
+            model="gemini-3.1-pro",
+            original_exception=VertexAIError(status_code=500, message=body, headers=None),
+            custom_llm_provider=provider,
+        )
+
+    assert raised.value.response.status_code == 500
+    assert raised.value.response.json() == json.loads(body)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "message", "mapped_error"),
+    (
+        (500, "The server had an error processing your request. Sorry about that!", litellm.InternalServerError),
+        (520, "Web server is returning an unknown error", litellm.InternalServerError),
+        (504, "A timeout occurred", litellm.Timeout),
+        (500, "Mistral API raised a streaming error", litellm.APIError),
+    ),
+)
+def test_openai_error_matched_by_its_message_keeps_the_upstream_body(
+    status_code: int, message: str, mapped_error: type[Exception]
+) -> None:
+    body: Final = json.dumps({"error": {"message": message, "type": "server_error", "param": None, "code": None}})
+    sent_request: Final = httpx.Request(
+        "POST",
+        "https://api.openai.com/v1/chat/completions",
+        headers={"authorization": "Bearer sk-openai-secret"},
+        content=b'{"messages":[{"role":"user","content":"hi"}]}',
+    )
+    upstream: Final = httpx.Response(
+        status_code, content=body, headers={"x-request-id": "req-openai"}, request=sent_request
+    )
+
+    with pytest.raises(mapped_error) as raised:
+        exception_type(
+            model="gpt-5.6",
+            original_exception=openai.APIStatusError(message, response=upstream, body=json.loads(body)),
+            custom_llm_provider="openai",
+        )
+
+    error_response: Final = getattr(raised.value, "response")
+    assert error_response.text == body
+    assert error_response.headers["x-request-id"] == "req-openai"
+    assert "sk-openai-secret" not in str(error_response.request.headers)
+    assert error_response.request.content == b""

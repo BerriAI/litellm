@@ -8,9 +8,9 @@ use axum::{
     routing::get,
 };
 use futures_util::future::BoxFuture;
-use litellm_auth_types::SecretValue;
 use litellm_config::Config;
 use litellm_gateway_auth::{Auth, RequireMasterKey, hash_token};
+use litellm_secret_value::SecretValue;
 use litellm_secrets::source::SecretSource;
 use rstest::{fixture, rstest};
 use tower::ServiceExt;
@@ -26,9 +26,9 @@ impl SecretSource for Secrets {
             match name {
                 "MASTER_KEY" => Ok(Some(SecretValue::new("resolved-key"))),
                 "EMPTY" => Ok(Some(SecretValue::new(""))),
-                "ERROR" => Err(litellm_secrets::Error::ExternalRead(Box::new(
-                    std::io::Error::other("private-backend-detail"),
-                ))),
+                "ERROR" => Err(litellm_secrets::Error::ExternalRead(
+                    litellm_error::Source::new(std::io::Error::other("private-backend-detail")),
+                )),
                 _ => Ok(None),
             }
         })
@@ -132,7 +132,11 @@ impl Authenticator for Verifier {
         Box::pin(async move {
             match self.failure {
                 Some(401) => return Err(Error::InvalidToken),
-                Some(_) => return Err(Error::Unavailable),
+                Some(_) => {
+                    return Err(Error::Unavailable(litellm_error::Source::new(
+                        std::io::Error::other("verifier offline"),
+                    )));
+                }
                 None => (),
             }
             let litellm_gateway_auth::Credential::Token(credential) = credential else {

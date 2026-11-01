@@ -9,12 +9,12 @@ from click.testing import CliRunner
 from litellm.litellm_core_utils.private_json import write_private_json
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.config import (
-    claude_subscription_default,
     get_config_file_path,
     get_config_value,
     load_config,
     pkce_default,
     save_config,
+    subscription_default,
 )
 from litellm.proxy.client.cli.interface import show_commands
 
@@ -362,33 +362,48 @@ class TestWritePrivateJson:
         assert list(tmp_path.glob(".tmp-*")) == []
 
 
-class TestClaudeSubscriptionSetting:
+@pytest.mark.parametrize(("agent", "key"), [("claude", "claude_subscription"), ("codex", "codex_subscription")])
+class TestSubscriptionSetting:
     @pytest.mark.parametrize("word", ["true", "TRUE", "on", "1", "yes"])
-    def test_truthy_words_are_stored_as_true(self, cli_runner, isolated_home, word):
-        result = cli_runner.invoke(cli, ["config", "set", "claude_subscription", word])
+    def test_truthy_words_are_stored_as_true(self, cli_runner, isolated_home, agent, key, word):
+        result = cli_runner.invoke(cli, ["config", "set", key, word])
 
         assert result.exit_code == 0, result.output
-        assert load_config()["claude_subscription"] == "true"
-        assert claude_subscription_default() is True
+        assert load_config()[key] == "true"
+        assert subscription_default(agent) is True
 
     @pytest.mark.parametrize("word", ["false", "Off", "0", "no"])
-    def test_falsy_words_are_stored_as_false(self, cli_runner, isolated_home, word):
-        cli_runner.invoke(cli, ["config", "set", "claude_subscription", "true"])
-        result = cli_runner.invoke(cli, ["config", "set", "claude_subscription", word])
+    def test_falsy_words_are_stored_as_false(self, cli_runner, isolated_home, agent, key, word):
+        cli_runner.invoke(cli, ["config", "set", key, "true"])
+        result = cli_runner.invoke(cli, ["config", "set", key, word])
 
         assert result.exit_code == 0, result.output
-        assert load_config()["claude_subscription"] == "false"
-        assert claude_subscription_default() is False
+        assert load_config()[key] == "false"
+        assert subscription_default(agent) is False
 
-    def test_anything_else_is_rejected_and_nothing_is_saved(self, cli_runner, isolated_home):
-        result = cli_runner.invoke(cli, ["config", "set", "claude_subscription", "maybe"])
+    def test_anything_else_is_rejected_and_nothing_is_saved(self, cli_runner, isolated_home, agent, key):
+        result = cli_runner.invoke(cli, ["config", "set", key, "maybe"])
 
         assert result.exit_code != 0
-        assert "true or false" in result.output
-        assert "claude_subscription" not in load_config()
+        assert f"{key} must be true or false" in result.output
+        assert key not in load_config()
 
-    def test_unset_means_off(self, isolated_home):
-        assert claude_subscription_default() is False
+    def test_unset_means_off(self, cli_runner, isolated_home, agent, key):
+        cli_runner.invoke(cli, ["config", "set", key, "true"])
+        result = cli_runner.invoke(cli, ["config", "unset", key])
+
+        assert result.exit_code == 0, result.output
+        assert subscription_default(agent) is False
+
+    def test_turning_it_on_leaves_every_other_agent_off(self, cli_runner, isolated_home, agent, key):
+        cli_runner.invoke(cli, ["config", "set", key, "true"])
+
+        assert {name: subscription_default(name) for name in ("claude", "codex", "opencode", "pi")} == {
+            "claude": agent == "claude",
+            "codex": agent == "codex",
+            "opencode": False,
+            "pi": False,
+        }
 
 
 class TestPkceSetting:

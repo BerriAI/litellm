@@ -1,5 +1,5 @@
 {
-  "description": "Mapping of Anthropic beta headers for each provider. Keys are input header names, values are provider-specific header names (or null if unsupported). Only headers present in mapping keys with non-null values can be forwarded.",
+  "description": "Mapping of Anthropic beta headers for each provider. Keys are input header names, values are provider-specific header names (or null if unsupported). Only headers present in mapping keys with non-null values can be forwarded. A <provider>_header_only column lists betas that provider accepts only as the anthropic-beta HTTP header: they are forwarded there and dropped from the anthropic_beta body field. Proxies that predate these columns ignore them and read the provider column alone.",
   "anthropic": {
     "advisor-tool-2026-03-01": "advisor-tool-2026-03-01",
     "advanced-tool-use-2025-11-20": "advanced-tool-use-2025-11-20",
@@ -46,6 +46,7 @@
     "bash_20250124": null,
     "code-execution-2025-08-25": "code-execution-2025-08-25",
     "compact-2026-01-12": null,
+    "compact-2026-09-04": "compact-2026-09-04",
     "computer-use-2025-01-24": "computer-use-2025-01-24",
     "computer-use-2025-11-24": "computer-use-2025-11-24",
     "context-1m-2025-08-07": "context-1m-2025-08-07",
@@ -59,6 +60,7 @@
     "mcp-client-2025-11-20": "mcp-client-2025-11-20",
     "mcp-client-2025-04-04": "mcp-client-2025-04-04",
     "mcp-servers-2025-12-04": null,
+    "mid-conversation-tool-changes-2026-07-01": "mid-conversation-tool-changes-2026-07-01",
     "output-128k-2025-02-19": null,
     "structured-output-2024-03-01": null,
     "per-turn-control-2026-07-01": "per-turn-control-2026-07-01",
@@ -202,6 +204,7 @@
     "mcp-client-2025-11-20": null,
     "mcp-client-2025-04-04": null,
     "mcp-servers-2025-12-04": null,
+    "mid-conversation-tool-changes-2026-07-01": "mid-conversation-tool-changes-2026-07-01",
     "output-128k-2025-02-19": null,
     "structured-output-2024-03-01": null,
     "per-turn-control-2026-07-01": "per-turn-control-2026-07-01",
@@ -216,6 +219,10 @@
     "tool-search-tool-2025-10-19": "tool-search-tool-2025-10-19",
     "web-fetch-2025-09-10": null,
     "web-search-2025-03-05": "web-search-2025-03-05",
+    "inline-tools-2026-09-15": "inline-tools-2026-09-15"
+  },
+  "vertex_ai_header_only": {
+    "compact-2026-09-04": "compact-2026-09-04",
     "inline-tools-2026-09-15": "inline-tools-2026-09-15"
   },
   "databricks": {
@@ -248,6 +255,7 @@
     "text_editor_20241022": null,
     "text_editor_20250124": null,
     "thinking-binding-controls-2026-08-01": "thinking-binding-controls-2026-08-01",
+    "thinking-display-updates-2026-08-18": "thinking-display-updates-2026-08-18",
     "token-efficient-tools-2025-02-19": "token-efficient-tools-2025-02-19",
     "web-fetch-2025-09-10": null,
     "web-search-2025-03-05": "web-search-2025-03-05"

@@ -127,8 +127,8 @@
       {
         "key": "agent_id",
         "label": "Agent ID",
-        "placeholder": "asst_abc123",
-        "tooltip": "The agent/assistant ID from your Azure AI Foundry project (e.g., asst_abc123)",
+        "placeholder": "my-agent",
+        "tooltip": "The agent name from your Azure AI Foundry project, optionally with a version (e.g., my-agent or my-agent:2), or a classic assistant ID (e.g., asst_abc123)",
         "required": true,
         "field_type": "text",
         "default_value": null,

@@ -23,7 +23,7 @@ from litellm.proxy.common_utils.model_deprecation import (
 
 def _make_router(deployments):
     router = MagicMock()
-    router.get_model_list.return_value = deployments
+    router.registry.return_value.deployments.return_value = deployments
     return router
 
 

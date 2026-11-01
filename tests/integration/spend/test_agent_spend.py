@@ -269,9 +269,4 @@ def test_a2a_send_bills_input_and_output_tokens_at_the_agent_per_token_prices(ga
 
 
 def test_a2a_stream_bills_input_and_output_tokens_at_the_agent_per_token_prices(gateway: Gateway) -> None:
-    pytest.skip(
-        "BUG: message/stream to an agent priced with input_cost_per_token/output_cost_per_token logs spend 0.0 "
-        "with prompt_tokens 0 and completion_tokens 0, because A2AStreamingIterator reads text from the request "
-        "Part RootModels without dumping them and ignores artifact-update text, while message/send bills 1.125"
-    )
     _assert_a2a_calls_are_billed(gateway, _PER_TOKEN, _PER_TOKEN_COST, (("message/stream", "/a2a/{agent}"),))

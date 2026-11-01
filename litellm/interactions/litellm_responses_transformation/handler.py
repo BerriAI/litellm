@@ -103,6 +103,7 @@ class LiteLLMResponsesInteractionsHandler:
         return LiteLLMResponsesInteractionsConfig.transform_responses_response_to_interactions_response(
             responses_response=responses_api_response,
             model=model,
+            custom_llm_provider=custom_llm_provider,
         )
 
     async def async_interactions_api_handler(
@@ -138,4 +139,5 @@ class LiteLLMResponsesInteractionsHandler:
         return LiteLLMResponsesInteractionsConfig.transform_responses_response_to_interactions_response(
             responses_response=responses_api_response,
             model=model,
+            custom_llm_provider=responses_request.get("custom_llm_provider"),
         )

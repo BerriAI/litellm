@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use litellm_http::{
     Client,
-    request::{string_headers, truncate_error_body, with_default_headers},
+    request::{string_headers, with_default_headers},
 };
 use litellm_llms::base_llm::{
     audio_transcription::transformation::BaseAudioTranscriptionConfig,
@@ -48,35 +48,27 @@ pub(super) async fn execute(
     let authenticated = resolve_auth(auth, environment, &env_lookup).await?;
     let outbound = litellm_inference::outbound::outbound_request(
         authenticated,
-        url,
+        &url,
         &body,
         Some(
             call.timeout
                 .unwrap_or(Duration::from_secs(AUDIO_TRANSCRIPTION_TIMEOUT_SECS)),
         ),
     )?;
-    let response = litellm_inference::outbound::send(outbound, http)
-        .await
-        .map_err(|error| {
-            Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
-        })?;
+    let response = litellm_inference::outbound::send(outbound, http).await?;
     let status = response.status();
-    let text = response.text().await.map_err(|error| {
-        Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
-    })?;
+    let text = response.text().await.map_err(litellm_http::Error::from)?;
     if !status.is_success() {
-        return Err(Error::Transport(litellm_http::transport::Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        }));
+        return Err(litellm_http::Error::upstream(status.as_u16(), text).into());
     }
     let response_json = serde_json::from_str(&text).map_err(|error| {
-        Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+        Error::invalid_response(litellm_llms::ErrorDetail::invalid(
             "audio response JSON",
             error,
         ))
     })?;
-    Ok(config
-        .transform_audio_transcription_response(provider.model, response_json)?
-        .into_json())
+    config
+        .transform_audio_transcription_response(provider.model, response_json)
+        .map(|response| response.into_json())
+        .map_err(|error| Error::from(error).after_send())
 }

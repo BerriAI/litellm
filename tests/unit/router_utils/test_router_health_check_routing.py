@@ -53,10 +53,10 @@ class TestFilterHealthCheckUnhealthyDeployments:
 
         class FakeRouter:
             def __init__(self):
-                self.enable_health_check_routing = enable
-                self.health_state_cache = health_cache
-                self.allowed_fails_policy = None
-                self.background_health_check_model_groups = model_groups
+                self._core_enable_health_check_routing = enable
+                self._core_health_state_cache = health_cache
+                self._core_allowed_fails_policy = None
+                self._core_background_health_check_model_groups = model_groups
 
         # Import the actual method and bind it
         from litellm.router import Router
@@ -169,10 +169,10 @@ class TestAsyncFilterHealthCheckUnhealthyDeployments:
 
         class FakeRouter:
             def __init__(self):
-                self.enable_health_check_routing = enable
-                self.health_state_cache = health_cache
-                self.allowed_fails_policy = None
-                self.background_health_check_model_groups = model_groups
+                self._core_enable_health_check_routing = enable
+                self._core_health_state_cache = health_cache
+                self._core_allowed_fails_policy = None
+                self._core_background_health_check_model_groups = model_groups
 
         fake = FakeRouter()
         fake._async_filter_health_check_unhealthy_deployments = (

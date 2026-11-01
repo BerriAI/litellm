@@ -148,6 +148,41 @@ class TestHostedVLLMRerankTransform:
             self.config._transform_response(response_dict)
 
 
+@pytest.mark.parametrize(
+    "meta",
+    [
+        {
+            "api_version": {"version": "2"},
+            "tokens": {"input_tokens": 7, "output_tokens": 3},
+            "billed_units": {"total_tokens": 12},
+        },
+        {"tokens": {"input_tokens": 0}, "billed_units": {"input_tokens": 0, "output_tokens": 0}},
+        {"tokens": None, "billed_units": None},
+        {},
+    ],
+)
+@pytest.mark.parametrize("legacy_usage", [{}, {"usage": {"total_tokens": 99}}])
+def test_hosted_vllm_rerank_preserves_native_metadata_over_legacy_usage(
+    meta: dict[str, object], legacy_usage: dict[str, object]
+) -> None:
+    response: Final = HostedVLLMRerankConfig()._transform_response(
+        {"id": "rerank-native", "results": [{"index": 0, "relevance_score": 0.9}], "meta": meta, **legacy_usage}
+    )
+    assert response.meta == meta
+    assert response.model_dump() == {
+        "id": "rerank-native",
+        "results": [{"index": 0, "relevance_score": 0.9}],
+        "meta": meta,
+    }
+
+
+def test_hosted_vllm_rerank_null_metadata_uses_legacy_usage() -> None:
+    response: Final = HostedVLLMRerankConfig()._transform_response(
+        {"results": [], "meta": None, "usage": {"total_tokens": 42}}
+    )
+    assert response.meta == {"billed_units": {"total_tokens": 42}, "tokens": {"input_tokens": 42}}
+
+
 class TestGetOptionalRerankParamsInstruction:
     """`instruction` is threaded through get_optional_rerank_params only when set."""
 

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from functools import reduce
 from itertools import accumulate, groupby
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, Protocol, TypeAlias
+from typing import Annotated, ClassVar, Final, Literal, Protocol, TypeAlias
 
 import httpx
 from pydantic import ConfigDict, Field, JsonValue, StrictInt, TypeAdapter, ValidationError
@@ -24,12 +24,12 @@ from litellm.llms.anthropic.common_utils import (
 )
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
-from litellm.llms.anthropic.pass_through.messages.utils import AnthropicMessagesRequestUtils, prepare_native_messages
-from litellm.router_utils.baseline_request import (
+from litellm.llms.anthropic.messages.native.utils import AnthropicMessagesRequestUtils, prepare_native_messages
+from litellm.router_strategy.auto_router.baseline_request import (
     BASELINE_PARAMETERS,
     capture_baseline_parameters,
 )
@@ -79,6 +79,10 @@ _DEPLOYMENT_OPTIONS: Final = frozenset(
         "cache_creation_input_token_cost_above_1hr",
     }
 )
+
+
+class _BaselineAnthropicMessagesConfig(AnthropicMessagesConfig):
+    _report_reasoning_drops: ClassVar[bool] = False
 
 
 class _StrictModel(LiteLLMBaseModel):
@@ -661,12 +665,13 @@ def prepare_native_baseline_body(request: Mapping[str, object], model: str) -> M
             TypeAdapter(tuple[str, ...]).validate_python(owned.get("additional_drop_params") or ()),
             dict(options),
         )
-        body: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        config: Final = _BaselineAnthropicMessagesConfig()
+        body: Final = config.transform_anthropic_messages_request(
             model=resolved_model,
             messages=strip_provider_specific_fields_from_anthropic_messages(messages),
             anthropic_messages_optional_request_params=filtered,
             litellm_params=GenericLiteLLMParams(),
-            headers={},
+            headers=config.finalize_messages_headers({}, dict(filtered), list(messages)),  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes and returns bare dicts
         )
         return MappingProxyType(_JSON_OBJECT.validate_python(body))
     except Exception:  # noqa: BLE001  # an unsupported hypothetical request is unavailable, never an inference failure

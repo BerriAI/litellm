@@ -281,6 +281,36 @@ class TestSearchSkills:
         assert isinstance(outcome, SkillSearchNotConfigured)
         assert "skill_search_embedding_model" in outcome.reason
 
+    @pytest.mark.parametrize("embedding_model", ("", "   "), ids=("empty", "whitespace"))
+    @pytest.mark.asyncio
+    async def test_empty_embedding_model_is_not_configured(self, embedding_model: str) -> None:
+        router: Final = _embedding_router()
+        not_configured: Final = await search_skills(
+            "language translation",
+            SKILLS,
+            5,
+            router=router,
+            embedding_model=None,
+            index=SkillSearchIndex(),
+            user_api_key_dict=CALLER,
+            proxy_logging_obj=_pass_through_key_limits(),
+        )
+        outcome: Final = await search_skills(
+            "language translation",
+            SKILLS,
+            5,
+            router=router,
+            embedding_model=embedding_model,
+            index=SkillSearchIndex(),
+            user_api_key_dict=CALLER,
+            proxy_logging_obj=_pass_through_key_limits(),
+        )
+
+        assert isinstance(not_configured, SkillSearchNotConfigured)
+        assert isinstance(outcome, SkillSearchNotConfigured)
+        assert outcome.reason == not_configured.reason
+        router.aembedding.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_no_router_is_not_configured(self) -> None:
         outcome = await search_skills(
@@ -456,7 +486,7 @@ class TestHandleSkillSearchMCP:
         self, accessible_skills: AsyncMock, embedding_router: MagicMock
     ) -> None:
         from litellm.llms.litellm_proxy.skills.skill_search import MAX_SKILL_SEARCH_TOP_K
-        from litellm.proxy._experimental.mcp_server.tool_search import handle_skill_search
+        from litellm.proxy.mcp_server.tool_search import handle_skill_search
 
         many_skills: Final = tuple(
             LiteLLM_SkillsTable(
@@ -476,7 +506,7 @@ class TestHandleSkillSearchMCP:
     async def test_top_k_below_one_is_raised_to_one(
         self, accessible_skills: AsyncMock, embedding_router: MagicMock
     ) -> None:
-        from litellm.proxy._experimental.mcp_server.tool_search import handle_skill_search
+        from litellm.proxy.mcp_server.tool_search import handle_skill_search
 
         result = await handle_skill_search(
             query="language translation", top_k=0, user_api_key_dict=UserAPIKeyAuth(user_id="u")
