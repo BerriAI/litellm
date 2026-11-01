@@ -1,5 +1,10 @@
+import itertools
 import logging
-from collections.abc import Mapping, Sequence
+import threading
+import time
+import uuid
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
@@ -29,6 +34,7 @@ class _LitellmParams(TypedDict, total=False):
 
 
 class _CallKwargs(TypedDict, total=False):
+    litellm_call_id: ReadOnly[str | None]
     litellm_params: ReadOnly[_LitellmParams | None]
 
 
@@ -43,13 +49,25 @@ class _Deployment(TypedDict):
 _CALL_KWARGS: Final = TypeAdapter(_CallKwargs)
 _DEPLOYMENTS: Final = TypeAdapter(list[_Deployment])
 _MEMORY_COUNTS: Final = TypeAdapter(tuple[float | None, ...] | None)
+_ATTEMPTS: Final[TypeAdapter[tuple[str, ...] | None]] = TypeAdapter(tuple[str, ...] | None)
+
+
+@dataclass(frozen=True, slots=True)
+class _CallRef:
+    model_group: str
+    deployment_id: str
+    call_id: str | None
 
 
 def _request_count_key(model_group: str, deployment_id: str) -> str:
     return f"{model_group}_request_count:{deployment_id}"
 
 
-def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
+def _in_flight_key(model_group: str, deployment_id: str) -> str:
+    return f"{model_group}_in_flight:{deployment_id}"
+
+
+def _call_ref(kwargs: Mapping[str, object]) -> _CallRef | None:
     if is_batch_retrieve_call_type(kwargs.get("call_type")):
         return None
     try:
@@ -63,13 +81,12 @@ def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
     deployment_id: Final = model_info.get("id") if model_info else None
     if model_group is None or deployment_id is None:
         return None
-    return model_group, str(deployment_id)
+    return _CallRef(model_group, str(deployment_id), call.get("litellm_call_id"))
 
 
-def _request_count_keys(model_group: str, healthy_deployments: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
+def _deployment_ids(healthy_deployments: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
     return tuple(
-        _request_count_key(model_group, str(deployment["model_info"]["id"]))
-        for deployment in _DEPLOYMENTS.validate_python(healthy_deployments)
+        str(deployment["model_info"]["id"]) for deployment in _DEPLOYMENTS.validate_python(healthy_deployments)
     )
 
 
@@ -116,9 +133,49 @@ class LeastBusyLoggingHandler(CustomLogger):
     logged_success: int = 0
     logged_failure: int = 0
 
-    def __init__(self, router_cache: DualCache):
+    def __init__(self, router_cache: DualCache, clock: Callable[[], float] = time.time):
         self.router_cache = router_cache
         self.router_cache_id = str(id(router_cache))
+        self._clock = clock
+        self._worker_id = uuid.uuid4().hex
+        self._attempt_numbers = itertools.count(1)
+        self._attempts_lock = threading.Lock()
+
+    def _attempts(self, attempts_key: str) -> tuple[str, ...]:
+        try:
+            cached: Final = self.router_cache.in_memory_cache.get_cache(attempts_key)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # InMemoryCache.get_cache leaves key and value untyped
+            return _ATTEMPTS.validate_python(cached) or ()
+        except ValidationError:
+            return ()
+
+    def _start_attempt(self, shared_key: str, call_id: str) -> str:
+        """Name a new sorted-set member for this call, never reused even when callers repeat a ``litellm_call_id``."""
+        member: Final = f"{call_id}:{self._worker_id}:{next(self._attempt_numbers)}"
+        attempts_key: Final = f"{shared_key}:{call_id}:attempts"
+        with self._attempts_lock:
+            self.router_cache.in_memory_cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache.set_cache leaves key and value untyped
+                attempts_key, (*self._attempts(attempts_key), member), ttl=IN_FLIGHT_COUNT_TTL_SECONDS
+            )
+        return member
+
+    def _finish_attempt(self, shared_key: str, call_id: str) -> str | None:
+        """Pick the member to remove when a call sharing this ``litellm_call_id`` finishes.
+
+        Callbacks cannot tell which same-id attempt finished, so drop the oldest: a call still
+        running then keeps a start time no earlier than its own and never ages out early.
+        """
+        attempts_key: Final = f"{shared_key}:{call_id}:attempts"
+        with self._attempts_lock:
+            attempts: Final = self._attempts(attempts_key)
+            if not attempts:
+                return None
+            if len(attempts) == 1:
+                self.router_cache.in_memory_cache.delete_cache(attempts_key)
+            else:
+                self.router_cache.in_memory_cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache.set_cache leaves key and value untyped
+                    attempts_key, attempts[1:], ttl=IN_FLIGHT_COUNT_TTL_SECONDS
+                )
+            return attempts[0]
 
     @with_service_target("router_usage")
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
@@ -160,15 +217,19 @@ class LeastBusyLoggingHandler(CustomLogger):
     def get_available_deployments(
         self, model_group: str, healthy_deployments: Sequence[Mapping[str, object]]
     ) -> Mapping[str, object] | None:
-        keys: Final = _request_count_keys(model_group, healthy_deployments)
+        deployment_ids: Final = _deployment_ids(healthy_deployments)
         redis_cache: Final = self.router_cache.redis_cache
         if redis_cache is not None:
             try:
-                shared: Final = _as_counts(redis_cache.batch_get_counts(list(keys)))
+                shared: Final = redis_cache.batch_count_in_flight(
+                    [_in_flight_key(model_group, deployment_id) for deployment_id in deployment_ids],
+                    self._clock() - IN_FLIGHT_COUNT_TTL_SECONDS,
+                )
             except Exception as e:
                 _warn_unreadable(model_group, e)
             else:
                 return _least_busy(healthy_deployments, shared)
+        keys: Final = tuple(_request_count_key(model_group, deployment_id) for deployment_id in deployment_ids)
         local: Final = _local_counts(self.router_cache.batch_get_cache(list(keys), local_only=True), keys)
         return _least_busy(healthy_deployments, local)
 
@@ -176,23 +237,27 @@ class LeastBusyLoggingHandler(CustomLogger):
     async def async_get_available_deployments(
         self, model_group: str, healthy_deployments: Sequence[Mapping[str, object]]
     ) -> Mapping[str, object] | None:
-        keys: Final = _request_count_keys(model_group, healthy_deployments)
+        deployment_ids: Final = _deployment_ids(healthy_deployments)
         redis_cache: Final = self.router_cache.redis_cache
         if redis_cache is not None:
             try:
-                shared: Final = _as_counts(await redis_cache.async_batch_get_counts(list(keys)))
+                shared: Final = await redis_cache.async_batch_count_in_flight(
+                    [_in_flight_key(model_group, deployment_id) for deployment_id in deployment_ids],
+                    self._clock() - IN_FLIGHT_COUNT_TTL_SECONDS,
+                )
             except Exception as e:
                 _warn_unreadable(model_group, e)
             else:
                 return _least_busy(healthy_deployments, shared)
+        keys: Final = tuple(_request_count_key(model_group, deployment_id) for deployment_id in deployment_ids)
         local: Final = _local_counts(await self.router_cache.async_batch_get_cache(list(keys), local_only=True), keys)
         return _least_busy(healthy_deployments, local)
 
     def _increment(self, kwargs: Mapping[str, object], delta: int) -> None:
-        ref: Final = _deployment_ref(kwargs)
+        ref: Final = _call_ref(kwargs)
         if ref is None:
             return
-        key: Final = _request_count_key(*ref)
+        key: Final = _request_count_key(ref.model_group, ref.deployment_id)
         redis_cache: Final = self.router_cache.redis_cache
         try:
             local: Final = self.router_cache.increment_cache(
@@ -200,17 +265,25 @@ class LeastBusyLoggingHandler(CustomLogger):
             )
             if local < 0:
                 self.router_cache.set_cache(key, 0, local_only=True, ttl=IN_FLIGHT_COUNT_TTL_SECONDS)
-            if redis_cache is None:
+            if redis_cache is None or ref.call_id is None:
                 return
-            redis_cache.increment_with_floor(key, delta, IN_FLIGHT_COUNT_TTL_SECONDS)
+            shared_key: Final = _in_flight_key(ref.model_group, ref.deployment_id)
+            if delta > 0:
+                redis_cache.track_in_flight(
+                    shared_key, self._start_attempt(shared_key, ref.call_id), self._clock(), IN_FLIGHT_COUNT_TTL_SECONDS
+                )
+                return
+            finished: Final = self._finish_attempt(shared_key, ref.call_id)
+            if finished is not None:
+                redis_cache.untrack_in_flight(shared_key, finished)
         except Exception as e:
             _warn_unwritable(key, e)
 
     async def _async_increment(self, kwargs: Mapping[str, object], delta: int) -> None:
-        ref: Final = _deployment_ref(kwargs)
+        ref: Final = _call_ref(kwargs)
         if ref is None:
             return
-        key: Final = _request_count_key(*ref)
+        key: Final = _request_count_key(ref.model_group, ref.deployment_id)
         redis_cache: Final = self.router_cache.redis_cache
         try:
             local: Final = await self.router_cache.async_increment_cache(
@@ -218,8 +291,16 @@ class LeastBusyLoggingHandler(CustomLogger):
             )
             if local is not None and local < 0:
                 await self.router_cache.async_set_cache(key, 0, local_only=True, ttl=IN_FLIGHT_COUNT_TTL_SECONDS)
-            if redis_cache is None:
+            if redis_cache is None or ref.call_id is None:
                 return
-            await redis_cache.async_increment_with_floor(key, delta, IN_FLIGHT_COUNT_TTL_SECONDS)
+            shared_key: Final = _in_flight_key(ref.model_group, ref.deployment_id)
+            if delta > 0:
+                await redis_cache.async_track_in_flight(
+                    shared_key, self._start_attempt(shared_key, ref.call_id), self._clock(), IN_FLIGHT_COUNT_TTL_SECONDS
+                )
+                return
+            finished: Final = self._finish_attempt(shared_key, ref.call_id)
+            if finished is not None:
+                await redis_cache.async_untrack_in_flight(shared_key, finished)
         except Exception as e:
             _warn_unwritable(key, e)

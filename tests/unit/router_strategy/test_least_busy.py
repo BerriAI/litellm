@@ -1,19 +1,24 @@
 import asyncio
 import json
 import logging
+import time
+from collections.abc import Callable, Iterator
 from typing import Final
+from unittest.mock import patch
 
+import fakeredis
+import fakeredis.aioredis
 import httpx
 import pytest
 import respx
 
 import litellm
 from litellm import Router
-
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.router_strategy.least_busy import IN_FLIGHT_COUNT_TTL_SECONDS, LeastBusyLoggingHandler
 from litellm.types.utils import ModelResponse
 
@@ -21,102 +26,199 @@ GROUP: Final = "least-busy-group"
 DEPLOYMENT_A: Final[dict[str, object]] = {"model_info": {"id": "dep-a"}}
 DEPLOYMENT_B: Final[dict[str, object]] = {"model_info": {"id": "dep-b"}}
 HEALTHY: Final = [DEPLOYMENT_A, DEPLOYMENT_B]
+START: Final = 1_700_000_000.0
 
 
-def _call_kwargs(deployment_id: str) -> dict[str, object]:
-    return {"litellm_params": {"metadata": {"model_group": GROUP}, "model_info": {"id": deployment_id}}}
+def _call_kwargs(deployment_id: str, call_id: str = "call-1") -> dict[str, object]:
+    return {
+        "litellm_call_id": call_id,
+        "litellm_params": {"metadata": {"model_group": GROUP}, "model_info": {"id": deployment_id}},
+    }
 
 
-class SharedRedisCounters:
-    """Mirrors what Redis gives the handler: increments clamped at zero, a TTL set once when
-    the key is created, and ordered reads that raise rather than invent a value."""
-
+class Clock:
     def __init__(self) -> None:
-        self.counts: dict[str, int] = {}
-        self.ttls: dict[str, int] = {}
+        self.now = START
 
-    def count(self, key: str) -> int | None:
-        return self.counts.get(key)
-
-    def expire(self, key: str) -> None:
-        self.counts.pop(key, None)
-        self.ttls.pop(key, None)
-
-    def increment_with_floor(self, key: str, value: int, ttl: int) -> int:
-        incremented: Final = max(0, self.counts.get(key, 0) + value)
-        self.counts[key] = incremented
-        self.ttls.setdefault(key, ttl)
-        return incremented
-
-    async def async_increment_with_floor(self, key: str, value: int, ttl: int) -> int:
-        return self.increment_with_floor(key, value, ttl)
-
-    def batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
-        return tuple(self.counts.get(key) for key in key_list)
-
-    async def async_batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
-        return self.batch_get_counts(key_list)
+    def __call__(self) -> float:
+        return self.now
 
 
-def _worker(shared: SharedRedisCounters | None) -> LeastBusyLoggingHandler:
-    cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=shared)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
-    return LeastBusyLoggingHandler(router_cache=cache)
+@pytest.fixture
+def redis_server() -> fakeredis.FakeServer:
+    return fakeredis.FakeServer()
+
+
+@pytest.fixture
+def shared_redis(redis_server: fakeredis.FakeServer) -> Iterator[RedisCache]:
+    server: Final = redis_server
+    with (
+        patch("asyncio.get_running_loop", side_effect=RuntimeError("no running event loop")),
+        patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
+            "litellm._redis.get_redis_client", return_value=fakeredis.FakeRedis(server=server)
+        ),
+    ):
+        cache: Final = RedisCache(host="127.0.0.1", port=6379)
+    with patch.object(cache, "init_async_client", return_value=fakeredis.aioredis.FakeRedis(server=server)):
+        yield cache
+
+
+class UnreachableRedis:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def track_in_flight(self, key: str, member: str, started_at: float, max_age: int) -> None:
+        raise self.error
+
+    async def async_track_in_flight(self, key: str, member: str, started_at: float, max_age: int) -> None:
+        raise self.error
+
+    def untrack_in_flight(self, key: str, member: str) -> None:
+        raise self.error
+
+    async def async_untrack_in_flight(self, key: str, member: str) -> None:
+        raise self.error
+
+    def batch_count_in_flight(self, key_list: list[str], since: float) -> tuple[int, ...]:
+        raise self.error
+
+    async def async_batch_count_in_flight(self, key_list: list[str], since: float) -> tuple[int, ...]:
+        raise self.error
+
+
+def _worker(
+    shared: RedisCache | UnreachableRedis | None, clock: Callable[[], float] = time.time
+) -> LeastBusyLoggingHandler:
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=shared)  # pyright: ignore[reportArgumentType]  # UnreachableRedis is a duck-typed Redis double
+    return LeastBusyLoggingHandler(router_cache=cache, clock=clock)
 
 
 @pytest.mark.asyncio
-async def test_worker_routes_around_a_request_another_worker_started() -> None:
-    shared: Final = SharedRedisCounters()
-    streaming_worker: Final = _worker(shared)
-    picking_worker: Final = _worker(shared)
+async def test_worker_routes_around_a_request_another_worker_started(shared_redis: RedisCache) -> None:
+    streaming_worker: Final = _worker(shared_redis)
+    picking_worker: Final = _worker(shared_redis)
 
-    picking_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
-    await picking_worker.async_log_success_event(_call_kwargs("dep-a"), None, None, None)
+    picking_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "quick"))
+    await picking_worker.async_log_success_event(_call_kwargs("dep-a", "quick"), None, None, None)
 
-    streaming_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+    streaming_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "stream"))
 
     assert await picking_worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
 
-    await streaming_worker.async_log_success_event(_call_kwargs("dep-a"), None, None, None)
+    await streaming_worker.async_log_success_event(_call_kwargs("dep-a", "stream"), None, None, None)
 
     assert await picking_worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
 
 
-def test_sync_pick_reads_the_shared_counts() -> None:
-    shared: Final = SharedRedisCounters()
-    streaming_worker: Final = _worker(shared)
-    picking_worker: Final = _worker(shared)
+def test_sync_pick_reads_the_shared_counts(shared_redis: RedisCache) -> None:
+    streaming_worker: Final = _worker(shared_redis)
+    picking_worker: Final = _worker(shared_redis)
 
-    picking_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
-    picking_worker.log_success_event(_call_kwargs("dep-a"), None, None, None)
+    picking_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "quick"))
+    picking_worker.log_success_event(_call_kwargs("dep-a", "quick"), None, None, None)
 
-    streaming_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+    streaming_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "stream"))
 
     assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
 
-    streaming_worker.log_failure_event(_call_kwargs("dep-a"), None, None, None)
+    streaming_worker.log_failure_event(_call_kwargs("dep-a", "stream"), None, None, None)
 
     assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
 
 
-def test_the_handler_never_pushes_a_counters_ttl_forward() -> None:
-    """A worker that dies mid-request leaves a +1 nobody will ever decrement. Redis expires that
-    stuck count an hour after the key was created, which only works while nothing writes the TTL
-    again: a handler that refreshed it on every touch would keep the count alive for as long as
-    the group takes traffic, and the deployment would read busier than it is forever."""
-    shared: Final = SharedRedisCounters()
-    worker: Final = _worker(shared)
-    key: Final = f"{GROUP}_request_count:dep-a"
+@pytest.mark.asyncio
+async def test_a_request_outliving_the_ttl_cannot_cancel_a_newer_request_when_it_finishes(
+    shared_redis: RedisCache,
+) -> None:
+    """A shared counter forgot every in-flight request when its key expired, then each late
+    decrement cancelled a request that was really running, so a busy deployment read idle and
+    kept getting a full share of new traffic (#48994)"""
+    clock: Final = Clock()
+    worker: Final = _worker(shared_redis, clock)
 
-    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "old"))
+    clock.now = START + IN_FLIGHT_COUNT_TTL_SECONDS + 1
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "new"))
+    await worker.async_log_success_event(_call_kwargs("dep-a", "old"), None, None, None)
 
-    assert shared.ttls == {key: IN_FLIGHT_COUNT_TTL_SECONDS}
+    assert await worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
 
-    shared.ttls[key] = 5
-    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
-    worker.log_success_event(_call_kwargs("dep-a"), None, None, None)
 
-    assert shared.count(key) == 1
-    assert shared.ttls == {key: 5}
+@pytest.mark.asyncio
+async def test_finishing_one_of_several_calls_sharing_a_call_id_keeps_the_others_counted(
+    shared_redis: RedisCache,
+) -> None:
+    """Callers can pass their own litellm_call_id, so concurrent calls may share one. Tracking the
+    id itself merged them into one entry, and the first to finish hid the rest from other workers"""
+    worker: Final = _worker(shared_redis)
+    other_worker: Final = _worker(shared_redis)
+    picking_worker: Final = _worker(shared_redis)
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "shared"))
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "shared"))
+    other_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "shared"))
+    picking_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-b", "b"))
+    await worker.async_log_success_event(_call_kwargs("dep-a", "shared"), None, None, None)
+
+    assert await picking_worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+    worker.log_success_event(_call_kwargs("dep-a", "shared"), None, None, None)
+    await other_worker.async_log_failure_event(_call_kwargs("dep-a", "shared"), None, None, None)
+
+    assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+@pytest.mark.asyncio
+async def test_a_call_sharing_its_call_id_with_an_earlier_one_keeps_its_own_start_time(
+    shared_redis: RedisCache,
+) -> None:
+    """Callbacks cannot tell which same-id call finished. Keeping the earlier call's start time for
+    the one still running made it age out before it was an hour old"""
+    clock: Final = Clock()
+    worker: Final = _worker(shared_redis, clock)
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "shared"))
+    clock.now = START + 600
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "shared"))
+    await worker.async_log_success_event(_call_kwargs("dep-a", "shared"), None, None, None)
+    clock.now = START + IN_FLIGHT_COUNT_TTL_SECONDS + 1
+
+    assert await worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "shared"))
+    worker.log_success_event(_call_kwargs("dep-a", "shared"), None, None, None)
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+    await worker.async_log_failure_event(_call_kwargs("dep-a", "shared"), None, None, None)
+
+    assert await worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+@pytest.mark.asyncio
+async def test_a_request_nobody_finished_stops_counting_once_it_is_older_than_the_ttl(
+    shared_redis: RedisCache,
+) -> None:
+    """A worker that dies mid-request never reports the end. Its request has to age out on its
+    own, without taking the deployment's other in-flight requests with it"""
+    clock: Final = Clock()
+    worker: Final = _worker(shared_redis, clock)
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "orphan"))
+    clock.now = START + IN_FLIGHT_COUNT_TTL_SECONDS - 1
+
+    assert await worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-b", "running-b"))
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "running-a"))
+    clock.now = START + IN_FLIGHT_COUNT_TTL_SECONDS + 1
+
+    assert await worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+    await worker.async_log_success_event(_call_kwargs("dep-b", "running-b"), None, None, None)
+
+    assert await worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
 
 
 @pytest.mark.asyncio
@@ -134,17 +236,9 @@ async def test_counts_stay_in_memory_without_redis() -> None:
     assert worker.router_cache.get_cache(f"{GROUP}_request_count:dep-a") == 0
 
 
-class UnavailableRedis(SharedRedisCounters):
-    def increment_with_floor(self, key: str, value: int, ttl: int) -> int:
-        raise ConnectionError("redis is down")
-
-    def batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
-        raise ConnectionError("redis is down")
-
-
 @pytest.mark.asyncio
 async def test_a_redis_outage_falls_back_to_this_workers_own_counts() -> None:
-    worker: Final = _worker(UnavailableRedis())
+    worker: Final = _worker(UnreachableRedis(ConnectionError("redis is down")))
 
     worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
 
@@ -154,22 +248,6 @@ async def test_a_redis_outage_falls_back_to_this_workers_own_counts() -> None:
     await worker.async_log_success_event(_call_kwargs("dep-a"), None, None, None)
 
     assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
-
-
-def test_a_shared_counter_that_expired_mid_request_cannot_go_negative() -> None:
-    shared: Final = SharedRedisCounters()
-    worker: Final = _worker(shared)
-
-    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
-    shared.expire(f"{GROUP}_request_count:dep-a")
-    worker.log_success_event(_call_kwargs("dep-a"), None, None, None)
-
-    assert shared.count(f"{GROUP}_request_count:dep-a") == 0
-
-    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
-
-    assert shared.count(f"{GROUP}_request_count:dep-a") == 1
-    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
 
 
 @pytest.mark.asyncio
@@ -188,27 +266,20 @@ async def test_a_local_counter_that_expired_mid_request_cannot_go_negative() -> 
     assert await worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
 
 
-def test_calls_without_a_deployment_are_ignored() -> None:
-    shared: Final = SharedRedisCounters()
-    worker: Final = _worker(shared)
+def test_calls_without_a_deployment_are_ignored(shared_redis: RedisCache, redis_server: fakeredis.FakeServer) -> None:
+    worker: Final = _worker(shared_redis)
 
     worker.log_pre_api_call(model="m", messages=[], kwargs={"litellm_params": {"metadata": None}})
     worker.log_pre_api_call(model="m", messages=[], kwargs={})
 
-    assert shared.counts == {}
-
-
-class OpenBreakerRedis(SharedRedisCounters):
-    def increment_with_floor(self, key: str, value: int, ttl: int) -> int:
-        raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
-
-    def batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
-        raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
+    assert fakeredis.FakeRedis(server=redis_server).dbsize() == 0
 
 
 @pytest.mark.asyncio
-async def test_an_open_circuit_breaker_falls_back_without_a_warning_per_request(caplog: pytest.LogCaptureFixture) -> None:
-    worker: Final = _worker(OpenBreakerRedis())
+async def test_an_open_circuit_breaker_falls_back_without_a_warning_per_request(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    worker: Final = _worker(UnreachableRedis(RedisCircuitBreakerOpenError("Redis circuit breaker is open")))
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
         worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
@@ -307,6 +378,12 @@ def _chat_stream(_: httpx.Request) -> httpx.Response:
     )
 
 
+async def _open_chat_stream(router: Router) -> CustomStreamWrapper:
+    return await router.acompletion(
+        model=ROUTER_GROUP, messages=[{"role": "user", "content": "write a poem"}], stream=True
+    )
+
+
 @pytest.mark.asyncio
 async def test_router_spreads_open_chat_streams_across_least_busy_deployments(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
@@ -315,12 +392,7 @@ async def test_router_spreads_open_chat_streams_across_least_busy_deployments(
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_chat_stream)
     router: Final = _least_busy_router()
 
-    streams: Final = [
-        await router.acompletion(
-            model=ROUTER_GROUP, messages=[{"role": "user", "content": "write a poem"}], stream=True
-        )
-        for _ in ROUTER_DEPLOYMENT_IDS
-    ]
+    streams: Final = [await _open_chat_stream(router) for _ in ROUTER_DEPLOYMENT_IDS]
 
     assert _router_counts(router) == {"1": 1, "2": 1, "3": 1}
     assert sorted(stream._hidden_params["model_id"] for stream in streams) == list(ROUTER_DEPLOYMENT_IDS)
@@ -379,9 +451,7 @@ async def test_router_picks_least_busy_deployment_and_completion_restores_counts
         if use_async
         else router.get_available_deployment(model=ROUTER_GROUP, messages=None)
     )
-    response: Final = await router.acompletion(
-        model=ROUTER_GROUP, messages=[{"role": "user", "content": "hi"}]
-    )
+    response: Final = await router.acompletion(model=ROUTER_GROUP, messages=[{"role": "user", "content": "hi"}])
     for _ in range(10):
         await asyncio.sleep(0)
         await GLOBAL_LOGGING_WORKER.flush()
@@ -391,3 +461,25 @@ async def test_router_picks_least_busy_deployment_and_completion_restores_counts
     assert response._hidden_params["model_id"] == "1"
     assert route.calls.last.request.headers["authorization"] == "Bearer key-1"
     assert _router_counts(router) == seeded
+
+
+@pytest.mark.asyncio
+async def test_router_spreads_open_streams_across_workers_through_the_shared_counts(
+    shared_redis: RedisCache, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    keys_used: Final[list[str]] = []
+
+    def record_key_and_stream(request: httpx.Request) -> httpx.Response:
+        keys_used.append(request.headers["authorization"])
+        return _chat_stream(request)
+
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=record_key_and_stream)
+    routers: Final = tuple(_least_busy_router() for _ in ROUTER_DEPLOYMENT_IDS)
+    for router in routers:
+        router.cache.redis_cache = shared_redis
+
+    for router in routers:
+        await _open_chat_stream(router)
+
+    assert sorted(keys_used) == [f"Bearer key-{deployment_id}" for deployment_id in ROUTER_DEPLOYMENT_IDS]
