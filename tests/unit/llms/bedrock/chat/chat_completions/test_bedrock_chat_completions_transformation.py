@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+from typing import Final
 
 import httpx
 import pytest
@@ -657,7 +658,7 @@ def _assert_remote_images_inlined(content):
 
 
 def test_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch):
-    import litellm.litellm_core_utils.prompt_templates.image_handling as image_handling
+    from litellm.litellm_core_utils.prompt_templates import image_handling
 
     monkeypatch.setattr(image_handling, "convert_url_to_base64", lambda url: f"data:image/png;base64,{url}")
     body = AmazonBedrockRuntimeChatCompletionsConfig().transform_request(
@@ -672,7 +673,7 @@ def test_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch
 
 
 async def test_async_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch):
-    import litellm.litellm_core_utils.prompt_templates.image_handling as image_handling
+    from litellm.litellm_core_utils.prompt_templates import image_handling
 
     async def fake_convert(url, timeout=None):
         return f"data:image/png;base64,{url}"
@@ -1724,3 +1725,53 @@ def test_positional_tool_call_ids_are_minted_for_gpt_too(local_cost_map, fake_aw
     ids = [tool_call.id for tool_call in response.choices[0].message.tool_calls]
     assert len(set(ids)) == 2
     assert all(re.fullmatch(r"call_[0-9a-f]{32}", tool_call_id) for tool_call_id in ids)
+
+
+# GPT 5.6 Terra on Bedrock answers priority and flex with `'priority' is not supported for 'service_tier'
+# on this model`, checked live on 2026-10-27 (LIT-9793). Its price-map row carries null tier prices to match.
+def test_native_chat_completions_drops_service_tier_the_model_does_not_sell(
+    local_cost_map: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config: Final = AmazonBedrockRuntimeChatCompletionsConfig()
+
+    result: Final = config.map_openai_params(
+        non_default_params={"service_tier": "priority", "max_tokens": 5},
+        optional_params={},
+        model="us.openai.gpt-5.6-terra",
+        drop_params=True,
+    )
+
+    assert "service_tier" not in result
+    assert result["max_completion_tokens"] == 5
+
+
+def test_native_chat_completions_raises_on_service_tier_the_model_does_not_sell(
+    local_cost_map: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config: Final = AmazonBedrockRuntimeChatCompletionsConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="service_tier='priority'"):
+        config.map_openai_params(
+            non_default_params={"service_tier": "priority"},
+            optional_params={},
+            model="us.openai.gpt-5.6-terra",
+            drop_params=False,
+        )
+
+
+def test_native_chat_completions_keeps_default_service_tier(
+    local_cost_map: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config: Final = AmazonBedrockRuntimeChatCompletionsConfig()
+
+    result: Final = config.map_openai_params(
+        non_default_params={"service_tier": "default"},
+        optional_params={},
+        model="us.openai.gpt-5.6-terra",
+        drop_params=False,
+    )
+
+    assert result["service_tier"] == "default"
