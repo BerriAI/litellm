@@ -9873,6 +9873,26 @@ def test_is_base64_encoded_2():
 
 
 @pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "data:text/plain;base64",
+        "data:text/plain;base64,!!!not-base64!!!",
+    ],
+)
+def test_is_base64_encoded_rejects_malformed_input(value):
+    from litellm.utils import is_base64_encoded
+
+    assert is_base64_encoded(s=value) is False
+
+
+def test_is_base64_encoded_accepts_text_data_uri():
+    from litellm.utils import is_base64_encoded
+
+    assert is_base64_encoded(s="data:text/plain;base64,aGVsbG8gd29ybGQ=") is True
+
+
+@pytest.mark.parametrize(
     "messages, expected_bool",
     [
         ([{"role": "user", "content": "hi"}], True),
