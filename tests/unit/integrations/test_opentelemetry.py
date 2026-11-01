@@ -5298,7 +5298,7 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         kwargs = self._build_kwargs()
         kwargs["litellm_params"]["metadata"]["litellm_parent_otel_span"] = proxy_span
 
-        otel._emit_once(kwargs, "success")  # pre-mark to force dedupe-skip branch
+        otel._emit_once(kwargs, kwargs.get("litellm_call_id"), "success")  # pre-mark to force dedupe-skip branch
         self.assertTrue(proxy_span.is_recording())
 
         start = datetime.utcnow()
