@@ -8,11 +8,38 @@ from litellm.proxy.a2a.agent_card import (
     LITELLM_SECURITY_SCHEMES,
     merge_agent_card,
     normalize_protocol_version,
+    point_agent_card_at_proxy,
     resolve_served_protocol_version,
 )
 
 PROXY_URL = "https://proxy.example/a2a/agent-xyz"
 PROXY_BASE = "https://proxy.example"
+
+
+def test_point_agent_card_at_proxy_returns_a_deep_copy() -> None:
+    card: dict[str, object] = {
+        "url": "http://internal/",
+        "metadata": {"nested": ["original"]},
+        "supportedInterfaces": [
+            {"url": "http://internal/", "nested": {"value": "original"}},
+            {"url": "http://secondary/"},
+        ],
+    }
+
+    pointed: dict[str, object] = point_agent_card_at_proxy(card, PROXY_URL)
+
+    assert pointed["url"] == PROXY_URL
+    assert pointed["metadata"] == card["metadata"]
+    assert pointed["metadata"] is not card["metadata"]
+    assert pointed["supportedInterfaces"] == [
+        {"url": PROXY_URL, "nested": {"value": "original"}},
+        {"url": "http://secondary/"},
+    ]
+    assert card["url"] == "http://internal/"
+    assert card["supportedInterfaces"] == [
+        {"url": "http://internal/", "nested": {"value": "original"}},
+        {"url": "http://secondary/"},
+    ]
 
 
 def _full_upstream_card() -> dict:

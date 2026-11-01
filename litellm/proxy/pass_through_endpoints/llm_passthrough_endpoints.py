@@ -64,11 +64,16 @@ from litellm.llms.azure.passthrough.transformation import (
 from litellm.llms.bedrock.passthrough.transformation import is_bedrock_streaming_endpoint
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.deepgram.common_utils import (
+    DeepgramSpeakMeter,
     deepgram_listen_callback_params,
     deepgram_listen_is_priced,
     deepgram_listen_registry_key,
     deepgram_listen_requested_model,
     deepgram_listen_websocket_target,
+    deepgram_speak_character_rate,
+    deepgram_speak_registry_key,
+    deepgram_speak_requested_model,
+    deepgram_speak_websocket_target,
 )
 from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
@@ -129,6 +134,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     YieldsToConfiguredPassThroughRoute,
     create_pass_through_route,
     create_websocket_passthrough_route,
+    truncated_close_reason,
     websocket_passthrough_request,
 )
 from litellm.proxy.utils import ProxyLogging as ProxyLoggingType
@@ -145,6 +151,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    WebSocketSessionMeter,
 )
 from litellm.types.passthrough_endpoints.tinyfish import (
     TINYFISH_AUTHENTICATED_RUN_FIELDS,
@@ -3460,6 +3467,7 @@ class _WebsocketRelay(Protocol):
         forward_headers: bool,
         endpoint: str,
         accept_websocket: bool,
+        meter: WebSocketSessionMeter | None = None,
     ) -> None: ...
 
 
@@ -3606,7 +3614,9 @@ async def deepgram_listen_websocket_route(
     if not deepgram_listen_is_priced(target):
         await websocket.close(
             code=1008,
-            reason=_DEEPGRAM_WS_UNPRICED_REASON.format(registry_key=deepgram_listen_registry_key(target)),
+            reason=truncated_close_reason(
+                _DEEPGRAM_WS_UNPRICED_REASON.format(registry_key=deepgram_listen_registry_key(target))
+            ),
         )
         return
 
@@ -3618,6 +3628,54 @@ async def deepgram_listen_websocket_route(
         forward_headers=False,
         endpoint=websocket.url.path,
         accept_websocket=False,
+    )
+
+
+async def deepgram_speak_user_api_key_auth(websocket: WebSocket) -> UserAPIKeyAuth:
+    return await user_api_key_auth_websocket_for_model(
+        websocket, model=deepgram_speak_requested_model(websocket.url.query)
+    )
+
+
+@router.websocket("/deepgram/v1/speak")
+@router.websocket("/deepgram/speak")
+async def deepgram_speak_websocket_route(
+    websocket: WebSocket,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(deepgram_speak_user_api_key_auth)],
+    relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
+) -> None:
+    deepgram_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider=litellm.LlmProviders.DEEPGRAM.value,
+        region_name=None,
+    )
+    if deepgram_api_key is None:
+        await websocket.close(code=1011, reason=_DEEPGRAM_WS_MISSING_KEY_REASON)
+        return
+
+    await websocket.accept(subprotocol=_negotiated_websocket_subprotocol(websocket))
+    target: Final = deepgram_speak_websocket_target(
+        api_base=get_secret_str("DEEPGRAM_API_BASE"),
+        query_string=websocket.url.query,
+    )
+    character_rate: Final = deepgram_speak_character_rate(target)
+    if character_rate is None:
+        await websocket.close(
+            code=1008,
+            reason=truncated_close_reason(
+                _DEEPGRAM_WS_UNPRICED_REASON.format(registry_key=deepgram_speak_registry_key(target))
+            ),
+        )
+        return
+
+    await relay(
+        websocket=websocket,
+        target=target,
+        custom_headers={"Authorization": f"Token {deepgram_api_key}"},
+        user_api_key_dict=user_api_key_dict,
+        forward_headers=False,
+        endpoint=websocket.url.path,
+        accept_websocket=False,
+        meter=DeepgramSpeakMeter(target, character_rate),
     )
 
 
@@ -4474,10 +4532,16 @@ async def watsonx_proxy_route(
     if provider_config is None:
         raise HTTPException(status_code=404, detail="Watsonx passthrough config not found")
 
+    watsonx_credentials: Final = passthrough_endpoint_router.get_proxy_wide_deployment_credentials(
+        custom_llm_provider="watsonx"
+    )
+    api_key: Final = watsonx_credentials.api_key if watsonx_credentials is not None else None
+    api_base: Final = watsonx_credentials.api_base if watsonx_credentials is not None else None
+
     # Get complete URL with version parameter
     complete_url, _ = provider_config.get_complete_url(
-        api_base=None,
-        api_key=None,
+        api_base=api_base,
+        api_key=api_key,
         model="",
         endpoint=endpoint,
         request_query_params=None,
@@ -4491,8 +4555,8 @@ async def watsonx_proxy_route(
         messages=[],
         optional_params={},
         litellm_params={},
-        api_key=None,
-        api_base=None,
+        api_key=api_key,
+        api_base=api_base,
     )
 
     # Check for streaming

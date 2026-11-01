@@ -45,8 +45,6 @@ class KeyLoggingCallbackVars(BaseModel):
     langfuse_public_key: str | None = Field(default=None, repr=False)
     langfuse_secret_key: str | None = Field(default=None, repr=False)
     langfuse_host: str | None = Field(default=None, repr=False)
-    wandb_api_key: str | None = Field(default=None, repr=False)
-    weave_project_id: str | None = None
 
 
 class KeyLoggingCallback(BaseModel):

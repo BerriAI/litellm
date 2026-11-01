@@ -117,12 +117,12 @@ def test_live_router_membership_is_scoped_to_this_test():
             }
         ]
     )
-    assert _CanaryRouterHolder.router in litellm_router_module._live_routers
+    assert _CanaryRouterHolder.router._core in litellm_router_module._live_routers
 
 
 def test_live_router_membership_was_rolled_back():
     assert _CanaryRouterHolder.router is not None
-    assert _CanaryRouterHolder.router not in litellm_router_module._live_routers
+    assert _CanaryRouterHolder.router._core not in litellm_router_module._live_routers
 
 
 def test_aws_cache_reset_sees_new_handlers_and_replaced_caches(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -175,7 +175,7 @@ def registered_collection_models() -> Iterator[None]:
     yield
     litellm_utils_module._runtime_registered_model_cost.clear()
     litellm_utils_module._runtime_registered_model_cost.update(original_registrations)
-    litellm_router_module._live_routers.discard(collection_router)
+    litellm_router_module._live_routers.discard(collection_router._core)
     litellm_router_module._live_routers.update(original_routers)
 
 
