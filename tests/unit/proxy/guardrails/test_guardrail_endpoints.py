@@ -2515,6 +2515,28 @@ class TestGuardrailRequestMetadata:
             "user_api_key_request_route": "/v1/chat/completions",
         }
 
+    def test_identity_fields_outside_the_key_namespace_are_reserved_too(self) -> None:
+        """The proxy sets who is calling and from where. A caller cannot claim another's."""
+        metadata: Final = _guardrail_request_metadata(
+            {
+                "requester_ip_address": "203.0.113.9",
+                "user_agent": "forged/1.0",
+                "agent_id": "someone-elses-agent",
+                "topic": "tax",
+            },
+            {
+                "requester_ip_address": "198.51.100.4",
+                "user_agent": "litellm-cli/2.3",
+                "agent_id": "billing-agent",
+            },
+        )
+        assert metadata == {
+            "topic": "tax",
+            "requester_ip_address": "198.51.100.4",
+            "user_agent": "litellm-cli/2.3",
+            "agent_id": "billing-agent",
+        }
+
     def test_a_guardrail_can_annotate_what_it_is_handed(self) -> None:
         """OpenAI moderation and Presidio write their detection details into this mapping."""
         metadata: Final = _guardrail_request_metadata({}, {"user_api_key_alias": "billing-app"})
