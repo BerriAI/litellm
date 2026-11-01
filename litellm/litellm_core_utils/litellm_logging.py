@@ -54,8 +54,10 @@ from litellm.constants import (
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
+    get_response_cost_from_hidden_params,
     get_usage_object,
     pricing_entry_for_cost_calc,
+    raw_cost_map_entry,
     select_model_name_for_cost_calc,
 )
 from litellm.exceptions import (
@@ -72,6 +74,7 @@ from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.langtrace import langtrace_trace_endpoint
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
+from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.classifier_logging import (
     classifier_audit_fields,
     classifier_input_snapshot,
@@ -209,9 +212,15 @@ from litellm.types.utils import (
     TranscriptionResponse,
     Usage,
     batch_chat_usage,
+    is_server_derived_pricing_key,
 )
 from litellm.types.videos.main import VideoObject
-from litellm.utils import get_base_model_from_metadata, print_verbose
+from litellm.utils import (
+    get_base_model_from_metadata,
+    mapped_model_fill_missing,
+    print_verbose,
+    unmapped_model_generalization,
+)
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
@@ -2566,6 +2575,44 @@ class Logging(LiteLLMLoggingBaseClass):
             **kwargs,
         )
 
+    def _response_price_is_known(self, result: object, cost: float, payload: StandardLoggingPayload) -> bool:
+        if (
+            cost != 0
+            or self._provider_reported_cost == 0
+            or get_response_cost_from_hidden_params(get_hidden_params_dict(result)) == 0
+        ):
+            return True
+        if self.model_call_details.get("cache_hit") is True or _served_from_cache_at_no_charge(result):
+            return True
+        params: Final = _LITELLM_PARAMS.validate_python(self._model_call_details_view.get("litellm_params") or {})
+        if is_unbilled_non_inference_call(
+            payload["call_type"], StandardLoggingPayloadSetup.merge_litellm_metadata(params), result
+        ):
+            return True
+        if self.custom_cost_per_token is not None or self.custom_cost_per_second is not None:
+            return True
+        passthrough: Final = _LITELLM_PARAMS.validate_python(
+            self._model_call_details_view.get("passthrough_logging_payload") or {}
+        )
+        if passthrough.get("cost_per_request") is not None:
+            return True
+        model_info: Final = payload["model_map_information"]["model_map_value"]
+        if model_info is None:
+            return False
+        raw_entry: Final = raw_cost_map_entry(model_info["key"])
+        rule_entry: Final = (
+            unmapped_model_generalization(model_info["key"], payload["custom_llm_provider"])
+            if raw_entry is None
+            else mapped_model_fill_missing(model_info["key"], raw_entry)
+        )
+        prices: Final = MappingProxyType({**(rule_entry or {}), **(raw_entry or {})})
+        return any(
+            value is not None
+            and ("cost" in key or "pricing" in key)
+            and (is_server_derived_pricing_key(key) or key in DEPLOYMENT_SCOPED_PRICING_FIELDS)
+            for key, value in prices.items()
+        )
+
     def prepare_response_cost(self, response: object, now: datetime.datetime) -> PreparedCost | None:
         if self.prepared_cost is not None:
             return self.prepared_cost
@@ -2618,6 +2665,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "cost_breakdown": copy.deepcopy(payload["cost_breakdown"]),
             },
             usage,
+            price_known=self._response_price_is_known(prepared[2], raw_cost, payload),
         )
         self.record_partial_usage_for_failure(
             usage, raw_cost, observation=self.model_call_details["_accounting_usage_observed"]

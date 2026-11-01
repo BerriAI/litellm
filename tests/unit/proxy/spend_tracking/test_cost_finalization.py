@@ -1,8 +1,9 @@
 import asyncio
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, Literal
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -450,18 +451,17 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     disable_spend_updates: bool,
 ) -> None:
     from unittest.mock import create_autospec
+
     import anyio
-
     from fastapi import Request, Response
-
-    from litellm.proxy._types import ProxyException
 
     from litellm.caching.caching import DualCache
     from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
     from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
     from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
     from litellm.proxy.proxy_server import ProxyConfig
-    from litellm.proxy import proxy_server
     from litellm.proxy.utils import ProxyLogging
 
     scope: Final = anyio.CancelScope()
@@ -598,6 +598,7 @@ async def test_guardrail_json_rejection_retains_completed_provider_usage(
     logging_obj: Logging, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import httpx
+
     from litellm.caching.dual_cache import DualCache
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.proxy.utils import ProxyLogging
@@ -633,3 +634,188 @@ async def test_guardrail_json_rejection_retains_completed_provider_usage(
     assert (payload["prompt_tokens"], payload["completion_tokens"]) == (10, 5)
     assert payload["response_cost"] == 0.5
     ProxyLogging._callback_capabilities_cache.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("price", [None, 0.0, 0.02], ids=["unpriced", "free", "priced"])
+@pytest.mark.parametrize("discount", [0.0, 1.0], ids=["no-discount", "fully-discounted"])
+async def test_finalized_header_distinguishes_missing_prices_from_free_models(
+    monkeypatch: pytest.MonkeyPatch, price: float | None, discount: float
+) -> None:
+    model: Final = "claude-header-pricing-test"
+    monkeypatch.setattr(litellm, "cost_discount_config", {"azure": discount})
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"azure/{model}",
+        {
+            "litellm_provider": "azure",
+            "mode": "chat",
+            "regional_endpoint_uplift_multiplier": 1.0,
+            **({"input_cost_per_token": price, "output_cost_per_token": price} if price is not None else {}),
+        },
+    )
+    logging: Final = Logging(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=NOW,
+        litellm_call_id="pricing-header",
+        function_id="pricing-header",
+    )
+    logging.update_environment_variables(
+        model=model, custom_llm_provider="azure", litellm_params={}, optional_params={}
+    )
+    result: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    finalized: Final = await finalize_response_cost(logging, result, None, NOW)
+    assert finalized is not None
+    assert finalized.amount == pytest.approx((price or 0.0) * 15 * (1 - discount))
+    headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
+        user_api_key_dict=UserAPIKeyAuth(),
+        response_cost=finalized.amount,
+        litellm_logging_obj=logging,
+    )
+    assert headers.get("x-litellm-response-cost") == (None if price is None else str(finalized.amount))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source", ["unpriced", "cache", "non-inference", "provider", "provider-header", "per-token", "per-second"]
+)
+@pytest.mark.parametrize("guardrail_cost", [0.0, 0.1])
+async def test_zero_cost_headers_preserve_known_free_calls_and_guardrail_charges(
+    source: Literal["unpriced", "cache", "non-inference", "provider", "provider-header", "per-token", "per-second"],
+    guardrail_cost: float,
+) -> None:
+    model: Final = "unmapped-header-cost"
+    logging: Final = Logging(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="adelete_responses" if source == "non-inference" else "acompletion",
+        start_time=NOW,
+        litellm_call_id="zero-cost-header",
+        function_id="zero-cost-header",
+    )
+    logging.update_environment_variables(
+        model=model, custom_llm_provider="openai", litellm_params={}, optional_params={}
+    )
+    result: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    result._hidden_params = {"response_cost": 0.0, "cache_hit": source == "cache"}
+    match source:
+        case "provider":
+            logging._provider_reported_cost = 0.0
+        case "provider-header":
+            result._hidden_params["additional_headers"] = {"llm_provider-x-litellm-response-cost": 0.0}
+        case "per-token":
+            logging.custom_cost_per_token = {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+        case "per-second":
+            logging.custom_cost_per_second = 0.0
+        case _:
+            pass
+    finalized: Final = await finalize_response_cost(logging, result, None, NOW, guardrail_cost=guardrail_cost)
+    assert finalized is not None
+    assert finalized.amount == guardrail_cost
+    headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
+        user_api_key_dict=UserAPIKeyAuth(),
+        response_cost=finalized.amount,
+        litellm_logging_obj=logging,
+    )
+    assert headers.get("x-litellm-response-cost") == (
+        None if source == "unpriced" and guardrail_cost == 0 else str(guardrail_cost)
+    )
+
+
+@pytest.mark.asyncio
+async def test_free_off_peak_pricing_keeps_the_finalized_zero_cost_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "gpt-free-off-peak-header"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "off_peak_pricing": {"hours_utc": "00:00-23:59", "input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+        },
+    )
+    logging: Final = Logging(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=NOW,
+        litellm_call_id="off-peak-header",
+        function_id="off-peak-header",
+    )
+    logging.update_environment_variables(
+        model=model, custom_llm_provider="openai", litellm_params={}, optional_params={}
+    )
+    result: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    result._hidden_params["response_cost"] = 0.0
+    finalized: Final = await finalize_response_cost(logging, result, None, NOW)
+    assert finalized is not None and finalized.amount == 0.0
+    headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
+        user_api_key_dict=UserAPIKeyAuth(),
+        response_cost=finalized.amount,
+        litellm_logging_obj=logging,
+    )
+    assert headers["x-litellm-response-cost"] == "0.0"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mapped", [False, True], ids=["unmapped-rule", "fill-missing-rule"])
+@pytest.mark.parametrize("price", [None, 0.0, 0.02], ids=["unpriced", "free", "priced"])
+async def test_rule_pricing_preserves_free_headers_without_treating_capabilities_as_prices(
+    monkeypatch: pytest.MonkeyPatch, mapped: bool, price: float | None
+) -> None:
+    from litellm.litellm_core_utils.fallback_generalizations import (
+        get_fallback_generalization_rules,
+        set_fallback_generalizations,
+    )
+
+    model: Final = "gpt-rule-header-model"
+    previous_rules: Final = TypeAdapter(list[object]).validate_python(get_fallback_generalization_rules())
+    if mapped:
+        monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "openai", "mode": "chat"})
+    try:
+        set_fallback_generalizations(
+            [
+                {
+                    "name": "header-pricing",
+                    "pattern": model,
+                    "fill_missing_for_providers": ["openai"],
+                    "model_info": {
+                        "mode": "chat",
+                        **(
+                            {"input_cost_per_token": price, "output_cost_per_token": price} if price is not None else {}
+                        ),
+                    },
+                }
+            ]
+        )
+        logging: Final = Logging(
+            model=model,
+            messages=[],
+            stream=False,
+            call_type="acompletion",
+            start_time=NOW,
+            litellm_call_id="rule-header",
+            function_id="rule-header",
+        )
+        logging.update_environment_variables(
+            model=model, custom_llm_provider="openai", litellm_params={}, optional_params={}
+        )
+        result: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+        finalized: Final = await finalize_response_cost(logging, result, None, NOW)
+        assert finalized is not None
+        assert finalized.amount == pytest.approx((price or 0.0) * 15)
+        headers: Final = TypeAdapter(dict[str, str]).validate_python(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response_cost=finalized.amount,
+                litellm_logging_obj=logging,
+            )
+        )
+        assert headers.get("x-litellm-response-cost") == (None if price is None else str(finalized.amount))
+    finally:
+        set_fallback_generalizations(previous_rules)
