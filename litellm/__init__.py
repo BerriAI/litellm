@@ -1751,6 +1751,9 @@ if TYPE_CHECKING:
     from .llms.nace.decisions.transformation import (
         NaceDecisionsConfig as NaceDecisionsConfig,
     )
+    from .llms.turion.decisions.transformation import (
+        TurionDecisionsConfig as TurionDecisionsConfig,
+    )
     from .llms.typesafe.decisions.transformation import (
         TypeSafeDecisionsConfig as TypeSafeDecisionsConfig,
     )
@@ -1765,6 +1768,9 @@ if TYPE_CHECKING:
     )
     from .llms.cloudflare.extraction.transformation import (
         CloudflareExtractionConfig as CloudflareExtractionConfig,
+    )
+    from .llms.turion.extraction.transformation import (
+        TurionExtractionConfig as TurionExtractionConfig,
     )
     from .llms.strands_decider.decisions.transformation import (
         StrandsDeciderDecisionsConfig as StrandsDeciderDecisionsConfig,

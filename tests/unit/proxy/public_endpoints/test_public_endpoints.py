@@ -536,6 +536,7 @@ def _decisions_provider_entry(provider: str) -> ProviderCreateInfo:
     (
         ("TypeSafe", "TypeSafe", LlmProviders.TYPESAFE),
         ("Nace", "Nace", LlmProviders.NACE),
+        ("Turion", "Turion", LlmProviders.TURION),
         ("EU_JEV", "eu/jev", LlmProviders.EU_JEV),
     ),
 )
