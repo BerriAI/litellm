@@ -395,11 +395,7 @@ class LLMCachingHandler:
                             end_time=end_time,
                             cache_hit=cache_hit,
                         )
-                    cache_key: Final = (
-                        self.preset_cache_key
-                        or self.request_kwargs.get("cache_key")
-                        or litellm.cache.get_cache_key(**self.request_kwargs)
-                    )
+                    cache_key: Final = self.preset_cache_key or litellm.cache.resolve_cache_key(self.request_kwargs)
                     _set_cached_hidden_param(cached_result, "cache_key", cache_key)
                     return CachingHandlerResponse(cached_result=cached_result)
                 elif (
@@ -522,11 +518,7 @@ class LLMCachingHandler:
                             end_time=end_time,
                             cache_hit=cache_hit,
                         )
-                    cache_key: Final = (
-                        self.preset_cache_key
-                        or self.request_kwargs.get("cache_key")
-                        or litellm.cache.get_cache_key(**self.request_kwargs)
-                    )
+                    cache_key: Final = self.preset_cache_key or litellm.cache.resolve_cache_key(self.request_kwargs)
                     _set_cached_hidden_param(cached_result, "cache_key", cache_key)
                     return CachingHandlerResponse(cached_result=cached_result)
         return CachingHandlerResponse(cached_result=cached_result)
@@ -920,7 +912,11 @@ class LLMCachingHandler:
             request_kwargs.pop("cache_key", None)
             if litellm.cache.supports_async() is True:
                 ## check if dual cache is supported ##
-                self.preset_cache_key = request_cache_key or litellm.cache.get_cache_key(**request_kwargs)
+                self.preset_cache_key = (
+                    litellm.cache.scope_cache_key(request_cache_key, request_kwargs)
+                    if request_cache_key
+                    else litellm.cache.get_cache_key(**request_kwargs)
+                )
                 with response_cache_phase("get"):
                     cached_result = await litellm.cache.async_get_cache(
                         dynamic_cache_object=self.dual_cache,
@@ -928,7 +924,11 @@ class LLMCachingHandler:
                         **request_kwargs,
                     )
             else:  # fallback for caches that don't support async
-                self.preset_cache_key = request_cache_key or litellm.cache.get_cache_key(**request_kwargs)
+                self.preset_cache_key = (
+                    litellm.cache.scope_cache_key(request_cache_key, request_kwargs)
+                    if request_cache_key
+                    else litellm.cache.get_cache_key(**request_kwargs)
+                )
                 with response_cache_phase("get"):
                     cached_result = litellm.cache.get_cache(
                         dynamic_cache_object=self.dual_cache,
