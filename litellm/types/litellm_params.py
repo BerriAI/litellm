@@ -314,6 +314,7 @@ class ControlOptions:
         ]
         | None
     ) = None
+    fake_stream: bool | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -350,6 +351,13 @@ class CallState:
     cache_key: str | None = None
     stream_response: "Mapping[str, ModelResponse] | None" = None
     context_compaction_state: "CompactionState | None" = field(default=None, metadata=wire("_context_compaction_state"))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class McpHandlerState:
+    recursion_guard: bool | None = field(default=None, metadata=wire("_skip_mcp_handler"))
+    skip_mcp_handler: bool | None = None
+    mcp_handler_context: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -428,6 +436,7 @@ class EntrypointState:
 class InternalState:
     call: CallState
     agentic_loop: AgenticLoopState
+    mcp_handler: McpHandlerState
     router: RouterState
     proxy: ProxyRequestState
     entrypoint: EntrypointState
@@ -455,3 +464,4 @@ def owned_wire_names(root: type) -> tuple[str, ...]:
 OWNED_KWARG_NAMES: Final = tuple(chain.from_iterable(owned_wire_names(root) for root in LITELLM_OWNED_ROOTS))
 AGENTIC_LOOP_KWARG_NAMES: Final = (*wire_names(AgenticLoopState), *wire_names(AgenticLoopOptions))
 BEDROCK_BATCH_KWARG_NAMES: Final = wire_names(BedrockBatchConnection)
+MCP_HANDLER_KWARG_NAMES: Final = frozenset(wire_names(McpHandlerState))
