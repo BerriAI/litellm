@@ -2130,8 +2130,8 @@ class CustomStreamWrapper:
         cache_hit = False
         if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
             cache_hit = True
-        self._check_max_streaming_duration()
         try:
+            self._check_max_streaming_duration()
             if self.completion_stream is None:
                 self.fetch_sync_stream()
 
