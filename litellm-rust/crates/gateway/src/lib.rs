@@ -1,5 +1,6 @@
 mod auth;
 mod error;
+pub mod forward;
 mod redis;
 mod secrets;
 pub use error::Error;

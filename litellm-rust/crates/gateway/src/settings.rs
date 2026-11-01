@@ -6,6 +6,33 @@ use serde::{Deserialize, de::DeserializeOwned};
 
 #[derive(Deserialize)]
 #[serde(default)]
+pub(super) struct ForwardSettings {
+    pub host: String,
+    pub port: u16,
+    rust_log: Option<String>,
+}
+
+impl Default for ForwardSettings {
+    fn default() -> Self {
+        Self {
+            host: "0.0.0.0".into(),
+            port: 4000,
+            rust_log: None,
+        }
+    }
+}
+
+impl ForwardSettings {
+    pub fn log_level(&self) -> Level {
+        self.rust_log
+            .as_deref()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(Level::INFO)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(default)]
 pub(super) struct Settings {
     pub host: String,
     pub port: u16,

@@ -3808,6 +3808,7 @@ dependencies = [
  "envy",
  "futures-util",
  "http-body-util",
+ "hyper-util",
  "litellm-circuit-breaker",
  "litellm-config",
  "litellm-error",

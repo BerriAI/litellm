@@ -1,5 +1,11 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("invalid forwarding upstream URI")]
+    ForwardUri(#[source] axum::http::uri::InvalidUri),
+    #[error(
+        "LITELLM_FORWARD_UPSTREAM must be a loopback IPv4 http origin without a path, query or credentials"
+    )]
+    ForwardUpstream,
     #[error(transparent)]
     Http(#[from] litellm_http::Error),
     #[error("environment_variables values must be strings, numbers or booleans")]

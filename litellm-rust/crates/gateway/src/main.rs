@@ -41,6 +41,30 @@ impl Sink for StderrSink {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    if let Some(upstream) = std::env::var_os("LITELLM_FORWARD_UPSTREAM") {
+        let settings: settings::ForwardSettings = settings::from_iter(std::env::vars_os())?;
+        Logger::new(StderrSink {
+            level: settings.log_level(),
+        })
+        .install_global()?;
+        let forward = litellm_gateway::forward::Forward::new(
+            &upstream
+                .into_string()
+                .map_err(|_| "invalid upstream encoding")?,
+        )?;
+        let listener =
+            tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
+        tracing::info!(address = %listener.local_addr()?, "forwarding gateway listening");
+        axum::serve(
+            listener,
+            forward
+                .router()
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+        return Ok(());
+    }
     let settings: Settings = settings::from_iter(std::env::vars_os())?;
     let level = settings.log_level();
     Logger::new(StderrSink { level }).install_global()?;

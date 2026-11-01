@@ -10,6 +10,7 @@ litellm-secret-value.workspace = true
 axum.workspace = true
 envy = "0.4.2"
 http-body-util = "0.1"
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
 litellm-inference.workspace = true
 litellm-gateway-inference.workspace = true
 litellm-gateway-mcp.workspace = true
