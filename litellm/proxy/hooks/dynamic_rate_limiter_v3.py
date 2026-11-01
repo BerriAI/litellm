@@ -15,6 +15,10 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
+    ensure_response_additional_headers,
+    response_has_hidden_params,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
@@ -34,10 +38,6 @@ from litellm.proxy.hooks.rate_limiter_utils import (
     resolve_llm_provider_for_rate_limit,
 )
 from litellm.proxy.utils import InternalUsageCache
-from litellm.router_utils.add_retry_fallback_headers import (
-    ensure_response_additional_headers,
-    response_has_hidden_params,
-)
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
 
@@ -133,7 +133,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         elif priority is not None and litellm.priority_reservation is not None:
             if os.getenv("LITELLM_LICENSE", None) is None:
                 verbose_proxy_logger.error(
-                    "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/proxy/enterprise."
+                    "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/enterprise."
                 )
             else:
                 value: Final = litellm.priority_reservation[priority]
@@ -316,7 +316,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return descriptors
 
         # Get model group info
-        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.get_model_group_info(model_group=model)
+        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.registry().group(model)
         if model_group_info is None:
             return descriptors
 
@@ -621,7 +621,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
 
         # Get model configuration
-        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.get_model_group_info(model_group=model)
+        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.registry().group(model)
         if model_group_info is None:
             verbose_proxy_logger.debug("No model group info for %s, allowing request", model)
             return None

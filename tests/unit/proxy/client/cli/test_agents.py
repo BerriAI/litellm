@@ -1,9 +1,13 @@
+import functools
 import inspect
 import json
 import os
+import stat
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Final
 from unittest.mock import patch
 
 import click
@@ -27,8 +31,16 @@ from litellm.proxy.client.cli.commands.agents import (
     opencode_model_sync_env,
     run_agent,
     verify_proxy_key,
+    verify_subscription_key,
 )
+from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsError
+from litellm.proxy.client.cli.commands.config import save_config
 from litellm.proxy.client.cli.main import cli as lite
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 AGENTS_MODULE = "litellm.proxy.client.cli.commands.agents"
 CLAUDE_SETTINGS_MODULE = "litellm.proxy.client.cli.commands.claude_settings"
@@ -46,6 +58,9 @@ class _FakeResponse:
     def __init__(self, status_code, body=None):
         self.status_code = status_code
         self.content = json.dumps(body).encode() if body is not None else b""
+
+    def json(self):
+        return json.loads(self.content)
 
 
 class _Recorder:
@@ -80,6 +95,8 @@ _STOCK_MODELS = {
         "base_instructions": "You are Codex, a coding agent based on GPT-5.6.",
         "apply_patch_tool_type": "freeform",
         "supports_parallel_tool_calls": True,
+        "supports_search_tool": True,
+        "tool_mode": "code_mode_only",
         "context_window": 272000,
         "comp_hash": "terra-hash",
     },
@@ -146,22 +163,49 @@ _STOCK_CATALOG = json.dumps({"models": list(_STOCK_MODELS.values())})
 
 
 class _FakeRun:
-    """A `codex` that prints `stock` from a bare `debug models` and answers a catalog override with `returncode`.
+    """A `codex` that prints `stock` from a bare `debug models`, `version` from `--version`, and answers a
+    catalog override with `returncode`.
 
     `stock=None` is a Codex with no `debug models` at all: every call answers with `returncode` and `stderr`.
+    `version=None` is a `--version` that fails, an exception one that cannot run.
     """
 
-    def __init__(self, returncode=0, stderr="", stock=_STOCK_CATALOG):
+    def __init__(self, returncode=0, stderr="", stock=_STOCK_CATALOG, version="codex-cli 0.165.0"):
         self.returncode = returncode
         self.stderr = stderr
         self.stock = stock
+        self.version = version
         self.calls = []
 
     def __call__(self, args, **kwargs):
         self.calls.append((args, kwargs))
+        if self.stock is not None and "--version" in str(args):
+            if isinstance(self.version, Exception):
+                raise self.version
+            if self.version is None:
+                return subprocess.CompletedProcess(args, 2, "", "error: unexpected argument '--version'")
+            return subprocess.CompletedProcess(args, 0, f"{self.version}\n", "")
         if self.stock is not None and "model_catalog_json=" not in str(args):
             return subprocess.CompletedProcess(args, 0, self.stock, "")
         return subprocess.CompletedProcess(args, self.returncode, "", self.stderr)
+
+
+def _routed_get(captured, listing, groups, model_info=None):
+    """A proxy answering /model_group/info with `groups` (or `groups` as the status it fails with),
+    /v1/model/info with `model_info` (raised when it is an exception) and any other URL with `listing`."""
+
+    def fake_get(url, headers, timeout):
+        captured.setdefault("urls", []).append(url)
+        captured["headers"] = headers
+        if url.endswith("/v1/model/info"):
+            if isinstance(model_info, Exception):
+                raise model_info
+            return model_info if model_info is not None else _FakeResponse(200, {"data": []})
+        if not url.endswith("/model_group/info"):
+            return _FakeResponse(200, listing)
+        return _FakeResponse(groups) if isinstance(groups, int) else _FakeResponse(200, {"data": list(groups)})
+
+    return fake_get
 
 
 class _FakeJsonResponse:
@@ -171,6 +215,43 @@ class _FakeJsonResponse:
 
     def json(self):
         return self._payload
+
+
+def _overlay_writer(tmp_path):
+    def write(text, environ):
+        target = tmp_path / "overlay.json"
+        target.write_text(text)
+        return target
+
+    return write
+
+
+def _overlay(args):
+    return json.loads(Path(args[2]).read_text())
+
+
+def _codex_config(args):
+    assert set(args[0::2]) == {"-c"}
+    return tomllib.loads("\n".join(args[1::2]))
+
+
+def _set_codex_key(config: Mapping[str, object], keys: Sequence[str], value: object) -> Mapping[str, object]:
+    head, *rest = keys
+    if not rest:
+        return {**config, head: value}
+    nested: Final = config.get(head, {})
+    assert isinstance(nested, Mapping)
+    return {**config, head: _set_codex_key(nested, rest, value)}
+
+
+def _with_codex_override(config: Mapping[str, object], override: str) -> Mapping[str, object]:
+    path, value = override.split("=", 1)
+    return _set_codex_key(config, path.split("."), tomllib.loads(f"value = {value}")["value"])
+
+
+def _codex_config_over(user_config_toml: str, args: Sequence[str]) -> Mapping[str, object]:
+    assert set(args[0::2]) == {"-c"}
+    return functools.reduce(_with_codex_override, args[1::2], tomllib.loads(user_config_toml))
 
 
 class TestAgentProfile:
@@ -238,6 +319,7 @@ class TestBuildAgentEnv:
         env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"openai"}))
         assert env["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert env["OPENAI_API_KEY"] == "sk-key"
+        assert "LITELLM_PROXY_API_KEY" not in env
         assert "ANTHROPIC_BASE_URL" not in env
         assert "ENABLE_TOOL_SEARCH" not in env
         assert "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY" not in env
@@ -262,6 +344,65 @@ class TestBuildAgentEnv:
         env = build_agent_env(base, "http://localhost:4000", "sk-key", frozenset({"anthropic"}))
         assert env["PATH"] == "/usr/bin"
         assert base == {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "real-key"}
+
+    def test_subscription_sends_the_key_in_a_header_and_sets_no_credential(self):
+        env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"anthropic"}), subscription=True)
+        assert env["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
+        assert env["ANTHROPIC_CUSTOM_HEADERS"] == "x-litellm-api-key: Bearer sk-key"
+        assert "ANTHROPIC_AUTH_TOKEN" not in env
+        assert "ANTHROPIC_API_KEY" not in env
+
+    def test_subscription_clears_inherited_credentials(self):
+        base = {"ANTHROPIC_AUTH_TOKEN": "stale-token", "ANTHROPIC_API_KEY": "real-key"}
+        env = build_agent_env(base, "http://localhost:4000", "sk-key", frozenset({"anthropic"}), subscription=True)
+        assert "ANTHROPIC_AUTH_TOKEN" not in env
+        assert "ANTHROPIC_API_KEY" not in env
+        assert base == {"ANTHROPIC_AUTH_TOKEN": "stale-token", "ANTHROPIC_API_KEY": "real-key"}
+
+    def test_subscription_keeps_the_users_other_custom_headers(self):
+        env = build_agent_env(
+            {"ANTHROPIC_CUSTOM_HEADERS": "x-team: blue\n\nx-trace: 1\n"},
+            "http://localhost:4000",
+            "sk-key",
+            frozenset({"anthropic"}),
+            subscription=True,
+        )
+        assert env["ANTHROPIC_CUSTOM_HEADERS"].splitlines() == [
+            "x-team: blue",
+            "x-trace: 1",
+            "x-litellm-api-key: Bearer sk-key",
+        ]
+
+    def test_subscription_replaces_a_stale_litellm_key_header_whatever_its_case(self):
+        env = build_agent_env(
+            {"ANTHROPIC_CUSTOM_HEADERS": "X-LiteLLM-Api-Key: Bearer old\nx-team: blue"},
+            "http://localhost:4000",
+            "sk-new",
+            frozenset({"anthropic"}),
+            subscription=True,
+        )
+        assert env["ANTHROPIC_CUSTOM_HEADERS"].splitlines() == ["x-team: blue", "x-litellm-api-key: Bearer sk-new"]
+
+    def test_subscription_routes_openai_agents_without_offering_the_key_as_an_openai_credential(self):
+        env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"openai"}), subscription=True)
+        assert "OPENAI_BASE_URL" not in env
+        assert env["LITELLM_PROXY_API_KEY"] == "sk-key"
+        assert "OPENAI_API_KEY" not in env
+        assert "ANTHROPIC_CUSTOM_HEADERS" not in env
+
+    def test_subscription_leaves_the_users_own_openai_key_and_base_url_as_they_were(self):
+        base = {"OPENAI_API_KEY": "sk-users-openai", "OPENAI_BASE_URL": "https://api.openai.com/v1"}
+        env = build_agent_env(base, "http://localhost:4000", "sk-key", frozenset({"openai"}), subscription=True)
+        assert env["OPENAI_API_KEY"] == "sk-users-openai"
+        assert env["OPENAI_BASE_URL"] == "https://api.openai.com/v1"
+        assert env["LITELLM_PROXY_API_KEY"] == "sk-key"
+        assert base == {"OPENAI_API_KEY": "sk-users-openai", "OPENAI_BASE_URL": "https://api.openai.com/v1"}
+
+    def test_default_mode_does_not_touch_custom_headers(self):
+        env = build_agent_env(
+            {"ANTHROPIC_CUSTOM_HEADERS": "x-team: blue"}, "http://localhost:4000", "sk-key", frozenset({"anthropic"})
+        )
+        assert env["ANTHROPIC_CUSTOM_HEADERS"] == "x-team: blue"
 
 
 class TestAgentLaunchArgs:
@@ -288,6 +429,67 @@ class TestAgentLaunchArgs:
         assert agent_launch_args("/usr/local/bin/codex", "http://localhost:4000") == (
             agent_launch_args("codex", "http://localhost:4000")
         )
+
+    def test_codex_default_provider_reads_the_key_from_openai_api_key(self):
+        assert _codex_config(agent_launch_args("codex", "http://localhost:4000/")) == {
+            "model_provider": "litellm",
+            "model_providers": {
+                "litellm": {
+                    "name": "LiteLLM proxy",
+                    "base_url": "http://localhost:4000/v1",
+                    "wire_api": "responses",
+                    "supports_websockets": False,
+                    "requires_openai_auth": False,
+                    "env_key": "OPENAI_API_KEY",
+                    "http_headers": {},
+                }
+            },
+        }
+
+    def test_codex_subscription_provider_keeps_the_chatgpt_login_and_sends_the_key_in_the_litellm_header(self):
+        assert _codex_config(
+            agent_launch_args("/usr/local/bin/codex", "http://localhost:4000/", subscription=True)
+        ) == {
+            "model_provider": "lite_subscription",
+            "model_providers": {
+                "lite_subscription": {
+                    "name": "LiteLLM proxy",
+                    "base_url": "http://localhost:4000/v1",
+                    "wire_api": "responses",
+                    "supports_websockets": False,
+                    "requires_openai_auth": True,
+                    "env_http_headers": {"x-litellm-api-key": "LITELLM_PROXY_API_KEY"},
+                    "http_headers": {},
+                }
+            },
+        }
+
+    def test_codex_subscription_leaves_the_cookbook_provider_table_out_of_the_launch(self):
+        user_config = """
+model_provider = "litellm_subscription"
+
+[model_providers.litellm_subscription]
+name = "LiteLLM subscription"
+base_url = "https://litellm.example.com/v1"
+wire_api = "responses"
+requires_openai_auth = true
+env_key = "OPENAI_API_KEY"
+http_headers = { "x-team" = "qa" }
+"""
+        config = _codex_config_over(
+            user_config, agent_launch_args("codex", "http://localhost:4000/", subscription=True)
+        )
+        launched = config["model_providers"][config["model_provider"]]
+        assert "env_key" not in launched
+        assert launched["requires_openai_auth"] is True
+        assert launched["base_url"] == "http://localhost:4000/v1"
+        assert config["model_providers"]["litellm_subscription"] == tomllib.loads(user_config)["model_providers"][
+            "litellm_subscription"
+        ]
+
+    @pytest.mark.parametrize("agent", ["claude", "opencode", "pi", "mytool"])
+    def test_subscription_adds_no_args_for_agents_without_a_proxy_provider(self, agent):
+        assert agent_launch_args(agent, "http://localhost:4000", subscription=True) == []
 
     def test_pi_gets_no_static_args(self):
         assert agent_launch_args("pi", "http://localhost:4000") == []
@@ -330,21 +532,41 @@ class TestVerifyProxyKey:
             get=lambda *a, **k: _FakeResponse(500),
         )
 
+    def test_key_header_moves_the_bearer_off_authorization(self):
+        captured = {}
+
+        def fake_get(url, headers, timeout):
+            captured["headers"] = headers
+            return _FakeResponse(200)
+
+        verify_proxy_key("http://localhost:4000", "sk-key", get=fake_get, key_header="x-litellm-api-key")
+
+        assert captured["headers"] == {"x-litellm-api-key": "Bearer sk-key"}
+
+    def test_subscription_probe_sends_the_key_only_in_the_litellm_header(self):
+        captured = {}
+
+        def fake_get(url, headers, timeout):
+            captured["headers"] = headers
+            return _FakeResponse(200)
+
+        verify_subscription_key("http://localhost:4000", "sk-key", get=fake_get)
+
+        assert captured["headers"] == {"x-litellm-api-key": "Bearer sk-key"}
+
+    def test_subscription_probe_reports_a_rejected_key(self):
+        with pytest.raises(AgentRunError, match="rejected your key"):
+            verify_subscription_key("http://localhost:4000", "sk-key", get=lambda *a, **k: _FakeResponse(401))
+
 
 class TestOpencodeModelSync:
     @staticmethod
     def _listing(*models):
         return {"object": "list", "data": list(models)}
 
-    def _sync(self, listing, base_env=None, base_url="http://localhost:4000/"):
+    def _sync(self, listing, base_env=None, base_url="http://localhost:4000/", groups=()):
         captured = {}
-
-        def fake_get(url, headers, timeout):
-            captured["url"] = url
-            captured["headers"] = headers
-            return _FakeResponse(200, listing)
-
-        env = opencode_model_sync_env(base_env or {}, base_url, "sk-key", get=fake_get)
+        env = opencode_model_sync_env(base_env or {}, base_url, "sk-key", get=_routed_get(captured, listing, groups))
         return captured, env
 
     def test_declares_proxy_as_litellm_provider_with_listed_models(self):
@@ -352,9 +574,9 @@ class TestOpencodeModelSync:
             {"id": "gpt-5.5", "object": "model", "created": 1, "owned_by": "openai", "mode": "chat"},
             {"id": "claude-opus-4-7", "object": "model", "created": 1, "owned_by": "openai"},
         )
-        captured, env = self._sync(listing)
+        captured, env = self._sync(listing, groups=({"model_group": "gpt-5.5", "supported_reasoning_efforts": None},))
 
-        assert captured["url"] == "http://localhost:4000/v1/models"
+        assert captured["urls"] == ["http://localhost:4000/v1/models", "http://localhost:4000/model_group/info"]
         assert captured["headers"] == {"Authorization": "Bearer sk-key"}
         config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
         provider = config["provider"]["litellm"]
@@ -386,6 +608,56 @@ class TestOpencodeModelSync:
         models = json.loads(env["OPENCODE_CONFIG_CONTENT"])["provider"]["litellm"]["models"]
         assert models["gpt-5.5"]["limit"] == {"context": 400000, "output": 128000}
         assert "limit" not in models["half"]
+
+    @pytest.mark.parametrize(
+        ("efforts", "reasoning"),
+        [
+            (
+                ["low", "high", "max"],
+                {
+                    "reasoning": True,
+                    "reasoning_options": [{"type": "effort", "values": ["low", "high", "max"]}],
+                    "variants": {
+                        "low": {"reasoningEffort": "low"},
+                        "high": {"reasoningEffort": "high"},
+                        "max": {"reasoningEffort": "max"},
+                    },
+                },
+            ),
+            (
+                ["none", "turbo"],
+                {
+                    "reasoning": True,
+                    "reasoning_options": [{"type": "effort", "values": ["none", "turbo"]}],
+                    "variants": {"none": {"reasoningEffort": "none"}, "turbo": {"reasoningEffort": "turbo"}},
+                },
+            ),
+            ([], {"variants": {}}),
+            (None, {}),
+        ],
+        ids=["declared", "unknown-names", "non-reasoning", "unknown"],
+    )
+    def test_model_group_reasoning_efforts_become_exactly_the_opencode_variants(self, efforts, reasoning):
+        listing = self._listing(
+            {
+                "id": "m",
+                "object": "model",
+                "created": 1,
+                "owned_by": "openai",
+                "max_input_tokens": 9,
+                "max_output_tokens": 3,
+            }
+        )
+        _, env = self._sync(listing, groups=({"model_group": "m", "supported_reasoning_efforts": efforts},))
+        models = json.loads(env["OPENCODE_CONFIG_CONTENT"])["provider"]["litellm"]["models"]
+        assert models == {"m": {"name": "m", "limit": {"context": 9, "output": 3}, **reasoning}}
+
+    def test_an_unavailable_model_group_info_keeps_the_listing_only_config(self):
+        listing = self._listing({"id": "m", "object": "model", "created": 1, "owned_by": "openai"})
+        _, failed = self._sync(listing, groups=500)
+        _, unknown = self._sync(listing, groups=({"model_group": "m", "supported_reasoning_efforts": None},))
+        assert failed == unknown
+        assert json.loads(failed["OPENCODE_CONFIG_CONTENT"])["provider"]["litellm"]["models"] == {"m": {"name": "m"}}
 
     def test_non_chat_models_are_left_out(self):
         listing = self._listing(
@@ -473,19 +745,13 @@ class TestCodexModelSync:
     def _row(model_id, **extra):
         return {"id": model_id, "object": "model", "created": 1, "owned_by": "openai", **extra}
 
-    def _sync(self, listing, codex_home, base_url="http://localhost:4000/", run=None):
+    def _sync(self, listing, codex_home, base_url="http://localhost:4000/", run=None, groups=(), model_info=None):
         captured = {}
-
-        def fake_get(url, headers, timeout):
-            captured["url"] = url
-            captured["headers"] = headers
-            return _FakeResponse(200, listing)
-
         result = codex_model_sync_args(
             {"CODEX_HOME": str(codex_home)},
             base_url,
             "sk-key",
-            get=fake_get,
+            get=_routed_get(captured, listing, groups, model_info),
             run=_FakeRun() if run is None else run,
         )
         return captured, result
@@ -503,7 +769,11 @@ class TestCodexModelSync:
         listing = self._listing(self._row("gpt-5.5", mode="chat"), self._row("claude-opus-4-7"))
         captured, result = self._sync(listing, tmp_path / "codex")
 
-        assert captured["url"] == "http://localhost:4000/v1/models"
+        assert captured["urls"] == [
+            "http://localhost:4000/v1/models",
+            "http://localhost:4000/v1/model/info",
+            "http://localhost:4000/model_group/info",
+        ]
         assert captured["headers"] == {"Authorization": "Bearer sk-key"}
         path = self._catalog_path(result)
         assert path == str(tmp_path / "codex" / "litellm-models.json")
@@ -540,6 +810,202 @@ class TestCodexModelSync:
         entries = self._entries(tmp_path)
         assert entries["gpt-5.4"]["upgrade"] == _STOCK_MODELS["gpt-5.4"]["upgrade"]
         assert [entries["gpt-5.4"]["priority"], entries["gpt-5.6-terra"]["priority"]] == [0, 1]
+
+    @pytest.mark.parametrize(
+        "deployment",
+        [
+            {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.6-terra"}},
+            {"model_name": "api-terra", "litellm_params": {"model": "gpt-5.6-terra"}, "model_info": None},
+            {
+                "model_name": "api-terra",
+                "litellm_params": {"model": "openai/gpt-5.6-terra"},
+                "model_info": {"id": "d1", "team_public_model_name": ""},
+            },
+            {
+                "model_name": "model_name_team-1_d1",
+                "litellm_params": {"model": "openai/gpt-5.6-terra", "api_base": "https://api.openai.com/v1"},
+                "model_info": {"id": "d1", "team_public_model_name": "api-terra"},
+            },
+        ],
+        ids=["provider_prefixed", "bare_without_model_info", "empty_team_public_name", "team_public_model_name"],
+    )
+    def test_alias_of_a_codex_model_gets_that_models_entry_under_its_own_name(self, tmp_path, deployment):
+        listing = self._listing(self._row("api-terra"), self._row("m"))
+        _, result = self._sync(listing, tmp_path, model_info=_FakeResponse(200, {"data": [deployment]}))
+
+        assert isinstance(result, ModelSyncArgs)
+        entries = self._entries(tmp_path)
+        assert entries["api-terra"] == {
+            **_STOCK_MODELS["gpt-5.6-terra"],
+            "slug": "api-terra",
+            "display_name": "api-terra",
+            "priority": 0,
+            "service_tiers": [],
+            "default_service_tier": None,
+            "default_verbosity": None,
+            "availability_nux": None,
+            "default_reasoning_level": None,
+        }
+        assert entries["m"]["supports_search_tool"] is False
+
+    def test_alias_gets_no_upgrade_nudge_away_from_its_own_name(self, tmp_path):
+        listing = self._listing(self._row("gpt-5.6-terra"), self._row("api-54"))
+        deployment = {"model_name": "api-54", "litellm_params": {"model": "openai/gpt-5.4"}}
+        self._sync(listing, tmp_path, model_info=_FakeResponse(200, {"data": [deployment]}))
+
+        entry = self._entries(tmp_path)["api-54"]
+        assert (entry["comp_hash"], entry["upgrade"]) == (_STOCK_MODELS["gpt-5.4"]["comp_hash"], None)
+
+    @pytest.mark.parametrize(
+        ("pins", "expected"),
+        [
+            (("high",), "high"),
+            (("high", "high"), "high"),
+            (("high", None), None),
+            (("high", "low"), None),
+            (({"effort": "high"},), None),
+        ],
+        ids=["one_deployment", "every_deployment_agrees", "one_unpinned", "pins_differ", "non_string_pin"],
+    )
+    def test_alias_starts_at_the_reasoning_effort_every_deployment_pins(self, tmp_path, pins, expected):
+        deployments = [
+            {
+                "model_name": "api-terra",
+                "litellm_params": {"model": "openai/gpt-5.6-terra", **({"reasoning_effort": p} if p else {})},
+            }
+            for p in pins
+        ]
+        self._sync(
+            self._listing(self._row("api-terra")), tmp_path, model_info=_FakeResponse(200, {"data": deployments})
+        )
+
+        entry = self._entries(tmp_path)["api-terra"]
+        assert (entry["comp_hash"], entry["default_reasoning_level"]) == ("terra-hash", expected)
+
+    @pytest.mark.parametrize(
+        "deployments",
+        [
+            [
+                {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.6-terra"}},
+                {"model_name": "api-terra", "litellm_params": {"model": "gpt-5.6-terra"}},
+            ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "gpt-5.6-terra", "custom_llm_provider": "openai"},
+                }
+            ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "openai/gpt-5.5"},
+                    "model_info": {"id": "paused", "blocked": True},
+                },
+                {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.6-terra"}},
+            ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "openai/gpt-5.6-terra", "api_base": "https://eu.api.openai.com/v1"},
+                }
+            ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {
+                        "model": "openai/gpt-5.6-terra",
+                        "api_base": "https://api.openai.com/v1",
+                        "litellm_credential_name": "openai-key",
+                    },
+                }
+            ],
+        ],
+        ids=[
+            "same_model_with_and_without_prefix",
+            "openai_custom_llm_provider",
+            "paused_deployment_ignored",
+            "openai_regional_host",
+            "credential_under_an_openai_host",
+        ],
+    )
+    def test_alias_whose_deployments_all_route_to_one_openai_model_gets_its_entry(self, tmp_path, deployments):
+        self._sync(
+            self._listing(self._row("api-terra")), tmp_path, model_info=_FakeResponse(200, {"data": deployments})
+        )
+
+        assert self._entries(tmp_path)["api-terra"]["comp_hash"] == _STOCK_MODELS["gpt-5.6-terra"]["comp_hash"]
+
+    @pytest.mark.parametrize(
+        "deployments",
+        [
+            [
+                {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.5"}},
+                {
+                    "model_name": "model_name_team-1_d1",
+                    "litellm_params": {"model": "openai/gpt-5.6-terra"},
+                    "model_info": {"id": "d1", "team_public_model_name": "api-terra"},
+                },
+            ],
+            [
+                {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.6-terra"}},
+                {"model_name": "api-terra", "litellm_params": {"model": "anthropic/claude-opus-4-7"}},
+            ],
+            [{"model_name": "api-terra", "litellm_params": {"model": "azure/gpt-5.6-terra"}}],
+            [{"model_name": "api-terra", "litellm_params": {"model": "gpt-5.6-terra", "custom_llm_provider": "azure"}}],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "openai/gpt-5.6-terra", "api_base": "http://vllm.example.invalid/v1"},
+                }
+            ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "gpt-5.6-terra", "api_base": "https://api.openai.com.example.invalid"},
+                }
+            ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "openai/gpt-5.6-terra", "litellm_credential_name": "gateway"},
+                }
+            ],
+        ],
+        ids=[
+            "team_row_and_global_row_differ",
+            "load_balanced_across_providers",
+            "azure_prefix",
+            "azure_provider",
+            "openai_prefix_on_another_host",
+            "openai_lookalike_host",
+            "host_only_a_credential_knows",
+        ],
+    )
+    def test_alias_without_one_shared_openai_upstream_keeps_the_fallback_entry(self, tmp_path, deployments):
+        listing = self._listing(self._row("api-terra"))
+        self._sync(listing, tmp_path / "with", model_info=_FakeResponse(200, {"data": deployments}))
+        self._sync(listing, tmp_path / "without")
+
+        assert self._entries(tmp_path / "with")["api-terra"] == self._entries(tmp_path / "without")["api-terra"]
+
+    @pytest.mark.parametrize(
+        "model_info",
+        [
+            requests.ConnectionError("refused"),
+            _FakeResponse(500, {"data": [{"model_name": "api-terra", "litellm_params": {"model": "gpt-5.6-terra"}}]}),
+            _FakeResponse(200, {"data": "nope"}),
+            _FakeResponse(200, {"data": [{"model_name": "api-terra"}]}),
+        ],
+        ids=["unreachable", "http_500", "unexpected_body", "deployment_without_litellm_params"],
+    )
+    def test_unavailable_model_info_keeps_the_alias_on_the_fallback_entry(self, tmp_path, model_info):
+        _, result = self._sync(self._listing(self._row("api-terra")), tmp_path, model_info=model_info)
+
+        catalog = tmp_path / "litellm-models.json"
+        assert result == ModelSyncArgs(("-c", f"model_catalog_json={json.dumps(str(catalog))}"))
+        entry = self._entries(tmp_path)["api-terra"]
+        assert entry["slug"] == "api-terra"
+        assert entry["supports_search_tool"] is False
 
     def test_stock_catalog_is_decoded_as_utf8_regardless_of_locale(self, tmp_path):
         description = "Modelo equilibrado para el trabajo diario, con acentos y ñ."
@@ -579,6 +1045,53 @@ class TestCodexModelSync:
         for nullable in ("description", "availability_nux", "upgrade", "default_verbosity", "apply_patch_tool_type"):
             assert nullable in entry and entry[nullable] is None
         assert entry["base_instructions"].startswith("You are a coding agent running in the Codex CLI")
+
+    @pytest.mark.parametrize(
+        ("version", "levels"),
+        [
+            ("codex-cli 0.165.0", ["low", "high", "max"]),
+            ("codex-cli 0.138.0", ["low", "high", "max"]),
+            ("codex-cli 0.137.0", ["low", "high"]),
+            ("codex-cli 0.138.0-alpha.3", ["low", "high"]),
+            ("codex-cli", ["low", "high"]),
+            (None, ["low", "high"]),
+            (OSError("codex vanished"), ["low", "high"]),
+            (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"), ["low", "high"]),
+        ],
+        ids=["current", "first-custom", "pre-custom", "pre-release", "no-number", "failed", "unrunnable", "undecodable"],
+    )
+    def test_unknown_model_offers_the_group_efforts_the_installed_codex_parses(self, tmp_path, version, levels):
+        _, result = self._sync(
+            self._listing(self._row("m")),
+            tmp_path,
+            run=_FakeRun(version=version),
+            groups=({"model_group": "m", "supported_reasoning_efforts": ["low", "high", "max"]},),
+        )
+
+        assert isinstance(result, ModelSyncArgs)
+        entry = self._entries(tmp_path)["m"]
+        assert [level["effort"] for level in entry["supported_reasoning_levels"]] == levels
+        assert entry["supported_reasoning_levels"][0] == {
+            "effort": "low",
+            "description": "Sends reasoning_effort=low upstream",
+        }
+        assert entry["default_reasoning_level"] == "low"
+
+    def test_known_models_and_unknown_or_empty_groups_keep_their_entries(self, tmp_path):
+        listing = self._listing(self._row("gpt-5.5"), self._row("unknown"), self._row("empty"))
+        groups = (
+            {"model_group": "gpt-5.5", "supported_reasoning_efforts": ["max"]},
+            {"model_group": "unknown", "supported_reasoning_efforts": None},
+            {"model_group": "empty", "supported_reasoning_efforts": []},
+        )
+        self._sync(listing, tmp_path, groups=groups)
+        with_groups = self._entries(tmp_path)
+        self._sync(listing, tmp_path, groups=500)
+
+        assert with_groups == self._entries(tmp_path)
+        assert with_groups["gpt-5.5"] == {**_STOCK_MODELS["gpt-5.5"], "priority": 0}
+        assert [with_groups[slug]["supported_reasoning_levels"] for slug in ("unknown", "empty")] == [[], []]
+        assert all("default_reasoning_level" not in with_groups[slug] for slug in ("unknown", "empty"))
 
     def test_context_window_comes_from_max_input_tokens_for_unknown_models_only(self, tmp_path):
         listing = self._listing(
@@ -694,7 +1207,7 @@ class TestCodexModelSync:
             run=run,
         )
         assert self._catalog_path(result) == str(tmp_path / "litellm-models.json")
-        assert len(run.calls) == 2
+        assert len(run.calls) == 3
         assert all(binary in command for command, _ in run.calls)
 
     def test_opencode_dispatch_never_runs_codex(self):
@@ -719,6 +1232,7 @@ class TestCodexModelSync:
 
         assert [command for command, _ in run.calls] == [
             ("codex", "debug", "models"),
+            ("codex", "--version"),
             ("codex", "-c", f"model_catalog_json={json.dumps(path)}", "debug", "models"),
         ]
         for _, options in run.calls:
@@ -757,7 +1271,13 @@ class TestCodexModelSync:
         assert result.reason == "`codex debug models` exited 1: no output"
 
     @pytest.mark.parametrize(
-        "error", [OSError("codex vanished"), subprocess.TimeoutExpired("codex", 10)], ids=["oserror", "timeout"]
+        "error",
+        [
+            OSError("codex vanished"),
+            subprocess.TimeoutExpired("codex", 10),
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+        ],
+        ids=["oserror", "timeout", "undecodable"],
     )
     def test_unrunnable_preflight_is_reported_not_raised(self, tmp_path, error):
         def failing_run(*a, **k):
@@ -783,6 +1303,7 @@ class TestCodexModelSync:
         doubled = override.replace('"', '""')
         assert [command for command, _ in run.calls] == [
             f'{_CMD_PREFIX}""{shim}" "debug" "models""',
+            f'{_CMD_PREFIX}""{shim}" "--version""',
             f'{_CMD_PREFIX}""{shim}" "-c" "{doubled}" "debug" "models""',
         ]
 
@@ -1195,6 +1716,396 @@ class TestRunAgent:
         with pytest.raises(AgentRunError):
             run_agent("http://localhost:4000", "sk-key", [])
 
+    @pytest.mark.parametrize("subscription", [True, False])
+    def test_codex_stop_hook_is_added_only_when_codex_sends_the_key_as_its_openai_key(self, subscription):
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["codex"],
+            subscription=subscription,
+            base_env={"OPENAI_API_KEY": "sk-users-own-openai-key"},
+            which=lambda name: "/usr/local/bin/codex",
+            verify=lambda *a: None,
+            verify_subscription=lambda *a: None,
+            sync_models=lambda *a: ModelSyncSkipped("not needed"),
+            warn=lambda message: None,
+            launcher=lambda p, a, e: launched.update(args=tuple(a)),
+            preparers={"codex": lambda *a: ("-c", "hooks.Stop=lite")},
+        )
+        assert ("hooks.Stop=lite" in launched["args"]) is not subscription
+
+    def test_subscription_launch_probes_with_the_header_and_exports_it(self):
+        probed = []
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude"],
+            subscription=True,
+            base_env={"ANTHROPIC_AUTH_TOKEN": "stale"},
+            which=lambda name: "/usr/local/bin/claude",
+            verify=lambda *a: probed.append(("bearer", a)),
+            verify_subscription=lambda *a: probed.append(("header", a)),
+            launcher=lambda p, a, e: launched.update(env=dict(e)),
+            read_settings=lambda path: {},
+        )
+        assert probed == [("header", ("http://localhost:4000", "sk-key"))]
+        assert launched["env"]["ANTHROPIC_CUSTOM_HEADERS"] == "x-litellm-api-key: Bearer sk-key"
+        assert "ANTHROPIC_AUTH_TOKEN" not in launched["env"]
+
+    def test_subscription_launch_blanks_the_credentials_claude_code_would_load_from_settings_json(self, tmp_path):
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude", "--resume"],
+            subscription=True,
+            base_env={},
+            which=lambda name: "/usr/local/bin/claude",
+            verify_subscription=lambda *a: None,
+            launcher=lambda p, a, e: launched.update(args=tuple(a)),
+            read_settings=lambda path: {},
+            write_overlay=_overlay_writer(tmp_path),
+        )
+        assert launched["args"][:2] == ("claude", "--settings")
+        assert _overlay(launched["args"]) == {
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "",
+                "ANTHROPIC_API_KEY": "",
+                "ANTHROPIC_CUSTOM_HEADERS": "x-litellm-api-key: Bearer sk-key",
+            }
+        }
+        assert launched["args"][3:] == ("--resume",)
+
+    def test_subscription_launch_keeps_the_key_out_of_argv_and_in_one_private_file_next_to_settings_json(
+        self, tmp_path
+    ):
+        config_dir = tmp_path / "cfg"
+        config_dir.mkdir()
+        stale = config_dir / "litellm-subscription-overlay.json"
+        stale.write_text('{"env": {"ANTHROPIC_CUSTOM_HEADERS": "x-litellm-api-key: Bearer old-key"}}')
+        stale.chmod(0o644)
+        launched = {}
+        for _ in range(2):
+            run_agent(
+                "http://localhost:4000",
+                "sk-key",
+                ["claude"],
+                subscription=True,
+                base_env={"CLAUDE_CONFIG_DIR": str(config_dir)},
+                which=lambda name: "/usr/local/bin/claude",
+                verify_subscription=lambda *a: None,
+                launcher=lambda p, a, e: launched.update(args=list(a)),
+                read_settings=lambda path: {},
+            )
+        assert "sk-key" not in " ".join(launched["args"])
+        assert Path(launched["args"][2]) == stale
+        assert sorted(path.name for path in config_dir.iterdir()) == ["litellm-subscription-overlay.json"]
+        assert json.loads(stale.read_text())["env"]["ANTHROPIC_CUSTOM_HEADERS"] == "x-litellm-api-key: Bearer sk-key"
+        if os.name == "posix":
+            assert stat.S_IMODE(stale.stat().st_mode) == 0o600
+
+    def test_subscription_launch_accepts_inline_settings_json_longer_than_a_file_name(self, tmp_path):
+        long_value = "a" * 400
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude", "--settings", json.dumps({"env": {"FOO": long_value}})],
+            subscription=True,
+            base_env={},
+            which=lambda name: "/usr/local/bin/claude",
+            verify_subscription=lambda *a: None,
+            launcher=lambda p, a, e: launched.update(args=list(a)),
+            read_settings=lambda path: {},
+            write_overlay=_overlay_writer(tmp_path),
+        )
+        assert _overlay(launched["args"])["env"]["FOO"] == long_value
+
+    def test_subscription_launch_reports_a_missing_settings_file_as_a_clean_cli_error(self, tmp_path):
+        with pytest.raises(AgentRunError, match="file not found"):
+            run_agent(
+                "http://localhost:4000",
+                "sk-key",
+                ["claude", "--settings", str(tmp_path / "nope.json")],
+                subscription=True,
+                base_env={},
+                which=lambda name: "/usr/local/bin/claude",
+                verify_subscription=lambda *a: None,
+                launcher=lambda *a: None,
+                read_settings=lambda path: {},
+                write_overlay=_overlay_writer(tmp_path),
+            )
+
+    def test_subscription_launch_reads_the_settings_files_claude_code_merges_below_the_flag(self, tmp_path):
+        seen = []
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude"],
+            subscription=True,
+            base_env={"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")},
+            which=lambda name: "/usr/local/bin/claude",
+            verify_subscription=lambda *a: None,
+            launcher=lambda *a: None,
+            read_settings=lambda path: seen.append(path) or {},
+            write_overlay=_overlay_writer(tmp_path),
+            project_dir=tmp_path / "repo",
+        )
+        assert seen == [
+            tmp_path / "repo" / ".claude" / "settings.local.json",
+            tmp_path / "repo" / ".claude" / "settings.json",
+            tmp_path / "cfg" / "settings.json",
+        ]
+
+    @pytest.mark.parametrize("separate_flag", [True, False])
+    def test_subscription_launch_merges_the_blanks_into_the_users_settings_flag(self, tmp_path, separate_flag):
+        settings_file = tmp_path / "mine.json"
+        settings_file.write_text('{"model": "opus", "env": {"ANTHROPIC_AUTH_TOKEN": "mine", "FOO": "bar"}}')
+        user_flag = ["--settings", str(settings_file)] if separate_flag else [f"--settings={settings_file}"]
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude", "--resume", *user_flag, "-p", "hi"],
+            subscription=True,
+            base_env={},
+            which=lambda name: "/usr/local/bin/claude",
+            verify_subscription=lambda *a: None,
+            launcher=lambda p, a, e: launched.update(args=list(a)),
+            read_settings=lambda path: {},
+            write_overlay=_overlay_writer(tmp_path),
+        )
+        assert launched["args"][:2] == ["claude", "--settings"]
+        assert _overlay(launched["args"]) == {
+            "model": "opus",
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "",
+                "FOO": "bar",
+                "ANTHROPIC_API_KEY": "",
+                "ANTHROPIC_CUSTOM_HEADERS": "x-litellm-api-key: Bearer sk-key",
+            },
+        }
+        assert launched["args"][3:] == ["--resume", "-p", "hi"]
+
+    def test_subscription_launch_merges_the_blanks_into_inline_settings_json(self, tmp_path):
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude", "--settings", '{"env": {"ANTHROPIC_API_KEY": "mine"}, "theme": "dark"}'],
+            subscription=True,
+            base_env={},
+            which=lambda name: "/usr/local/bin/claude",
+            verify_subscription=lambda *a: None,
+            launcher=lambda p, a, e: launched.update(args=list(a)),
+            read_settings=lambda path: {},
+            write_overlay=_overlay_writer(tmp_path),
+        )
+        assert launched["args"][:2] == ["claude", "--settings"]
+        assert _overlay(launched["args"]) == {
+            "theme": "dark",
+            "env": {
+                "ANTHROPIC_API_KEY": "",
+                "ANTHROPIC_AUTH_TOKEN": "",
+                "ANTHROPIC_CUSTOM_HEADERS": "x-litellm-api-key: Bearer sk-key",
+            },
+        }
+        assert launched["args"][3:] == []
+
+    @pytest.mark.parametrize(
+        ("flag_headers", "local_headers", "project_headers", "user_headers", "expected"),
+        [
+            ("X-Flag: f", "X-Local: l", "X-Proj: p", "X-User: u", "X-Flag: f\nx-litellm-api-key: Bearer sk-key"),
+            (None, "X-Local: l", "X-Proj: p", "X-User: u", "X-Local: l\nx-litellm-api-key: Bearer sk-key"),
+            (
+                None,
+                None,
+                "X-Proj: p\nx-litellm-api-key: Bearer stale",
+                "X-User: u",
+                "X-Proj: p\nx-litellm-api-key: Bearer sk-key",
+            ),
+            (None, None, None, "X-User: u", "X-User: u\nx-litellm-api-key: Bearer sk-key"),
+            (None, None, None, None, "X-Proc: h\nx-litellm-api-key: Bearer sk-key"),
+        ],
+    )
+    def test_subscription_overlay_keeps_the_custom_headers_claude_code_would_apply_and_adds_the_key(
+        self, tmp_path, flag_headers, local_headers, project_headers, user_headers, expected
+    ):
+        """Claude Code applies settings `env` over the process env, in precedence order, so the overlay must too."""
+        user_flag = (
+            ["--settings", json.dumps({"env": {"ANTHROPIC_CUSTOM_HEADERS": flag_headers}})] if flag_headers else []
+        )
+        files = {
+            tmp_path / "repo" / ".claude" / "settings.local.json": local_headers,
+            tmp_path / "repo" / ".claude" / "settings.json": project_headers,
+            tmp_path / "cfg" / "settings.json": user_headers,
+        }
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude", *user_flag],
+            subscription=True,
+            base_env={"ANTHROPIC_CUSTOM_HEADERS": "X-Proc: h", "CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")},
+            which=lambda name: "/usr/local/bin/claude",
+            verify_subscription=lambda *a: None,
+            launcher=lambda p, a, e: launched.update(args=list(a), env=dict(e)),
+            read_settings=lambda path: {"env": {"ANTHROPIC_CUSTOM_HEADERS": files[path]}} if files[path] else {},
+            write_overlay=_overlay_writer(tmp_path),
+            project_dir=tmp_path / "repo",
+        )
+        assert _overlay(launched["args"])["env"]["ANTHROPIC_CUSTOM_HEADERS"] == expected
+        assert launched["env"]["ANTHROPIC_CUSTOM_HEADERS"] == "X-Proc: h\nx-litellm-api-key: Bearer sk-key"
+
+    def test_subscription_launch_strips_every_settings_flag_and_merges_the_last_one_claude_code_would_keep(
+        self, tmp_path
+    ):
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            [
+                "claude",
+                "--settings",
+                '{"env": {"ANTHROPIC_AUTH_TOKEN": "first"}, "theme": "light"}',
+                "--resume",
+                '--settings={"theme": "dark"}',
+            ],
+            subscription=True,
+            base_env={},
+            which=lambda name: "/usr/local/bin/claude",
+            verify_subscription=lambda *a: None,
+            launcher=lambda p, a, e: launched.update(args=list(a)),
+            read_settings=lambda path: {},
+            write_overlay=_overlay_writer(tmp_path),
+        )
+        assert launched["args"][:2] == ["claude", "--settings"]
+        assert _overlay(launched["args"]) == {
+            "theme": "dark",
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "",
+                "ANTHROPIC_API_KEY": "",
+                "ANTHROPIC_CUSTOM_HEADERS": "x-litellm-api-key: Bearer sk-key",
+            },
+        }
+        assert launched["args"][3:] == ["--resume"]
+
+    def test_subscription_launch_reports_a_malformed_settings_file_as_a_clean_cli_error(self):
+        def broken(path):
+            raise ClaudeSettingsError(f"{path} contains invalid JSON")
+
+        with pytest.raises(AgentRunError, match="contains invalid JSON"):
+            run_agent(
+                "http://localhost:4000",
+                "sk-key",
+                ["claude"],
+                subscription=True,
+                base_env={},
+                which=lambda name: "/usr/local/bin/claude",
+                verify_subscription=lambda *a: None,
+                launcher=lambda *a: None,
+                read_settings=broken,
+            )
+
+    def test_subscription_launch_rejects_a_settings_flag_that_is_not_a_json_object(self):
+        with pytest.raises(AgentRunError, match="is not a JSON object"):
+            run_agent(
+                "http://localhost:4000",
+                "sk-key",
+                ["claude", "--settings", '{"env": 1, '],
+                subscription=True,
+                base_env={},
+                which=lambda name: "/usr/local/bin/claude",
+                verify_subscription=lambda *a: None,
+                launcher=lambda *a: None,
+                read_settings=lambda path: {},
+            )
+
+    def test_codex_subscription_launch_keeps_the_chatgpt_login_and_needs_no_settings_overlay(self):
+        probed = []
+        overlays = []
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["codex", "exec", "--settings", "kept"],
+            subscription=True,
+            base_env={"PATH": "/usr/bin"},
+            which=lambda name: "/usr/local/bin/codex",
+            verify=lambda *a: probed.append(("bearer", a)),
+            verify_subscription=lambda *a: probed.append(("header", a)),
+            sync_models=lambda *a: {},
+            preparers={},
+            write_overlay=lambda text, environ: overlays.append(text),
+            launcher=lambda p, a, e: launched.update(path=p, args=tuple(a), env=dict(e)),
+        )
+        assert probed == [("header", ("http://localhost:4000", "sk-key"))]
+        assert overlays == []
+        assert launched["path"] == "/usr/local/bin/codex"
+        assert launched["args"][0] == "codex"
+        assert launched["args"][-3:] == ("exec", "--settings", "kept")
+        assert _codex_config(launched["args"][1:-3])["model_provider"] == "lite_subscription"
+        assert "OPENAI_BASE_URL" not in launched["env"]
+        assert launched["env"]["LITELLM_PROXY_API_KEY"] == "sk-key"
+        assert "OPENAI_API_KEY" not in launched["env"]
+
+    @pytest.mark.parametrize(
+        "sync_result",
+        [ModelSyncArgs(("-c", 'model_catalog_json="/tmp/c.json"')), ModelSyncSkipped("lists no chat models")],
+    )
+    def test_codex_subscription_launch_leaves_the_model_list_to_codex(self, sync_result):
+        warnings = []
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["codex"],
+            subscription=True,
+            base_env={},
+            which=lambda name: "/usr/local/bin/codex",
+            verify_subscription=lambda *a: None,
+            sync_models=lambda *a: sync_result,
+            warn=warnings.append,
+            launcher=lambda p, a, e: launched.update(args=tuple(a)),
+        )
+        assert warnings == []
+        assert "model_catalog_json" not in json.dumps(launched["args"])
+
+    def test_default_launch_still_probes_with_the_bearer(self):
+        probed = []
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude"],
+            base_env={},
+            which=lambda name: "/usr/local/bin/claude",
+            verify=lambda *a: probed.append(("bearer", a)),
+            verify_subscription=lambda *a: probed.append(("header", a)),
+            launcher=lambda *a: None,
+        )
+        assert probed == [("bearer", ("http://localhost:4000", "sk-key"))]
+
+    def test_subscription_rejection_aborts_before_launch(self):
+        launched = []
+
+        def boom(*a):
+            raise AgentRunError("rejected")
+
+        with pytest.raises(AgentRunError):
+            run_agent(
+                "http://localhost:4000",
+                "sk-key",
+                ["claude"],
+                subscription=True,
+                base_env={},
+                which=lambda name: "/usr/local/bin/claude",
+                verify_subscription=boom,
+                launcher=lambda *a: launched.append(a),
+            )
+        assert launched == []
+
     def test_reattach_terminal_runs_just_before_launch(self):
         order = []
         run_agent(
@@ -1552,6 +2463,99 @@ class TestAgentCommands:
         assert captured["command"] == ["opencode"]
         assert "routing OpenCode through proxy at http://localhost:4000" in result.output
 
+    @pytest.mark.parametrize(
+        ("agent", "user_args", "login"),
+        [("claude", ["--resume"], "claude.ai"), ("codex", ["exec", "hi"], "ChatGPT")],
+    )
+    def test_subscription_flag_reaches_run_agent_and_is_not_forwarded(self, agent, user_args, login):
+        captured = {}
+
+        def fake_run_agent(base_url, api_key, command, **kwargs):
+            captured["command"] = list(command)
+            captured["subscription"] = kwargs.get("subscription")
+
+        with patch(f"{AGENTS_MODULE}.run_agent", side_effect=fake_run_agent):
+            result = self.runner.invoke(
+                _agent_command(agent),
+                ["--subscription", *user_args],
+                obj={"base_url": "http://localhost:4000", "api_key": "sk-key"},
+            )
+
+        assert result.exit_code == 0, result.output
+        assert captured["subscription"] is True
+        assert captured["command"] == [agent, *user_args]
+        assert f"keeping your {login} login" in result.output
+
+    @pytest.mark.parametrize(("agent", "login"), [("claude", "claude.ai"), ("codex", "ChatGPT")])
+    @pytest.mark.parametrize(
+        ("saved", "args", "expected"),
+        [
+            (None, [], False),
+            ("false", [], False),
+            ("true", [], True),
+            ("true", ["--no-subscription"], False),
+            ("false", ["--subscription"], True),
+        ],
+    )
+    def test_subscription_comes_from_the_flag_else_the_saved_setting(self, agent, login, saved, args, expected):
+        if saved is not None:
+            save_config({f"{agent}_subscription": saved})
+        captured = {}
+        with patch(
+            f"{AGENTS_MODULE}.run_agent",
+            side_effect=lambda b, k, c, **kw: captured.update(sub=kw.get("subscription"), command=list(c)),
+        ):
+            result = self.runner.invoke(
+                _agent_command(agent), args, obj={"base_url": "http://localhost:4000", "api_key": "sk-key"}
+            )
+        assert result.exit_code == 0, result.output
+        assert captured["sub"] is expected
+        assert captured["command"] == [agent]
+        assert (f"keeping your {login} login" in result.output) is expected
+
+    @pytest.mark.parametrize(
+        ("saved_key", "agent"),
+        [
+            ("claude_subscription", "codex"),
+            ("claude_subscription", "opencode"),
+            ("codex_subscription", "claude"),
+            ("codex_subscription", "opencode"),
+        ],
+    )
+    def test_a_saved_subscription_setting_only_changes_its_own_agent(self, saved_key, agent):
+        save_config({saved_key: "true"})
+        captured = {}
+        with patch(
+            f"{AGENTS_MODULE}.run_agent",
+            side_effect=lambda b, k, c, **kw: captured.update(sub=kw.get("subscription")),
+        ):
+            result = self.runner.invoke(
+                _agent_command(agent), [], obj={"base_url": "http://localhost:4000", "api_key": "sk-key"}
+            )
+        assert result.exit_code == 0, result.output
+        assert captured["sub"] is False
+        assert "keeping your" not in result.output
+
+    def test_only_claude_and_codex_offer_the_subscription_flag(self):
+        offering = {
+            command.name
+            for command in agent_commands()
+            if "--subscription" in {opt for param in command.params for opt in param.opts}
+        }
+        assert offering == {"claude", "codex"}
+
+    @pytest.mark.parametrize(
+        ("agent", "login", "own_credential"),
+        [("claude", "claude.ai", "Claude Code's"), ("codex", "ChatGPT", "Codex's")],
+    )
+    def test_subscription_help_names_the_agents_own_login_and_its_setting(self, agent, login, own_credential):
+        result = self.runner.invoke(lite, [agent, "--help"], prog_name="lite")
+        assert result.exit_code == 0, result.output
+        text = " ".join(result.output.split())
+        assert f"Keep using your {login} login" in text
+        assert f"instead of replacing {own_credential} own credential" in text
+        assert f"lite config set {agent}_subscription true" in text
+
     def test_skip_verify_is_consumed_not_forwarded(self):
         captured = {}
 
@@ -1676,7 +2680,9 @@ class TestPrepareCodex:
     def test_registers_the_installed_script_as_a_session_scoped_stop_hook(self):
         from litellm.proxy.client.cli.commands.agents import prepare_codex
 
-        args = prepare_codex("http://localhost:4000", "sk-key", {}, install=lambda: "/py /home/me/.litellm/statusline.py")
+        args = prepare_codex(
+            "http://localhost:4000", "sk-key", {}, install=lambda: "/py /home/me/.litellm/statusline.py"
+        )
         assert args == (
             "-c",
             'hooks.Stop=[{hooks=[{type="command",command="/py /home/me/.litellm/statusline.py"}]}]',
@@ -1697,11 +2703,20 @@ class TestPrepareCodex:
 
         warnings = []
         env = {"CODEX_HOME": str(tmp_path)}
-        for body in ('[[hooks.Stop]]\nhooks = [{ type = "command", command = "mine" }]\n', 'hooks.Stop = []\n', "[hooks]\n"):
+        for body in (
+            '[[hooks.Stop]]\nhooks = [{ type = "command", command = "mine" }]\n',
+            "hooks.Stop = []\n",
+            "[hooks]\n",
+        ):
             (tmp_path / "config.toml").write_text(body)
-            assert prepare_codex("http://localhost:4000", "sk", env, install=lambda: "/py /s.py", warn=warnings.append) == ()
+            assert (
+                prepare_codex("http://localhost:4000", "sk", env, install=lambda: "/py /s.py", warn=warnings.append)
+                == ()
+            )
         (tmp_path / "config.toml").write_text('model = "gpt-5.6-sol"\n[projects."/x"]\ntrust_level = "trusted"\n')
-        assert prepare_codex("http://localhost:4000", "sk", env, install=lambda: "/py /s.py", warn=warnings.append) != ()
+        assert (
+            prepare_codex("http://localhost:4000", "sk", env, install=lambda: "/py /s.py", warn=warnings.append) != ()
+        )
         assert len(warnings) == 3 and "already declares hooks" in warnings[0]
 
     def test_a_config_that_cannot_be_read_or_decoded_still_lets_codex_launch(self, tmp_path):

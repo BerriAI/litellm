@@ -34,7 +34,7 @@ pub fn config(endpoint: &str) -> S3CacheConfig {
 pub fn cache_with(config: S3CacheConfig, runtime: Handle) -> JsonS3Cache {
     S3Cache::new(
         config,
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         JsonCodec::new(),
         runtime,
     )

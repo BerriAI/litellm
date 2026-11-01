@@ -4,8 +4,11 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+import functools
+import re
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -22,7 +25,20 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from openai import Timeout as SDKTimeout
-from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, StrictInt, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StrictInt,
+    ValidationError,
+    ValidationInfo,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
@@ -34,7 +50,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
 
 if TYPE_CHECKING:
-    from litellm.router import Router
+    from litellm.router_api import RoutingContext as RouterContext
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
@@ -43,17 +59,31 @@ from .llms.bedrock import AwsSessionTag
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
 from .utils import (
+    # private alias: `from .types.router import *` would rebind a public Final in litellm/__init__.py
+    API_KEY_SECRET_REFERENCE_REJECTION as _API_KEY_SECRET_REFERENCE_REJECTION,
+)
+from .utils import (
+    OIDC_SECRET_REFERENCE_PREFIX as _OIDC_SECRET_REFERENCE_PREFIX,
+)
+from .utils import (
+    AdminApiKeySecretReference as _AdminApiKeySecretReference,
+)
+from .utils import (
+    CooldownDeploymentInfo,
     CustomPricingLiteLLMParams,
     MirroredPricingParams,
     ModelResponse,
     StandardLoggingRoutingDecision,
 )
 from .utils import (
-    # private alias: `from .types.router import *` would rebind a public Final in litellm/__init__.py
     server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
 )
 
 AllowedModelRegion: TypeAlias = Literal["eu", "us"]
+
+
+class SilentExperimentFlag(TypedDict, total=False):
+    is_silent_experiment: ReadOnly[bool]
 
 
 class FallbackSkipReason(str, enum.Enum):
@@ -175,6 +205,11 @@ OptionalPreCallChecks = list[
 ]
 
 
+FallbackTargets: TypeAlias = Sequence[str | Mapping[str, JsonValue]]
+ContentPolicyFallbackRule: TypeAlias = Annotated[Mapping[str, FallbackTargets], Field(min_length=1, max_length=1)]
+ContentPolicyFallbackRules: TypeAlias = Sequence[ContentPolicyFallbackRule]
+
+
 class UpdateRouterConfig(LiteLLMBaseModel):
     """
     Set of params that you can modify via `router.update_settings()`.
@@ -194,6 +229,7 @@ class UpdateRouterConfig(LiteLLMBaseModel):
     retry_after: float | None = None
     fallbacks: list[dict] | None = None
     context_window_fallbacks: list[dict] | None = None
+    content_policy_fallbacks: ContentPolicyFallbackRules | None = None
     model_group_alias: dict[str, str | dict] | None = Field(default={})
     enable_tag_filtering: bool | None = None
     weights: RouterWeights | None = None
@@ -255,6 +291,7 @@ def _whole_float_as_int(value: object) -> object:
 
 
 class ModelInfo(MirroredPricingParams):
+    enforce_supported_endpoints: bool | None = None
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
     updated_at: datetime.datetime | None = None
@@ -264,6 +301,7 @@ class ModelInfo(MirroredPricingParams):
     created_by: str | None = None
 
     base_model: str | None = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
+    pricing_provider: str | None = None  # provider whose cost-map rows price this deployment, else custom_llm_provider
     tier: Literal["free", "paid"] | None = None
 
     """
@@ -313,6 +351,8 @@ class ModelInfo(MirroredPricingParams):
     # in the spend log row's metadata. Set it on every deployment of the group.
     internal_router_model: bool | None = None
 
+    max_embedding_batch_size: Annotated[int, Field(gt=0)] | None = None
+
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
@@ -361,7 +401,7 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
 
         def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: credential fields vary by provider
 
-    api_key: str | None = None
+    api_key: _AdminApiKeySecretReference | str | None = None
     api_base: str | None = None
     api_version: str | None = None
     ## AZURE OAUTH ##
@@ -401,6 +441,7 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     aws_external_id: str | None = None
     aws_session_tags: Sequence[AwsSessionTag] | None = None
     aws_bedrock_runtime_endpoint: str | None = None
+    aws_bedrock_control_plane_endpoint: str | None = None
     aws_bedrock_project_id: str | None = None
     s3_bucket_name: str | None = None
     s3_endpoint_url: str | None = None
@@ -450,15 +491,29 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     token_exchange_audience: str | None = None
 
 
+def _api_key_secret_reference(fields: Mapping[str, object]) -> tuple[str, ...]:
+    """The call path reads an ``oidc/`` api_key reference from the proxy's own filesystem or environment
+    and sends the result upstream, so it is server-owned the same way a federation field is."""
+    api_key: Final = fields.get("api_key")
+    return ("api_key",) if isinstance(api_key, str) and api_key.startswith(_OIDC_SECRET_REFERENCE_PREFIX) else ()
+
+
+def holds_api_key_secret_reference(fields: Mapping[str, object]) -> bool:
+    return bool(_api_key_secret_reference(fields))
+
+
 def server_owned_wif_fields_present(fields: Mapping[str, object]) -> tuple[str, ...]:
-    """Server-owned federation or OAuth token-exchange field names set in ``fields``.
+    """Server-owned federation or OAuth token-exchange field names set in ``fields``, plus ``api_key``
+    when it holds an ``oidc/`` secret reference.
 
     ``fields`` is a ``litellm_params`` dict (or a credential's ``credential_values`` mapping,
     which feeds the same resolution when referenced by name). Derived from
     ``server_owned_wif_litellm_params`` rather than hand-copied, so a persistence gate built on
     this stays correct when a server-owned field is added there.
     """
-    return tuple(name for name in _server_owned_wif_litellm_params if fields.get(name) is not None)
+    return tuple(
+        name for name in _server_owned_wif_litellm_params if fields.get(name) is not None
+    ) + _api_key_secret_reference(fields)
 
 
 def server_owned_wif_fields_named(keys: Container[str]) -> tuple[str, ...]:
@@ -474,6 +529,10 @@ def server_owned_wif_fields_named(keys: Container[str]) -> tuple[str, ...]:
     return tuple(name for name in _server_owned_wif_litellm_params if name in keys)
 
 
+def server_owned_wif_fields_written(values: Mapping[str, object]) -> tuple[str, ...]:
+    return server_owned_wif_fields_named(values) + _api_key_secret_reference(values)
+
+
 _WIF_POINTER_FIELDS: Final = frozenset(name for name in _server_owned_wif_litellm_params if name.endswith("_ref"))
 
 
@@ -484,6 +543,40 @@ def holds_secret_pointer(param_name: str) -> bool:
 
 
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
+
+_STRICT_LITELLM_PARAMS: Final = MappingProxyType({"strict_litellm_params": True})
+
+_StrictlyValidatedParams: Final = TypeVar("_StrictlyValidatedParams", bound=BaseModel)
+
+
+def validate_litellm_params_strictly(
+    params_model: type[_StrictlyValidatedParams], params: Mapping[str, object]
+) -> _StrictlyValidatedParams:
+    return params_model.model_validate(params, context=_STRICT_LITELLM_PARAMS)
+
+
+def _none_when_malformed_outside_strict_validation(
+    value: object, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
+) -> object:
+    try:
+        return handler(value)
+    except ValidationError:
+        if info.context is _STRICT_LITELLM_PARAMS:
+            raise
+        return None
+
+
+_DAILY_RESET_TIME_PATTERN: Final = re.compile(r"\d{2}:\d{2}")
+
+
+def parse_daily_reset_time(value: str | None) -> datetime.timedelta:
+    """`daily_reset_time` is "HH:MM" in UTC, when the rpd/tpd window starts over; unset means midnight UTC."""
+    if value is None:
+        return datetime.timedelta(0)
+    if _DAILY_RESET_TIME_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"daily_reset_time must be HH:MM in UTC, got {value!r}")
+    parsed: Final = datetime.time.fromisoformat(value)
+    return datetime.timedelta(hours=parsed.hour, minutes=parsed.minute)
 
 
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
@@ -501,9 +594,15 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     rpm: int | None = None
     itpm: int | None = None
     otpm: int | None = None
+    tpd: int | None = None
+    rpd: int | None = None
+    daily_reset_time: str | None = None
     timeout: float | str | httpx.Timeout | SDKTimeout | None = None  # if str, pass in as os.environ/
     # read timeout of a live stream, a faked stream takes the longer of this and timeout. If str, pass in as os.environ/
     stream_timeout: float | str | None = None
+    # per service_tier overrides of timeout / stream_timeout, used when the request's service_tier matches a key
+    timeout_by_service_tier: Mapping[str, float] | None = None
+    stream_timeout_by_service_tier: Mapping[str, float] | None = None
     max_retries: int | None = None
     drop_params: bool | str | None = None
     organization: str | None = None  # for openai orgs
@@ -537,12 +636,19 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         default=False,
         description="Use stored xAI OAuth credentials when no xAI API key is configured.",
     )
+    chatgpt_auth_file: str | None = Field(
+        default=None,
+        description="Path to a ChatGPT OAuth auth.json for this deployment.",
+    )
     fireworks_forward_user_id: bool | None = Field(
         default=None,
         description="Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.",
     )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
+    thought_signature_in_tool_call_id: Annotated[
+        bool | None, WrapValidator(_none_when_malformed_outside_strict_validation)
+    ] = None
     model_info: dict | None = None
     mock_response: str | ModelResponse | Exception | object | None = None
 
@@ -584,6 +690,13 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     valkey_ssl: bool | None = None
     valkey_text_field: str | None = None
     valkey_embedding_field: str | None = None
+
+    @field_validator("daily_reset_time")
+    @classmethod
+    def _daily_reset_time_is_utc_hh_mm(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_daily_reset_time(value)
+        return value
 
     @field_validator("timeout")
     @classmethod
@@ -699,6 +812,9 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     rpm: int | None
     itpm: int | None
     otpm: int | None
+    tpd: ReadOnly[int | None]
+    rpd: ReadOnly[int | None]
+    daily_reset_time: ReadOnly[str | None]
     order: int | None
     weight: int | None
     max_parallel_requests: int | None
@@ -708,6 +824,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     responses_api_version: ReadOnly[str | None]
     timeout: float | str | httpx.Timeout | SDKTimeout | None  # writable-ok: preserve timeout updates
     stream_timeout: float | str | None
+    timeout_by_service_tier: ReadOnly[Mapping[str, float] | None]
+    stream_timeout_by_service_tier: ReadOnly[Mapping[str, float] | None]
     max_retries: int | None
     organization: list | str | None  # for openai orgs
     provider_affinity_header: ReadOnly[str | None]
@@ -720,6 +838,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     use_chat_completions_api: bool | None
     ## PASS-THROUGH ENDPOINTS ##
     use_in_pass_through: bool | None
+    kubernetes_pod_discovery: ReadOnly[bool | None]
     litellm_credential_name: str | None
     ## UNIFIED PROJECT/REGION ##
     region_name: str | None
@@ -915,9 +1034,10 @@ class AlertingConfig(LiteLLMBaseModel):
     alerting_threshold: float | None = 300
 
 
+@functools.cache
 def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
     """Resolve a class's annotations, keeping each resolved annotation opaque."""
-    return get_type_hints(model_class)
+    return MappingProxyType(get_type_hints(model_class))
 
 
 class ModelGroupInfo(LiteLLMBaseModel):
@@ -948,6 +1068,7 @@ class ModelGroupInfo(LiteLLMBaseModel):
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     description: str | None = None
+    supported_endpoints: tuple[str, ...] | None = None
 
     def __init__(self, **data) -> None:
         for field_name, field_type in _resolved_annotations(self.__class__).items():
@@ -1105,6 +1226,7 @@ class RouterErrorTypes(str, enum.Enum):
 
 class RouterRateLimitError(ValueError):
     status_code: Final = 429
+    cooldown_deployments: tuple[CooldownDeploymentInfo, ...] | None = None
 
     def __init__(
         self,
@@ -1113,11 +1235,13 @@ class RouterRateLimitError(ValueError):
         enable_pre_call_checks: bool,
         cooldown_list: list,
         model_ids: Sequence[str] = (),
+        cooldown_deployments: Sequence[CooldownDeploymentInfo] | None = None,
     ) -> None:
         self.model = model
         self.cooldown_time = cooldown_time
         self.enable_pre_call_checks = enable_pre_call_checks
         self.cooldown_list = cooldown_list
+        self.cooldown_deployments = None if cooldown_deployments is None else tuple(cooldown_deployments)
         self.all_deployments_in_cooldown = bool(model_ids) and frozenset(model_ids) <= frozenset(cooldown_list)
         self.type = (
             RouterErrorTypes.all_deployments_in_cooldown.value
@@ -1142,6 +1266,8 @@ class RouterModelGroupAliasItem(TypedDict):
 class RetryAttemptRecord(TypedDict):
     model_group: ReadOnly[str | None]
     deployment_id: ReadOnly[str | None]
+    model: ReadOnly[str | None]
+    base_model: ReadOnly[str | None]
     exception_type: ReadOnly[str]
     exception_string: ReadOnly[str]
     attempted_retries: ReadOnly[int | None]
@@ -1187,7 +1313,7 @@ class FallbackAccessCheck(Protocol):
     rejects, so a fallback can never reach a model the caller could not have requested directly.
     """
 
-    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
 
 
 class FallbackBudgetCheck(Protocol):
@@ -1200,7 +1326,7 @@ class FallbackBudgetCheck(Protocol):
     and skips targets it rejects, leaving the free attempt itself untouched.
     """
 
-    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
 
 
 class AutoRouterCapabilityLimit(Protocol):
@@ -1292,6 +1418,18 @@ class ConsumedRequestTagsStamp:
 
     model_group: str
     tags: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class BaggageMappedTagsStamp:
+    """Request tags added by baggage mappings, which classify spend and budgets but never select deployments.
+
+    The serving deployment's own tags are kept beside them, so a mapped tag that the deployment also carries
+    still picks that deployment's guardrail mode.
+    """
+
+    tags: tuple[str, ...]
+    serving_deployment_tags: tuple[str, ...] = ()
 
 
 @runtime_checkable
@@ -1394,7 +1532,8 @@ class AdaptiveRouterPreferences(LiteLLMBaseModel):
 
 def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
     """Raise ``ValueError`` if a mapping that did not come from deployment config carries a
-    server-owned workload identity federation or OAuth token-exchange field.
+    server-owned workload identity federation or OAuth token-exchange field, or an ``api_key``
+    holding an ``oidc/`` secret reference.
 
     These are never settable inline on a client surface, with or without a client-side credential
     opt-in. Naming a stored credential that already holds them is the other way in and has its own
@@ -1403,6 +1542,14 @@ def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
     This lives here rather than under ``litellm.proxy`` so the router can call it on a
     post-authentication merge without core importing from the proxy package.
     """
+    reject_server_owned_wif_fields(body)
+    if holds_api_key_secret_reference(body):
+        raise ValueError(_API_KEY_SECRET_REFERENCE_REJECTION)
+
+
+def reject_server_owned_wif_fields(body: Mapping[str, object]) -> None:
+    """``reject_server_owned_wif_params`` without the ``oidc/`` api_key check, for the deployment writes whose
+    role gate already refuses a non-admin setting one."""
     submitted_names: Final = frozenset(key.removesuffix("[]") for key in body)
     for param in _server_owned_wif_litellm_params:
         if param in submitted_names:

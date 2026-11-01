@@ -37,7 +37,7 @@ impl HashicorpVault {
                             .await
                         {
                             Ok(metadata) => u32::try_from(metadata.current_version)
-                                .map_err(|_| Error::CasVersionOverflow)?,
+                                .map_err(Error::CasVersionOverflow)?,
                             Err(error) if api_status(&error) == Some(404) => 0,
                             Err(_) => return Err(map_api_error(error, ErrorContext::Secret)),
                         };

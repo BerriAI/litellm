@@ -621,7 +621,7 @@ async def retrieve_batch(
         unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
         if unified_model_id is not None:
             resolved_unified_model: Final = (
-                llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
+                llm_router.registry().resolve(unified_model_id, kind="from_id") if llm_router is not None else None
             )
             await authorize_model_for_key(
                 model_id=resolved_unified_model or unified_model_id,
@@ -1130,7 +1130,7 @@ async def cancel_batch(
         unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
         if unified_model_id is not None:
             resolved_unified_model: Final = (
-                llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
+                llm_router.registry().resolve(unified_model_id, kind="from_id") if llm_router is not None else None
             )
             await authorize_model_for_key(
                 model_id=resolved_unified_model or unified_model_id,

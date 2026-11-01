@@ -3,15 +3,19 @@ Tests for restamping the public model on Anthropic Messages streaming chunks.
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from collections.abc import AsyncIterator, Sequence
+from typing import Final
 
 import pytest
 
+from litellm.caching.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
     AnthropicStreamModelRestamper,
     restamp_anthropic_stream_chunk_model,
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.utils import ProxyLogging
 
 
 def _message_start_frame(model: str, line_end: str = "\n") -> bytes:
@@ -22,15 +26,9 @@ def _message_start_frame(model: str, line_end: str = "\n") -> bytes:
     return f"event: message_start{line_end}data: {json.dumps(payload)}{line_end}{line_end}".encode()
 
 
-def _proxy_logging_obj_streaming(frames: list[bytes]) -> MagicMock:
-    async def _iterator_hook(**_kwargs):
-        for frame in frames:
-            yield frame
-
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.async_post_call_streaming_iterator_hook = _iterator_hook
-    proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["response"])
-    return proxy_logging_obj
+async def _stream_frames(frames: Sequence[bytes]) -> AsyncIterator[bytes]:
+    for frame in frames:
+        yield frame
 
 
 def _model_from_frame(frame: bytes | str) -> str:
@@ -47,6 +45,28 @@ def test_restamps_sse_bytes_frame():
     assert isinstance(restamped, bytes)
     assert _model_from_frame(restamped) == "claude-auto-1"
     assert b"event: message_start" in restamped
+
+
+def test_restamps_sse_bytes_frame_holding_a_line_separator() -> None:
+    payload: Final = {
+        "type": "message_start",
+        "message": {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5-20251001",
+            "content": [{"type": "text", "text": "alpha\u2028beta"}],
+        },
+    }
+    frame: Final = f"event: message_start\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+
+    restamped: Final = restamp_anthropic_stream_chunk_model(frame, "claude-auto-1")
+
+    assert isinstance(restamped, bytes)
+    data_line: Final = next(line for line in restamped.decode().split("\n") if line.startswith("data:"))
+    message: Final = json.loads(data_line[len("data:") :])["message"]
+    assert message["model"] == "claude-auto-1"
+    assert message["content"] == [{"type": "text", "text": "alpha\u2028beta"}]
 
 
 def test_restamps_event_dict():
@@ -76,15 +96,14 @@ def test_leaves_chunks_without_a_model_untouched(chunk):
 async def test_sse_generator_publishes_requested_model_on_message_start():
     """The message_start event reports the requested model, not the provider's."""
     delta_frame = b'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"text":"hi"}}\n\n'
-    proxy_logging_obj = _proxy_logging_obj_streaming([_message_start_frame("claude-haiku-4-5-20251001"), delta_frame])
 
     chunks = [
         chunk
         async for chunk in ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-            response=MagicMock(),
-            user_api_key_dict=MagicMock(),
+            response=_stream_frames((_message_start_frame("claude-haiku-4-5-20251001"), delta_frame)),
+            user_api_key_dict=UserAPIKeyAuth(),
             request_data={"model": "claude-auto-1"},
-            proxy_logging_obj=proxy_logging_obj,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
             restamp_model="claude-auto-1",
         )
     ]
@@ -95,15 +114,13 @@ async def test_sse_generator_publishes_requested_model_on_message_start():
 
 @pytest.mark.asyncio
 async def test_sse_generator_keeps_provider_model_when_restamping_is_off():
-    proxy_logging_obj = _proxy_logging_obj_streaming([_message_start_frame("claude-haiku-4-5-20251001")])
-
     chunks = [
         chunk
         async for chunk in ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-            response=MagicMock(),
-            user_api_key_dict=MagicMock(),
+            response=_stream_frames((_message_start_frame("claude-haiku-4-5-20251001"),)),
+            user_api_key_dict=UserAPIKeyAuth(),
             request_data={"model": "claude-auto-1"},
-            proxy_logging_obj=proxy_logging_obj,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
         )
     ]
 
@@ -175,15 +192,14 @@ def test_dict_message_start_disarms_after_restamp():
 @pytest.mark.asyncio
 async def test_sse_generator_restamps_message_start_split_across_chunks():
     frame = _message_start_frame("claude-haiku-4-5-20251001")
-    proxy_logging_obj = _proxy_logging_obj_streaming([frame[:30], frame[30:]])
 
     chunks = [
         chunk
         async for chunk in ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-            response=MagicMock(),
-            user_api_key_dict=MagicMock(),
+            response=_stream_frames((frame[:30], frame[30:])),
+            user_api_key_dict=UserAPIKeyAuth(),
             request_data={"model": "claude-auto-1"},
-            proxy_logging_obj=proxy_logging_obj,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
             restamp_model="claude-auto-1",
         )
     ]
@@ -250,15 +266,14 @@ def test_flush_disarms_the_restamper():
 @pytest.mark.asyncio
 async def test_sse_generator_flushes_held_tail_at_end_of_stream():
     unterminated = _message_start_frame("claude-haiku-4-5-20251001")[:-2]
-    proxy_logging_obj = _proxy_logging_obj_streaming([unterminated])
 
     chunks = [
         chunk
         async for chunk in ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-            response=MagicMock(),
-            user_api_key_dict=MagicMock(),
+            response=_stream_frames((unterminated,)),
+            user_api_key_dict=UserAPIKeyAuth(),
             request_data={"model": "claude-auto-1"},
-            proxy_logging_obj=proxy_logging_obj,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
             restamp_model="claude-auto-1",
         )
     ]
@@ -271,15 +286,14 @@ async def test_sse_generator_flushes_held_tail_at_end_of_stream():
 async def test_sse_generator_restamps_crlf_stream():
     frame = _message_start_frame("claude-haiku-4-5-20251001", line_end="\r\n")
     delta = b'event: content_block_delta\r\ndata: {"type":"content_block_delta","delta":{"text":"hi"}}\r\n\r\n'
-    proxy_logging_obj = _proxy_logging_obj_streaming([frame, delta])
 
     chunks = [
         chunk
         async for chunk in ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-            response=MagicMock(),
-            user_api_key_dict=MagicMock(),
+            response=_stream_frames((frame, delta)),
+            user_api_key_dict=UserAPIKeyAuth(),
             request_data={"model": "claude-auto-1"},
-            proxy_logging_obj=proxy_logging_obj,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
             restamp_model="claude-auto-1",
         )
     ]

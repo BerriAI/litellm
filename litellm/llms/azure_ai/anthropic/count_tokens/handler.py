@@ -4,6 +4,7 @@ Azure AI Anthropic CountTokens API handler.
 Uses httpx for HTTP requests with Azure authentication.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -12,6 +13,7 @@ from pydantic import JsonValue
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
@@ -36,6 +38,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
         timeout: float | httpx.Timeout | None = None,
         tools: list[dict[str, JsonValue]] | None = None,
         system: object = None,
+        optional_params: Mapping[str, JsonValue] | None = None,
     ) -> dict[str, object]:
         """
         Handle a CountTokens request using httpx with Azure authentication.
@@ -66,6 +69,8 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 messages=messages,
                 tools=tools,
                 system=system,
+                optional_params=optional_params,
+                drop_params=drops_unsupported_params((litellm_params or {}).get("drop_params")),
             )
 
             verbose_logger.debug("Transformed request: %s", request_body)
@@ -79,6 +84,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
             headers: Final = self.get_required_headers(
                 api_key=api_key,
                 litellm_params=litellm_params,
+                messages=messages,
             )
             if not {"x-api-key", "Authorization"} & headers.keys():
                 raise AnthropicError(

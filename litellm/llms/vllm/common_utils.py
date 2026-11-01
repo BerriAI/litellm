@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -8,6 +9,14 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import add_path_to_api_base
+
+
+def endpoint_under_api_base(endpoint: str, api_base: str | None) -> str:
+    return (
+        endpoint.lstrip("/").removeprefix("v1/")
+        if api_base is not None and api_base.rstrip("/").endswith("/v1")
+        else endpoint
+    )
 
 
 class VLLMError(BaseLLMException):
@@ -39,9 +48,14 @@ class VLLMModelInfo(BaseLLMModelInfo):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        if api_key is not None:
-            headers["x-api-key"] = api_key
-        return headers
+        upstream_key: Final = self.upstream_api_key(api_key, api_base)
+        return {**headers, **self.upstream_auth_headers(upstream_key)} if upstream_key else headers
+
+    def upstream_api_key(self, api_key: str | None, api_base: str | None) -> str | None:
+        return api_key
+
+    def upstream_auth_headers(self, api_key: str) -> Mapping[str, str]:
+        return {"Authorization": f"Bearer {api_key}", "x-api-key": api_key}
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:

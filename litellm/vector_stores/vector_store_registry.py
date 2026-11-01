@@ -36,7 +36,7 @@ else:
 _DB_ROW: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 _ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
 _TOOL: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
-_STORE_ID_ITEMS: Final = TypeAdapter(list[object], config=ConfigDict(strict=True))
+_STORE_ID_ITEMS: Final = TypeAdapter(list[object] | tuple[object, ...], config=ConfigDict(strict=True))
 
 
 def _named_store_ids(store_ids: object) -> tuple[str, ...]:
@@ -49,7 +49,11 @@ def _named_store_ids(store_ids: object) -> tuple[str, ...]:
     return tuple(store_id for store_id in items if isinstance(store_id, str))
 
 
-def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
+def listed_vector_store_ids(store_ids: object) -> tuple[str, ...]:
+    return _named_store_ids(store_ids) if isinstance(store_ids, (list, tuple)) else ()
+
+
+def vector_store_ids_in_tool(tool: object) -> tuple[str, ...]:
     try:
         return _named_store_ids(_TOOL.validate_python(tool).get("vector_store_ids"))
     except ValidationError:
@@ -195,7 +199,7 @@ class VectorStoreRegistry:
         tools_to_remove: Final[list[int]] = []
 
         for i, tool in enumerate(tools):
-            tool_vector_store_ids = _tool_vector_store_ids(tool)
+            tool_vector_store_ids = vector_store_ids_in_tool(tool)
             if not tool_vector_store_ids:
                 continue
 
@@ -305,7 +309,7 @@ class VectorStoreRegistry:
             List of vector stores with tool parameters merged into litellm_params
         """
         # Pop vector_store_ids from params
-        vector_store_ids: Final[list[str]] = non_default_params.pop("vector_store_ids", None) or []
+        vector_store_ids: Final = [*listed_vector_store_ids(non_default_params.pop("vector_store_ids", None))]
 
         # Extract params from tools and collect IDs
         params_by_id = self.get_and_pop_recognised_vector_store_tools(tools=tools, vector_store_ids=vector_store_ids)
@@ -353,7 +357,7 @@ class VectorStoreRegistry:
             List of vector stores with tool parameters merged into litellm_params
         """
         # Pop vector_store_ids from params
-        vector_store_ids: Final[list[str]] = non_default_params.pop("vector_store_ids", None) or []
+        vector_store_ids: Final = [*listed_vector_store_ids(non_default_params.pop("vector_store_ids", None))]
 
         # Extract params from tools and collect IDs
         params_by_id = self.get_and_pop_recognised_vector_store_tools(tools=tools, vector_store_ids=vector_store_ids)
@@ -423,7 +427,7 @@ class VectorStoreRegistry:
             validated_tools: Final = _ITEMS.validate_python(tools)
         except ValidationError:
             return vector_store_ids
-        return [*vector_store_ids, *chain.from_iterable(_tool_vector_store_ids(tool) for tool in validated_tools)]
+        return [*vector_store_ids, *chain.from_iterable(vector_store_ids_in_tool(tool) for tool in validated_tools)]
 
     def load_vector_stores_from_config(self, vector_stores_config: list[dict]):
         """

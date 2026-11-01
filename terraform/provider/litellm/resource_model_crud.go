@@ -357,7 +357,7 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	return retryModelRead(d, m, 5)
 }
 
-// /model/update only merges litellm_params, so model_info changes go through the PATCH endpoint.
+// Older proxies drop the model_info sent to /model/update, so display_name also goes through the PATCH endpoint.
 func patchModelDisplayName(client *Client, modelID, displayName string) error {
 	resp, err := MakeRequest(client, "PATCH", fmt.Sprintf(endpointModelPatch, url.PathEscape(modelID)), ModelInfoPatch{
 		ModelInfo: ModelInfoPatchFields{ID: modelID, DisplayName: displayName},
