@@ -298,6 +298,7 @@ class CustomGuardrail(CustomLogger):
     use_native_lifecycle_hooks: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
+    masks_logged_request: ClassVar[bool] = False
     logging_only_scope: LoggingOnlyScope | None
     logging_only_continue_on_input_failure: bool
 
