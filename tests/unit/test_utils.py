@@ -8505,6 +8505,20 @@ def test_function_setup_logs_the_search_query_edit_prompt_and_ocr_document_summa
     assert _logged_request_messages(original_function, *args, **kwargs) == [{"role": "user", "content": expected}]
 
 
+@pytest.mark.parametrize("original_function", ("acompact_responses", "compact_responses"))
+@pytest.mark.parametrize(
+    ("args", "kwargs"),
+    [(("Remember forbiddenword",), {"model": "gpt-4o"}), ((), {"input": "Remember forbiddenword", "model": "gpt-4o"})],
+)
+def test_function_setup_logs_the_compact_input_as_the_request_like_responses(
+    original_function: str, args: tuple[object, ...], kwargs: dict[str, object]
+) -> None:
+    logged: Final = _logged_request_messages(original_function, *args, **kwargs)
+
+    assert logged == [{"role": "user", "content": "Remember forbiddenword"}]
+    assert logged == _logged_request_messages("aresponses", *args, **kwargs)
+
+
 @pytest.mark.parametrize("original_function", ("atext_completion", "text_completion"))
 def test_function_setup_without_a_prompt_leaves_the_missing_prompt_to_request_validation(
     original_function: str,
@@ -11367,10 +11381,18 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
 
 
-@pytest.mark.parametrize("call_type", ["aget_responses", "adelete_responses", "acancel_responses", "acompact_responses"])
+@pytest.mark.parametrize(
+    ("call_type", "expected_hooks"),
+    [
+        ("aget_responses", ("pre", "post")),
+        ("adelete_responses", ("pre", "post")),
+        ("acancel_responses", ("pre", "post")),
+        ("acompact_responses", ("pre",)),
+    ],
+)
 @pytest.mark.asyncio
-async def test_client_passes_stored_response_call_types_to_both_deployment_hooks(
-    call_type: str, monkeypatch: pytest.MonkeyPatch
+async def test_client_leaves_compact_replies_to_the_proxy_post_call_scan_and_hooks_other_stored_responses(
+    call_type: str, expected_hooks: tuple[str, ...], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class RecordingLogger(CustomLogger):
         def __init__(self) -> None:
@@ -11399,14 +11421,11 @@ async def test_client_passes_stored_response_call_types_to_both_deployment_hooks
 
     await client(stored_response_call)(model="gpt-4o", response_id="resp_abc")
 
-    assert callback.hook_calls == (("pre", CallTypes(call_type)), ("post", CallTypes(call_type)))
+    assert callback.hook_calls == tuple((hook, CallTypes(call_type)) for hook in expected_hooks)
 
 
-@pytest.mark.parametrize("call_type", ["aget_responses", "acompact_responses"])
 @pytest.mark.asyncio
-async def test_a_deployment_post_call_guardrail_blocks_a_stored_response_reply(
-    call_type: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_a_deployment_post_call_guardrail_blocks_a_stored_response_reply(monkeypatch: pytest.MonkeyPatch) -> None:
     class NoPineappleGuardrail(CustomGuardrail):
         async def async_post_call_success_hook(
             self, data: dict[str, object], user_api_key_dict: object, response: object
@@ -11424,7 +11443,7 @@ async def test_a_deployment_post_call_guardrail_blocks_a_stored_response_reply(
     async def stored_response_call(**kwargs: object) -> dict[str, str]:
         return {"id": "resp_abc", "output_text": "I like pineapple"}
 
-    stored_response_call.__name__ = call_type
+    stored_response_call.__name__ = "aget_responses"
 
     with pytest.raises(ValueError, match="pineapple is not allowed"):
         await client(stored_response_call)(model="gpt-4o", response_id="resp_abc", guardrails=["no-pineapple"])
