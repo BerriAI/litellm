@@ -25,6 +25,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.child_request import ChildResponse, chat_child_request
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 from litellm.types.utils import CallTypes
 
 IMAGE_BYTES: Final = b"\x89PNG\r\n\x1a\nfake image bytes"
@@ -491,12 +492,17 @@ async def test_descriptions_pass_the_input_guardrails_including_cache_hits(monke
     describer: Final = _RecordingDescriber([Described("the PIN is 1234")])
     logger: Final = _logger(describer)
 
+    requests: Final = [_request([_image_turn("hi")]) for _ in range(2)]
+    for request in requests:
+        guardrail.mark_pre_call_hook_ran(request)  # the parent request already ran this guardrail
+
     results: Final = [
-        await logger.async_pre_call_deployment_hook(_request([_image_turn("hi")]), CallTypes.acompletion)
-        for _ in range(2)
+        await logger.async_pre_call_deployment_hook(request, CallTypes.acompletion) for request in requests
     ]
 
-    assert results == [_request([_described_turn("hi", 1, "the PIN is [PIN]")])] * 2
+    assert [result["messages"] if result else None for result in results] == [
+        [_described_turn("hi", 1, "the PIN is [PIN]")]
+    ] * 2
     assert (guardrail.scanned, len(describer.requests)) == (["the PIN is 1234", "the PIN is 1234"], 1)
 
 
@@ -568,3 +574,25 @@ async def test_a_repeated_image_that_fails_is_described_once_per_request(auth: U
     await logger.async_pre_call_deployment_hook(request, CallTypes.acompletion)
 
     assert len(describer.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_descriptions_pass_the_request_policy_pipeline(monkeypatch: pytest.MonkeyPatch):
+    guardrail: Final = _MaskingGuardrail(guardrail_name="pii-policy", event_hook=GuardrailEventHooks.pre_call)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    pipeline: Final = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="pii-policy", on_fail="block", on_pass="allow", pass_data=True)],
+    )
+    request: Final = {
+        **_request([_image_turn("hi")]),
+        "metadata": {"user_api_key_auth": TEAM_AUTH, "_guardrail_pipelines": [("mandatory-pii", pipeline)]},
+    }
+    guardrail.mark_pre_call_hook_ran(request)  # the parent request already ran this pipeline step
+
+    result: Final = await _logger(_RecordingDescriber([Described("the PIN is 1234")])).async_pre_call_deployment_hook(
+        request, CallTypes.acompletion
+    )
+
+    assert result == {**request, "messages": [_described_turn("hi", 1, "the PIN is [PIN]")]}
+    assert guardrail.scanned == ["the PIN is 1234"]

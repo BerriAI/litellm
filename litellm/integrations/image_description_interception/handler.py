@@ -28,11 +28,10 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_convert_url_to_base64
-from litellm.types.llms.openai import ChatCompletionUserMessage
 from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
-    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.utils import is_vision_explicitly_disabled
 
 DEFAULT_IMAGE_DESCRIPTION_PROMPT: Final = """You are an image-to-evidence extractor. A text-only model will read your output instead of the image. It cannot see the image and cannot check you. A wrong value is worse than a missing value.
@@ -190,13 +189,10 @@ def _request_metadatas(kwargs: Mapping[str, object]) -> tuple[Mapping[str, objec
     )
 
 
-def _tenant_scope(kwargs: Mapping[str, object]) -> str | None:
-    """Cache and dedup scope for a request: its team, else its hashed key, else its user. Descriptions are never
-    shared across tenants, so a tenant cannot learn from a fast answer that another tenant sent the same image.
-    None when the request carries no such identity: its descriptions are then not shared at all"""
+def _request_auth(kwargs: Mapping[str, object]) -> "UserAPIKeyAuth | None":
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
-    auth: Final = next(
+    return next(
         (
             candidate
             for metadata in _request_metadatas(kwargs)
@@ -204,6 +200,13 @@ def _tenant_scope(kwargs: Mapping[str, object]) -> str | None:
         ),
         None,
     )
+
+
+def _tenant_scope(kwargs: Mapping[str, object]) -> str | None:
+    """Cache and dedup scope for a request: its team, else its hashed key, else its user. Descriptions are never
+    shared across tenants, so a tenant cannot learn from a fast answer that another tenant sent the same image.
+    None when the request carries no such identity: its descriptions are then not shared at all"""
+    auth: Final = _request_auth(kwargs)
     if auth is not None and auth.team_id:
         return f"team:{auth.team_id}"
     if auth is not None and auth.token:
@@ -226,35 +229,60 @@ def _logging_disabled(kwargs: dict[str, object]) -> bool:  # mutable-ok: the dyn
     return value is True
 
 
-def _input_guardrails(kwargs: dict[str, object]) -> "tuple[CustomGuardrail, ...]":  # mutable-ok: guardrail API
-    import litellm
-    from litellm.integrations.custom_guardrail import CustomGuardrail
-    from litellm.types.guardrails import GuardrailEventHooks
+# What guardrail dispatch and the policy engine read from a request's metadata, as in the batch file scan. The
+# rest of the parent's metadata, including its guardrail bookkeeping, stays out of the scan
+_SCAN_METADATA_KEYS: Final = frozenset(
+    {
+        "guardrails",
+        "_guardrail_pipelines",
+        "_pipeline_managed_guardrails",
+        "user_api_key_metadata",
+        "user_api_key_team_metadata",
+        "tags",
+        "headers",
+    }
+)
 
-    return tuple(
-        callback
-        for callback in litellm.callbacks
-        if isinstance(callback, CustomGuardrail)
-        and callback.should_run_guardrail(data=kwargs, event_type=GuardrailEventHooks.pre_call)  # pyright: ignore[reportUnknownMemberType]  # CustomGuardrail.should_run_guardrail leaves data untyped
-    )
+
+def _scan_payload(kwargs: Mapping[str, object], text: str) -> dict[str, object]:  # mutable-ok: pre_call_hook data
+    """A chat request that carries only `text`, with the parent's guardrail selection and policy state"""
+    bags: Final = {
+        bag: {key: value for key, value in metadata.items() if key in _SCAN_METADATA_KEYS}
+        for bag in ("metadata", "litellm_metadata")
+        if (metadata := as_str_mapping(kwargs.get(bag))) is not None
+    }
+    guardrails: Final = kwargs.get("guardrails")
+    return {
+        "model": kwargs.get("model"),
+        "messages": [{"role": "user", "content": text}],
+        **bags,
+        **({"guardrails": guardrails} if guardrails is not None else {}),
+    }
 
 
-async def _scanned_description(
-    result: DescriptionResult,
-    guardrails: "Sequence[CustomGuardrail]",
-    request_data: Mapping[str, object],
-) -> DescriptionResult:
-    """Run a description through the request's input guardrails. They ran before the image became text, so the
-    text would otherwise reach the model unchecked. A guardrail that rejects it raises and blocks the request"""
-    if isinstance(result, DescriptionFailed) or not guardrails:
+async def _scanned_description(result: DescriptionResult, kwargs: Mapping[str, object]) -> DescriptionResult:
+    """Run a description through the request's input guardrails and pre-call policy pipelines. They ran before the
+    image became text, so the text would otherwise reach the model unchecked. A guardrail or pipeline that rejects
+    it raises and blocks the request"""
+    if isinstance(result, DescriptionFailed):
         return result
-    scanned: Final = await guardrails[0].async_pre_call_hook_on_messages(
-        request_data=request_data, messages=(ChatCompletionUserMessage(role="user", content=result.text),)
+    from litellm.proxy.proxy_server import proxy_logging_obj
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+    scanned: Final = _JSON_OBJECT.validate_python(
+        await proxy_logging_obj.pre_call_hook(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # ProxyLogging.pre_call_hook returns an untyped dict
+            user_api_key_dict=_request_auth(kwargs) or UserAPIKeyAuth(),
+            data=_scan_payload(kwargs, result.text),
+            call_type="acompletion",
+            guardrails_only=True,
+        )
     )
-    text: Final = _message_text(scanned[0]) if len(scanned) == 1 else None
+    messages: Final = _list_items(scanned.get("messages")) or ()
+    first: Final = as_str_mapping(messages[0]) if len(messages) == 1 else None
+    text: Final = _message_text(first) if first is not None else None
     if text is None:
         return DescriptionFailed("a guardrail changed the description into something other than text")
-    return await _scanned_description(Described(text), guardrails[1:], request_data)
+    return Described(text)
 
 
 def _message_text(message: Mapping[str, object]) -> str | None:
@@ -430,10 +458,7 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
             )
             for key, image in images.items()
         }
-        guardrails: Final = _input_guardrails(kwargs)
-        scanned: Final = {
-            key: await _scanned_description(outcome, guardrails, kwargs) for key, outcome in outcomes.items()
-        }
+        scanned: Final = {key: await _scanned_description(outcome, kwargs) for key, outcome in outcomes.items()}
         texts: Final = [
             self._replacement_text(number, image, scanned[key] if key is not None else None)
             for number, (image, key) in enumerate(zip(loaded, keys, strict=True), 1)
