@@ -1446,8 +1446,8 @@ async def _log_passthrough_upstream_failure_keeping_guardrail_headers(
     """Log an upstream error like ``_log_passthrough_upstream_failure`` and return the guardrail response headers,
     read before the failure hooks rebuild ``kwargs``' metadata without the guardrail fields. A successful response
     has no failure hooks to read around, so it returns none."""
-    guardrail_headers: Final = (
-        _guardrail_response_headers(parsed_body, kwargs) if response.status_code >= 400 else MappingProxyType({})
+    guardrail_headers: Final[Mapping[str, str]] = (
+        _guardrail_response_headers(parsed_body, kwargs) if response.status_code >= 400 else {}
     )
     await _log_passthrough_upstream_failure(
         response=response,
