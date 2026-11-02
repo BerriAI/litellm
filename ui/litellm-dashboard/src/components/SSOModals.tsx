@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
 import { getSSOSettings, updateSSOSettings } from "./networking";
+import { CLEARED_SSO_SETTINGS, diffSSOSettingsPayload } from "./Settings/AdminSettings/SSOSettings/utils";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "./shared/errorUtils";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,60 @@ interface SSOModalsProps {
   accessToken: string | null;
   ssoConfigured?: boolean; // Add optional prop to indicate if SSO is configured
 }
+
+const buildLegacySSOPayload = (formValues: SSOSettingsFormValues): Record<string, unknown> => {
+  const {
+    proxy_admin_teams,
+    admin_viewer_teams,
+    internal_user_teams,
+    internal_viewer_teams,
+    default_role,
+    group_claim,
+    use_role_mappings,
+    ...rest
+  } = formValues;
+
+  const payload: Record<string, unknown> = {
+    ...rest,
+  };
+
+  if (typeof payload.saml_allow_unsolicited === "boolean") {
+    payload.saml_allow_unsolicited = payload.saml_allow_unsolicited ? "true" : "false";
+  }
+
+  // Add role mappings if use_role_mappings is checked
+  if (use_role_mappings) {
+    // Helper function to split comma-separated string into array
+    const splitTeams = (teams: string | undefined): string[] => {
+      if (!teams || teams.trim() === "") return [];
+      return teams
+        .split(",")
+        .map((team) => team.trim())
+        .filter((team) => team.length > 0);
+    };
+
+    // Map default role display values to backend values
+    const defaultRoleMapping: Record<string, string> = {
+      internal_user_viewer: "internal_user_viewer",
+      internal_user: "internal_user",
+      proxy_admin_viewer: "proxy_admin_viewer",
+      proxy_admin: "proxy_admin",
+    };
+
+    payload.role_mappings = {
+      provider: "generic",
+      group_claim,
+      default_role: (default_role ? defaultRoleMapping[default_role] : undefined) || "internal_user",
+      roles: {
+        proxy_admin: splitTeams(proxy_admin_teams),
+        proxy_admin_viewer: splitTeams(admin_viewer_teams),
+        internal_user: splitTeams(internal_user_teams),
+        internal_user_viewer: splitTeams(internal_viewer_teams),
+      },
+    };
+  }
+  return payload;
+};
 
 const detectSSOProvider = (values: Record<string, unknown>): string | null => {
   if (values.google_client_id) return "google";
@@ -134,56 +189,10 @@ const SSOModals: React.FC<SSOModalsProps> = ({
     }
 
     try {
-      const {
-        proxy_admin_teams,
-        admin_viewer_teams,
-        internal_user_teams,
-        internal_viewer_teams,
-        default_role,
-        group_claim,
-        use_role_mappings,
-        ...rest
-      } = formValues;
-
-      const payload: Record<string, unknown> = {
-        ...rest,
-      };
-
-      if (typeof payload.saml_allow_unsolicited === "boolean") {
-        payload.saml_allow_unsolicited = payload.saml_allow_unsolicited ? "true" : "false";
-      }
-
-      // Add role mappings if use_role_mappings is checked
-      if (use_role_mappings) {
-        // Helper function to split comma-separated string into array
-        const splitTeams = (teams: string | undefined): string[] => {
-          if (!teams || teams.trim() === "") return [];
-          return teams
-            .split(",")
-            .map((team) => team.trim())
-            .filter((team) => team.length > 0);
-        };
-
-        // Map default role display values to backend values
-        const defaultRoleMapping: Record<string, string> = {
-          internal_user_viewer: "internal_user_viewer",
-          internal_user: "internal_user",
-          proxy_admin_viewer: "proxy_admin_viewer",
-          proxy_admin: "proxy_admin",
-        };
-
-        payload.role_mappings = {
-          provider: "generic",
-          group_claim,
-          default_role: (default_role ? defaultRoleMapping[default_role] : undefined) || "internal_user",
-          roles: {
-            proxy_admin: splitTeams(proxy_admin_teams),
-            proxy_admin_viewer: splitTeams(admin_viewer_teams),
-            internal_user: splitTeams(internal_user_teams),
-            internal_user_viewer: splitTeams(internal_viewer_teams),
-          },
-        };
-      }
+      const payload = diffSSOSettingsPayload(
+        buildLegacySSOPayload({ ...emptySSOSettingsFormValues, ...form.formState.defaultValues }),
+        buildLegacySSOPayload(formValues),
+      );
 
       // Save SSO settings using the new API
       await updateSSOSettings(accessToken, payload);
@@ -203,30 +212,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
     }
 
     try {
-      // Clear all SSO settings
-      const clearSettings = {
-        google_client_id: null,
-        google_client_secret: null,
-        microsoft_client_id: null,
-        microsoft_client_secret: null,
-        microsoft_tenant: null,
-        generic_client_id: null,
-        generic_client_secret: null,
-        generic_authorization_endpoint: null,
-        generic_token_endpoint: null,
-        generic_userinfo_endpoint: null,
-        saml_idp_metadata_url: null,
-        saml_idp_metadata_xml: null,
-        saml_sp_entity_id: null,
-        saml_allow_unsolicited: null,
-        generic_scope: null,
-        proxy_base_url: null,
-        user_email: null,
-        sso_provider: null,
-        role_mappings: null,
-      };
-
-      await updateSSOSettings(accessToken, clearSettings);
+      await updateSSOSettings(accessToken, CLEARED_SSO_SETTINGS);
 
       // Clear the form
       form.reset(emptySSOSettingsFormValues);
