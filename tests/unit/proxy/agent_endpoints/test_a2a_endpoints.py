@@ -3296,3 +3296,56 @@ def test_message_send_params_without_push_config_is_untouched():
         }
     )
     assert result.message.role.value == "user"
+
+
+def test_message_send_params_rejects_a2a_10_task_push_url_loopback():
+    """Regression (#49637 review): A2A 1.0 taskPushNotificationConfig survives the
+    1.0->0.3 conversion into built.configuration.push_notification_config, so the
+    built-object check must run on the fallback path too — a loopback webhook on
+    message/send is refused before reaching the agent."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _build_message_send_params
+
+    params = {
+        "message": {
+            "messageId": "msg-1",
+            "role": "ROLE_USER",
+            "parts": [{"text": "hello"}],
+        },
+        "configuration": {
+            "taskPushNotificationConfig": {
+                "url": "http://127.0.0.1:8080/hook",
+            }
+        },
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        _build_message_send_params(params)
+
+    assert exc_info.value.status_code == 400
+
+
+def test_message_send_params_rejects_snake_case_task_push_url():
+    """The snake_case task_push_notification_config wire spelling is covered too."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _build_message_send_params
+
+    params = {
+        "message": {
+            "messageId": "msg-1",
+            "role": "ROLE_USER",
+            "parts": [{"text": "hello"}],
+        },
+        "configuration": {
+            "task_push_notification_config": {
+                "url": "http://10.0.0.9/hook",
+            }
+        },
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        _build_message_send_params(params)
+
+    assert exc_info.value.status_code == 400

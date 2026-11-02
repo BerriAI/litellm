@@ -161,12 +161,13 @@ def _build_message_send_params(params: dict[str, Any]) -> "MessageSendParams":
             raise ValueError(f"Invalid message/send params: {e}") from e
         built = to_compat_send_message_request(pb, "").params
         # The 1.0->0.3 conversion drops pushNotificationConfig, so validate the
-        # raw wire config on this path.
+        # raw wire config on this path too.
         _validate_inline_push_notification_url(params)
-        return built
     # A push config registered inline via message/send or message/stream must
     # clear the same SSRF guard the tasks/pushNotificationConfig/set method
-    # applies, otherwise message/send is a way around it (#49622).
+    # applies, otherwise message/send is a way around it (#49622). Runs on both
+    # paths: the 1.0 taskPushNotificationConfig spelling survives the
+    # conversion into built.configuration.push_notification_config.
     push_config = built.configuration.push_notification_config if built.configuration else None
     callback_url = push_config.url if push_config is not None else None
     if callback_url:
@@ -177,14 +178,26 @@ def _build_message_send_params(params: dict[str, Any]) -> "MessageSendParams":
 def _validate_inline_push_notification_url(params: Mapping[str, Any]) -> None:
     """Reject an unsafe inline pushNotificationConfig carried in wire params.
 
-    Covers the A2A 1.0 shape (``configuration.pushNotificationConfig.url``) on the
-    proto-fallback path, where the built params no longer carry the config.
+    Covers the A2A 1.0 shapes (``configuration.pushNotificationConfig.url`` and
+    ``configuration.taskPushNotificationConfig.url``, camelCase or snake_case)
+    on the proto-fallback path, where a dropped config no longer exists in the
+    built params.
     """
     configuration = params.get("configuration")
     if not isinstance(configuration, Mapping):
         return
-    push_config = configuration.get("pushNotificationConfig") or configuration.get("push_notification_config")
-    if not isinstance(push_config, Mapping):
+    push_config: Any = None
+    for key in (
+        "pushNotificationConfig",
+        "push_notification_config",
+        "taskPushNotificationConfig",
+        "task_push_notification_config",
+    ):
+        value = configuration.get(key)
+        if isinstance(value, Mapping):
+            push_config = value
+            break
+    if push_config is None:
         return
     callback_url = push_config.get("url")
     if isinstance(callback_url, str) and callback_url:
