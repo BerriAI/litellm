@@ -5266,6 +5266,34 @@ class PythonCore(DeprecatedRouterMembers):
         if "tool_choice" not in kwargs and dep_params.get("tool_choice") is not None:
             kwargs["tool_choice"] = dep_params["tool_choice"]
 
+    @staticmethod
+    def _apply_max_output_tokens_cap_to_request(
+        deployment: Mapping[str, object],
+        kwargs: dict[str, object],  # mutable-ok: the shared request mapping is updated in place
+    ) -> None:
+        """
+        Lower caller-requested completion token budgets to the deployment's
+        max_output_tokens_cap, when set (see litellm_params.max_output_tokens_cap).
+
+        Only lowers what the request already carries: a smaller caller budget is
+        respected, and requests without an output budget are untouched (a default
+        belongs in router default_litellm_params). Applies to the OpenAI token
+        budget fields so provider translation can normalize it afterwards.
+        """
+        dep_params_raw: Final[object] = deployment.get("litellm_params", {}) or {}
+        dep_params: Final = (
+            dep_params_raw if isinstance(dep_params_raw, Mapping) else dep_params_raw.model_dump(exclude_none=True)
+        )
+        cap: Final[object] = dep_params.get("max_output_tokens_cap")
+        if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
+            return
+        for name in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
+            requested = kwargs.get(name)
+            if isinstance(requested, bool) or not isinstance(requested, int):
+                continue
+            if requested > cap:
+                kwargs[name] = cap  # rebind-ok: the clamped budget rides the request mapping to the provider call
+
     def _update_kwargs_with_deployment(
         self,
         deployment: dict,
@@ -5275,10 +5303,11 @@ class PythonCore(DeprecatedRouterMembers):
         opens_responses_socket: bool = False,
     ) -> None:
         """
-        5 jobs:
+        6 jobs:
         - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
         - Adds default litellm params to kwargs, if set.
         - Merges tools from deployment with request (proxy-configured tools + request tools).
+        - Lowers caller-requested completion token budgets to the deployment's max_output_tokens_cap, when set.
         - On a fallback hop, drops the encrypted reasoning this deployment cannot decrypt, keeping its summary.
         - On a Responses continuation, sends the partial response as prefill where this deployment takes one.
         """
@@ -5487,6 +5516,7 @@ class PythonCore(DeprecatedRouterMembers):
         ):
             kwargs[STREAM_USAGE_INJECTED_FIELD] = True
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
+        self._apply_max_output_tokens_cap_to_request(deployment=deployment, kwargs=kwargs)
         pinned_model_id: Final = deployment_model_id_pin(deployment_context)
         if pinned_model_id is not None:
             kwargs["model_id"] = pinned_model_id  # rebind-ok: this method's contract is filling the caller's kwargs
