@@ -82,7 +82,10 @@ async fn forward(
         .client
         .request(request)
         .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+        .map_err(|error| {
+            tracing::warn!(%error, "python proxy unreachable");
+            StatusCode::BAD_GATEWAY
+        })?;
     strip_hop_headers(response.headers_mut());
     Ok(response.map(Body::new))
 }
