@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 from datetime import datetime
 from typing import Any, Dict, Final, List, Optional, TypeAlias, Union
@@ -8,6 +9,7 @@ import pytest
 from fastapi import HTTPException, Request
 from starlette.datastructures import State
 
+from litellm.exceptions import SensitiveDataRouteException
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.utils import get_docs_url, get_openapi_url, get_redoc_url
@@ -3785,7 +3787,7 @@ def _unroutable_model_probe():
     )
 
 
-async def _walk(monkeypatch, callbacks, model: str, probe, call_type: str = "completion") -> dict:
+async def _walk(monkeypatch, callbacks, model: str, probe, call_type: str = "completion", metadata=None) -> dict:
     from litellm.caching.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
@@ -3793,7 +3795,11 @@ async def _walk(monkeypatch, callbacks, model: str, probe, call_type: str = "com
     ProxyLogging._callback_capabilities_cache.clear()
     return await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
-        data={"model": model, "messages": [dict(message) for message in _SECRET_PROMPT]},
+        data={
+            "model": model,
+            "messages": [dict(message) for message in _SECRET_PROMPT],
+            **({} if metadata is None else {"metadata": metadata}),
+        },
         call_type=call_type,
         routing_probe=probe,
     )
@@ -3839,6 +3845,24 @@ async def test_pre_call_hook_runs_an_operator_guardrail_and_every_guardrail_befo
     assert (len(before.seen), len(operator.seen), after.seen) == (1, 1, ())
 
 
+@pytest.mark.parametrize(
+    ("module_name", "runs"),
+    [
+        pytest.param("enterprise.op_hooks", True, id="operator-folder-named-enterprise"),
+        pytest.param("enterprise.enterprise_hooks.banned_keywords", True, id="enterprise-hook"),
+        pytest.param("litellm_enterprise.enterprise_callbacks.secret_detection", False, id="litellm-enterprise"),
+    ],
+)
+async def test_pre_call_hook_counts_only_the_litellm_packages_as_shipped(monkeypatch, module_name, runs):
+    guardrail_class: Final = type("ModuleGuardrail", (_ShippedGuardrail,), {"__module__": module_name})
+    before: Final = _ShippedGuardrail(name="before")
+    guardrail: Final = guardrail_class(name="in-module")
+
+    await _walk(monkeypatch, [before, guardrail], "no-such-model", _unroutable_model_probe())
+
+    assert (len(before.seen), len(guardrail.seen)) == ((1, 1) if runs else (0, 0))
+
+
 async def test_pre_call_hook_runs_a_custom_code_guardrail_for_a_model_routing_refuses(monkeypatch):
     from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeGuardrail
 
@@ -3877,6 +3901,80 @@ async def test_pre_call_hook_hides_the_prompt_from_hooks_after_a_skipped_guardra
     redacted: Final = [{"role": "user", "content": REDACTED_BY_LITELLM}]
     assert hook.seen == (redacted,)
     assert result["messages"] == redacted
+
+
+@pytest.mark.parametrize(
+    ("model", "armed", "applied"),
+    [
+        pytest.param("no-such-model", True, None, id="refused-model"),
+        pytest.param("gpt-4o-mini", True, ["opt-in"], id="routable-model"),
+        pytest.param("no-such-model", False, ["opt-in"], id="no-probe"),
+    ],
+)
+async def test_pre_call_hook_names_an_opt_in_guardrail_only_when_it_ran(monkeypatch, model, armed, applied):
+    guardrail: Final = _ShippedGuardrail(name="opt-in", default_on=False)
+
+    result: Final = await _walk(
+        monkeypatch,
+        [guardrail],
+        model,
+        _unroutable_model_probe() if armed else None,
+        metadata={"guardrails": ["opt-in"]},
+    )
+
+    assert result["metadata"].get("applied_guardrails") == applied
+    assert len(guardrail.seen) == (0 if applied is None else 1)
+
+
+@pytest.mark.parametrize("after_in_parallel", [False, True], ids=["after-sequential", "after-parallel"])
+async def test_pre_call_hook_names_the_guardrails_before_an_operator_guardrail_and_not_the_one_after(
+    monkeypatch, after_in_parallel
+):
+    before: Final = _ShippedGuardrail(name="before", default_on=False)
+    operator: Final = _OperatorGuardrail(name="operator", default_on=False)
+    after: Final = _ShippedGuardrail(name="after", default_on=False, run_in_parallel=after_in_parallel)
+
+    result: Final = await _walk(
+        monkeypatch,
+        [before, operator, after],
+        "no-such-model",
+        _unroutable_model_probe(),
+        metadata={"guardrails": ["before", "operator", "after"]},
+    )
+
+    assert after.seen == ()
+    assert result["metadata"]["applied_guardrails"] == ["before", "operator"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(ValueError("operator rule"), id="operator-blocks"),
+        pytest.param(
+            SensitiveDataRouteException(route_to_model="gpt-4o-mini", session_id="s1", sticky_session_routing=False),
+            id="operator-reroutes",
+        ),
+    ],
+)
+async def test_pre_call_hook_leaves_a_skipped_guardrail_out_when_a_parallel_guardrail_ends_the_walk(monkeypatch, error):
+    class _EndsTheWalk(_OperatorGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            raise error
+
+    after: Final = _ShippedGuardrail(name="after", default_on=False)
+    metadata: Final[dict[str, object]] = {"guardrails": ["operator", "after"]}
+
+    with contextlib.suppress(ValueError):
+        await _walk(
+            monkeypatch,
+            [_EndsTheWalk(name="operator", default_on=False, run_in_parallel=True), after],
+            "no-such-model",
+            _unroutable_model_probe(),
+            metadata=metadata,
+        )
+
+    assert after.seen == ()
+    assert metadata["applied_guardrails"] == ["operator"]
 
 
 @pytest.mark.parametrize(

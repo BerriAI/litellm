@@ -1892,7 +1892,7 @@ def _overrides_moderation_hook(callback: CustomLogger) -> bool:
     return _overrides_hook(callback, "async_moderation_hook")
 
 
-_LITELLM_PACKAGES: Final = frozenset({"litellm", "litellm_enterprise", "enterprise"})
+_LITELLM_PACKAGES: Final = frozenset({"litellm", "litellm_enterprise"})
 
 
 def _is_custom_pre_call_hook(callback: CustomLogger) -> bool:
@@ -1912,12 +1912,15 @@ async def _skipped_for_unroutable_model(
     event_type: Final = (
         GuardrailEventHooks.pre_mcp_call if call_type in MCP_GUARDRAIL_CALL_TYPES else GuardrailEventHooks.pre_call
     )
-    return (
-        probe is not None
-        and caps.resolved_callbacks.index(guardrail) > caps.last_custom_pre_call_hook
-        and guardrail.should_run_guardrail(data=data, event_type=event_type)  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
-        and await probe.refuses(data)
-    )
+    if (
+        probe is None
+        or caps.resolved_callbacks.index(guardrail) <= caps.last_custom_pre_call_hook
+        or not guardrail.should_run_guardrail(data=data, event_type=event_type)  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+        or not await probe.refuses(data)
+    ):
+        return False
+    probe.record_skipped_guardrail(guardrail.guardrail_name)
+    return True
 
 
 _SYSTEM_INSTRUCTION_KEYS: Final = ("systemInstruction", "system_instruction")
@@ -3011,11 +3014,13 @@ class ProxyLogging:
             data.pop("prompt_version", None)
             data.pop("prompt_environment", None)
 
-    def _process_guardrail_metadata(self, data: dict, *, skip_guardrails: bool = False) -> None:
+    def _process_guardrail_metadata(
+        self, data: dict, *, skip_guardrails: bool = False, routing_probe: "UnroutableModelProbe | None" = None
+    ) -> None:
         """
         Process guardrails from metadata and add to applied_guardrails, leaving out the pre_call
-        policy pipeline steps that have not run. With ``skip_guardrails`` the pipelines run on
-        another request, so every step is added.
+        policy pipeline steps that have not run and the guardrails ``routing_probe`` skipped.
+        With ``skip_guardrails`` the pipelines run on another request, so every step is added.
         """
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -3044,7 +3049,7 @@ class ProxyLogging:
                 frozenset[str]()
                 if skip_guardrails
                 else _request_steps_that_have_not_run(cast(dict[str, object], data))  # cast-ok: request payload
-            )
+            ) | (frozenset[str]() if routing_probe is None else routing_probe.skipped_guardrails)
             for guardrail_name in guardrails_in_metadata:
                 if (
                     isinstance(guardrail_name, str)
@@ -3287,7 +3292,7 @@ class ProxyLogging:
         With ``routing_probe``, a pre-call guardrail litellm ships is not called for a model ``route_request``
         refuses, when only litellm's own guardrails and hooks come after it and no guardrail reroutes on
         sensitive data. The hooks after a skipped sequential guardrail see the request with every field it
-        could have rewritten redacted.
+        could have rewritten redacted, and a skipped guardrail is left out of ``applied_guardrails``.
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
 
@@ -3493,17 +3498,17 @@ class ProxyLogging:
                 )
 
             if data is not None:
-                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
+                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails, routing_probe=routing_probe)
 
             return data
         except SensitiveDataRouteException as e:
             data = await self._handle_sensitive_data_route_exception(e, data, user_api_key_dict)
             if data is not None:
-                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
+                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails, routing_probe=routing_probe)
             return data
         except Exception:
             if data is not None:
-                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
+                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails, routing_probe=routing_probe)
             raise
 
     async def _run_parallel_pre_call_guardrails(

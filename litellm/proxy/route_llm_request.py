@@ -793,9 +793,18 @@ class UnroutableModelProbe:
     recognizes and an ``a2a/`` agent name count as routable without asking.
 
     ``refusal`` is the routing error a caller skipped a pre-call guardrail for, and the request must end with it.
+    ``skipped_guardrails`` names the guardrails the caller skipped for it.
     """
 
-    __slots__ = ("_checked", "_llm_router", "_route_type", "_user_api_key_dict", "_user_model", "refusal")
+    __slots__ = (
+        "_checked",
+        "_llm_router",
+        "_route_type",
+        "_user_api_key_dict",
+        "_user_model",
+        "refusal",
+        "skipped_guardrails",
+    )
 
     def __init__(
         self,
@@ -810,6 +819,7 @@ class UnroutableModelProbe:
         self._user_api_key_dict: Final = user_api_key_dict
         self._checked: tuple[object, ProxyModelNotFoundError | None] | None = None
         self.refusal: ProxyModelNotFoundError | None = None
+        self.skipped_guardrails: frozenset[str] = frozenset()
 
     async def refuses(self, data: Mapping[str, object]) -> bool:
         model: Final = data.get("model")
@@ -819,6 +829,10 @@ class UnroutableModelProbe:
         if refusal is not None:
             self.refusal = refusal
         return refusal is not None
+
+    def record_skipped_guardrail(self, guardrail_name: str | None) -> None:
+        if guardrail_name is not None:
+            self.skipped_guardrails |= {guardrail_name}
 
     async def _refusal(self, data: Mapping[str, object], model: object) -> ProxyModelNotFoundError | None:
         if _is_a2a_agent_model(model) or (
