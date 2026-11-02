@@ -53,6 +53,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     parts_of,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING,
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
@@ -1069,19 +1070,22 @@ class AmazonConverseConfig(BaseConfig):
         drop_params: bool,
         model_info: Mapping[str, object] | None = None,
     ) -> dict:
+        request_params: Final = tool_params_without_hosted_mcp(
+            non_default_params, model=model, route="bedrock", drop_params=drop_params
+        )
         base_model: Final = BedrockModelInfo.get_base_model(model)
         drop_thinking_param: Final = self._is_deepseek_model(model=model, base_model=base_model)
         drop_reasoning_effort_param: Final = self._model_rejects_reasoning_effort_param(
             model=model, base_model=base_model
         )
 
-        for param, value in non_default_params.items():
+        for param, value in request_params.items():
             if param == "response_format" and isinstance(value, dict):
                 optional_params = self._translate_response_format_param(
                     value=value,
                     model=model,
                     optional_params=optional_params,
-                    non_default_params=non_default_params,
+                    non_default_params=request_params,
                     model_info=model_info,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
@@ -1134,7 +1138,7 @@ class AmazonConverseConfig(BaseConfig):
                         ),
                     ),
                     model=model,
-                    non_default_params=non_default_params,
+                    non_default_params=request_params,
                     optional_params=optional_params,
                 )
             if param == "tool_choice":
@@ -1159,7 +1163,7 @@ class AmazonConverseConfig(BaseConfig):
                     and value.get("type") == "adaptive"
                     and not AnthropicConfig.is_adaptive_thinking_model(model, "bedrock")
                 ):
-                    max_tokens = non_default_params.get("max_completion_tokens") or non_default_params.get("max_tokens")
+                    max_tokens = request_params.get("max_completion_tokens") or request_params.get("max_tokens")
                     legacy_thinking = AnthropicConfig.map_reasoning_effort(
                         reasoning_effort="medium",
                         model=model,
@@ -1229,7 +1233,7 @@ class AmazonConverseConfig(BaseConfig):
         # Nova 2 handles token budgeting differently through reasoningConfig
         if "gpt-oss" not in model and not self._is_nova_2_model(model):
             self.update_optional_params_with_thinking_tokens(
-                non_default_params=non_default_params, optional_params=optional_params
+                non_default_params=request_params, optional_params=optional_params
             )
 
         final_is_thinking_enabled: Final = self.is_thinking_enabled(optional_params)

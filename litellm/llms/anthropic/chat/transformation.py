@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm.anthropic_beta_headers_manager import get_unsupported_headers
 from litellm.constants import (
     ANTHROPIC_BILLING_METADATA_PREFIX,
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
@@ -57,6 +58,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     split_leading_system_run,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_non_string_reasoning_effort
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
     as_json_object,
@@ -1316,6 +1318,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             *(tool for tool in tools[first_search_tool_index + 1 :] if not _is_openai_tool_search_tool(tool)),
         ]
 
+    def runs_hosted_mcp(self) -> bool:
+        return ANTHROPIC_BETA_HEADER_VALUES.MCP_CLIENT_2025_04_04.value not in get_unsupported_headers(
+            self._resolved_provider
+        )
+
     def _tools_param_with_openai_tool_search_mapped(
         self, non_default_params: Mapping[str, object], model: str, drop_params: bool
     ) -> Mapping[str, object]:
@@ -1900,10 +1907,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        request_params: Final = tool_params_without_hosted_mcp(
+            non_default_params,
+            model=model,
+            route=self._resolved_provider,
+            drop_params=drop_params,
+            runs_hosted_mcp=self.runs_hosted_mcp,
+        )
         response_format_tool_is_forced: Final = (
-            "response_format" in non_default_params
+            "response_format" in request_params
             and AnthropicModelInfo.response_format_tool_can_be_forced(
-                model, self._resolved_provider, REQUEST_PARAMS.validate_python(non_default_params)
+                model, self._resolved_provider, REQUEST_PARAMS.validate_python(request_params)
             )
         )
 
@@ -1918,7 +1932,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         #      via ``data = {**optional_params}`` and would 400 with
         #      ``Extra inputs are not permitted``).
 
-        for param, value in non_default_params.items():
+        for param, value in request_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value if isinstance(value, int) else max(1, int(round(value)))
             elif param == "tools":
@@ -1932,8 +1946,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     optional_params["mcp_servers"] = mcp_servers
             elif param == "tool_choice" or param == "parallel_tool_calls":
                 _tool_choice: AnthropicMessagesToolChoice | None = self._map_tool_choice(
-                    tool_choice=non_default_params.get("tool_choice"),
-                    parallel_tool_use=non_default_params.get("parallel_tool_calls"),
+                    tool_choice=request_params.get("tool_choice"),
+                    parallel_tool_use=request_params.get("parallel_tool_calls"),
                 )
 
                 if _tool_choice is not None:
@@ -1959,7 +1973,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if self.uses_native_structured_output_for_schema(
                     model,
                     self._extract_json_schema_from_response_format(value),
-                    REQUEST_PARAMS.validate_python(non_default_params),
+                    REQUEST_PARAMS.validate_python(request_params),
                 ):
                     _output_format = self.map_response_format_to_anthropic_output_format(value)
                     if _output_format is not None:
@@ -1997,7 +2011,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     # `thinking={type: enabled, budget_tokens}` interface a
                     # pre-4.6 model actually supports instead of forwarding a
                     # shape the model will reject.
-                    max_tokens = non_default_params.get("max_completion_tokens") or non_default_params.get("max_tokens")
+                    max_tokens = request_params.get("max_completion_tokens") or request_params.get("max_tokens")
                     legacy_thinking = AnthropicConfig._map_reasoning_effort(
                         reasoning_effort="medium",
                         model=model,
@@ -2091,7 +2105,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
-            non_default_params=non_default_params, optional_params=optional_params
+            non_default_params=request_params, optional_params=optional_params
         )
 
         return optional_params
