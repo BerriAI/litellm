@@ -5,12 +5,20 @@ import asyncio
 import importlib
 import json
 import os
+import time
 from collections.abc import Sequence
 from typing import Final
 
 import pytest
+import redis
+import redis.asyncio
+from fakeredis import FakeRedis, FakeServer
+from fakeredis.aioredis import FakeConnection
+from redis.asyncio import BlockingConnectionPool
 
 import litellm
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.scheduler import FlowItem, Scheduler, SchedulerCacheKeys
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -205,6 +213,53 @@ class _ExpiringCache:
 
     async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
         self.store[key] = value
+
+
+class _SchedulerClock:
+    now: float = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.mark.asyncio
+async def test_waiter_observes_shared_expiry_after_reading_just_before_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock: Final = _SchedulerClock()
+    server: Final = FakeServer()
+
+    class Pool(BlockingConnectionPool):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(connection_class=FakeConnection, server=server, **kwargs)
+
+    monkeypatch.setattr(time, "time", clock)
+    monkeypatch.setattr(redis, "Redis", FakeRedis)
+    monkeypatch.setattr(redis.asyncio, "BlockingConnectionPool", Pool)
+    cache: Final = RedisCache(host="scheduler-expiry")
+    scheduler: Final = Scheduler(redis_cache=cache)
+    scheduler.cache.in_memory_cache = InMemoryCache(clock=clock)
+    waiter: Final = FlowItem(priority=2, request_id="waiter", model_name="expiry")
+    key: Final = f"{SchedulerCacheKeys.queue.value}:{waiter.model_name}"
+    try:
+        await cache.async_set_cache(key, [(1, "dead-replica")])
+        assert await scheduler.get_queue(waiter.model_name) == [(1, "dead-replica")]
+        clock.now = 1000.1
+        await scheduler.add_request(waiter)
+        clock.now = 1005.05
+        assert not await scheduler.poll(waiter, [])
+        clock.now = 1005.2
+        server.connected = False
+        assert not await scheduler.poll(waiter, [])
+        server.connected = True
+        assert await cache.async_get_cache(key) is None
+        assert await scheduler.get_queue(waiter.model_name) == []
+        server.connected = False
+        assert await scheduler.get_queue(waiter.model_name) == []
+        server.connected = True
+        assert await scheduler.poll(waiter, [])
+        assert await scheduler.get_queue(waiter.model_name) == []
+    finally:
+        server.connected = True
+        await cache.disconnect()
 
 
 @pytest.mark.asyncio

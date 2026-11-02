@@ -602,6 +602,27 @@ describe("uiSpendLogsCall exclude_internal_health_checks serialization", () => {
   });
 });
 
+describe("uiSpendLogDetailsCall", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each(["chatcmpl-123#a1", "chatcmpl-123?a=1", "chatcmpl-123%41b", "chatcmpl-123 a&b"])(
+    "requests the details of %s with the full request id and start date",
+    async (logId) => {
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({ id: logId }) });
+      vi.stubGlobal("fetch", mockFetch);
+
+      await Networking.uiSpendLogDetailsCall("token", logId, "2026-01-01 00:00:00");
+
+      const url = new URL(String(mockFetch.mock.calls.at(-1)?.[0]), "http://example.com");
+      expect(decodeURIComponent(url.pathname.split("/spend/logs/ui/")[1])).toBe(logId);
+      expect(url.hash).toBe("");
+      expect([...url.searchParams.entries()]).toEqual([["start_date", "2026-01-01 00:00:00"]]);
+    },
+  );
+});
+
 describe("sessionSpendLogsCall", () => {
   const originalFetch = global.fetch;
 
@@ -975,6 +996,30 @@ describe("modelCostMap", () => {
   });
 });
 
+describe("ragIngestCall", () => {
+  let currentFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    currentFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = currentFetch;
+  });
+
+  it("rejects with the proxy's error text when the detail is an object", async () => {
+    const reason = "Error code: 404 - No vector store found with id 'vs_missing'";
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({ detail: { error: reason } }),
+    } as any) as any;
+
+    await expect(
+      Networking.ragIngestCall("sk-test", new File(["text"], "doc.txt"), "openai", "vs_missing"),
+    ).rejects.toThrow(reason);
+  });
+});
+
 describe("getUiConfig runtime backend discovery", () => {
   const discoveryConfig = () => ({
     server_root_path: "/",
@@ -1152,5 +1197,31 @@ describe("getUiConfig runtime backend discovery", () => {
       url: "https://agent.example.com",
       discovery_mode: "well_known_fallback",
     });
+  });
+});
+
+describe("searchToolQueryCall", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("rejects with the backend error message for a denied search", async () => {
+    const errorMessage = "User not allowed to access search tool: exa-search-2";
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: errorMessage,
+            type: "user_search_tool_access_denied",
+            code: "403",
+          },
+        }),
+        { status: 403 },
+      ),
+    );
+
+    await expect(Networking.searchToolQueryCall("token", "exa-search-2", "litellm")).rejects.toThrow(errorMessage);
   });
 });

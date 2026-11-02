@@ -2,8 +2,10 @@ import json
 import math
 import re
 from pathlib import Path
+from typing import Final, Literal
 
 import pytest
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import completion, get_llm_provider
@@ -52,6 +54,23 @@ DASHSCOPE_FAMILY_ENV_VARS = [
     "QWEN_AI_PLATFORM_API_BASE_RERANK",
     "QWEN_AI_PLATFORM_API_BASE_IMAGE",
 ]
+
+
+
+class BrandCase(TypedDict):
+    provider: ReadOnly[str]
+    display_name: ReadOnly[str]
+    enum: ReadOnly[LlmProviders]
+    key_env: ReadOnly[str]
+    base_env: ReadOnly[str]
+    default_base: ReadOnly[str]
+    default_rerank_base: ReadOnly[str]
+    default_image_base: ReadOnly[str]
+    chat_config: ReadOnly[type[DashScopeChatConfig]]
+    embedding_config: ReadOnly[type[DashScopeEmbeddingConfig]]
+    rerank_config: ReadOnly[type[DashScopeRerankConfig]]
+    image_config: ReadOnly[type[DashScopeImageGenerationConfig]]
+
 
 BRAND_CASES = [
     pytest.param(
@@ -212,6 +231,20 @@ class TestQwenBrandDefaultUrls:
         assert url == f"{brand['default_base']}/embeddings"
 
     @pytest.mark.parametrize("brand", BRAND_CASES)
+    @pytest.mark.parametrize(("config_key", "route"), [("chat_config", "chat/completions"), ("embedding_config", "embeddings")])
+    def test_openai_routes_derive_from_a_domain_root(
+        self, brand: BrandCase, config_key: Literal["chat_config", "embedding_config"], route: str
+    ) -> None:
+        url: Final = brand[config_key]().get_complete_url(
+            api_base="https://dashscope-intl.aliyuncs.com",
+            api_key="sk-test",
+            model="qwen-max",
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == f"https://dashscope-intl.aliyuncs.com/compatible-mode/v1/{route}"
+
+    @pytest.mark.parametrize("brand", BRAND_CASES)
     def test_rerank_complete_url(self, brand):
         url = brand["rerank_config"]().get_complete_url(api_base=None, model="gte-rerank-v2")
         assert url == brand["default_rerank_base"]
@@ -248,6 +281,19 @@ class TestQwenBrandDefaultUrls:
             litellm_params={},
         )
         assert url == brand["default_image_base"]
+
+    @pytest.mark.parametrize("brand", BRAND_CASES)
+    def test_image_generation_uses_its_own_configured_base(self, monkeypatch: pytest.MonkeyPatch, brand: BrandCase) -> None:
+        monkeypatch.setenv("DASHSCOPE_API_BASE", "https://legacy.example.com/images")
+        monkeypatch.setenv(brand["base_env"], "https://gateway.example.com/qwen/images")
+        url: Final = brand["image_config"]().get_complete_url(
+            api_base=None,
+            api_key="sk-test",
+            model="qwen-image",
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == "https://gateway.example.com/qwen/images"
 
     @pytest.mark.parametrize("brand", BRAND_CASES)
     def test_validate_environment_requires_key(self, brand):

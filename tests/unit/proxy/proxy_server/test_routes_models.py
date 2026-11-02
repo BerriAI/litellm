@@ -9,22 +9,31 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+import respx
 
 import litellm
+from litellm import Router
+from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.proxy import proxy_server
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy import utils as proxy_utils
 from litellm.proxy.utils import create_model_info_response
 from litellm.types.router import DeploymentModelListingInfo
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
-from .conftest import normalize  # type: ignore[import-not-found]
+from .conftest import normalize, route_entry_points_to_stubs  # type: ignore[import-not-found]
 
 
-def _stub_model_info_response(
-    model_id: str = "gpt-4", provider: str = "openai"
-) -> dict:
+def _stub_model_info_response(model_id: str = "gpt-4", provider: str = "openai") -> dict:
     return {
         "id": model_id,
         "object": "model",
@@ -49,6 +58,9 @@ def patched_models(monkeypatch):
     router.get_routable_upstream_model = MagicMock(return_value="gpt-4")
     router.get_configured_display_name = MagicMock(return_value=None)
     router.get_configured_service_tiers = MagicMock(return_value=())
+    router.get_model_group_info = MagicMock(return_value=None)
+    router.get_search_tool_support = MagicMock(return_value=())
+    route_entry_points_to_stubs(router)
 
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
@@ -65,9 +77,7 @@ def patched_models(monkeypatch):
     def _fake_create_model_info_response(model_id, provider="openai", **kwargs):
         return _stub_model_info_response(model_id=model_id, provider=provider)
 
-    monkeypatch.setattr(
-        proxy_utils, "create_model_info_response", _fake_create_model_info_response
-    )
+    monkeypatch.setattr(proxy_utils, "create_model_info_response", _fake_create_model_info_response)
 
     monkeypatch.setattr(proxy_utils, "validate_model_access", lambda **kwargs: None)
 
@@ -106,9 +116,7 @@ def test_get_models_happy_path(client, auth_as, patched_models, path):
 
 
 @pytest.mark.parametrize("path", ["/v1/models", "/models"])
-def test_get_models_anthropic_format_when_header_present(
-    client, auth_as, patched_models, path
-):
+def test_get_models_anthropic_format_when_header_present(client, auth_as, patched_models, path):
     """Pins: ``GET /v1/models`` returns the Anthropic-native models shape when
     the caller sends an ``anthropic-version`` header (Claude Code gateway
     discovery), while the default OpenAI shape is unchanged without it."""
@@ -128,9 +136,7 @@ def test_get_models_anthropic_format_when_header_present(
 
 
 @pytest.mark.parametrize("path", ["/v1/models", "/models"])
-def test_anthropic_format_exposes_token_limits(
-    client, auth_as, patched_models, monkeypatch, path
-):
+def test_anthropic_format_exposes_token_limits(client, auth_as, patched_models, monkeypatch, path):
     """Claude Code sizes requests off the listing, so the Anthropic-native entries
     carry the same token limits the OpenAI listing resolves, with the output budget
     named max_tokens as the Messages API names it."""
@@ -145,9 +151,7 @@ def test_anthropic_format_exposes_token_limits(
             "max_output_tokens": 64000,
         }
 
-    monkeypatch.setattr(
-        proxy_utils, "create_model_info_response", _create_model_info_response
-    )
+    monkeypatch.setattr(proxy_utils, "create_model_info_response", _create_model_info_response)
 
     with auth_as():
         response = client.get(path, headers={"anthropic-version": "2023-06-01"})
@@ -222,9 +226,7 @@ def test_anthropic_format_uses_configured_display_name(client, auth_as, patched_
 
 
 @pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
-def test_anthropic_display_name_resolved_via_internal_team_key(
-    client, auth_as, patched_models, monkeypatch, params
-):
+def test_anthropic_display_name_resolved_via_internal_team_key(client, auth_as, patched_models, monkeypatch, params):
     """For a team-scoped row the configured display name must be looked up by the
     internal routing key while the entry itself is keyed by the public name, so
     the clean name lands on the id the client actually sees."""
@@ -237,6 +239,7 @@ def test_anthropic_display_name_resolved_via_internal_team_key(
         return_value=[
             {
                 "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-4"},
                 "model_info": {
                     "team_id": "team-1",
                     "team_public_model_name": "gpt-4-team",
@@ -257,14 +260,10 @@ def test_anthropic_display_name_resolved_via_internal_team_key(
         "get_available_models_for_user",
         _fake_get_available_models_for_user,
     )
-    monkeypatch.setattr(
-        model_checks, "get_complete_model_list", lambda **kwargs: [internal_name]
-    )
+    monkeypatch.setattr(model_checks, "get_complete_model_list", lambda **kwargs: [internal_name])
 
     with auth_as():
-        response = client.get(
-            "/v1/models", params=params, headers={"anthropic-version": "2023-06-01"}
-        )
+        response = client.get("/v1/models", params=params, headers={"anthropic-version": "2023-06-01"})
 
     assert response.status_code == 200
     (entry,) = response.json()["data"]
@@ -305,9 +304,7 @@ def test_get_model_by_id_not_found(client, auth_as, patched_models, path):
 
 
 @pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
-def test_anthropic_format_returns_public_team_model_name(
-    client, auth_as, patched_models, monkeypatch, params
-):
+def test_anthropic_format_returns_public_team_model_name(client, auth_as, patched_models, monkeypatch, params):
     """Regression: the Anthropic-native listing must go through the same team
     name translation as the OpenAI listing, so a caller never sees the internal
     ``model_name_{team_id}_{uuid}`` routing key."""
@@ -320,6 +317,7 @@ def test_anthropic_format_returns_public_team_model_name(
         return_value=[
             {
                 "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-4"},
                 "model_info": {
                     "team_id": "team-1",
                     "team_public_model_name": "gpt-4-team",
@@ -337,14 +335,10 @@ def test_anthropic_format_returns_public_team_model_name(
         "get_available_models_for_user",
         _fake_get_available_models_for_user,
     )
-    monkeypatch.setattr(
-        model_checks, "get_complete_model_list", lambda **kwargs: [internal_name]
-    )
+    monkeypatch.setattr(model_checks, "get_complete_model_list", lambda **kwargs: [internal_name])
 
     with auth_as():
-        response = client.get(
-            "/v1/models", params=params, headers={"anthropic-version": "2023-06-01"}
-        )
+        response = client.get("/v1/models", params=params, headers={"anthropic-version": "2023-06-01"})
 
     assert response.status_code == 200
     assert [m["id"] for m in response.json()["data"]] == ["gpt-4-team"]
@@ -375,7 +369,9 @@ def test_anthropic_format_lists_claude_code_view_ids_for_claude_code(
 
     patched_models.model_group_alias = {}
     patched_models.has_model_id.return_value = False
-    patched_models.get_candidate_model_ids_for_route.side_effect = lambda name, team_id=None: frozenset({name}) if name in ("gpt-4", "claude-sonnet") else frozenset()
+    patched_models.get_candidate_model_ids_for_route.side_effect = lambda name, team_id=None: (
+        frozenset({name}) if name in ("gpt-4", "claude-sonnet") else frozenset()
+    )
     monkeypatch.setattr(proxy_utils, "create_model_info_response", _create_model_info_response)
 
     with auth_as():
@@ -395,7 +391,9 @@ def test_anthropic_format_lists_claude_code_view_ids_for_claude_code(
 def test_anthropic_format_keeps_served_ids_for_other_anthropic_clients(client, auth_as, patched_models, path):
     """An Anthropic SDK asking for the vendor shape gets the served ids: the view is Claude Code's alone."""
     with auth_as():
-        response = client.get(path, headers={"anthropic-version": "2023-06-01", "user-agent": "anthropic-sdk-python/0.40"})
+        response = client.get(
+            path, headers={"anthropic-version": "2023-06-01", "user-agent": "anthropic-sdk-python/0.40"}
+        )
 
     assert response.status_code == 200
     assert [m["id"] for m in response.json()["data"]] == ["gpt-4", "claude-sonnet"]
@@ -461,6 +459,35 @@ def test_codex_format_carries_configured_service_tiers(client, auth_as, patched_
 
 
 @pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
+def test_codex_reasoning_levels_are_the_ones_the_requesting_codex_parses(client, auth_as, monkeypatch, params):
+    """Both listing paths hand the route's ``client_version`` to the catalog: Codex before 0.138.0 cannot
+    parse max, so it is offered there only to a newer release."""
+    declared = {"supports_reasoning": True, "reasoning_effort_levels": ["low", "max"]}
+    vllm = {"model": "hosted_vllm/qa-local-coder", "api_base": "https://vllm.example/v1"}
+    router = litellm.Router(
+        model_list=[
+            {"model_name": name, "litellm_params": vllm, "model_info": declared} for name in ("gpt-4", "claude-sonnet")
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    with auth_as():
+        current = client.get("/v1/models", params={**params, "client_version": "0.165.0"})
+        older = client.get("/v1/models", params={**params, "client_version": "0.137.0"})
+
+    assert [[level["effort"] for level in m["supported_reasoning_levels"]] for m in current.json()["models"]] == [
+        ["low", "max"]
+    ] * 2
+    assert [[level["effort"] for level in m["supported_reasoning_levels"]] for m in older.json()["models"]] == [
+        ["low"]
+    ] * 2
+
+
+@pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
 def test_codex_service_tiers_are_read_for_the_key_team(client, auth_as, patched_models, params):
     """A tier and the upstream model that picks Codex's stock entry are read off the deployments the
     key's team can route to, so both listing paths hand the router the key's team, and no team for a
@@ -494,7 +521,11 @@ def test_codex_service_tiers_resolved_via_internal_team_key(client, auth_as, pat
 
     patched_models.get_model_list = MagicMock(
         return_value=[
-            {"model_name": internal_name, "model_info": {"team_id": "team-1", "team_public_model_name": "gpt-4-team"}}
+            {
+                "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-4"},
+                "model_info": {"team_id": "team-1", "team_public_model_name": "gpt-4-team"},
+            }
         ]
     )
     patched_models.get_model_names = MagicMock(return_value=[internal_name])
@@ -514,3 +545,273 @@ def test_codex_service_tiers_resolved_via_internal_team_key(client, auth_as, pat
     assert response.status_code == 200
     (entry,) = response.json()["models"]
     assert (entry["slug"], [tier["id"] for tier in entry["service_tiers"]]) == ("gpt-4-team", ["ultrafast"])
+
+
+OPENROUTER_BASE: Final = "https://openrouter.ai/api/v1"
+
+
+@dataclass(frozen=True, slots=True)
+class _CatalogHeldUntilTheLoopRuns:
+    requested: threading.Event = field(default_factory=threading.Event)
+    released: threading.Event = field(default_factory=threading.Event)
+
+    def answer(self, _request: httpx.Request) -> httpx.Response:
+        self.requested.set()
+        if not self.released.wait(timeout=30):
+            return httpx.Response(504)
+        return httpx.Response(200, json={"data": [{"id": "openai/gpt-5.4-mini"}]})
+
+    async def release_from_the_loop(self) -> None:
+        assert await asyncio.to_thread(self.requested.wait, 30)
+        self.released.set()
+
+
+@pytest.mark.parametrize("scope", [None, "expand"])
+def test_v1_models_fetches_a_live_openrouter_catalog_without_holding_the_event_loop_or_its_default_thread_pool(
+    monkeypatch: pytest.MonkeyPatch, scope: str | None
+):
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "openrouter/*",
+                    "litellm_params": {
+                        "model": "openrouter/*",
+                        "api_key": f"sk-or-v1-models-off-loop-{scope}",
+                        "api_base": OPENROUTER_BASE,
+                    },
+                }
+            ]
+        ),
+    )
+    catalog: Final = _CatalogHeldUntilTheLoopRuns()
+
+    async def listed_ids_on_a_one_thread_default_pool() -> list[str]:
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
+        listing: Final = asyncio.ensure_future(
+            proxy_server.model_list(
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="sk-test-key", user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+                ),
+                scope=scope,
+            )
+        )
+        await catalog.release_from_the_loop()
+        response: Final = await listing
+        return [str(model["id"]) for model in response["data"]]
+
+    with respx.mock() as respx_mock:
+        catalog_route: Final = respx_mock.get(f"{OPENROUTER_BASE}/models/user").mock(side_effect=catalog.answer)
+        listed_ids: Final = asyncio.run(listed_ids_on_a_one_thread_default_pool())
+
+    assert catalog_route.calls.last.response.status_code == 200
+    assert listed_ids == ["openrouter/openai/gpt-5.4-mini"]
+
+
+def _priced_jev_models() -> frozenset[str]:
+    return frozenset(name.removeprefix("typesafe/") for name in litellm.model_cost if name.startswith("typesafe/"))
+
+
+async def _admin_picker_models() -> set[str]:
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+    response: Final = await proxy_server.model_list(
+        user_api_key_dict=admin, return_wildcard_routes=True, include_model_access_groups=True, scope="expand"
+    )
+    return {model["id"] for model in response["data"]}
+
+
+@pytest.mark.asyncio
+async def test_scope_expand_offers_typesafe_models_when_typesafe_is_configured(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    jev_models: Final = _priced_jev_models()
+
+    picker_models: Final = await _admin_picker_models()
+
+    assert jev_models
+    assert {"gpt-4", "typesafe/*", *jev_models} <= picker_models
+
+
+@pytest.mark.asyncio
+async def test_scope_expand_still_lists_models_when_the_typesafe_key_reference_cannot_resolve(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LITELLM_QA_UNSET_TYPESAFE_TOKEN", raising=False)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "oidc/env/LITELLM_QA_UNSET_TYPESAFE_TOKEN")
+
+    picker_models: Final = await _admin_picker_models()
+
+    assert {"gpt-4", "typesafe/*"} <= picker_models
+
+
+@pytest.mark.asyncio
+async def test_scope_expand_offers_no_typesafe_models_without_typesafe_credentials(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+
+    picker_models: Final = await _admin_picker_models()
+
+    assert "gpt-4" in picker_models
+    assert picker_models.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+@pytest.mark.asyncio
+async def test_scope_expand_does_not_read_the_secret_manager_for_typesafe_credentials(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret_manager: Final = MagicMock(spec=CustomSecretManager)
+    secret_manager.sync_read_secret.return_value = None
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "secret_manager_client", secret_manager)
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+
+    picker_models: Final = await _admin_picker_models()
+
+    secrets_read: Final = {
+        call.kwargs["secret_name"]
+        for call in (*secret_manager.sync_read_secret.call_args_list, *secret_manager.async_read_secret.call_args_list)
+    }
+    assert "gpt-4" in picker_models
+    assert "TYPESAFE_API_KEY" not in secrets_read
+
+
+@pytest.mark.asyncio
+async def test_default_model_list_does_not_offer_typesafe_models(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    response: Final = await proxy_server.model_list(user_api_key_dict=admin)
+
+    assert {model["id"] for model in response["data"]}.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+async def _key_dialog_models(user_role: LitellmUserRoles, team_id: str | None) -> set[str]:
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=user_role)
+    response: Final = await proxy_server.model_list(
+        user_api_key_dict=caller, return_wildcard_routes=True, include_model_access_groups=True, team_id=team_id
+    )
+    return {model["id"] for model in response["data"]}
+
+
+@pytest.mark.asyncio
+async def test_key_dialog_without_a_team_offers_typesafe_models_to_an_admin(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+
+    dialog_models: Final = await _key_dialog_models(LitellmUserRoles.PROXY_ADMIN, team_id=None)
+
+    assert {"gpt-4", "typesafe/*", *_priced_jev_models()} <= dialog_models
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["expand", None])
+async def test_pickers_offer_typesafe_names_once_and_no_bare_name_for_registered_typesafe_deployments(
+    monkeypatch: pytest.MonkeyPatch, scope: str | None
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    jev_models: Final = _priced_jev_models()
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost})
+    router: Final = Router(
+        model_list=[
+            {"model_name": "typesafe/*", "litellm_params": {"model": "typesafe/*", "api_key": "sk-typesafe-fake"}},
+            {
+                "model_name": "ticket-router",
+                "litellm_params": {"model": "typesafe/my-classifier", "api_key": "sk-typesafe-fake"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    response: Final = await proxy_server.model_list(
+        user_api_key_dict=admin, return_wildcard_routes=True, include_model_access_groups=True, scope=scope
+    )
+
+    listed: Final = [model["id"] for model in response["data"]]
+    assert {"ticket-router", *jev_models} <= set(listed)
+    assert listed.count("typesafe/*") == 1
+    assert set(listed).isdisjoint({"*", "my-classifier"})
+
+
+@pytest.mark.asyncio
+async def test_key_dialog_offers_no_typesafe_models_to_an_internal_user(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+
+    dialog_models: Final = await _key_dialog_models(LitellmUserRoles.INTERNAL_USER, team_id=None)
+
+    assert "gpt-4" in dialog_models
+    assert dialog_models.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+@pytest.mark.asyncio
+async def test_key_dialog_for_a_team_offers_no_typesafe_models_the_team_lacks(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+
+    dialog_models: Final = await _key_dialog_models(LitellmUserRoles.PROXY_ADMIN, team_id="team-without-typesafe")
+
+    assert dialog_models.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+@pytest.mark.asyncio
+async def test_scope_expand_lists_no_typesafe_models_to_a_client_not_asking_for_allowlist_names(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    response: Final = await proxy_server.model_list(user_api_key_dict=admin, scope="expand")
+
+    listed: Final = {model["id"] for model in response["data"]}
+    assert "gpt-4" in listed
+    assert listed.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope", "return_wildcard_routes", "only_model_access_groups"),
+    [
+        pytest.param(None, False, True, id="access-group-dropdown"),
+        pytest.param(None, None, None, id="dashboard-list-without-wildcard-routes"),
+        pytest.param("expand", None, None, id="expanded-list-without-wildcard-routes"),
+        pytest.param(None, True, True, id="access-groups-only-with-wildcard-routes"),
+    ],
+)
+async def test_dashboard_lists_not_asking_for_allowlist_names_offer_no_typesafe_models(
+    openai_only_router: Router,
+    monkeypatch: pytest.MonkeyPatch,
+    scope: str | None,
+    return_wildcard_routes: bool | None,
+    only_model_access_groups: bool | None,
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    response: Final = await proxy_server.model_list(
+        user_api_key_dict=admin,
+        include_model_access_groups=True,
+        return_wildcard_routes=return_wildcard_routes,
+        only_model_access_groups=only_model_access_groups,
+        scope=scope,
+    )
+
+    assert {model["id"] for model in response["data"]}.isdisjoint({"typesafe/*", *_priced_jev_models()})

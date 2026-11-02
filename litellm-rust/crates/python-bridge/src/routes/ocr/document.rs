@@ -9,6 +9,29 @@ use pyo3::{
     types::{PyBytes, PyString, PyType},
 };
 
+/// A `type='file'` document the bridge cannot read, with the text Python's OCR path raises.
+#[derive(Debug, thiserror::Error)]
+enum DocumentError {
+    #[error(
+        "document with type='file' must include a 'file' field containing a pathlib.Path, file-like object, or bytes"
+    )]
+    MissingFile,
+    #[error(
+        "OCR file input does not accept bare str values. Pass bytes, a pathlib.Path, or a file-like object."
+    )]
+    BareString,
+    #[error(
+        "Unsupported file input type: {0}. Expected pathlib.Path, bytes, or a file-like object."
+    )]
+    UnsupportedType(String),
+}
+
+impl From<DocumentError> for PyErr {
+    fn from(error: DocumentError) -> Self {
+        PyValueError::new_err(litellm_error::Report::new(&error).to_string())
+    }
+}
+
 /// A `type='file'` document as projected: paths and bytes are typed inputs already; a
 /// file-like object is a reader the projection consumes once every other field is read.
 pub(super) enum FileDocumentInput {
@@ -45,25 +68,18 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
             Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) => None,
             Err(error) => return Err(error),
         };
-        let missing = || {
-            PyValueError::new_err(
-                "document with type='file' must include a 'file' field containing a pathlib.Path, file-like object, or bytes",
-            )
-        };
-        let file = document.get_item("file").map_err(|error| {
-            if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) {
-                missing()
-            } else {
-                error
+        let file = match document.get_item("file") {
+            Ok(file) => file,
+            Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) => {
+                return Err(DocumentError::MissingFile.into());
             }
-        })?;
+            Err(error) => return Err(error),
+        };
         if file.is_none() {
-            return Err(missing());
+            return Err(DocumentError::MissingFile.into());
         }
         if file.is_instance_of::<PyString>() {
-            return Err(PyValueError::new_err(
-                "OCR file input does not accept bare str values. Pass bytes, a pathlib.Path, or a file-like object.",
-            ));
+            return Err(DocumentError::BareString.into());
         }
         static PATH_LIKE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
         if file.is_instance(PATH_LIKE.import(py, "os", "PathLike")?)? {
@@ -81,10 +97,7 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
         }
         match PythonFileReader::from_file_like(&file)? {
             Some(reader) => Ok(Self::Deferred { reader, mime_type }),
-            None => Err(PyValueError::new_err(format!(
-                "Unsupported file input type: {}. Expected pathlib.Path, bytes, or a file-like object.",
-                file.get_type(),
-            ))),
+            None => Err(DocumentError::UnsupportedType(file.get_type().to_string()).into()),
         }
     }
 }
@@ -92,6 +105,7 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
 #[cfg(test)]
 mod tests {
     use pyo3::{exceptions::PyTypeError, types::PyDict};
+    use rstest::rstest;
 
     use super::*;
 
@@ -108,40 +122,47 @@ mod tests {
         }
     }
 
-    #[test]
-    fn extraction_validates_required_file_and_optional_mime_type() {
+    enum Rejection {
+        Value(&'static str),
+        Type,
+    }
+
+    #[rstest]
+    #[case::missing_file(c"{}", Rejection::Value("must include a 'file' field"))]
+    #[case::none_file(c"{'file': None}", Rejection::Value("must include a 'file' field"))]
+    #[case::none_mime_type(c"{'file': b'abc', 'mime_type': None}", Rejection::Type)]
+    #[case::numeric_mime_type(c"{'file': b'abc', 'mime_type': 7}", Rejection::Type)]
+    #[case::bare_str(c"{'file': 'scan.pdf'}", Rejection::Value("bare str"))]
+    #[case::unsupported_type(
+        c"{'file': object()}",
+        Rejection::Value("Unsupported file input type")
+    )]
+    fn extraction_rejects_invalid_documents(
+        #[case] expression: &std::ffi::CStr,
+        #[case] rejection: Rejection,
+    ) {
         Python::initialize();
         Python::attach(|py| {
-            for expression in [c"{}", c"{'file': None}"] {
-                let document = py.eval(expression, None, None).unwrap();
-                let error = document.extract::<FileDocumentInput>().err().unwrap();
-                assert!(error.is_instance_of::<PyValueError>(py));
-                assert!(error.to_string().contains("must include a 'file' field"));
-            }
-            for expression in [
-                c"{'file': b'abc', 'mime_type': None}",
-                c"{'file': b'abc', 'mime_type': 7}",
-            ] {
-                let document = py.eval(expression, None, None).unwrap();
-                let error = document.extract::<FileDocumentInput>().err().unwrap();
-                assert!(error.is_instance_of::<PyTypeError>(py));
-            }
             let error = py
-                .eval(c"{'file': 'scan.pdf'}", None, None)
+                .eval(expression, None, None)
                 .unwrap()
                 .extract::<FileDocumentInput>()
                 .err()
                 .unwrap();
-            assert!(error.is_instance_of::<PyValueError>(py));
-            assert!(error.to_string().contains("bare str"));
-            let error = py
-                .eval(c"{'file': object()}", None, None)
-                .unwrap()
-                .extract::<FileDocumentInput>()
-                .err()
-                .unwrap();
-            assert!(error.is_instance_of::<PyValueError>(py));
-            assert!(error.to_string().contains("Unsupported file input type"));
+            match rejection {
+                Rejection::Value(fragment) => {
+                    assert!(error.is_instance_of::<PyValueError>(py));
+                    assert!(error.to_string().contains(fragment), "{error}");
+                }
+                Rejection::Type => assert!(error.is_instance_of::<PyTypeError>(py)),
+            }
+        });
+    }
+
+    #[test]
+    fn extraction_keeps_bytes_and_their_mime_type() {
+        Python::initialize();
+        Python::attach(|py| {
             let document = py
                 .eval(c"{'file': b'abc', 'mime_type': 'image/png'}", None, None)
                 .unwrap();

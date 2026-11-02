@@ -19,9 +19,11 @@ from litellm.litellm_core_utils.get_blog_posts import (
     get_blog_posts,
 )
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.proxy._types import (
     CommonProxyErrors,
 )
+from litellm.proxy.db.health_check_latest import latest_by_model_name
 from litellm.proxy.utils import get_custom_url
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.router_strategy.complexity_router.fuse_presets import FusePresetCatalog, get_fuse_presets
@@ -295,13 +297,8 @@ async def public_model_hub():
     if prisma_client is not None:
         try:
             latest_checks: Final = await prisma_client.get_all_latest_health_checks()
-            for check in latest_checks:
-                key = check.model_id if check.model_id else check.model_name
-                if key:
-                    health_check_dict = convert_health_check_to_dict(check)
-                    health_checks_map[key] = health_check_dict
-                    if check.model_name:
-                        health_checks_map[check.model_name] = health_check_dict
+            for model_name, check in latest_by_model_name(latest_checks).items():
+                health_checks_map[model_name] = convert_health_check_to_dict(check)
         except Exception:
             pass
 
@@ -345,7 +342,7 @@ async def get_agents(request: Request):
     response_model=list[MCPPublicServer],
 )
 async def get_mcp_servers():
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    from litellm.proxy.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
 
@@ -370,19 +367,23 @@ async def get_mcp_servers():
     tags=["public", "Claude Code Marketplace"],
 )
 async def public_skill_hub():
-    """Return enabled (public) Claude Code skills — no auth required."""
+    """Return enabled (public) Claude Code skills, or none when the marketplace requires a key."""
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
         MANIFEST_FIELDS,
         get_installation_preference,
-        get_prisma_client,
     )
+    from litellm.proxy.common_utils.claude_code_marketplace_auth import marketplace_auth_required
+    from litellm.proxy.proxy_server import prisma_client
     from litellm.types.proxy.claude_code_endpoints import (
         ListPluginsResponse,
         PluginListItem,
     )
 
+    if marketplace_auth_required():
+        return ListPluginsResponse(plugins=[], count=0)
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     try:
-        prisma_client: Final = await get_prisma_client()
         plugins: Final = await _plugin_table(prisma_client).find_many(where={"enabled": True})
         items: Final = []
         for plugin in plugins:
@@ -409,7 +410,8 @@ async def public_skill_hub():
             )
         return ListPluginsResponse(plugins=items, count=len(items))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        verbose_logger.exception("Error listing public skills: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to list skills")
 
 
 @router.get(
@@ -568,7 +570,7 @@ async def _resolve_autorouter_presets(
     url: str,
     fetch: Callable[[str], Awaitable[Mapping[str, AutoRouterPresetRecord]]],
 ) -> Mapping[str, AutoRouterPresetRecord]:
-    if os.getenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", "").lower() == "true":
+    if is_offline_mode() or os.getenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", "").lower() == "true":
         return _load_bundled_autorouter_presets()
     try:
         return await fetch(url)

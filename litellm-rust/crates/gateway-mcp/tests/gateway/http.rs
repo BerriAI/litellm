@@ -171,43 +171,44 @@ async fn resolver_receives_each_requests_identity(
         Duration::from_secs(2),
     ));
     let app = router(operations, HttpConfig::default());
-    for token in ["allowed", "denied", "allowed"] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(method)
-                    .uri(path)
-                    .header("host", "localhost")
-                    .header("authorization", format!("Bearer {token}"))
-                    .header("content-type", "application/json")
-                    .header("accept", "application/json, text/event-stream")
-                    .header("mcp-protocol-version", "2025-11-25")
-                    .body(Body::from(
-                        json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}).to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let status = response.status();
-        let body = String::from_utf8(
-            to_bytes(response.into_body(), 65536)
-                .await
-                .unwrap()
-                .to_vec(),
+    let (status, body) = list_as(&app, method, path, "allowed").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("echo-value"), "{body}");
+    let (status, body) = list_as(&app, method, path, "denied").await;
+    assert_eq!(status == StatusCode::FORBIDDEN, method == "GET");
+    assert!(body.contains("not allowed"), "{body}");
+    let (status, body) = list_as(&app, method, path, "allowed").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("echo-value"), "{body}");
+}
+
+async fn list_as(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    token: &str,
+) -> (StatusCode, String) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header("host", "localhost")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .header("accept", "application/json, text/event-stream")
+                .header("mcp-protocol-version", "2025-11-25")
+                .body(Body::from(
+                    json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}).to_string(),
+                ))
+                .unwrap(),
         )
+        .await
         .unwrap();
-        if token == "denied" {
-            if method == "GET" {
-                assert_eq!(status, StatusCode::FORBIDDEN);
-            }
-            assert!(body.contains("not allowed"), "{body}");
-        } else {
-            assert_eq!(status, StatusCode::OK);
-            assert!(body.contains("echo-value"), "{body}");
-        }
-    }
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 65536).await.unwrap();
+    (status, String::from_utf8(body.to_vec()).unwrap())
 }
 
 fn rpc_request(path: &str, token: &str, session: Option<&str>, body: Value) -> Request<Body> {
@@ -352,10 +353,14 @@ async fn header_scope_cannot_broaden_path_scope(
 }
 
 #[rstest]
-#[case::missing_server(json!({"name":"echo-value"}))]
-#[case::missing_name(json!({"server_id":"alpha"}))]
+#[case::missing_server(json!({"name":"echo-value"}), "server_id")]
+#[case::missing_name(json!({"server_id":"alpha"}), "name")]
 #[tokio::test]
-async fn rest_requires_server_and_tool(#[future] harness: Harness, #[case] body: Value) {
+async fn rest_requires_server_and_tool(
+    #[future] harness: Harness,
+    #[case] body: Value,
+    #[case] field: &str,
+) {
     let harness = harness.await;
     let response = harness
         .app
@@ -368,6 +373,40 @@ async fn rest_requires_server_and_tool(#[future] harness: Harness, #[case] body:
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+    assert!(body["detail"].as_str().unwrap().contains(field), "{body}");
+}
+
+#[rstest]
+#[case::malformed_call("/mcp-rest/tools/call", "POST", "{")]
+#[case::unknown_list_parameter("/mcp-rest/tools/list?unknown=1", "GET", "")]
+#[case::legacy_message_without_session("/mcp/sse/messages", "POST", "{}")]
+#[tokio::test]
+async fn rejected_requests_use_the_detail_envelope(
+    #[future] harness: Harness,
+    #[case] path: &str,
+    #[case] method: &str,
+    #[case] body: &'static str,
+) {
+    let harness = harness.await;
+    let response = harness
+        .app
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header("host", "localhost")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(response.status().is_client_error(), "{}", response.status());
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+    assert!(body["detail"].is_string(), "{body}");
 }
 
 #[rstest]

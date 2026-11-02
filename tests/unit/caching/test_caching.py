@@ -250,6 +250,15 @@ def test_semantic_cache_key_reads_tenant_identity_from_litellm_metadata():
     assert key_a == key_a_in_litellm_params
 
 
+def test_cache_rejects_unsupported_type() -> None:
+    cache_params: Final = {"type": "not-a-cache"}
+    with pytest.raises(
+        ValueError, match=re.escape("Unsupported cache type 'not-a-cache'. Supported types: ")
+    ) as raised:
+        Cache(**cache_params)
+    assert str(raised.value).split("Supported types: ")[1].split(", ") == [member.value for member in LiteLLMCacheType]
+
+
 def test_semantic_cache_scope_rejects_unknown_value():
     with pytest.raises(ValueError, match="'team' is not a valid SemanticCacheScope"):
         _semantic_cache(semantic_cache_scope="team")
@@ -289,6 +298,37 @@ def test_exact_cache_key_includes_anthropic_messages_params(anthropic_param):
     messages = [{"role": "user", "content": "which greek letter?"}]
     baseline = cache.get_cache_key(model="claude-sonnet-4-5", messages=messages)
     assert baseline != cache.get_cache_key(model="claude-sonnet-4-5", messages=messages, **anthropic_param)
+
+
+@pytest.mark.parametrize(
+    "summary_ask",
+    [
+        {"reasoning_summary": "auto"},
+        {"reasoningSummary": "auto"},
+        {"extra_body": {"reasoning_summary": "auto"}},
+        {"extra_body": {"reasoningSummary": "auto"}},
+    ],
+    ids=["top_level", "top_level_camel", "extra_body", "extra_body_camel"],
+)
+def test_exact_cache_key_includes_the_reasoning_summary_alias(summary_ask: dict[str, object]) -> None:
+    """The AI SDK summary alias decides whether thought summaries come back, wherever the request
+    carries it, so a reply cached without it must not answer a request that asks for one."""
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    messages: Final = [{"role": "user", "content": "how much is the ball?"}]
+    no_ask: Final = cache.get_cache_key(model="gemini/gemini-3.8-flash", messages=messages, reasoning_effort="medium")
+    ask: Final = cache.get_cache_key(
+        model="gemini/gemini-3.8-flash", messages=messages, reasoning_effort="medium", **summary_ask
+    )
+    assert no_ask != ask
+    assert ask == cache.get_cache_key(
+        model="gemini/gemini-3.8-flash", messages=messages, reasoning_effort="medium", **summary_ask
+    )
+    assert ask != cache.get_cache_key(
+        model="gemini/gemini-3.8-flash",
+        messages=messages,
+        reasoning_effort="medium",
+        reasoning_summary="detailed",
+    )
 
 
 @pytest.mark.asyncio
@@ -432,6 +472,23 @@ def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token()
     assert cache.get_cache_key(**request, continuation_token="") == first_segment_key
 
 
+def test_cache_key_tells_apart_requests_that_differ_only_in_tool_call_id_shape() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {
+        "model": "gemini/gemini-3.5-flash",
+        "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
+    }
+
+    signed_ids_key: Final = cache.get_cache_key(**request)
+    short_ids_key: Final = cache.get_cache_key(**request, thought_signature_in_tool_call_id=False)
+
+    assert short_ids_key != signed_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id="false") == short_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=0) == short_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=True) == signed_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=None) == signed_ids_key
+
+
 class PhaseRecordingCache(InMemoryCache):
     """Records the target and the active span each read / write ran under, as a Redis span would."""
 
@@ -561,10 +618,7 @@ def test_caching_v2():  # test in memory cache
         litellm.cache = None  # disable cache
         litellm.success_callback = []
         litellm._async_success_callback = []
-        if (
-            response2["choices"][0]["message"]["content"]
-            != response1["choices"][0]["message"]["content"]
-        ):
+        if response2["choices"][0]["message"]["content"] != response1["choices"][0]["message"]["content"]:
             print(f"response1: {response1}")
             print(f"response2: {response2}")
             pytest.fail(f"Error occurred:")
@@ -595,10 +649,7 @@ def test_caching_with_ttl():
         litellm.cache = None  # disable cache
         litellm.success_callback = []
         litellm._async_success_callback = []
-        assert (
-            response2["choices"][0]["message"]["content"]
-            != response1["choices"][0]["message"]["content"]
-        )
+        assert response2["choices"][0]["message"]["content"] != response1["choices"][0]["message"]["content"]
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
@@ -632,9 +683,7 @@ def test_caching_with_default_ttl():
 
 
 def test_caching_with_models_v2():
-    messages = [
-        {"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}
-    ]
+    messages = [{"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}]
     litellm.cache = Cache()
     print("test2 for caching")
     litellm.set_verbose = True
@@ -657,18 +706,12 @@ def test_caching_with_models_v2():
     litellm.cache = None
     litellm.success_callback = []
     litellm._async_success_callback = []
-    if (
-        response3["choices"][0]["message"]["content"]
-        == response2["choices"][0]["message"]["content"]
-    ):
+    if response3["choices"][0]["message"]["content"] == response2["choices"][0]["message"]["content"]:
         # if models are different, it should not return cached response
         print(f"response2: {response2}")
         print(f"response3: {response3}")
         pytest.fail(f"Error occurred:")
-    if (
-        response1["choices"][0]["message"]["content"]
-        != response2["choices"][0]["message"]["content"]
-    ):
+    if response1["choices"][0]["message"]["content"] != response2["choices"][0]["message"]["content"]:
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         pytest.fail(f"Error occurred:")
@@ -708,9 +751,7 @@ def test_get_cache_key():
         cache_key = cache_instance.get_cache_key(
             **{
                 "model": "gpt-3.5-turbo",
-                "messages": [
-                    {"role": "user", "content": "write a one sentence poem about: 7510"}
-                ],
+                "messages": [{"role": "user", "content": "write a one sentence poem about: 7510"}],
                 "max_tokens": 40,
                 "temperature": 0.2,
                 "stream": True,
@@ -721,9 +762,7 @@ def test_get_cache_key():
         cache_key_2 = cache_instance.get_cache_key(
             **{
                 "model": "gpt-3.5-turbo",
-                "messages": [
-                    {"role": "user", "content": "write a one sentence poem about: 7510"}
-                ],
+                "messages": [{"role": "user", "content": "write a one sentence poem about: 7510"}],
                 "max_tokens": 40,
                 "temperature": 0.2,
                 "stream": True,
@@ -736,9 +775,9 @@ def test_get_cache_key():
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
         assert cache_key == hash_hex
-        assert (
-            cache_key_2 == hash_hex
-        ), f"{cache_key} != {cache_key_2}. The same kwargs should have the same cache key across runs"
+        assert cache_key_2 == hash_hex, (
+            f"{cache_key} != {cache_key_2}. The same kwargs should have the same cache key across runs"
+        )
 
         embedding_cache_key = cache_instance.get_cache_key(
             **{
@@ -756,15 +795,13 @@ def test_get_cache_key():
 
         print(embedding_cache_key)
 
-        embedding_cache_key_str = (
-            "model: azure/text-embedding-ada-002input: ['hi who is ishaan']"
-        )
+        embedding_cache_key_str = "model: azure/text-embedding-ada-002input: ['hi who is ishaan']"
         hash_object = hashlib.sha256(embedding_cache_key_str.encode())
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
-        assert (
-            embedding_cache_key == hash_hex
-        ), f"{embedding_cache_key} != 'model: azure/text-embedding-ada-002input: ['hi who is ishaan']'. The same kwargs should have the same cache key across runs"
+        assert embedding_cache_key == hash_hex, (
+            f"{embedding_cache_key} != 'model: azure/text-embedding-ada-002input: ['hi who is ishaan']'. The same kwargs should have the same cache key across runs"
+        )
 
         # Proxy - embedding cache, test if embedding key, gets model_group and not model
         embedding_cache_key_2 = cache_instance.get_cache_key(
@@ -817,9 +854,7 @@ def test_get_cache_key():
         )
 
         print(embedding_cache_key_2)
-        embedding_cache_key_str_2 = (
-            "model: EMBEDDING_MODEL_GROUPinput: ['hi who is ishaan']"
-        )
+        embedding_cache_key_str_2 = "model: EMBEDDING_MODEL_GROUPinput: ['hi who is ishaan']"
         hash_object = hashlib.sha256(embedding_cache_key_str_2.encode())
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
@@ -852,9 +887,7 @@ def test_redis_caching_multiple_namespaces():
     # Mock the Redis client creation from the _redis module
     with (
         patch("litellm._redis.get_redis_client") as mock_get_redis_client,
-        patch(
-            "litellm._redis.get_redis_connection_pool"
-        ) as mock_get_redis_connection_pool,
+        patch("litellm._redis.get_redis_connection_pool") as mock_get_redis_connection_pool,
     ):
         # Create a mock Redis client that simulates real Redis behavior
         mock_redis_client = MagicMock()
@@ -927,18 +960,10 @@ def test_redis_caching_multiple_namespaces():
             mock_response="Response without namespace",
         )
 
-        print(
-            f"Response 1 type: {type(response_1)} - ID: {getattr(response_1, 'id', 'N/A')}"
-        )
-        print(
-            f"Response 2 type: {type(response_2)} - ID: {getattr(response_2, 'id', 'N/A')}"
-        )
-        print(
-            f"Response 3 type: {type(response_3)} - Cache hit: {isinstance(response_3, str)}"
-        )
-        print(
-            f"Response 4 type: {type(response_4)} - ID: {getattr(response_4, 'id', 'N/A')}"
-        )
+        print(f"Response 1 type: {type(response_1)} - ID: {getattr(response_1, 'id', 'N/A')}")
+        print(f"Response 2 type: {type(response_2)} - ID: {getattr(response_2, 'id', 'N/A')}")
+        print(f"Response 3 type: {type(response_3)} - Cache hit: {isinstance(response_3, str)}")
+        print(f"Response 4 type: {type(response_4)} - ID: {getattr(response_4, 'id', 'N/A')}")
 
         print(f"Redis storage keys: {list(redis_storage.keys())}")
 
@@ -947,10 +972,7 @@ def test_redis_caching_multiple_namespaces():
         namespace_1_keys = [k for k in cache_keys if k.startswith(f"{namespace_1}:")]
         namespace_2_keys = [k for k in cache_keys if k.startswith(f"{namespace_2}:")]
         no_namespace_keys = [
-            k
-            for k in cache_keys
-            if not k.startswith(f"{namespace_1}:")
-            and not k.startswith(f"{namespace_2}:")
+            k for k in cache_keys if not k.startswith(f"{namespace_1}:") and not k.startswith(f"{namespace_2}:")
         ]
 
         print(f"Namespace 1 keys: {namespace_1_keys}")
@@ -963,9 +985,7 @@ def test_redis_caching_multiple_namespaces():
         assert len(no_namespace_keys) > 0, "Should have cache keys for no namespace"
 
         # The main test: response 3 should be a cache hit (string) because it uses same namespace as response 1
-        assert isinstance(
-            response_3, str
-        ), "Response 3 should be a cache hit (string) for same namespace"
+        assert isinstance(response_3, str), "Response 3 should be a cache hit (string) for same namespace"
 
         # response 1 & 2 should be ModelResponse objects (cache misses)
         assert hasattr(response_1, "id"), "Response 1 should be a ModelResponse object"
@@ -973,14 +993,14 @@ def test_redis_caching_multiple_namespaces():
         assert hasattr(response_4, "id"), "Response 4 should be a ModelResponse object"
 
         # response 1 & 2 should have different IDs (different namespaces)
-        assert (
-            response_1.id != response_2.id
-        ), f"Expected different response ID for different namespace. Got {response_1.id} and {response_2.id}"
+        assert response_1.id != response_2.id, (
+            f"Expected different response ID for different namespace. Got {response_1.id} and {response_2.id}"
+        )
 
         # response 1 & 4 should have different IDs (different namespaces)
-        assert (
-            response_1.id != response_4.id
-        ), f"Expected different response ID for no namespace vs namespaced. Got {response_1.id} and {response_4.id}"
+        assert response_1.id != response_4.id, (
+            f"Expected different response ID for no namespace vs namespaced. Got {response_1.id} and {response_4.id}"
+        )
 
 
 _TOOL_TURN_ITEM: Final = {"role": "user", "content": "hi"}
@@ -1236,6 +1256,22 @@ def test_custom_redis_cache_params(redis_client_without_network: None) -> None:
     assert cache.cache.redis_client.connection_pool.connection_kwargs["db"] == 4
 
 
+def test_redis_cache_ignores_a_leftover_disk_cache_dir(
+    redis_client_without_network: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        Cache(type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379")
+    assert "disk_cache_dir" not in caplog.text
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        cache: Final = Cache(
+            type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379", disk_cache_dir="/tmp/litellm-cache"
+        )
+
+    assert isinstance(cache.cache, RedisCache)
+    assert "disk_cache_dir" in caplog.text
+
+
 def test_custom_redis_cache_with_key(monkeypatch: pytest.MonkeyPatch) -> None:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
     monkeypatch.setattr(litellm, "cache", cache)
@@ -1305,12 +1341,8 @@ async def test_embedding_caching_individual_items(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
     item: Final = f"individual embedding {uuid.uuid4().hex}"
 
-    first: Final = await aembedding(
-        model="text-embedding-3-small", input=item, caching=True, mock_response="0.1,0.2"
-    )
-    second: Final = await aembedding(
-        model="text-embedding-3-small", input=item, caching=True, mock_response="0.3,0.4"
-    )
+    first: Final = await aembedding(model="text-embedding-3-small", input=item, caching=True, mock_response="0.1,0.2")
+    second: Final = await aembedding(model="text-embedding-3-small", input=item, caching=True, mock_response="0.3,0.4")
 
     assert second.data[0].embedding == first.data[0].embedding
     assert second._hidden_params["cache_hit"] is True
@@ -1448,9 +1480,7 @@ async def test_caching_with_cache_controls(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_embedding_caching_redis_ttl(
-    monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None
-) -> None:
+async def test_embedding_caching_redis_ttl(monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None) -> None:
     mock_pipeline: Final = AsyncMock()
     mock_set: Final = AsyncMock()
     mock_pipeline.__aenter__.return_value.set = mock_set
@@ -1506,18 +1536,14 @@ async def test_logging_turn_off_message_logging_streaming(
     assert cached_response["choices"][0]["message"]["content"] == "cached"
 
 
-def test_redis_caching_default_ttl(
-    monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None
-) -> None:
+def test_redis_caching_default_ttl(monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None) -> None:
     monkeypatch.setattr(litellm, "default_redis_ttl", 120)
     cache: Final = RedisCache(host="127.0.0.1", port="6379")
 
     assert cache.default_ttl == 120
 
 
-def test_redis_caching_llm_caching_ttl(
-    monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None
-) -> None:
+def test_redis_caching_llm_caching_ttl(monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None) -> None:
     monkeypatch.setattr(litellm, "default_redis_ttl", 120)
     cache: Final = RedisCache(host="127.0.0.1", port="6379")
     set_cache: Final = MagicMock()
@@ -1529,9 +1555,7 @@ def test_redis_caching_llm_caching_ttl(
 
 
 @pytest.mark.asyncio
-async def test_redis_caching_ttl_pipeline(
-    monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None
-) -> None:
+async def test_redis_caching_ttl_pipeline(monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None) -> None:
     monkeypatch.setattr(litellm, "default_redis_ttl", 120)
     cache: Final = RedisCache(host="127.0.0.1", port="6379")
     pipeline: Final = AsyncMock()
@@ -1551,9 +1575,7 @@ async def test_redis_caching_ttl_pipeline(
 
 
 @pytest.mark.asyncio
-async def test_redis_caching_ttl_sadd(
-    monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None
-) -> None:
+async def test_redis_caching_ttl_sadd(monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None) -> None:
     monkeypatch.setattr(litellm, "default_redis_ttl", 120)
     cache: Final = RedisCache(host="127.0.0.1", port="6379")
     redis_client: Final = AsyncMock()

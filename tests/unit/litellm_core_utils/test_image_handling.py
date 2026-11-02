@@ -288,6 +288,37 @@ def test_convert_url_to_base64_keeps_a_real_content_type(monkeypatch):
     assert result.startswith("data:image/jpeg;base64,")
 
 
+@pytest.mark.parametrize(
+    ("url", "content_type", "expected"),
+    [
+        (
+            "https://docs.example/document.pdf",
+            "application/pdf; qs=0.001",
+            "data:application/pdf;base64,cGRm",
+        ),
+        (
+            "https://img.example/image.png",
+            "image/png; charset=binary",
+            "data:image/png;base64,cGRm",
+        ),
+        (
+            "https://docs.example/document.pdf",
+            "application/octet-stream; charset=binary",
+            "data:application/pdf;base64,cGRm",
+        ),
+    ],
+)
+def test_convert_url_to_base64_uses_bare_content_type(
+    monkeypatch: pytest.MonkeyPatch,
+    url: str,
+    content_type: str,
+    expected: str,
+) -> None:
+    monkeypatch.setattr(litellm, "module_level_client", _stub_image_client(b"pdf", content_type))
+
+    assert convert_url_to_base64(url) == expected
+
+
 def test_convert_url_to_base64_raises_when_no_content_type_is_determinable(monkeypatch):
     monkeypatch.setattr(
         litellm,

@@ -7,13 +7,18 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
 
+import litellm
 from litellm.llms.azure_ai.anthropic.messages_transformation import (
     AzureAnthropicMessagesConfig,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -192,6 +197,17 @@ class TestAzureAnthropicMessagesConfig:
         )
 
         assert url == "https://test.services.ai.azure.com/anthropic/v1/messages"
+
+    def test_get_complete_url_adds_the_anthropic_path_for_a_host_named_anthropic(self):
+        url: Final = AzureAnthropicMessagesConfig().get_complete_url(
+            api_base="https://anthropic-res.services.ai.azure.com",
+            api_key="test-api-key",
+            model="claude-sonnet-4-5",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == "https://anthropic-res.services.ai.azure.com/anthropic/v1/messages"
 
     def test_get_complete_url_raises_error_when_api_base_missing(self):
         """Test get_complete_url raises error when api_base is None"""
@@ -470,3 +486,212 @@ def test_azure_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_fl
         and info.get("supports_mid_conversation_system") is not True
     ]
     assert missing == []
+
+
+AUTO_MODE_SAFEGUARDS: Final = ({"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}},)
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("client_headers", "optional_params", "expected_beta"),
+    [
+        ({}, {"safeguards": AUTO_MODE_SAFEGUARDS}, "dangerous-tool-use-2026-09-03"),
+        (
+            {"anthropic-beta": "context-1m-2025-08-07"},
+            {"safeguards": AUTO_MODE_SAFEGUARDS},
+            "context-1m-2025-08-07,dangerous-tool-use-2026-09-03",
+        ),
+        ({"anthropic-beta": "context-1m-2025-08-07"}, {}, "context-1m-2025-08-07"),
+        ({}, {}, None),
+    ],
+)
+def test_safeguards_request_carries_the_dangerous_tool_use_beta_without_the_client_header(
+    client_headers: dict[str, str], optional_params: dict[str, object], expected_beta: str | None
+) -> None:
+    headers, _ = AzureAnthropicMessagesConfig().validate_anthropic_messages_environment(
+        headers=client_headers,
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Run ls -la with the Bash tool"}],
+        optional_params=optional_params,
+        litellm_params={"api_key": "test-api-key"},
+    )
+    assert headers.get("anthropic-beta") == expected_beta, headers
+
+
+def _foundry_answer(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        headers={"content-type": "application/json"},
+        json={
+            "id": "msg_safeguards",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-6",
+            "content": [{"type": "text", "text": "hello from the gateway"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 12, "output_tokens": 6},
+        },
+        request=request,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_outgoing_azure_request_sends_safeguards_with_the_dangerous_tool_use_beta() -> None:
+    received: Final[list[httpx.Request]] = []
+
+    def foundry_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return _foundry_answer(request)
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(foundry_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=256,
+            messages=[{"role": "user", "content": "Use the Bash tool to run: echo hello from the gateway"}],
+            model="azure_ai/claude-sonnet-4-6",
+            api_key="test-api-key",
+            api_base="https://test-resource.services.ai.azure.com",
+            safeguards=AUTO_MODE_SAFEGUARDS,
+            client=upstream,
+        )
+    finally:
+        await upstream.close()
+
+    assert len(received) == 1, received
+    sent: Final = received[0]
+    assert "dangerous-tool-use-2026-09-03" in sent.headers["anthropic-beta"].split(","), dict(sent.headers)
+    assert json.loads(sent.content)["safeguards"] == list(AUTO_MODE_SAFEGUARDS)
+
+
+async def _azure_request_body_for_output_format(output_format: object, drop_params: bool) -> Mapping[str, object]:
+    received: Final[list[httpx.Request]] = []
+
+    def foundry_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return _foundry_answer(request)
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(foundry_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=256,
+            messages=[{"role": "user", "content": "What is 6 times 7?"}],
+            model="azure_ai/claude-sonnet-4-6",
+            api_key="test-api-key",
+            api_base="https://test-resource.services.ai.azure.com",
+            output_format=output_format,
+            drop_params=drop_params,
+            client=upstream,
+        )
+    finally:
+        await upstream.close()
+
+    assert len(received) == 1, received
+    return json.loads(received[0].content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_outgoing_azure_request_drops_a_malformed_output_format_under_drop_params() -> None:
+    body: Final = await _azure_request_body_for_output_format("json", drop_params=True)
+
+    assert "output_format" not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_outgoing_azure_request_keeps_an_object_output_format_under_drop_params() -> None:
+    output_format: Final = {"type": "json_schema", "schema": {"type": "object", "properties": {}}}
+
+    body: Final = await _azure_request_body_for_output_format(output_format, drop_params=True)
+
+    assert body["output_format"] == output_format
+
+
+_SIGNED_COMPACTION_BLOCK: Final = {"type": "compaction", "content": "Summary of the chat so far.", "signature": "sig"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("messages", "params"),
+    [
+        ([{"role": "user", "content": "Summarize the chat so far."}], {"compaction": {"type": "summarize"}}),
+        (
+            [{"role": "assistant", "content": [_SIGNED_COMPACTION_BLOCK]}, {"role": "user", "content": "Go on"}],
+            {},
+        ),
+    ],
+    ids=["compaction_param", "signed_compaction_block"],
+)
+async def test_outgoing_azure_compaction_request_carries_the_compact_2026_09_04_beta(
+    messages: list[object], params: dict[str, object]
+) -> None:
+    """Foundry answers 400 "compaction: this parameter requires anthropic-beta: compact-2026-09-04" for the param
+    and 400 "Input tag 'compaction' ... does not match" for a replayed block without the header, and 200 with it
+    (live, claude-sonnet-5-5 on Azure AI Foundry, 2026-10-20)."""
+    received: Final[list[httpx.Request]] = []
+
+    def foundry_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return _foundry_answer(request)
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(foundry_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=256,
+            messages=messages,
+            model="azure_ai/claude-sonnet-5-5",
+            api_key="test-api-key",
+            api_base="https://test-resource.services.ai.azure.com",
+            client=upstream,
+            **params,
+        )
+    finally:
+        await upstream.close()
+
+    assert len(received) == 1, received
+    assert received[0].headers["anthropic-beta"].split(",").count("compact-2026-09-04") == 1, dict(received[0].headers)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("feature", ("thinking", "output_config", "tool_addition", "tool_removal", "none"))
+@pytest.mark.parametrize("explicit_beta", (False, True))
+def test_messages_feature_beta_headers(feature: str, explicit_beta: bool) -> None:
+    from typing import Final
+
+    from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
+    from litellm.types.llms.anthropic import (
+        ANTHROPIC_BETA_HEADER_VALUES,
+        ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
+        ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
+    )
+
+    beta: Final = (
+        ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+        if feature == "thinking"
+        else ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value
+        if feature == "output_config"
+        else ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    )
+    message: Final = (
+        {"role": "system", "content": [], "output_config": {"effort": "high"}}
+        if feature == "output_config"
+        else {"role": "system", "content": [{"type": feature, "tool": {"type": "tool_reference", "name": "ping"}}]}
+        if feature in ("tool_addition", "tool_removal")
+        else {"role": "user", "content": "Reply with OK"}
+    )
+    headers, _ = AzureAnthropicMessagesConfig().validate_anthropic_messages_environment(
+        headers={"anthropic-beta": f"existing-beta,{beta}" if explicit_beta else "existing-beta"},
+        model="claude-fable-5-1",
+        messages=[{"role": "user", "content": "Hello"}, message],
+        optional_params={"thinking": {"type": "adaptive", "display": "updates"}} if feature == "thinking" else {},
+        litellm_params={"vertex_ai_project": "test-project", "vertex_ai_location": "us-east5"},
+        api_key="test-key",
+        api_base="https://example.com/anthropic",
+    )
+
+    betas: Final = headers["anthropic-beta"].split(",")
+    assert betas.count(beta) == int(feature != "none" or explicit_beta)
+    assert betas.count("existing-beta") == 1

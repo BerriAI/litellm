@@ -74,6 +74,7 @@ from litellm.integrations.otel.plumbing.metrics import (
     create_genai_metrics,
 )
 from litellm.integrations.otel.plumbing.providers import (
+    LITELLM_TRACER_NAME,
     attach_tenant_fan_out,
     build_tracer_provider,
     get_event_logger,
@@ -97,7 +98,6 @@ if TYPE_CHECKING:
         StandardLoggingPayload,
     )
 
-LITELLM_TRACER_NAME: Final = "litellm"
 _published_v2_provider: ApiTracerProvider | None = None
 
 
@@ -198,6 +198,7 @@ class OpenTelemetryV2(CustomLogger):
         tracer_provider: TracerProvider | None = None,
         logger_provider: LoggerProvider | None = None,
         meter_provider: "MeterProvider | None" = None,
+        console_default: bool = False,
         **kwargs: Unpack[_CustomLoggerOptions],
     ) -> None:
         super().__init__(**kwargs)
@@ -206,7 +207,7 @@ class OpenTelemetryV2(CustomLogger):
         self._tracer_provider: TracerProvider = (
             tracer_provider
             if tracer_provider is not None
-            else build_tracer_provider(self.config, tenant_overrides=True)
+            else build_tracer_provider(self.config, tenant_overrides=True, console_default=console_default)
         )
         self.tracer: Tracer = get_tracer(self._tracer_provider, LITELLM_TRACER_NAME)
         self._metrics_recorder = self._init_metrics(meter_provider)
@@ -217,7 +218,9 @@ class OpenTelemetryV2(CustomLogger):
             mappers=resolve_mappers(self.config.mapper_names),
             event_recorder=self._init_events(logger_provider),
         )
-        self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
+        self._tenant_tracers = TenantTracerCache(
+            self.config, callback_name, LITELLM_TRACER_NAME, console_default=console_default
+        )
         self._open_llm_calls: OrderedDict[str, _LLMCallSpan] = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
 
@@ -538,8 +541,10 @@ class OpenTelemetryV2(CustomLogger):
         # logger is a success/failure callback only, so ``pre_call`` never reaches it
         # and no carrier exists. The payload plus the request-level provider-handoff
         # stamp (``upstream_started``) is the affirmative signal of a real call; a
-        # gate rejection carries ``is_no_upstream_call`` and gets no span.
-        if carrier is None and (call.is_no_upstream_call or not call.upstream_started or call.payload is None):
+        # gate rejection carries ``is_no_upstream_call`` and gets no span. A cache
+        # hit never hands off to a provider, so ``cache_hit`` substitutes for the
+        # upstream stamp, since the payload proves the call completed.
+        if carrier is None and not call.reached_a_provider:
             return None
         try:
             return self._finish_carrier(carrier, call, start_time, end_time)
@@ -590,11 +595,13 @@ class OpenTelemetryV2(CustomLogger):
             payload,
             capture_content=self._capture_span_content(),
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
+            completion_start_seconds=call.completion_start_seconds,
             request_route=request_root_http_route(),
             request_purpose=call.purpose,
             trace=call.trace,
             session_id=call.session_id,
             metadata_keys=tuple(self.config.baggage_metadata_keys),
+            operation=call.operation,
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:
@@ -1085,6 +1092,7 @@ def build_otel_v2_logger(
     logger_provider: LoggerProvider | None = None,
     meter_provider: "MeterProvider | None" = None,
     settings: Mapping[str, object] = MappingProxyType({}),
+    console_default: bool = False,
 ) -> OpenTelemetryV2:
     return _logger_class(config)(
         config=config,
@@ -1092,6 +1100,7 @@ def build_otel_v2_logger(
         tracer_provider=tracer_provider,
         logger_provider=logger_provider,
         meter_provider=meter_provider,
+        console_default=console_default,
         **settings,
     )
 

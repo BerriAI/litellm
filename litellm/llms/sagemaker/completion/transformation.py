@@ -15,15 +15,15 @@ from httpx._models import Headers, Response
 import litellm
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
     prompt_factory,
+    render_custom_prompt_template,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import token_counter
 
-from ..common_utils import SagemakerError
+from ..common_utils import STR_KEYED_MAPPING, SagemakerError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -122,20 +122,14 @@ class SagemakerConfig(BaseConfig):
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details.get("roles", None),
-                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
-                final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
-                messages=messages,
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="sagemaker"
             )
         elif hf_model_name in custom_prompt_dict:
             # check if the base huggingface model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[hf_model_name]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details.get("roles", None),
-                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
-                final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
-                messages=messages,
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="sagemaker"
             )
         else:
             if hf_model_name is None:
@@ -159,7 +153,9 @@ class SagemakerConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        inference_params: Final = optional_params.copy()
+        inference_params: Final = {
+            key: value for key, value in STR_KEYED_MAPPING.validate_python(optional_params).items() if key != "model_id"
+        }
         stream: Final = inference_params.pop("stream", False)
         data: Final[dict] = {"parameters": inference_params}
         if stream is True:

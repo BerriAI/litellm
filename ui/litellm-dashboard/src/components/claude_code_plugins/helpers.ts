@@ -240,7 +240,9 @@ export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourceP
  * bare `"url"` string, so the url/source pair is nested one level deeper. The key must be
  * "litellm" to match the name the proxy returns in marketplace.json.
  */
-export const buildMarketplaceSettingsSnippet = (proxyOrigin: string): string =>
+export const MARKETPLACE_KEY_PLACEHOLDER = "<your-litellm-key>";
+
+export const buildMarketplaceSettingsSnippet = (proxyOrigin: string, requiresKey: boolean): string =>
   JSON.stringify(
     {
       extraKnownMarketplaces: {
@@ -248,6 +250,7 @@ export const buildMarketplaceSettingsSnippet = (proxyOrigin: string): string =>
           source: {
             source: "url",
             url: `${proxyOrigin}/claude-code/marketplace.json`,
+            ...(requiresKey ? { headers: { Authorization: `Bearer ${MARKETPLACE_KEY_PLACEHOLDER}` } } : {}),
           },
         },
       },

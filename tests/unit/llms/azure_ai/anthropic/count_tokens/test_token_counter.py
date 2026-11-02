@@ -54,6 +54,7 @@ async def test_count_reports_upstream_input_tokens_and_keeps_the_raw_payload(
             "request_model": "azure_ai/claude-sonnet-4-5",
             "model_used": "claude-sonnet-4-5",
             "tokenizer_type": "azure_ai_anthropic_api",
+            "count_source": None,
             "original_response": payload,
             "error": False,
             "error_message": None,
@@ -98,6 +99,7 @@ async def test_non_integer_input_tokens_becomes_an_error_response_carrying_the_v
             "request_model": "azure_ai/claude-sonnet-4-5",
             "model_used": "claude-sonnet-4-5",
             "tokenizer_type": "azure_ai_anthropic_api",
+            "count_source": None,
             "original_response": None,
             "error": True,
             "error_message": str(rejection.value),
@@ -126,6 +128,7 @@ async def test_count_payload_that_is_not_an_object_becomes_an_error_response_nam
             "request_model": "azure_ai/claude-sonnet-4-5",
             "model_used": "claude-sonnet-4-5",
             "tokenizer_type": "azure_ai_anthropic_api",
+            "count_source": None,
             "original_response": None,
             "error": True,
             "error_message": str(failed_lookup.value),
@@ -156,6 +159,7 @@ async def test_upstream_error_status_becomes_an_error_response_with_that_status_
             "request_model": "azure_ai/claude-sonnet-4-5",
             "model_used": "claude-sonnet-4-5",
             "tokenizer_type": "azure_ai_anthropic_api",
+            "count_source": None,
             "original_response": None,
             "error": True,
             "error_message": upstream_text,
@@ -180,9 +184,87 @@ async def test_undecodable_count_body_becomes_a_500_error_response_carrying_the_
             "request_model": "azure_ai/claude-sonnet-4-5",
             "model_used": "claude-sonnet-4-5",
             "tokenizer_type": "azure_ai_anthropic_api",
+            "count_source": None,
             "original_response": None,
             "error": True,
             "error_message": f"CountTokens processing error: {undecodable.value}",
             "status_code": 500,
         }
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("set_base", ("env", "global"), ids=("AZURE_API_BASE", "litellm.api_base"))
+async def test_count_uses_the_shared_api_base_chat_would_use(monkeypatch: pytest.MonkeyPatch, set_base: str) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+    monkeypatch.delenv("AZURE_API_BASE", raising=False)
+    if set_base == "env":
+        monkeypatch.setenv("AZURE_API_BASE", API_BASE)
+    else:
+        monkeypatch.setattr(litellm, "api_base", API_BASE)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 6}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "azure-key"}},
+            request_model="azure_ai/claude-sonnet-4-5",
+        )
+    assert result is not None
+    assert result.total_tokens == 6
+    assert route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("assistant_content", "expected_beta"),
+    [
+        (
+            [{"type": "compaction", "content": "Summary of the chat so far.", "signature": "sig-abc"}],
+            "compact-2026-09-04,token-counting-2024-11-01",
+        ),
+        ("Use Recipe and Step tables.", "token-counting-2024-11-01"),
+    ],
+    ids=("signed_compaction_block", "plain_turn"),
+)
+async def test_count_sends_the_compact_beta_only_when_the_history_replays_a_compaction_block(
+    monkeypatch: pytest.MonkeyPatch, assistant_content: object, expected_beta: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 376}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-5-5",
+            messages=[
+                {"role": "assistant", "content": assistant_content},
+                {"role": "user", "content": "What tables did we pick?"},
+            ],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "azure-key", "api_base": API_BASE}},
+            request_model="azure_ai/claude-sonnet-5-5",
+        )
+    assert result is not None
+    assert result.total_tokens == 376
+    assert route.calls.last.request.headers["anthropic-beta"] == expected_beta
+
+
+@pytest.mark.asyncio
+async def test_count_sends_the_tool_change_beta_when_the_history_adds_a_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 541}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-5-5",
+            messages=[
+                {"role": "user", "content": "Use the ping tool once."},
+                {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+            ],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "azure-key", "api_base": API_BASE}},
+            request_model="azure_ai/claude-sonnet-5-5",
+        )
+    assert result is not None
+    assert result.total_tokens == 541
+    assert route.calls.last.request.headers["anthropic-beta"] == "mid-conversation-tool-changes-2026-07-01,token-counting-2024-11-01"

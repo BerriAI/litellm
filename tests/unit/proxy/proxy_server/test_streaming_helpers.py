@@ -17,21 +17,23 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from fastapi import HTTPException, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from openai import APIError as OpenAIAPIError
 from pydantic import BaseModel
 
 import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_request_processing import create_response
 from litellm.proxy.proxy_server import (
     _apply_streaming_chunk_hooks,
     _fast_serialize_simple_model_response_stream,
@@ -54,8 +56,9 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+from tests._support.clock_loops import AutojumpClockLoop
 
-from .conftest import normalize
+from .conftest import normalize, route_entry_points_to_stubs
 
 
 def _user_auth() -> UserAPIKeyAuth:
@@ -905,6 +908,351 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
     assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
 
 
+_BLOCK_MESSAGE: Final = "Content blocked: keyword 'keeper' detected"
+_BLOCK_ERROR: Final = {
+    "message": _BLOCK_MESSAGE,
+    "type": "invalid_request_error",
+    "param": None,
+    "code": "400",
+    "provider_specific_fields": {"error": _BLOCK_MESSAGE},
+}
+_UNSERIALIZABLE_SPAN: Final = object()
+
+
+async def _blocked_after(chunks: int, detail: dict[str, object]) -> AsyncIterator[ModelResponseStream]:
+    for _ in range(chunks):
+        yield _simple_chunk(content="partial")
+    raise HTTPException(status_code=400, detail=detail)
+
+
+async def _served(
+    upstream: AsyncIterator[ModelResponseStream], request_data: dict[str, object] | None = None
+) -> tuple[int, str | None, tuple[str, ...]]:
+    response: Final = await create_response(
+        generator=async_data_generator(
+            response=upstream, user_api_key_dict=_user_auth(), request_data=dict(request_data or {})
+        ),
+        media_type="text/event-stream",
+        headers={},
+    )
+    assert isinstance(response, StreamingResponse)
+    body: Final = "".join(
+        [part if isinstance(part, str) else bytes(part).decode() async for part in response.body_iterator]
+    )
+    return response.status_code, response.media_type, tuple(frame for frame in body.split("\n\n") if frame)
+
+
+def _error_of(frame: str) -> dict[str, object]:
+    return json.loads(frame.removeprefix("data: "))["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raised, expected_error",
+    [
+        pytest.param(
+            ProxyException(message="Budget has been exceeded", type="budget_exceeded", param=None, code=429),
+            {"message": "Budget has been exceeded", "type": "budget_exceeded", "param": None, "code": "429"},
+            id="proxy_exception_keeps_its_status",
+        ),
+        pytest.param(
+            RuntimeError("upstream blew up"),
+            {"message": "upstream blew up", "type": "internal_server_error", "param": None, "code": "500"},
+            id="unexpected_failure",
+        ),
+    ],
+)
+async def test_a_mid_stream_failure_frame_carries_the_status_the_error_was_raised_with(
+    monkeypatch, raised: Exception, expected_error: dict[str, object]
+):
+    _patch_logging_flags(monkeypatch)
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", AsyncMock(return_value=None))
+
+    frames: Final = [
+        frame
+        async for frame in async_data_generator(
+            response=_async_iter_raises(raised), user_api_key_dict=_user_auth(), request_data={}
+        )
+    ]
+
+    error_frames: Final = [frame for frame in frames if isinstance(frame, str) and frame.startswith('data: {"error":')]
+    assert [_error_of(frame.removesuffix("\n\n")) for frame in error_frames] == [expected_error]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "detail,expected_message,expected_fields",
+    [
+        pytest.param(
+            {"error": _BLOCK_MESSAGE, "guardrail": "block-keeper-word"},
+            _BLOCK_MESSAGE,
+            {"error": _BLOCK_MESSAGE, "guardrail": "block-keeper-word"},
+            id="json_detail",
+        ),
+        pytest.param(
+            {"error": _BLOCK_MESSAGE, "matched_span": _UNSERIALIZABLE_SPAN},
+            _BLOCK_MESSAGE,
+            {"error": _BLOCK_MESSAGE, "matched_span": str(_UNSERIALIZABLE_SPAN)},
+            id="non_json_detail",
+        ),
+        pytest.param(
+            {"matched_span": _UNSERIALIZABLE_SPAN},
+            json.dumps({"matched_span": str(_UNSERIALIZABLE_SPAN)}),
+            {"matched_span": str(_UNSERIALIZABLE_SPAN)},
+            id="non_json_detail_without_message",
+        ),
+    ],
+)
+async def test_guardrail_block_after_the_first_chunk_ends_the_stream_with_an_error_event(
+    detail: dict[str, object], expected_message: str, expected_fields: dict[str, str]
+) -> None:
+    status_code, _, frames = await _served(_blocked_after(1, detail))
+
+    assert status_code == 200
+    assert len(frames) == 3
+    assert json.loads(frames[0].removeprefix("data: "))["choices"][0]["delta"]["content"] == "partial"
+    assert _error_of(frames[1]) == {
+        "message": expected_message,
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "400",
+        "provider_specific_fields": expected_fields,
+    }
+    assert frames[2] == "data: [DONE]"
+
+
+@pytest.mark.asyncio
+async def test_guardrail_block_mid_stream_on_a_gemini_stream_sends_no_openai_error_event() -> None:
+    response: Final = await create_response(
+        generator=async_data_generator(
+            response=_blocked_after(1, {"error": _BLOCK_MESSAGE}),
+            user_api_key_dict=_user_auth(),
+            request_data={"_litellm_skip_openai_stream_done": True},
+        ),
+        media_type="text/event-stream",
+        headers={},
+    )
+    assert isinstance(response, StreamingResponse)
+    parts: Final = aiter(response.body_iterator)
+    first: Final = await anext(parts)
+
+    with pytest.raises(HTTPException):
+        await anext(parts)
+    assert '"error"' not in (first if isinstance(first, str) else bytes(first).decode())
+
+
+async def _upstream_fails_after(chunks: int) -> AsyncIterator[ModelResponseStream]:
+    for _ in range(chunks):
+        yield _simple_chunk(content="partial")
+    raise RuntimeError("upstream reset")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_data,closing_frames",
+    [
+        pytest.param({}, ("data: [DONE]",), id="openai_stream"),
+        pytest.param({"_litellm_skip_openai_stream_done": True}, (), id="gemini_stream"),
+    ],
+)
+async def test_upstream_failure_mid_stream_ends_with_an_error_event(
+    request_data: dict[str, object], closing_frames: tuple[str, ...]
+) -> None:
+    status_code, _, frames = await _served(_upstream_fails_after(1), request_data)
+
+    assert status_code == 200
+    assert _error_of(frames[1])["message"] == "upstream reset"
+    assert frames[2:] == closing_frames
+
+
+class _ReplacesClientErrors(CustomLogger):
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException:
+        return HTTPException(status_code=403, detail="Request blocked by policy")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "upstream,original_message,expected_status",
+    [
+        pytest.param(
+            lambda: _blocked_after(0, {"error": _BLOCK_MESSAGE}), _BLOCK_MESSAGE, 403, id="block_before_the_first_chunk"
+        ),
+        pytest.param(lambda: _blocked_after(1, {"error": _BLOCK_MESSAGE}), _BLOCK_MESSAGE, 200, id="block_mid_stream"),
+        pytest.param(lambda: _upstream_fails_after(1), "upstream reset", 200, id="failure_mid_stream"),
+    ],
+)
+async def test_stream_error_sends_the_failure_hook_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+    upstream: Callable[[], AsyncIterator[ModelResponseStream]],
+    original_message: str,
+    expected_status: int,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ReplacesClientErrors()])
+
+    status_code, _, frames = await _served(upstream())
+
+    assert status_code == expected_status
+    assert original_message not in "".join(frames)
+    assert _error_of(frames[-2]) == {
+        "message": "Request blocked by policy",
+        "type": "permission_error",
+        "param": None,
+        "code": "403",
+    }
+    assert frames[-1] == "data: [DONE]"
+
+
+@pytest.mark.asyncio
+async def test_failure_before_the_first_chunk_answers_the_failure_hook_replacement_as_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ReplacesClientErrors()])
+
+    response: Final = await create_response(
+        generator=async_data_generator(
+            response=_upstream_fails_after(0), user_api_key_dict=_user_auth(), request_data={}
+        ),
+        media_type="text/event-stream",
+        headers={},
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 403
+    assert json.loads(bytes(response.body))["error"]["message"] == "Request blocked by policy"
+    assert b"upstream reset" not in bytes(response.body)
+
+
+@pytest.mark.asyncio
+async def test_failure_before_the_first_chunk_on_a_bare_stream_still_ends_with_the_replacement_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ReplacesClientErrors()])
+
+    frames: Final = tuple(
+        [
+            frame
+            async for frame in async_data_generator(
+                response=_upstream_fails_after(0), user_api_key_dict=_user_auth(), request_data={}
+            )
+        ]
+    )
+
+    assert _error_of(frames[0].strip())["message"] == "Request blocked by policy"
+    assert frames[1:] == ("data: [DONE]\n\n",)
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_failure_sends_the_failure_hook_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ReplacesClientErrors()])
+    response: Final = ResponsesAPIResponse(id="resp_visible", created_at=1, model="gpt-6-astra", output=[])
+
+    async def upstream() -> AsyncIterator[BaseModel]:
+        yield ResponseCreatedEvent.model_validate({"type": "response.created", "sequence_number": 0, "response": response})
+        raise HTTPException(status_code=400, detail={"error": _BLOCK_MESSAGE})
+
+    frames: Final = tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in select_data_generator(
+                response=upstream(), user_api_key_dict=_user_auth(), request_data={}, responses_stream_errors=True
+            )
+        ]
+    )
+    failure: Final = ResponseFailedEvent.model_validate_json(
+        next(line.removeprefix("data: ") for line in frames[-2].splitlines() if line.startswith("data: "))
+    )
+
+    assert _BLOCK_MESSAGE not in "".join(frames)
+    assert failure.response.error is not None
+    assert failure.response.error["code"] == "permission_error"
+    assert "Request blocked by policy" in failure.response.error["message"]
+    assert frames[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "detail,expected_fields",
+    [
+        pytest.param({"error": _BLOCK_MESSAGE}, {"error": _BLOCK_MESSAGE}, id="json_detail"),
+        pytest.param(
+            {"error": _BLOCK_MESSAGE, "matched_span": _UNSERIALIZABLE_SPAN},
+            {"error": _BLOCK_MESSAGE, "matched_span": str(_UNSERIALIZABLE_SPAN)},
+            id="non_json_detail",
+        ),
+    ],
+)
+async def test_guardrail_block_before_the_first_chunk_keeps_its_http_status(
+    detail: dict[str, object], expected_fields: dict[str, str]
+) -> None:
+    status_code, media_type, frames = await _served(_blocked_after(0, detail))
+
+    assert (status_code, media_type) == (400, "text/event-stream")
+    assert len(frames) == 2
+    assert _error_of(frames[0]) == {**_BLOCK_ERROR, "provider_specific_fields": expected_fields}
+    assert frames[1] == "data: [DONE]"
+
+
+async def _blocked_after_a_stall() -> AsyncIterator[ModelResponseStream]:
+    await asyncio.sleep(1.5)
+    async for chunk in _blocked_after(0, {"error": _BLOCK_MESSAGE}):
+        yield chunk
+
+
+def test_guardrail_block_after_a_keepalive_ping_ends_the_stream_with_an_error_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 1)
+    loop: Final = AutojumpClockLoop()
+
+    try:
+        status_code, _, frames = loop.run_until_complete(_served(_blocked_after_a_stall()))
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+
+    assert status_code == 200
+    assert frames[0] == ": ping"
+    assert _error_of(frames[-2]) == _BLOCK_ERROR
+    assert frames[-1] == "data: [DONE]"
+
+class _BlocksKeeperPerChunk(CustomLogger):
+    async def async_post_call_streaming_hook(self, user_api_key_dict: UserAPIKeyAuth, response: str) -> None:
+        if "keeper" in response:
+            raise HTTPException(status_code=400, detail={"error": _BLOCK_MESSAGE})
+
+
+async def _chunks(*contents: str) -> AsyncIterator[ModelResponseStream]:
+    for content in contents:
+        yield _simple_chunk(content=content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "contents,expected_status,expected_frames",
+    [
+        pytest.param(("the keeper",), 400, 2, id="first_chunk"),
+        pytest.param(("partial", "the keeper"), 200, 3, id="second_chunk"),
+    ],
+)
+async def test_per_chunk_guardrail_block_keeps_early_blocks_on_their_status_and_ends_later_ones_in_band(
+    monkeypatch: pytest.MonkeyPatch, contents: tuple[str, ...], expected_status: int, expected_frames: int
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_BlocksKeeperPerChunk()])
+
+    status_code, media_type, frames = await _served(_chunks(*contents))
+
+    assert (status_code, media_type) == (expected_status, "text/event-stream")
+    assert len(frames) == expected_frames
+    assert _error_of(frames[-2]) == _BLOCK_ERROR
+    assert frames[-1] == "data: [DONE]"
+
+
 _UPSTREAM_BODY: Final = {
     "code": "cyber_policy",
     "message": "Upstream rejected request: flagged for possible cybersecurity risk",
@@ -942,6 +1290,9 @@ _UPSTREAM_BODY: Final = {
             ),
             "cyber_policy", id="upstream_body_code_and_message",
         ),
+        pytest.param(
+            "upstream_failure", RuntimeError("Upstream rejected request"), "server_error", id="builtin_exception"
+        ),
         *(
             pytest.param(
                 "upstream_failure", HTTPException(status_code=status, detail="Upstream rejected request"),
@@ -956,7 +1307,7 @@ _UPSTREAM_BODY: Final = {
 )
 async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_terminal(
     terminal: Literal["completed", "serialization_failure", "failure_after_completed", "upstream_failure"],
-    upstream_error: HTTPException | OpenAIAPIError | None,
+    upstream_error: Exception | None,
     expected_code: str | None,
 ) -> None:
     class ToolDelta(BaseModel):
@@ -1268,7 +1619,7 @@ def test_resolve_keepalive_seconds_client_value_ignored_without_override_permiss
     deployment.litellm_params.keepalive_seconds = 15.0
     deployment.litellm_params.allow_client_keepalive_override = False
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1287,7 +1638,7 @@ def test_resolve_keepalive_seconds_request_value_wins_when_override_allowed(monk
     deployment.litellm_params.keepalive_seconds = None
     deployment.litellm_params.allow_client_keepalive_override = True
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1306,7 +1657,7 @@ def test_resolve_keepalive_seconds_explicit_zero_disables_when_override_allowed(
     deployment.litellm_params.keepalive_seconds = 20.0
     deployment.litellm_params.allow_client_keepalive_override = True
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1325,7 +1676,7 @@ def test_resolve_keepalive_seconds_clamps_below_minimum(monkeypatch):
     deployment.litellm_params.keepalive_seconds = None
     deployment.litellm_params.allow_client_keepalive_override = True
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1344,7 +1695,7 @@ def test_resolve_keepalive_seconds_clamps_above_maximum(monkeypatch):
     deployment.litellm_params.keepalive_seconds = None
     deployment.litellm_params.allow_client_keepalive_override = True
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1363,7 +1714,7 @@ def test_resolve_keepalive_seconds_non_numeric_returns_zero(monkeypatch):
     deployment.litellm_params.keepalive_seconds = None
     deployment.litellm_params.allow_client_keepalive_override = True
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1394,7 +1745,7 @@ def test_resolve_keepalive_seconds_deployment_disable_cannot_be_overridden_by_re
     deployment.litellm_params.keepalive_seconds = 0
     deployment.litellm_params.allow_client_keepalive_override = True
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1443,7 +1794,7 @@ def test_resolve_keepalive_seconds_deployment_zero_beats_global_default(monkeypa
     deployment.litellm_params.keepalive_seconds = 0
     deployment.litellm_params.allow_client_keepalive_override = False
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1465,7 +1816,7 @@ def test_resolve_keepalive_seconds_deployment_value_beats_global_default(monkeyp
     deployment.litellm_params.keepalive_seconds = 30.0
     deployment.litellm_params.allow_client_keepalive_override = False
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1485,7 +1836,7 @@ def test_keepalive_from_deployment_config_reads_by_model_id(monkeypatch):
     deployment.litellm_params.keepalive_seconds = 45.0
     deployment.litellm_params.allow_client_keepalive_override = True
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1507,7 +1858,7 @@ def test_keepalive_from_deployment_config_stale_model_id_does_not_fall_through(m
     unambiguous on its own."""
     from unittest.mock import MagicMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [
         {"litellm_params": {"keepalive_seconds": 20.0}},
@@ -1526,7 +1877,7 @@ def test_keepalive_from_deployment_config_stale_model_id_does_not_fall_through(m
 def test_keepalive_from_deployment_config_fallback_by_name(monkeypatch):
     from unittest.mock import MagicMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [
         {"litellm_params": {"keepalive_seconds": 20.0}},
@@ -1539,7 +1890,7 @@ def test_keepalive_from_deployment_config_fallback_by_name(monkeypatch):
 
     result = _keepalive_from_deployment_config({"model": "slow-model"}, response)
     assert result == ps._DeploymentKeepaliveConfig(keepalive_seconds=20.0, allow_client_override=False)
-    router.get_model_list.assert_called_once_with(model_name="slow-model")
+    router.registry.return_value.deployments.assert_called_once_with(model_name="slow-model")
 
 
 def test_keepalive_from_deployment_config_fallback_by_name_agreeing_deployments(monkeypatch):
@@ -1547,7 +1898,7 @@ def test_keepalive_from_deployment_config_fallback_by_name_agreeing_deployments(
     is unambiguous, so the shared value is used even without a model_id."""
     from unittest.mock import MagicMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [
         {"litellm_params": {"keepalive_seconds": 20.0, "allow_client_keepalive_override": True}},
@@ -1569,7 +1920,7 @@ def test_keepalive_from_deployment_config_fallback_by_name_conflicting_deploymen
     apply the wrong deployment's interval (or override an explicit disable)."""
     from unittest.mock import MagicMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [
         {"litellm_params": {"keepalive_seconds": 20.0}},
@@ -1593,7 +1944,7 @@ def test_keepalive_from_deployment_config_fallback_by_name_configured_plus_unset
     configured values."""
     from unittest.mock import MagicMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [
         {"litellm_params": {"keepalive_seconds": 20.0}},
@@ -1624,7 +1975,7 @@ def test_make_keepalive_resolver_caches_by_model_id(monkeypatch):
     deployment.litellm_params.keepalive_seconds = 5.0
     deployment.litellm_params.allow_client_keepalive_override = False
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
     monkeypatch.setattr(ps, "llm_router", router)
 
@@ -1653,7 +2004,7 @@ def test_make_keepalive_resolver_reresolves_on_model_id_change(monkeypatch):
     after.litellm_params.keepalive_seconds = 30.0
     after.litellm_params.allow_client_keepalive_override = False
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.side_effect = lambda model_id: {"deploy-a": before, "deploy-b": after}[model_id]
     monkeypatch.setattr(ps, "llm_router", router)
 
@@ -1675,7 +2026,7 @@ def test_make_keepalive_resolver_missing_model_id_never_cached(monkeypatch):
     re-resolve fresh rather than reuse a stale guess."""
     from unittest.mock import MagicMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [{"litellm_params": {"keepalive_seconds": 12.0}}]
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1707,7 +2058,7 @@ def test_make_keepalive_resolver_expires_cache_after_ttl(monkeypatch):
     after.litellm_params.keepalive_seconds = 0
     after.litellm_params.allow_client_keepalive_override = False
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = before
     monkeypatch.setattr(ps, "llm_router", router)
 
@@ -1762,7 +2113,7 @@ async def test_async_data_generator_emits_ping_heartbeat(monkeypatch):
     _patch_logging_flags(monkeypatch)
     monkeypatch.setattr(ps, "_KEEPALIVE_MIN_SECONDS", 0.05)
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [{"litellm_params": {"allow_client_keepalive_override": True}}]
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1857,7 +2208,7 @@ async def test_async_data_generator_resolves_deployment_once_per_steady_stream(m
     deployment.litellm_params.keepalive_seconds = None
     deployment.litellm_params.allow_client_keepalive_override = False
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
     router.get_model_list.return_value = [{"litellm_params": {}}]
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1903,7 +2254,7 @@ class _SlowAssistantsStream(_FakeAssistantsStream):
 async def _run_thread_streaming(monkeypatch, interval, delay=0.3, fails_with=None):
     monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", interval)
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_list.return_value = []
     if fails_with is None:
         router.arun_thread = AsyncMock(return_value=_SlowAssistantsStream([_simple_chunk(content="hi")], delay))
@@ -2002,8 +2353,9 @@ async def _queue_streaming(monkeypatch, interval, delay=0.3, fails_with=None):
     _patch_logging_flags(monkeypatch)
     monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", interval)
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_list.return_value = []
+    router.split_request_priority.return_value = (0, {})
 
     async def _schedule_after_the_scheduler_queue_drains(**kwargs):
         await asyncio.sleep(delay)
@@ -2090,3 +2442,36 @@ def test_fast_serialize_simple_model_response_stream_keeps_served_service_tier()
 
     assert result is not None
     assert json.loads(result)["service_tier"] == "priority"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_lets_other_tasks_run_during_a_stream_that_never_waits(monkeypatch):
+    """A stream whose chunks are already buffered never suspends on its own, so
+    the generator has to hand the loop back itself once it has held the loop
+    long enough: another task must get to run before the stream is over, and
+    not before the hold budget is used up."""
+    _patch_logging_flags(monkeypatch)
+    order: list[str] = []  # mutable-ok: records the interleaving of the two tasks
+    clock: list[float] = [0.0]  # mutable-ok: fake monotonic clock, advanced 20 ms per chunk
+    monkeypatch.setattr(ps.time, "monotonic", lambda: clock[0])
+
+    async def chunks():
+        for index in range(6):
+            clock[0] += 0.02
+            order.append(f"chunk{index}")
+            yield _simple_chunk(content=str(index))
+
+    async def other_task():
+        order.append("other")
+
+    other = asyncio.ensure_future(other_task())
+    async for _ in async_data_generator(
+        response=chunks(),
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "gpt-4"},
+    ):
+        pass
+    await other
+
+    assert "other" in order[:-1], order
+    assert order.index("other") >= 3, order

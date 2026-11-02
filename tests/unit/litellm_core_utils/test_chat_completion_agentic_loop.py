@@ -25,13 +25,13 @@ from typing import Any, Dict, Final, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
+from openai._legacy_response import LegacyAPIResponse
 
 import litellm
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
 )
@@ -45,9 +45,9 @@ from litellm.types.integrations.custom_logger import (
     AgenticLoopRequestPatch,
 )
 from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
     Choices,
     Function,
-    ChatCompletionMessageToolCall,
     Message,
     ModelResponse,
 )
@@ -142,7 +142,7 @@ def _raw_response_for(model_response: ModelResponse) -> MagicMock:
     (an object exposing `.headers` and `.parse()` -> something with model_dump)."""
     parsed = MagicMock()
     parsed.model_dump.return_value = model_response.model_dump()
-    raw = MagicMock()
+    raw = MagicMock(spec=LegacyAPIResponse)
     raw.headers = {}
     raw.parse.return_value = parsed
     return raw
@@ -171,7 +171,7 @@ async def test_internal_control_fields_never_leak_into_provider_body(restore_cal
         ]
     )
     mock_client = MagicMock()
-    mock_client.chat.completions.with_raw_response.create = create
+    mock_client.post = create
 
     response = await litellm.acompletion(
         model="openai/gpt-4o-mini",
@@ -362,6 +362,49 @@ async def test_dispatcher_runs_followup_with_incremented_depth_and_patched_messa
     assert "_agentic_loop_api_surface" not in call_kwargs
     # Cleanup hook always runs.
     assert logger.cleanup_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model,custom_llm_provider,routed_model",
+    [
+        ("cohere/command-a-03-2025", "cohere_chat", "command-a-03-2025"),
+        ("anthropic/claude-2", "anthropic_text", "claude-2"),
+    ],
+)
+async def test_sdk_followup_keeps_a_model_whose_prefix_already_routes_to_its_provider(
+    model: str, custom_llm_provider: str, routed_model: str
+) -> None:
+    plan: Final = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(messages=_patched_messages()),
+    )
+    gate: Final = _GateOnlyLogger(plan=plan, tool_calls={"tool_calls": [{"id": "call_abc"}]})
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="call-prefix",
+        function_id="fn-prefix",
+        dynamic_success_callbacks=[gate],
+    )
+
+    followup: Final = await maybe_run_chat_completion_agentic_loop(
+        response=_tool_call_model_response(),
+        model=model,
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        optional_params={},
+        kwargs={"mock_response": "done"},
+        logging_obj=logging_obj,
+        custom_llm_provider=custom_llm_provider,
+        stream=False,
+    )
+
+    assert isinstance(followup, ModelResponse)
+    assert followup.model == routed_model
+    assert followup._hidden_params["custom_llm_provider"] == custom_llm_provider
 
 
 @pytest.mark.asyncio

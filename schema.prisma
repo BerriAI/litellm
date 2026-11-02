@@ -1163,6 +1163,7 @@ model LiteLLM_ManagedFileTable {
   @@index([unified_file_id])
   @@index([flat_model_file_ids], type: Gin)
   @@index([team_id, created_at(sort: Desc)])
+  @@index([created_by, created_at(sort: Desc)])
 }
 
 model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use the
@@ -1981,6 +1982,7 @@ model LiteLLM_BackgroundInteractionSettlement {
   outcome             String?
 
   @@index([claimed_at], map: "idx_background_interaction_settlement_claimed_at")
+  @@index([settled_at], map: "idx_background_interaction_settlement_settled_at")
 }
 
 model LiteLLM_Lens {
@@ -2058,4 +2060,90 @@ model LiteLLM_TelemetryReport {
 
   @@index([window_end])
   @@index([created_at])
+}
+
+enum AccountingEventKind {
+  inbound_usage
+  outbound_usage
+  cost
+}
+
+enum AccountingDeliveryState {
+  pending
+  applied
+  parked
+}
+
+enum AccountingDeliveryTarget {
+  LiteLLM_VerificationToken
+  LiteLLM_UserTable
+  LiteLLM_TeamTable
+  LiteLLM_TeamMembership
+  LiteLLM_OrganizationTable
+  LiteLLM_OrganizationMembership
+  LiteLLM_EndUserTable
+  LiteLLM_AgentsTable
+  LiteLLM_TagTable
+  LiteLLM_ProjectTable
+  LiteLLM_ModelAccessGroupBudgetTable
+  LiteLLM_BudgetTable
+  LiteLLM_BudgetWindowSpend
+  LiteLLM_DailyUserSpend
+  LiteLLM_DailyTeamSpend
+  LiteLLM_DailyOrganizationSpend
+  LiteLLM_DailyEndUserSpend
+  LiteLLM_DailyAgentSpend
+  LiteLLM_DailyTagSpend
+  LiteLLM_DailyModelUsage
+  LiteLLM_DailyToolSpend
+  LiteLLM_AutoRouterDailySpend
+}
+
+// Durable accounting ledger. One row per usage or cost event; payload holds the
+// private event envelope versioned by schema_version. Usage rows retain request-scoped
+// pricing context; cost rows include resolved rates and the finalized pricing snapshot.
+model LiteLLM_AccountingEvent {
+  event_id        String              @id
+  kind            AccountingEventKind
+  source_event_id String?
+  schema_version  Int
+  payload_hash    String
+  occurred_at     DateTime
+  recorded_at     DateTime            @default(now())
+  payload         Json
+
+  @@index([recorded_at])
+  @@index([kind, source_event_id])
+}
+
+// One row per (event, target table, version): pending work for the projector and,
+// once applied in the same transaction as the target write, the receipt that stops a retry.
+model LiteLLM_AccountingDelivery {
+  event_id        String
+  target          AccountingDeliveryTarget
+  version         Int
+  state           AccountingDeliveryState  @default(pending)
+  attempts        Int                      @default(0)
+  next_attempt_at DateTime                 @default(now())
+  applied_at      DateTime?
+  last_error      String?
+
+  @@id([event_id, target, version])
+  @@index([target, state, next_attempt_at])
+}
+
+model LiteLLM_SubscriptionAccountTable {
+  subscription_account_id String @id @default(uuid())
+  custom_llm_provider String
+  account_id String
+  label String?
+  monthly_fee Float
+  currency String
+  billing_period_start String
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+
+  @@unique([custom_llm_provider, account_id], map: "LiteLLM_SubscriptionAccountTable_provider_account_key")
 }

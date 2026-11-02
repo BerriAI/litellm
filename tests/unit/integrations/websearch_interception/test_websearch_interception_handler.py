@@ -22,6 +22,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.router_api import RouterSettings
 from litellm.types.utils import CallTypes, LlmProviders
 
 
@@ -200,19 +201,21 @@ async def test_execute_search_passes_selected_search_tool_litellm_params(monkeyp
         search_tool_name="ui-tavily",
     )
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": "ui-tavily",
-            "litellm_params": {
-                "search_provider": "tavily",
-                "api_key": "fake-ui-key",
-                "api_base": "https://api.tavily.com",
-                "timeout": 10.0,
-                "max_retries": 2,
-                "country": None,
-            },
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": "ui-tavily",
+                "litellm_params": {
+                    "search_provider": "tavily",
+                    "api_key": "fake-ui-key",
+                    "api_base": "https://api.tavily.com",
+                    "timeout": 10.0,
+                    "max_retries": 2,
+                    "country": None,
+                },
+            }
+        ]
+    )
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
     user_api_key_auth = UserAPIKeyAuth(
         object_permission=LiteLLM_ObjectPermissionTable(
@@ -245,12 +248,14 @@ async def test_execute_search_attributes_cli_session_spend_to_the_per_user_alias
 
     logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="perplexity-sonar-pro")
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": "perplexity-sonar-pro",
-            "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": "perplexity-sonar-pro",
+                "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
+            }
+        ]
+    )
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
     session = UserAPIKeyAuth(
         api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
@@ -287,12 +292,14 @@ async def test_execute_search_attributes_spend_to_the_calling_key(monkeypatch):
         search_tool_name="perplexity-sonar-pro",
     )
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": "perplexity-sonar-pro",
-            "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": "perplexity-sonar-pro",
+                "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
+            }
+        ]
+    )
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
     user_api_key_auth = UserAPIKeyAuth(
         api_key="hashed-sk-9876",
@@ -330,12 +337,14 @@ async def test_execute_search_attributes_spend_to_the_calling_key(monkeypatch):
 
 def _perplexity_router() -> MagicMock:
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": "perplexity-sonar-pro",
-            "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": "perplexity-sonar-pro",
+                "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
+            }
+        ]
+    )
     return router
 
 
@@ -495,12 +504,14 @@ async def test_execute_search_without_proxy_auth_context_stays_sdk_only(monkeypa
         search_tool_name="perplexity-sonar-pro",
     )
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": "perplexity-sonar-pro",
-            "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": "perplexity-sonar-pro",
+                "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
+            }
+        ]
+    )
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
 
     monkeypatch.setattr(proxy_server, "llm_router", router)
@@ -521,15 +532,17 @@ async def test_execute_search_enforces_key_search_tool_permission(monkeypatch):
         search_tool_name="blocked-search",
     )
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": "blocked-search",
-            "litellm_params": {
-                "search_provider": "tavily",
-                "api_key": "fake-ui-key",
-            },
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": "blocked-search",
+                "litellm_params": {
+                    "search_provider": "tavily",
+                    "api_key": "fake-ui-key",
+                },
+            }
+        ]
+    )
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
     user_api_key_auth = UserAPIKeyAuth(
         object_permission=LiteLLM_ObjectPermissionTable(
@@ -560,15 +573,17 @@ async def test_execute_search_enforces_team_search_tool_permission(monkeypatch):
         search_tool_name="blocked-search",
     )
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": "blocked-search",
-            "litellm_params": {
-                "search_provider": "tavily",
-                "api_key": "fake-ui-key",
-            },
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": "blocked-search",
+                "litellm_params": {
+                    "search_provider": "tavily",
+                    "api_key": "fake-ui-key",
+                },
+            }
+        ]
+    )
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
     team_key_auth = UserAPIKeyAuth(team_id="team-1")
     team_object = LiteLLM_TeamTable(
@@ -1021,12 +1036,14 @@ async def test_pre_request_hook_syncs_forced_tool_choice():
 
 def _single_search_tool_router(search_tool_name):
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": search_tool_name,
-            "litellm_params": {"search_provider": "tavily", "api_key": "fake-ui-key"},
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": search_tool_name,
+                "litellm_params": {"search_provider": "tavily", "api_key": "fake-ui-key"},
+            }
+        ]
+    )
     return router
 
 
@@ -1148,7 +1165,7 @@ async def test_execute_search_unregistered_fallback_follows_search_tool_deny_by_
 
     logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
     router = MagicMock()
-    router.search_tools = []
+    router.settings.return_value = RouterSettings(search_tools=[])
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
 
     monkeypatch.setattr(proxy_server, "llm_router", router)
@@ -1181,7 +1198,9 @@ async def test_execute_search_registered_tool_without_provider_follows_unregiste
 
     logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="no-provider")
     router = MagicMock()
-    router.search_tools = [{"search_tool_name": "no-provider", "litellm_params": {}}]
+    router.settings.return_value = RouterSettings(
+        search_tools=[{"search_tool_name": "no-provider", "litellm_params": {}}]
+    )
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
 
     monkeypatch.setattr(proxy_server, "llm_router", router)

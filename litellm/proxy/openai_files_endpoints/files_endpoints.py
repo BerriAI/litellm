@@ -6,9 +6,12 @@
 ######################################################################
 
 import asyncio
+import functools
+import itertools
 import traceback
-from collections.abc import Mapping, Sequence
-from typing import Any, BinaryIO, Final, TypedDict, cast, get_args
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, BinaryIO, Final, NoReturn, TypedDict, cast, get_args
 
 import httpx
 from fastapi import (
@@ -28,12 +31,13 @@ from typing_extensions import ReadOnly
 import litellm
 from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import ANTHROPIC_DEFAULT_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
 )
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
-from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+from litellm.llms.base_llm.files.transformation import BaseFileEndpoints, FileListModelScope
 from litellm.llms.base_llm.managed_resources.isolation import build_list_page
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -76,6 +80,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     add_internal_model_credentials,
     apply_team_provider_credentials,
     authorize_model_for_key,
+    deployment_drop_params,
     encode_file_id_with_model,
     extract_file_creation_params,
     get_authorized_credentials_for_model,
@@ -111,12 +116,15 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
+from litellm.types.proxy.auth.user_api_key_auth import user_api_key_has_admin_view
+from litellm.types.router import Deployment
+from litellm.types.utils import LlmProviders
 
 router: Final = APIRouter()
 
 
 def _names_a_litellm_executed_provider(llm_router: Router, candidate: str, team_id: str | None) -> bool:
-    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=candidate, team_id=team_id)
+    credentials: Final = llm_router.registry().credentials(candidate, form="with_provider", team_id=team_id)
     return credentials is not None and litellm_executed_provider_of(credentials) is not None
 
 
@@ -217,7 +225,7 @@ def get_files_provider_config(
 
 
 def _deployment_provider(llm_router: Router, model_id: str, team_id: str | None) -> str | None:
-    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
+    credentials: Final = llm_router.registry().credentials(model_id, form="with_provider", team_id=team_id)
     return None if credentials is None else credentials.get("custom_llm_provider")
 
 
@@ -226,7 +234,7 @@ def _resolves_to_vertex_deployments_only(llm_router: Router | None, model_name: 
         return False
     return all(
         _deployment_provider(llm_router, str(deployment["model_info"]["id"]), team_id) == "vertex_ai"
-        for deployment in llm_router.get_model_list(model_name=model_name, team_id=team_id) or ()
+        for deployment in llm_router.registry().deployments(model_name, team_id=team_id) or ()
         if "id" in deployment.get("model_info", {})
     )
 
@@ -457,7 +465,7 @@ async def route_create_file(
         # Merge credentials into the request
         prepare_data_with_credentials(
             data=_create_file_request,
-            credentials=credentials,
+            credentials={**credentials, **deployment_drop_params(llm_router, model, _create_file_request)},
         )
 
         # Create the file with model credentials
@@ -1102,14 +1110,10 @@ async def get_file_content(
                     }
                 )
         else:
-            # A raw cloud-storage URI (s3://, gs://) supplied here would skip the
-            # managed-file owner/team check that only runs for unified ids, letting
-            # a caller read another tenant's object by its key. Such objects are only
-            # reachable through their managed unified id.
-            if is_managed_cloud_storage_uri(file_id):
+            if is_managed_cloud_storage_uri(file_id) and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
                 raise HTTPException(
-                    status_code=400,
-                    detail="Raw cloud storage file ids cannot be retrieved directly. Use the LiteLLM managed file id returned when the file was created.",
+                    status_code=403,
+                    detail="Raw cloud storage file ids can only be retrieved by a proxy admin key. Use the LiteLLM managed file id returned when the file was created.",
                 )
             # Check for model-based credential routing
             (
@@ -1676,6 +1680,185 @@ def _as_file_list_page(response: object) -> object:
     return FileListPage.model_validate(page)
 
 
+async def _list_owned_managed_files(
+    managed_files_obj: BaseFileEndpoints,
+    user_api_key_dict: UserAPIKeyAuth,
+    purpose: str | None,
+    limit: int | None,
+    after: str | None,
+    before: str | None,
+    model_scope: FileListModelScope | None,
+) -> FileListPage:
+    return await managed_files_obj.afile_list(
+        purpose=purpose,
+        litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+        user_api_key_dict=user_api_key_dict,
+        limit=limit,
+        after=after,
+        before=before,
+        model_scope=model_scope,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _UnscopedFileList:
+    status_code: int
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ListedFiles:
+    model_scope: FileListModelScope | None
+    custom_llm_provider: str | None
+
+
+def _raise_unscoped_file_list(failure: _UnscopedFileList) -> NoReturn:
+    raise HTTPException(status_code=failure.status_code, detail=failure.detail)
+
+
+def _single_target_model_name(target_model_names: str) -> str | _UnscopedFileList:
+    target_model_names_list: Final = target_model_names.split(",")
+    if len(target_model_names_list) != 1:
+        return _UnscopedFileList(
+            status_code=400,
+            detail="target_model_names on list files must be a list of one model name. Example: ['gpt-4o']",
+        )
+    return target_model_names_list[0]
+
+
+async def _requested_custom_llm_provider(request: Request, provider: str | None) -> str | None:
+    return (
+        provider
+        or get_custom_llm_provider_from_request_headers(request=request)
+        or get_custom_llm_provider_from_request_query(request=request)
+        or await get_custom_llm_provider_from_request_body(request=request)
+    )
+
+
+def _default_file_list_limit(custom_llm_provider: str | None) -> int | None:
+    return ANTHROPIC_DEFAULT_FILE_LIST_LIMIT if custom_llm_provider == LlmProviders.ANTHROPIC.value else None
+
+
+def _deployment_model_mapping_keys(deployment: Deployment) -> frozenset[str]:
+    return frozenset(key for key in (deployment.model_name, deployment.model_info.id) if key is not None)
+
+
+def _model_mapping_keys(deployments: Iterable[Deployment]) -> frozenset[str]:
+    return frozenset(itertools.chain.from_iterable(map(_deployment_model_mapping_keys, deployments)))
+
+
+def _deployments_serving_model(llm_router: Router, model: str) -> tuple[Deployment, ...]:
+    deployment: Final = llm_router.registry().deployment(model) if llm_router.registry().has_deployment(model) else None
+    if deployment is not None:
+        return (deployment,)
+    return tuple(Deployment.model_validate(listed) for listed in llm_router.registry().deployments(model) or ())
+
+
+def _resolved_deployment_provider(deployment: Deployment) -> str | None:
+    try:
+        return litellm.get_llm_provider(
+            model=deployment.litellm_params.model,
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )[1]
+    except litellm.BadRequestError:
+        return None
+
+
+def _deployments_on_provider(llm_router: Router | None, custom_llm_provider: str) -> Iterator[Deployment]:
+    if llm_router is None:
+        return iter(())
+    return (
+        deployment
+        for deployment_id in llm_router.registry().names(kind="ids")
+        if (deployment := llm_router.registry().deployment(deployment_id)) is not None
+        and _resolved_deployment_provider(deployment) == custom_llm_provider
+    )
+
+
+def _routed_model_name_on_provider(
+    llm_router: Router, custom_llm_provider: str, provider_model_names: frozenset[str], model_name: str
+) -> bool:
+    if model_name in llm_router.registry().names(kind="group_set"):
+        return model_name in provider_model_names
+    return llm_router.registry().patterns().routes_to_provider(model_name, custom_llm_provider)
+
+
+def _stored_model_name_routes_to_provider(
+    llm_router: Router, custom_llm_provider: str, provider_model_names: frozenset[str], model_name: str
+) -> bool:
+    routing_group: Final = llm_router.registry().routing_group(model_name)
+    routed_model_names: Final = (
+        tuple(routing_group.models) if routing_group is not None else (llm_router.registry().resolve(model_name),)
+    )
+    return any(
+        _routed_model_name_on_provider(llm_router, custom_llm_provider, provider_model_names, routed_model_name)
+        for routed_model_name in routed_model_names
+    )
+
+
+def _files_on_provider(llm_router: Router | None, custom_llm_provider: str) -> _ListedFiles | _UnscopedFileList:
+    from litellm.proxy.pass_through_endpoints.managed_id_rewriter import passthrough_file_model_id
+
+    if custom_llm_provider not in litellm.provider_list:
+        return _UnscopedFileList(status_code=400, detail=f"Unknown provider '{custom_llm_provider}' for listing files.")
+    passthrough_model_id: Final = passthrough_file_model_id(custom_llm_provider)
+    deployments: Final = tuple(_deployments_on_provider(llm_router, custom_llm_provider))
+    model_mapping_keys: Final = _model_mapping_keys(deployments) | frozenset(
+        (passthrough_model_id,) if passthrough_model_id is not None else ()
+    )
+    if llm_router is None:
+        return _ListedFiles(FileListModelScope(model_mapping_keys), custom_llm_provider)
+    return _ListedFiles(
+        FileListModelScope(
+            model_mapping_keys,
+            routes_stored_model_name=functools.partial(
+                _stored_model_name_routes_to_provider,
+                llm_router,
+                custom_llm_provider,
+                frozenset(deployment.model_name for deployment in deployments),
+            ),
+        ),
+        custom_llm_provider,
+    )
+
+
+def _files_serving_model(llm_router: Router, model: str) -> _ListedFiles:
+    deployments: Final = _deployments_serving_model(llm_router, model)
+    providers: Final = frozenset(map(_resolved_deployment_provider, deployments))
+    return _ListedFiles(
+        FileListModelScope(_model_mapping_keys(deployments)), next(iter(providers)) if len(providers) == 1 else None
+    )
+
+
+async def _listed_files(
+    llm_router: Router | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    custom_llm_provider: str | None,
+    target_model_names: str | None,
+    routed_model: str | None,
+) -> _ListedFiles | _UnscopedFileList:
+    if routed_model is not None and llm_router is not None:
+        return _files_serving_model(llm_router, routed_model)
+    if target_model_names:
+        target_model_name: Final = _single_target_model_name(target_model_names)
+        if isinstance(target_model_name, _UnscopedFileList):
+            return target_model_name
+        if llm_router is None:
+            return _UnscopedFileList(
+                status_code=500, detail="LLM Router not initialized. Ensure models added to proxy."
+            )
+        await get_authorized_credentials_for_model(
+            llm_router=llm_router,
+            model_id=target_model_name,
+            user_api_key_dict=user_api_key_dict,
+            operation_context="file list",
+        )
+        return _files_serving_model(llm_router, target_model_name)
+    if custom_llm_provider is None:
+        return _ListedFiles(None, None)
+    return _files_on_provider(llm_router, custom_llm_provider)
+
+
 @router.get(
     "/{provider}/v1/files",
     dependencies=[Depends(user_api_key_auth)],
@@ -1700,6 +1883,8 @@ async def list_files(
     purpose: str | None = None,
     limit: int | None = None,
     after: str | None = None,
+    after_id: str | None = None,
+    before_id: str | None = None,
 ):
     """
     Returns information about a specific file. that can be used across - Assistants API, Batch API 
@@ -1742,6 +1927,10 @@ async def list_files(
         )
 
         response: Any | None = None
+        owned_files_hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+        list_owned_files_only: Final = litellm.require_managed_files is True and not user_api_key_has_admin_view(
+            user_api_key_dict
+        )
 
         # Check for model-based credential routing (no file_id encoding check for list)
         should_route, model_used, _, credentials = await handle_model_based_routing(
@@ -1753,7 +1942,36 @@ async def list_files(
             check_file_id_encoding=False,
         )
 
-        if should_route and credentials is not None:
+        if list_owned_files_only:
+            if after and after_id and after != after_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Pass the list cursor as either 'after' or 'after_id', not both with different ids.",
+                )
+            if not isinstance(owned_files_hook, BaseFileEndpoints):
+                raise HTTPException(
+                    status_code=500,
+                    detail="Managed file listing is unavailable, so require_managed_files cannot scope the list to the caller.",
+                )
+            listed_files: Final = await _listed_files(
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+                custom_llm_provider=await _requested_custom_llm_provider(request=request, provider=provider),
+                target_model_names=target_model_names,
+                routed_model=model_used if should_route else None,
+            )
+            if isinstance(listed_files, _UnscopedFileList):
+                _raise_unscoped_file_list(listed_files)
+            response = await _list_owned_managed_files(  # rebind-ok: each dispatch branch binds response
+                managed_files_obj=owned_files_hook,
+                user_api_key_dict=user_api_key_dict,
+                purpose=purpose,
+                limit=limit if limit is not None else _default_file_list_limit(listed_files.custom_llm_provider),
+                after=after or after_id,
+                before=before_id,
+                model_scope=listed_files.model_scope,
+            )
+        elif should_route and credentials is not None:
             # Use model-based routing with credentials from config
             prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
             response = await litellm.afile_list(
@@ -1765,12 +1983,9 @@ async def list_files(
             verbose_proxy_logger.debug("Listed files using model: %s", model_used)
 
         elif target_model_names and isinstance(target_model_names, str):
-            target_model_names_list: Final = target_model_names.split(",")
-            if len(target_model_names_list) != 1:
-                raise HTTPException(
-                    status_code=400,
-                    detail="target_model_names on list files must be a list of one model name. Example: ['gpt-4o']",
-                )
+            target_model_name: Final = _single_target_model_name(target_model_names)
+            if isinstance(target_model_name, _UnscopedFileList):
+                _raise_unscoped_file_list(target_model_name)
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
@@ -1778,7 +1993,7 @@ async def list_files(
                 )
             credentials = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
-                model_id=target_model_names_list[0],
+                model_id=target_model_name,
                 user_api_key_dict=user_api_key_dict,
                 operation_context="file list",
             )
@@ -1789,20 +2004,17 @@ async def list_files(
                 **data,
             )
         else:
-            custom_llm_provider: Final = (
-                provider
-                or get_custom_llm_provider_from_request_headers(request=request)
-                or get_custom_llm_provider_from_request_query(request=request)
-                or await get_custom_llm_provider_from_request_body(request=request)
-            )
+            custom_llm_provider: Final = await _requested_custom_llm_provider(request=request, provider=provider)
             managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
             if custom_llm_provider is None and isinstance(managed_files_obj, BaseFileEndpoints):
-                response = await managed_files_obj.afile_list(
-                    purpose=purpose,
-                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                response = await _list_owned_managed_files(  # rebind-ok: each dispatch branch binds response
+                    managed_files_obj=managed_files_obj,
                     user_api_key_dict=user_api_key_dict,
+                    purpose=purpose,
                     limit=limit,
                     after=after,
+                    before=None,
+                    model_scope=None,
                 )
             else:
                 resolved_custom_llm_provider: Final = custom_llm_provider or "openai"

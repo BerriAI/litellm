@@ -4,10 +4,21 @@ Azure Anthropic transformation config - extends AnthropicConfig with Azure authe
 
 from typing import Final
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
+
+
+def azure_anthropic_messages_url(api_base: str) -> str:
+    base: Final = api_base.rstrip("/")
+    if base.endswith("/v1/messages"):
+        return base
+    path_start: Final = base.find("/", base.find("://") + len("://")) if "://" in base else 0
+    anthropic_start: Final = base.find("/anthropic", path_start) if path_start >= 0 else -1
+    anthropic_root: Final = base[:anthropic_start] if anthropic_start >= 0 else base
+    return join_api_base(anthropic_root, "anthropic/v1/messages")
 
 
 def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
@@ -96,9 +107,11 @@ class AzureAnthropicConfig(AnthropicConfig):
             is_vertex_request=optional_params.get("is_vertex_request", False),
             user_anthropic_beta_headers=user_anthropic_beta_headers,
             mcp_server_used=mcp_server_used,
+            thinking=optional_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # optional_params is the base config's bare dict
         )
         # Merge headers - Azure auth (api-key or Authorization) takes precedence
-        headers = {**anthropic_headers, **headers}
+        merged_beta_header: Final = {k: v for k, v in anthropic_headers.items() if k == "anthropic-beta"}
+        headers = {**anthropic_headers, **headers, **merged_beta_header}
 
         # Ensure anthropic-version header is set
         if "anthropic-version" not in headers:
