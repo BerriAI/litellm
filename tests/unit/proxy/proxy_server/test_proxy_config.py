@@ -73,7 +73,7 @@ def _db_model(model_id: str, model_name: str = "gpt-3.5-turbo") -> SimpleNamespa
 
 
 def test_yaml_settings_reload_keeps_db_general_settings_until_sync() -> None:
-    settings = SettingsStore("general_settings")
+    settings: Final = SettingsStore("general_settings")
     settings.apply_db_row("general_settings", {"max_file_downloads_per_minute": 2})
 
     _reload_settings_store("general_settings", settings, {})
