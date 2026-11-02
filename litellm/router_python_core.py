@@ -180,7 +180,7 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
     resolve_supported_reasoning_efforts,
 )
 from litellm.litellm_core_utils.request_timeout_resolver import (
-    get_configured_request_timeout,
+    configured_request_timeout,
     get_service_tier_timeout,
 )
 from litellm.litellm_core_utils.routing_common_utils import (
@@ -366,6 +366,7 @@ from litellm.router_utils.fallback_event_handlers import (
     mid_stream_fallback_hop_kwargs,
     mid_stream_fallback_snapshot_kwargs,
     mid_stream_retry_kwargs,
+    non_stream_fallback_answer_as_chunk,
     per_request_fallback_controls,
     record_disable_fallbacks,
     record_pre_routing_selection,
@@ -699,6 +700,12 @@ _NO_DEFAULT_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+# The router strategies whose pick runs the pre-routing hook (`_async_get_available_deployment`).
+_PRE_ROUTING_PICK_STRATEGIES: Final = frozenset(
+    {"usage-based-routing-v2", "simple-shuffle", "cost-based-routing", "latency-based-routing", "least-busy"}
+)
+# The generic calls (sync and async) resolve their timeout with the LLM pass-through resolver.
+_GENERIC_CALL_FUNCTION_NAMES: Final = frozenset({"_ageneric_api_call_with_fallbacks", "generic_api_call"})
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
@@ -2083,7 +2090,7 @@ class PythonCore(DeprecatedRouterMembers):
         # Per-attempt request_timeout, independent of router_settings.timeout.
         # Only stored when a router timeout is also set, since otherwise
         # request_timeout already flows through self.timeout above.
-        self.request_timeout = get_configured_request_timeout() if timeout is not None else None
+        self.request_timeout = self._process_request_timeout() if timeout is not None else None
         self.stream_timeout = stream_timeout
 
         self.retry_after = retry_after
@@ -2972,16 +2979,13 @@ class PythonCore(DeprecatedRouterMembers):
         if selector is None:
             return None
 
-        # `cost-based-routing` is intentionally omitted —
-        # `LowestCostLoggingHandler` only implements
-        # `async_get_available_deployments`
         match strategy:
             case "least-busy":
                 return selector.get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
                 )
-            case "usage-based-routing" | "usage-based-routing-v2":
+            case "usage-based-routing" | "usage-based-routing-v2" | "cost-based-routing":
                 return selector.get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
@@ -3411,6 +3415,7 @@ class PythonCore(DeprecatedRouterMembers):
                 model_client = None
             else:
                 model_client = potential_model_client
+            self.total_calls[model_name] += 1  # pyright: ignore[reportUnknownMemberType]  # the legacy untyped router core
 
             ### DEPLOYMENT-SPECIFIC PRE-CALL CHECKS ### (e.g. update rpm pre-call. Raise error, if deployment over limit)
             ## only run if model group given, not model id
@@ -3427,6 +3432,7 @@ class PythonCore(DeprecatedRouterMembers):
                 }
             )
             response: Final = self._host.invoke("completion")(**input_kwargs)
+            self.success_calls[model_name] += 1  # pyright: ignore[reportUnknownMemberType]  # the legacy untyped router core
             verbose_router_logger.info("litellm.completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
             ## CHECK CONTENT FILTER ERROR ##
@@ -3459,6 +3465,8 @@ class PythonCore(DeprecatedRouterMembers):
             return response
         except Exception as e:
             verbose_router_logger.info("litellm.completion(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
+            if model_name is not None:
+                self.fail_calls[model_name] += 1  # pyright: ignore[reportUnknownMemberType]  # the legacy untyped router core
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
@@ -3734,6 +3742,17 @@ class PythonCore(DeprecatedRouterMembers):
         return prepared
 
     @staticmethod
+    def _non_stream_fallback_item(
+        wrapper_ref: "weakref.ref[FallbackAwareStreamWrapper]", fallback_response: object
+    ) -> object:
+        """The one item a stream yields for a fallback that answered without a stream: its
+        response as a stream chunk, carrying the fallback's hidden params and headers."""
+        prepared: Final = PythonCore._adopt_fallback_response_headers(wrapper_ref, fallback_response)
+        item: Final = non_stream_fallback_answer_as_chunk(fallback_response)
+        PythonCore._apply_fallback_hidden_params_to_item(item, prepared)
+        return item
+
+    @staticmethod
     def _apply_fallback_hidden_params_to_item(
         fallback_item: object,
         prepared_fallback_hidden_params: tuple[dict[str, object], dict[str, object]],
@@ -3949,8 +3968,7 @@ class PythonCore(DeprecatedRouterMembers):
                                 )
                             yield fallback_item
                     else:
-                        # If fallback returns a non-streaming response, yield None
-                        yield None
+                        yield PythonCore._non_stream_fallback_item(wrapper_ref, fallback_response)  # pyright: ignore[reportAny]  # the legacy untyped router core
 
                 except Exception as fallback_error:
                     # If fallback also fails, log and re-raise original error
@@ -4710,7 +4728,7 @@ class PythonCore(DeprecatedRouterMembers):
                     initial_kwargs["messages"] = messages
                     router_self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
                     fallback_response = run_async_function(
-                        router_self.async_function_with_fallbacks_common_utils,
+                        router_self.async_function_with_fallbacks_common_utils,  # pyright: ignore[reportUnknownArgumentType]  # the legacy untyped router core
                         e=e.original_exception
                         if isinstance(e.original_exception, litellm_exceptions.ContextWindowExceededError)
                         else e,
@@ -4724,7 +4742,7 @@ class PythonCore(DeprecatedRouterMembers):
                         include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
                     )
 
-                    if hasattr(fallback_response, "__iter__"):
+                    if hasattr(fallback_response, "__iter__") and not isinstance(fallback_response, ModelResponse):  # pyright: ignore[reportUnknownArgumentType]  # the legacy untyped router core
                         prepared_fallback_hidden_params = PythonCore._adopt_fallback_response_headers(
                             wrapper_ref, fallback_response
                         )
@@ -4747,7 +4765,7 @@ class PythonCore(DeprecatedRouterMembers):
                                 router_self._combine_fallback_usage(fallback_item, None)
                             yield fallback_item
                     else:
-                        yield None
+                        yield PythonCore._non_stream_fallback_item(wrapper_ref, fallback_response)  # pyright: ignore[reportUnknownArgumentType]  # the legacy untyped router core
 
                 except Exception as fallback_error:
                     verbose_router_logger.error("Fallback also failed: %s", fallback_error)
@@ -4766,9 +4784,9 @@ class PythonCore(DeprecatedRouterMembers):
                             "stream_with_fallbacks: error closing model_response: %s",
                             close_err,
                         )
-                if fallback_response is not None and hasattr(fallback_response, "close"):
+                if fallback_response is not None and hasattr(fallback_response, "close"):  # pyright: ignore[reportUnknownArgumentType]  # the legacy untyped router core
                     try:
-                        fallback_response.close()
+                        fallback_response.close()  # pyright: ignore[reportAttributeAccessIssue]  # a stream wrapper, closed when it has close()
                     except BaseException as close_err:
                         verbose_router_logger.debug(
                             "stream_with_fallbacks: error closing fallback_response: %s",
@@ -5299,17 +5317,19 @@ class PythonCore(DeprecatedRouterMembers):
 
         kwargs["model_info"] = model_info
 
-        if function_name == "_ageneric_api_call_with_fallbacks":
+        if function_name in _GENERIC_CALL_FUNCTION_NAMES:
             from litellm.passthrough.timeout_utils import (
                 resolve_llm_passthrough_timeout,
             )
 
+            # The process request_timeout is read through the host; it ranks right after the
+            # router timeout, as resolve_llm_passthrough_timeout ranks it.
             _router_timeout: Final = (
                 self.request_timeout
                 if self.request_timeout is not None
                 else float(self._explicit_timeout)
                 if isinstance(self._explicit_timeout, (int, float))
-                else None
+                else self._process_request_timeout()
             )
             _router_stream_timeout: Final = (
                 self.stream_timeout
@@ -5380,6 +5400,11 @@ class PythonCore(DeprecatedRouterMembers):
             kwargs["input"] = responses_continuation_input_for(  # rebind-ok: the deployment's continuation input
                 hop_kwargs, _FALLBACK_HOP_ADAPTER.validate_python(deployment)
             )
+
+    def _process_request_timeout(self) -> float | None:
+        """The host's explicitly configured process ``request_timeout``, else None."""
+        dynamic: Final = self._host.dynamic()
+        return configured_request_timeout(dynamic.request_timeout, dynamic.request_timeout_explicitly_set)
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
         """
@@ -5926,7 +5951,7 @@ class PythonCore(DeprecatedRouterMembers):
             raise e
 
     def _image_generation(self, prompt: str, model: str, **kwargs):
-        model_name: Final = ""
+        model_name = model  # rebind-ok: the group until a deployment is picked, as in _aimage_generation
         try:
             verbose_router_logger.debug("Inside _image_generation()- model: %s", model)
             deployment: Final = self.get_available_deployment(
@@ -5937,6 +5962,7 @@ class PythonCore(DeprecatedRouterMembers):
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data: Final = deployment["litellm_params"].copy()
+            model_name = data["model"]  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: the picked deployment's model, as in _aimage_generation
 
             model_client: Final = self._get_async_openai_model_client(
                 deployment=deployment,
@@ -5958,10 +5984,10 @@ class PythonCore(DeprecatedRouterMembers):
                 }
             )
             self.success_calls[model_name] += 1
-            verbose_router_logger.info("litellm.image_generation(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
+            verbose_router_logger.info("litellm.image_generation(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)  # pyright: ignore[reportUnknownArgumentType]  # the legacy untyped router core
             return response
         except Exception as e:
-            verbose_router_logger.info("litellm.image_generation(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
+            verbose_router_logger.info("litellm.image_generation(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)  # pyright: ignore[reportUnknownArgumentType]  # the legacy untyped router core
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
@@ -6300,37 +6326,64 @@ class PythonCore(DeprecatedRouterMembers):
         is_async: bool | None = False,
         **kwargs,
     ):
-        messages: Final = [{"role": "user", "content": prompt}]
-        try:
-            kwargs["model"] = model
-            kwargs["prompt"] = prompt
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+        """The sync twin of `atext_completion`: picks, shapes, retries and falls back the same way."""
+        kwargs["model"] = model  # rebind-ok: the request kwargs, shaped in place as atext_completion shapes them
+        kwargs["prompt"] = prompt  # rebind-ok: same
+        kwargs["original_function"] = self._text_completion  # rebind-ok: same
+        self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)  # pyright: ignore[reportUnknownMemberType]  # the legacy untyped router core
+        return self.function_with_fallbacks(**kwargs)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # the legacy untyped router core
 
-            # pick the one that is available (lowest TPM/RPM)
-            with endpoint_selection("text_completion", model=model):
-                deployment: Final = self.get_available_deployment(
-                    model=model,
-                    messages=messages,
-                    specific_deployment=kwargs.pop("specific_deployment", None),
-                    request_kwargs=kwargs,
-                )
+    def _text_completion(
+        self,
+        model: str,
+        prompt: str,
+        **kwargs: object,  # kwargs-ok: the request kwargs, sent on to the deployment
+    ) -> object:
+        try:
+            verbose_router_logger.debug("Inside _text_completion()- model: %s", model)
+            deployment: Final = self.get_available_deployment(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the legacy untyped router core
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                specific_deployment=kwargs.pop("specific_deployment", None),  # pyright: ignore[reportArgumentType]  # the legacy untyped router core
+                request_kwargs=kwargs,
+            )
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, splits_stream_timeout=True)  # pyright: ignore[reportUnknownMemberType]  # the legacy untyped router core
 
             data: Final = deployment["litellm_params"].copy()
-            for k, v in self._core_default_litellm_params.items():
-                if k not in kwargs:  # prioritize model-specific params > default router params
-                    kwargs[k] = v
-                elif k == "metadata":
-                    kwargs[k].update(v)
-            pinned_model_id: Final = deployment_model_id_pin(_LITELLM_PARAMS_ADAPTER.validate_python(data))
-            if pinned_model_id is not None:
-                kwargs["model_id"] = pinned_model_id  # rebind-ok: this call's own kwargs, filled like the defaults
+            model_name: Final = data["model"]  # pyright: ignore[reportUnknownVariableType]  # the legacy untyped router core
 
-            # call via litellm.completion()
-            return self._host.invoke("text_completion")(
-                **{**data, "prompt": prompt, "caching": self._core_cache_responses, **kwargs}
+            potential_model_client: Final = self._get_client(deployment=deployment, kwargs=kwargs, client_type="sync")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the legacy untyped router core
+            dynamic_api_key: Final = kwargs.get("api_key", None)
+            model_client: Final = (  # pyright: ignore[reportUnknownVariableType]  # the legacy untyped router core
+                None
+                if dynamic_api_key is not None
+                and potential_model_client is not None
+                and dynamic_api_key != potential_model_client.api_key  # pyright: ignore[reportUnknownMemberType]  # the legacy untyped router core
+                else potential_model_client
             )
+            self.total_calls[model_name] += 1  # pyright: ignore[reportUnknownMemberType]  # the legacy untyped router core
+
+            ### DEPLOYMENT-SPECIFIC PRE-CALL CHECKS ### (e.g. update rpm pre-call. Raise error, if deployment over limit)
+            self.routing_strategy_pre_call_checks(deployment=deployment)  # pyright: ignore[reportUnknownMemberType]  # the legacy untyped router core
+
+            response: Final = self._host.invoke("text_completion")(  # pyright: ignore[reportUnknownMemberType]  # the legacy untyped router core
+                **{
+                    **data,
+                    "prompt": prompt,
+                    "caching": self._core_cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
+
+            self.success_calls[model_name] += 1  # pyright: ignore[reportUnknownMemberType]  # the legacy untyped router core
+            verbose_router_logger.info("litellm.text_completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)  # pyright: ignore[reportUnknownArgumentType]  # the legacy untyped router core
+            return response
         except Exception as e:
+            verbose_router_logger.info("litellm.text_completion(model=%s)\x1b[31m Exception %s\x1b[0m", model, e)
+            if model is not None:  # pyright: ignore[reportUnnecessaryComparison]  # the legacy untyped router core
+                self.fail_calls[model] += 1  # pyright: ignore[reportUnknownMemberType]  # the legacy untyped router core
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def atext_completion(
@@ -7476,8 +7529,11 @@ class PythonCore(DeprecatedRouterMembers):
 
             # For passthrough routes, use the actual model from deployment
             # and swap model name in endpoint if present
-            if "endpoint" in kwargs and kwargs["endpoint"]:
-                kwargs["endpoint"] = kwargs["endpoint"].replace(model, model_name)
+            self._add_deployment_model_to_endpoint_for_llm_passthrough_route(
+                kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # the legacy untyped router core
+                model=model,
+                model_name=model_name,  # pyright: ignore[reportUnknownArgumentType]  # the legacy untyped router core
+            )
             kwargs["model"] = model_name
 
             # Perform pre-call checks for routing strategy
@@ -9473,7 +9529,7 @@ class PythonCore(DeprecatedRouterMembers):
 
         Wrapped to reduce code duplication and prevent bugs.
         """
-        return run_async_function(self.async_function_with_fallbacks, *args, **kwargs)
+        return run_async_function(self.async_function_with_fallbacks, *args, **kwargs)  # pyright: ignore[reportUnknownArgumentType]  # the legacy untyped router core
 
     def _get_fallback_model_group_for_lookup_groups(
         self,
@@ -10232,11 +10288,22 @@ class PythonCore(DeprecatedRouterMembers):
         - None
 
         Raises:
-        - Rate Limit Exception - If the deployment is over it's tpm/rpm limits
+        - Rate Limit Exception - If the deployment is over it's tpm/rpm limits; the deployment is
+          cooled down first, as on the async path
         """
         for _callback in self._routing_callbacks():
             if isinstance(_callback, CustomLogger):
-                _callback.pre_call_check(deployment)
+                try:
+                    _callback.pre_call_check(deployment)  # pyright: ignore[reportUnknownMemberType]  # the legacy untyped router core
+                except litellm_exceptions.RateLimitError as e:
+                    set_cooldown_deployments(
+                        ctx=self._core_ctx,
+                        exception_status=e.status_code,
+                        original_exception=e,
+                        deployment=deployment["model_info"]["id"],  # pyright: ignore[reportUnknownArgumentType]  # the legacy untyped router core
+                        time_to_cooldown=self._core_cooldown_time,
+                    )
+                    raise
 
     async def async_routing_strategy_pre_call_checks(
         self,
@@ -16234,6 +16301,18 @@ class PythonCore(DeprecatedRouterMembers):
         )
         return registered_model_name
 
+    def _core_sync_pick_pre_routes(self) -> bool:
+        """Whether the sync pick runs the pre-routing hook: a strategy router is registered and the
+        router strategy is one whose async pick runs the hook too (see `_async_get_available_deployment`)."""
+        return self._core_routing_strategy in _PRE_ROUTING_PICK_STRATEGIES and any(
+            (
+                self._core_auto_routers,
+                self._core_complexity_routers,
+                self._core_adaptive_routers,
+                self._core_quality_routers,
+            )
+        )
+
     async def _core_async_pre_routing_hook(
         self,
         model: str,
@@ -16646,6 +16725,33 @@ class PythonCore(DeprecatedRouterMembers):
                 "usage-based-routing-v2, cost-based-routing, latency-based-routing, least-busy), "
                 "or remove `plugins` from the Router config."
             )
+        if self._core_sync_pick_pre_routes():
+            # The async pick's pre-routing hook (auto/complexity/adaptive/quality routers), run to
+            # completion from the sync pick, so a strategy router serves sync calls too.
+            hook_kwargs: Final[dict[str, object]] = (  # pyright: ignore[reportUnknownVariableType]  # mutable-ok: the request kwargs the hook stamps
+                request_kwargs if request_kwargs is not None else {}
+            )
+            responses_call: Final = input is not None and messages is None
+            pre_routed: Final = run_async_function(
+                partial(
+                    self._core_async_pre_routing_hook,  # pyright: ignore[reportUnknownMemberType]  # the legacy untyped router core
+                    model=model,
+                    request_kwargs=hook_kwargs,
+                    messages=messages,
+                    input=input,
+                    specific_deployment=specific_deployment,
+                )
+            )
+            if pre_routed is not None:
+                model = pre_routed.model  # rebind-ok: the tier group the strategy picked, as the async pick rebinds it
+                messages = pre_routed.messages  # rebind-ok: same
+                record_pre_routing_selection(hook_kwargs, model)
+            self._pin_tier_params_onto_request(  # pyright: ignore[reportUnknownMemberType]  # the legacy untyped router core
+                model=model,
+                tier_litellm_params=pre_routed.litellm_params if pre_routed is not None else None,
+                request_kwargs=hook_kwargs,
+                responses_call=responses_call,
+            )
         # users need to explicitly call a specific deployment, by setting `specific_deployment = True` as completion()/embedding() kwarg
         # When this was no explicit we had several issues with fallbacks timing out
 
@@ -16926,7 +17032,7 @@ class PythonCore(DeprecatedRouterMembers):
         if len(pass_through_deployments) == 0:
             # No deployments support pass-through
             raise litellm_exceptions.BadRequestError(
-                message=f"Model {model} has no deployment configured with use_in_pass_through=True. Please add use_in_pass_through: true in the deployment configuration",
+                message=f"Model {model} has no deployments configured with use_in_pass_through=True. Please add use_in_pass_through: true to the deployment configuration",
                 model=model,
                 llm_provider="",
             )

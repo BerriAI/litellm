@@ -8,7 +8,7 @@ the same precedence and the same oddities. Nothing here reads a Python router.
 """
 
 import dataclasses
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -62,6 +62,8 @@ _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS: Final = frozenset({"chatgpt", "anthro
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
 # Generic handlers whose stream timeout is split from the request timeout.
 STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS: Final = frozenset({"anthropic_messages", "aresponses", "responses"})
+# The generic calls (sync and async) resolve their timeout with the LLM pass-through resolver.
+GENERIC_CALL_FUNCTION_NAMES: Final = frozenset({"_ageneric_api_call_with_fallbacks", "generic_api_call"})
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -70,7 +72,8 @@ class Shaping:
 
     ``timeout`` is the router's ``timeout`` (its own setting, else the process ``request_timeout``),
     ``request_timeout`` the explicitly configured process ``request_timeout``, kept only when the
-    router has a timeout of its own, as the Python router keeps them."""
+    router has a timeout of its own, as the Python router keeps them; ``process_request_timeout``
+    reads the host's explicitly configured process ``request_timeout`` at call time."""
 
     default_litellm_params: Mapping[str, object]
     timeout: object
@@ -78,6 +81,7 @@ class Shaping:
     request_timeout: float | None
     stream_timeout: object
     cache_responses: bool
+    process_request_timeout: Callable[[], float | None] = lambda: None
 
 
 def as_dict(value: object) -> dict[str, object]:  # mutable-ok: a fresh dict of a request mapping
@@ -532,15 +536,17 @@ def _set_timeouts(
     function_name: str | None,
     splits_stream_timeout: bool,
 ) -> None:
-    if function_name == "_ageneric_api_call_with_fallbacks":
+    if function_name in GENERIC_CALL_FUNCTION_NAMES:
         from litellm.passthrough.timeout_utils import resolve_llm_passthrough_timeout
 
+        # The process request_timeout, read through the host, ranks right after the router timeout,
+        # as resolve_llm_passthrough_timeout ranks it.
         router_timeout: Final = (
             shaping.request_timeout
             if shaping.request_timeout is not None
             else float(shaping.explicit_timeout)
             if isinstance(shaping.explicit_timeout, (int, float))
-            else None
+            else shaping.process_request_timeout()
         )
         router_stream_timeout: Final = (
             shaping.stream_timeout

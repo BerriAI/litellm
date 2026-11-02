@@ -281,13 +281,14 @@ def pick_sync(
     input: object,
     request_kwargs: dict[str, object] | None,  # mutable-ok: see pick_async
 ) -> object:
-    """``_select_deployment_sync``: cost-based routing has no sync pick."""
+    """``_select_deployment_sync``."""
     match selector:
         case LeastBusyLoggingHandler() if strategy == "least-busy":
             return selector.get_available_deployments(model_group=model, healthy_deployments=deployments)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selectors return untyped deployment dicts
-        case LowestTPMLoggingHandler() | LowestTPMLoggingHandler_v2() if strategy in (
+        case LowestTPMLoggingHandler() | LowestTPMLoggingHandler_v2() | LowestCostLoggingHandler() if strategy in (
             "usage-based-routing",
             "usage-based-routing-v2",
+            "cost-based-routing",
         ):
             return selector.get_available_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selectors return untyped deployment dicts
                 model_group=model,

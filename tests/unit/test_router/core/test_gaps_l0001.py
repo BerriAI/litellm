@@ -364,11 +364,13 @@ async def test_an_override_matching_a_routing_group_strategy_is_not_bound_to_the
 
 def test_a_sync_usage_based_v2_override_counts_rpm_before_the_call(make_core: MakeCore, host: ScriptedHost) -> None:
     """The override selector is on no callback list, so the sync pick runs its pre-call check itself:
-    the first call is counted against ``rpm=1`` and the next pick finds no deployment. Oddity: the sync
-    path raises a bare ``ValueError`` where the async one raises ``RateLimitError``."""
+    the first call is counted against ``rpm=1`` and the next pick finds no deployment, raising the same
+    ``RateLimitError`` as the async path."""
     core: Final = make_core(model_list=[deployment("g", "a", rpm=1)], num_retries=0)
     core.completion(model="g", messages=MESSAGES, routing_strategy="usage-based-routing-v2")  # pyright: ignore[reportAttributeAccessIssue]
-    with pytest.raises(ValueError, match=re.escape("No deployments available for selected model. Passed model=g.")):
+    with pytest.raises(  # pyright: ignore[reportUnknownMemberType]  # pytest and the cores' untyped members
+        litellm.RateLimitError, match=re.escape("No deployments available for selected model. Passed model=g.")
+    ):
         core.completion(model="g", messages=MESSAGES, routing_strategy="usage-based-routing-v2")  # pyright: ignore[reportAttributeAccessIssue]
     assert host.deployments_called() == ["a"]
 
@@ -424,22 +426,31 @@ def test_sync_completion_under_latency_based_routing_reaches_the_group(make_core
     assert len(host.calls) == 10
 
 
-def test_sync_completion_under_cost_based_routing_finds_no_deployment(make_core: MakeCore, host: ScriptedHost) -> None:
-    """Oddity: the cost-based selector has no sync pick, so every sync pick under cost-based routing
-    rate-limits without calling a provider."""
+def test_sync_completion_under_cost_based_routing_picks_the_cheapest_deployment(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    """The cost-based selector picks on the sync path as it does on the async one."""
     core: Final = make_core(
-        model_list=[deployment("g", "a"), deployment("g", "b")], routing_strategy="cost-based-routing", num_retries=0
+        model_list=[
+            deployment("g", "a", input_cost_per_token=0.5, output_cost_per_token=0.5),
+            deployment("g", "b", input_cost_per_token=0.1, output_cost_per_token=0.1),
+        ],
+        routing_strategy="cost-based-routing",
+        num_retries=0,
     )
-    with pytest.raises(RouterRateLimitError) as raised:
+    for _ in range(3):
         core.completion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]
-    assert str(raised.value) == NO_DEPLOYMENTS_MESSAGE.format(model="g")
-    assert host.calls == []
+    assert host.deployments_called() == ["b", "b", "b"]
 
 
 @pytest.mark.asyncio
-async def test_pass_through_pick_under_cost_based_routing_finds_no_deployment(make_core: MakeCore) -> None:
+async def test_pass_through_pick_under_cost_based_routing_picks_the_cheapest_deployment(make_core: MakeCore) -> None:
     core: Final = make_core(
-        model_list=[deployment("g", "a", use_in_pass_through=True)], routing_strategy="cost-based-routing"
+        model_list=[
+            deployment("g", "a", use_in_pass_through=True, input_cost_per_token=0.5, output_cost_per_token=0.5),
+            deployment("g", "b", use_in_pass_through=True, input_cost_per_token=0.1, output_cost_per_token=0.1),
+        ],
+        routing_strategy="cost-based-routing",
     )
-    with pytest.raises(RouterRateLimitError):
-        await core.select("g", kind="pass_through")
+    picked: Final = await core.select("g", kind="pass_through")  # pyright: ignore[reportCallIssue, reportUnknownVariableType]  # pytest and the cores' untyped members
+    assert picked["model_info"]["id"] == "b"  # pyright: ignore[reportIndexIssue, reportCallIssue, reportArgumentType]

@@ -469,6 +469,68 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             [f"{prefix}:rpm:{current_minute}" for prefix in prefixes],
         )
 
+    def _no_deployments_available_error(
+        self,
+        model_group: str,
+        healthy_deployments: Sequence[object],
+        tpm_values: Sequence[object] | None,
+        rpm_values: Sequence[object] | None,
+    ) -> litellm.RateLimitError:
+        """The error both the sync and the async pick raise when no deployment is under its limits."""
+        ### GET THE DICT OF TPM / RPM + LIMITS PER DEPLOYMENT ###
+        deployment_dict: Final = {}
+        for index, _deployment in enumerate(healthy_deployments):
+            if isinstance(_deployment, dict):
+                id = _deployment.get("model_info", {}).get("id")
+                ### GET DEPLOYMENT TPM LIMIT ###
+                _deployment_tpm = None
+                if _deployment_tpm is None:
+                    _deployment_tpm = _deployment.get("tpm", None)
+                if _deployment_tpm is None:
+                    _deployment_tpm = _deployment.get("litellm_params", {}).get("tpm", None)
+                if _deployment_tpm is None:
+                    _deployment_tpm = _deployment.get("model_info", {}).get("tpm", None)
+                if _deployment_tpm is None:
+                    _deployment_tpm = float("inf")
+
+                ### GET CURRENT TPM ###
+                current_tpm = tpm_values[index] if tpm_values else 0
+
+                ### GET DEPLOYMENT TPM LIMIT ###
+                _deployment_rpm = None
+                if _deployment_rpm is None:
+                    _deployment_rpm = _deployment.get("rpm", None)
+                if _deployment_rpm is None:
+                    _deployment_rpm = _deployment.get("litellm_params", {}).get("rpm", None)
+                if _deployment_rpm is None:
+                    _deployment_rpm = _deployment.get("model_info", {}).get("rpm", None)
+                if _deployment_rpm is None:
+                    _deployment_rpm = float("inf")
+
+                ### GET CURRENT RPM ###
+                current_rpm = rpm_values[index] if rpm_values else 0
+
+                deployment_dict[id] = {
+                    "current_tpm": current_tpm,
+                    "tpm_limit": _deployment_tpm,
+                    "current_rpm": current_rpm,
+                    "rpm_limit": _deployment_rpm,
+                }
+        return litellm.RateLimitError(
+            message=f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. Deployments={deployment_dict}",
+            llm_provider="",
+            model=model_group,
+            response=httpx.Response(
+                status_code=429,
+                content="",
+                headers={"retry-after": str(60)},
+                request=httpx.Request(
+                    method="tpm_rpm_limits",
+                    url="https://github.com/BerriAI/litellm",
+                ),
+            ),
+        )
+
     @with_service_target("router_usage")
     async def async_get_available_deployments(
         self,
@@ -520,63 +582,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             input=input,
         )
 
-        try:
-            assert deployment is not None
-            return deployment
-        except Exception:
-            ### GET THE DICT OF TPM / RPM + LIMITS PER DEPLOYMENT ###
-            deployment_dict: Final = {}
-            for index, _deployment in enumerate(healthy_deployments):
-                if isinstance(_deployment, dict):
-                    id = _deployment.get("model_info", {}).get("id")
-                    ### GET DEPLOYMENT TPM LIMIT ###
-                    _deployment_tpm = None
-                    if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("tpm", None)
-                    if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("litellm_params", {}).get("tpm", None)
-                    if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("model_info", {}).get("tpm", None)
-                    if _deployment_tpm is None:
-                        _deployment_tpm = float("inf")
-
-                    ### GET CURRENT TPM ###
-                    current_tpm = tpm_values[index] if tpm_values else 0
-
-                    ### GET DEPLOYMENT TPM LIMIT ###
-                    _deployment_rpm = None
-                    if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("rpm", None)
-                    if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("litellm_params", {}).get("rpm", None)
-                    if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("model_info", {}).get("rpm", None)
-                    if _deployment_rpm is None:
-                        _deployment_rpm = float("inf")
-
-                    ### GET CURRENT RPM ###
-                    current_rpm = rpm_values[index] if rpm_values else 0
-
-                    deployment_dict[id] = {
-                        "current_tpm": current_tpm,
-                        "tpm_limit": _deployment_tpm,
-                        "current_rpm": current_rpm,
-                        "rpm_limit": _deployment_rpm,
-                    }
-            raise litellm.RateLimitError(
-                message=f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. Deployments={deployment_dict}",
-                llm_provider="",
-                model=model_group,
-                response=httpx.Response(
-                    status_code=429,
-                    content="",
-                    headers={"retry-after": str(60)},
-                    request=httpx.Request(
-                        method="tpm_rpm_limits",
-                        url="https://github.com/BerriAI/litellm",
-                    ),
-                ),
-            )
+        if deployment is None:
+            raise self._no_deployments_available_error(model_group, healthy_deployments, tpm_values, rpm_values)  # pyright: ignore[reportUnknownArgumentType]  # the untyped cached usage lists
+        return deployment
 
     @with_service_target("router_usage")
     def get_available_deployments(
@@ -631,49 +639,6 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             input=input,
         )
 
-        try:
-            assert deployment is not None
-            return deployment
-        except Exception:
-            ### GET THE DICT OF TPM / RPM + LIMITS PER DEPLOYMENT ###
-            deployment_dict: Final = {}
-            for index, _deployment in enumerate(healthy_deployments):
-                if isinstance(_deployment, dict):
-                    id = _deployment.get("model_info", {}).get("id")
-                    ### GET DEPLOYMENT TPM LIMIT ###
-                    _deployment_tpm = None
-                    if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("tpm", None)
-                    if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("litellm_params", {}).get("tpm", None)
-                    if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("model_info", {}).get("tpm", None)
-                    if _deployment_tpm is None:
-                        _deployment_tpm = float("inf")
-
-                    ### GET CURRENT TPM ###
-                    current_tpm = tpm_values[index] if tpm_values else 0
-
-                    ### GET DEPLOYMENT TPM LIMIT ###
-                    _deployment_rpm = None
-                    if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("rpm", None)
-                    if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("litellm_params", {}).get("rpm", None)
-                    if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("model_info", {}).get("rpm", None)
-                    if _deployment_rpm is None:
-                        _deployment_rpm = float("inf")
-
-                    ### GET CURRENT RPM ###
-                    current_rpm = rpm_values[index] if rpm_values else 0
-
-                    deployment_dict[id] = {
-                        "current_tpm": current_tpm,
-                        "tpm_limit": _deployment_tpm,
-                        "current_rpm": current_rpm,
-                        "rpm_limit": _deployment_rpm,
-                    }
-            raise ValueError(
-                f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. Deployments={deployment_dict}"
-            )
+        if deployment is None:
+            raise self._no_deployments_available_error(model_group, healthy_deployments, tpm_values, rpm_values)  # pyright: ignore[reportUnknownArgumentType]  # the untyped cached usage lists
+        return deployment

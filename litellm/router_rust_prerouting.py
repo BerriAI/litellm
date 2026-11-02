@@ -705,6 +705,10 @@ class PreRouter:
 
     # -- the step --------------------------------------------------------------------------------
 
+    def has_strategy_routers(self) -> bool:
+        """Whether any auto, complexity, adaptive or quality router is registered."""
+        return self._strategies.any_registered()
+
     async def pre_route(
         self,
         model: str,

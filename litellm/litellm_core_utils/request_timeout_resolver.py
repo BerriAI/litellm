@@ -26,8 +26,14 @@ def get_configured_request_timeout() -> float | None:
     """Return the explicitly-configured ``litellm.request_timeout``, else ``None``."""
     import litellm
 
-    timeout: Final = float(litellm.request_timeout)
-    if litellm.request_timeout_explicitly_set:
+    return configured_request_timeout(litellm.request_timeout, litellm.request_timeout_explicitly_set)
+
+
+def configured_request_timeout(request_timeout: float, explicitly_set: bool) -> float | None:
+    """``get_configured_request_timeout`` for a process ``request_timeout`` read elsewhere (a router
+    host's process settings): the value when it was configured, else ``None``."""
+    timeout: Final = float(request_timeout)
+    if explicitly_set:
         return timeout
     if timeout != float(DEFAULT_REQUEST_TIMEOUT_SECONDS):
         return timeout

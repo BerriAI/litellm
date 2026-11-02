@@ -184,11 +184,15 @@ def _as_dict(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, dict) else None  # pyright: ignore[reportUnknownVariableType]  # the argument dict, as passed
 
 
-def request_timeout(config: "RouterConfig") -> float | None:
-    """The per-attempt ``request_timeout``: only stored when a router timeout is also set."""
-    from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
+def request_timeout(config: "RouterConfig", host: "PythonHost") -> float | None:
+    """The per-attempt ``request_timeout``: the host's configured process ``request_timeout``, only
+    stored when a router timeout is also set."""
+    from litellm.litellm_core_utils.request_timeout_resolver import configured_request_timeout
 
-    return get_configured_request_timeout() if config.get("timeout") is not None else None
+    if config.get("timeout") is None:
+        return None
+    dynamic: Final = host.dynamic()
+    return configured_request_timeout(dynamic.request_timeout, dynamic.request_timeout_explicitly_set)
 
 
 def apply_construction_effects(config: "RouterConfig", host: "PythonHost") -> None:

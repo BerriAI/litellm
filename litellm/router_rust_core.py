@@ -424,6 +424,19 @@ def failure_kind(error: BaseException) -> str:
     return next((name for name in names if name in _FAILURE_KINDS), "APIError")
 
 
+def _crate_int(value: object) -> int | None:
+    """A count setting kept as given, as the crate reads it: an int, or a number spelled another way
+    (``1.5``, ``"3"``, ``"1e-05"``) truncated to one; None (the crate's default) when it is no number."""
+    if value is None or isinstance(value, bool):
+        return None if value is None else int(value)
+    if isinstance(value, int):
+        return value
+    try:
+        return int(float(str(value)))
+    except (ValueError, OverflowError):
+        return None
+
+
 def _retry_after_seconds(error: BaseException) -> float | None:
     response: Final = getattr(error, "response", None)
     headers: Final[object] = getattr(error, "litellm_response_headers", None) or getattr(response, "headers", None)
@@ -490,15 +503,18 @@ class Resolved:
 
     routing_strategy: str | None
     routing_strategy_args: Mapping[str, object]
-    num_retries: int
-    max_fallbacks: int
-    allowed_fails: int
-    explicit_allowed_fails: int | None
+    # `num_retries`, `max_fallbacks` and `allowed_fails` as the Python core stores them: as given
+    # (the crate reads them through `_crate_int`).
+    num_retries: object
+    max_fallbacks: object
+    allowed_fails: object
+    explicit_allowed_fails: object
     cooldown_time: float
     disable_cooldowns: bool | None
     allowed_fails_policy: object
-    retry_after: float
-    timeout: float | None
+    # `retry_after` and `timeout` as the Python core stores them: as given (an int stays an int).
+    retry_after: object
+    timeout: object
     fallbacks: list[object] | None  # mutable-ok: the setting as Python spells it
     context_window_fallbacks: list[object] | None  # mutable-ok: same
     content_policy_fallbacks: list[object] | None  # mutable-ok: same
@@ -535,15 +551,19 @@ class Resolved:
             list(_as_list(get("fallbacks"))) or (dynamic.fallbacks if dynamic.fallbacks else None)  # pyright: ignore[reportAssignmentType]  # the process list as given
         )
         refuse_malformed_fallbacks(configured)
-        default_fallbacks: Final = get("default_fallbacks") or dynamic.default_fallbacks
-        if isinstance(default_fallbacks, str):
+        # As the Python core: a given default_fallbacks, even an empty one, adds a `{"*": ...}` entry
+        # (`[]` falls back to the process default_fallbacks, so it may add `{"*": None}`).
+        given_default_fallbacks: Final = get("default_fallbacks")
+        has_default_fallbacks: Final = given_default_fallbacks is not None or dynamic.default_fallbacks is not None
+        default_fallbacks: Final = given_default_fallbacks or dynamic.default_fallbacks
+        if has_default_fallbacks and isinstance(default_fallbacks, str):
             raise TypeError(
                 f"default_fallbacks must be a list of model names, got '{default_fallbacks}'. Use ['{default_fallbacks}']"
             )
         fallbacks: Final[list[object] | None] = (  # mutable-ok: see above
-            configured
-            if default_fallbacks is None
-            else [*(configured if configured is not None else ()), {"*": default_fallbacks}]
+            [*(configured if configured is not None else ()), {"*": default_fallbacks}]
+            if has_default_fallbacks
+            else configured
         )
         content_policy: Final = list(_as_list(get("content_policy_fallbacks"))) or (
             list(dynamic.content_policy_fallbacks) if dynamic.content_policy_fallbacks else None
@@ -561,23 +581,23 @@ class Resolved:
             if strategy is None and "routing_strategy" in config.arguments
             else normalize_strategy(strategy) or "simple-shuffle",
             routing_strategy_args=MappingProxyType(dict(as_str_mapping(get("routing_strategy_args")) or {})),
-            num_retries=int(str(num_retries))
+            num_retries=num_retries
             if num_retries is not None
             else dynamic.num_retries
             if dynamic.num_retries is not None
             else 2,
-            max_fallbacks=int(str(max_fallbacks))
+            max_fallbacks=max_fallbacks
             if max_fallbacks is not None
             else dynamic.max_fallbacks
             if dynamic.max_fallbacks is not None
             else dynamic.router_max_fallbacks,
-            allowed_fails=int(str(allowed_fails)) if allowed_fails is not None else dynamic.allowed_fails,
-            explicit_allowed_fails=int(str(allowed_fails)) if allowed_fails is not None else None,
+            allowed_fails=allowed_fails if allowed_fails is not None else dynamic.allowed_fails,
+            explicit_allowed_fails=allowed_fails,
             cooldown_time=float(str(get("cooldown_time") or _DEFAULT_COOLDOWN_SECONDS)),
             disable_cooldowns=_optional_bool(get("disable_cooldowns")),
             allowed_fails_policy=resolved_allowed_fails_policy(get("allowed_fails_policy")),
-            retry_after=float(str(get("retry_after") or 0)),
-            timeout=float(str(timeout)) if timeout else dynamic.request_timeout,
+            retry_after=get("retry_after") if "retry_after" in config.arguments else 0,
+            timeout=timeout if timeout else dynamic.request_timeout,
             fallbacks=fallbacks,
             context_window_fallbacks=list(_as_list(get("context_window_fallbacks")))
             or (list(dynamic.context_window_fallbacks) if dynamic.context_window_fallbacks else None),
@@ -628,7 +648,7 @@ class Resolved:
             if name in {"model_group_alias", "default_litellm_params"}:
                 updates[name] = MappingProxyType(dict(as_str_mapping(value) or {}))
             elif name in _NUMBER_SETTINGS:
-                updates[name] = self._number_setting(name, value)
+                updates[name] = self._number_setting(name, value, updated=name in updated)
                 if name == "allowed_fails":
                     updates["explicit_allowed_fails"] = updates[name]
             elif name in _SELECTION_SETTINGS:
@@ -648,16 +668,18 @@ class Resolved:
             updates["routing_group_members"] = None
         return dataclasses.replace(self, **updates, assigned=self.assigned | frozenset(values))  # pyright: ignore[reportArgumentType]  # each value converted to its field's type above
 
-    def _number_setting(self, name: str, value: object) -> object:
-        """A numeric setting converted to its field's type."""
-        if name in ("num_retries", "max_fallbacks", "allowed_fails"):
-            return int(str(value))
+    def _number_setting(self, name: str, value: object, *, updated: bool = False) -> object:
+        """A numeric setting converted to its field's type. ``retry_after`` and ``timeout`` are kept
+        as the Python core keeps them: ``update_settings`` stores ``int(value)``, an attribute write
+        the value as given."""
+        if name in ("retry_after", "timeout", "num_retries", "allowed_fails"):
+            return int(value) if updated else value  # pyright: ignore[reportArgumentType]  # int() of the value as given, as Python casts it
+        if name == "max_fallbacks":
+            return value
         if name == "cooldown_time":
             # Stored as given (`_core_cooldown_time`), so a failure cools down for that long:
             # 0 for no time at all; None leaves the cooldown cache's own default, set by the caller.
             return float(str(value)) if value is not None else self.cooldown_time
-        if name == "retry_after":
-            return float(str(value or 0))
         return float(str(value)) if value is not None else None
 
     def _selection_setting(self, name: str, value: object, *, validate: bool) -> object:
@@ -681,8 +703,8 @@ class Resolved:
             "cooldown_time": self.cooldown_time,
             "disable_cooldowns": self.disable_cooldowns,
             "allowed_fails_policy": _plain(self.allowed_fails_policy),
-            "retry_after": self.retry_after,
-            "timeout": self.timeout,
+            "retry_after": float(str(self.retry_after or 0)),
+            "timeout": float(str(self.timeout)) if self.timeout is not None else None,
             "routing_groups": group_documents(self.routing_groups) if self.routing_groups else None,
             "enable_pre_call_checks": True if self.enable_pre_call_checks else None,
             "routing_plugins": True if self.routing_plugins else None,
@@ -706,16 +728,16 @@ class Resolved:
             "fallbacks": _plain(self.fallbacks),
             "context_window_fallbacks": _plain(self.context_window_fallbacks),
             "content_policy_fallbacks": _plain(self.content_policy_fallbacks),
-            "num_retries": self.num_retries,
-            "max_fallbacks": self.max_fallbacks,
-            "allowed_fails": self._router_allowed_fails(),
+            "num_retries": _crate_int(self.num_retries),
+            "max_fallbacks": _crate_int(self.max_fallbacks),
+            "allowed_fails": _crate_int(self._router_allowed_fails()),
             "fallback_keys": self._fallback_keys(model_names),
             "default_deployment": _plain(served_default_deployment(self.default_deployment)[0]),
             "default_deployment_raises": True if served_default_deployment(self.default_deployment)[1] else None,
         }
         return {name: value for name, value in values.items() if value is not None}
 
-    def _router_allowed_fails(self) -> int | None:
+    def _router_allowed_fails(self) -> object:
         """``allowed_fails`` when it counts as set on the router (``_is_allowed_fails_set_on_router``):
         passed explicitly, or different from the process default."""
         import litellm
@@ -1033,7 +1055,7 @@ class RustCore(
         # Settings the Python core keeps as plain attributes, and settings deleted with `del`.
         self._plain: Final = initial_plain(config)
         self._deleted: frozenset[str] = frozenset()
-        self._request_timeout: Final = request_timeout(config)
+        self._request_timeout: Final = request_timeout(config, host)
         legacy: Final[dict[str, object]] = {"deployment_stats": {}}  # mutable-ok: the core's own legacy attributes
         self._legacy: Final = legacy
         self._health_view: RustHealth | None = None
@@ -1390,7 +1412,7 @@ class RustCore(
             else default_litellm_params(self._config),
             default_max_parallel_requests=self._endpoints.default_max_parallel_requests,  # pyright: ignore[reportArgumentType]  # the setting as given
             cooldown_time=self._cooldown_given,  # pyright: ignore[reportArgumentType]  # the value as given, as the Python core stores it
-            allowed_fails=r.allowed_fails,
+            allowed_fails=r.allowed_fails,  # pyright: ignore[reportArgumentType]  # the value as given, as the Python core stores it
             allowed_fails_policy=r.allowed_fails_policy,  # pyright: ignore[reportArgumentType]  # the policy as passed
             disable_cooldowns=r.disable_cooldowns,
             enable_pre_call_checks=r.enable_pre_call_checks,
@@ -2018,8 +2040,8 @@ class RustCore(
             **self._routing_fields(prepared),
             **pinned_video_deployment(plan, request),
             **unrouted_fields(plan),
-            # The sync path never runs pre-routing; a custom strategy picks on both.
-            **({} if plan.sync and self._custom_strategy is None else {"pre_routes": True}),
+            # A custom strategy picks on both paths; the sync path pre-routes when it can.
+            **({"pre_routes": True} if not plan.sync or self._sync_pick_pre_routes() else {}),
             **({"mock_failure": mock} if mock is not None else {}),
             # Every target of the walk is refused.
             **({"fallbacks": []} if rejected_fallback_target(request) is not None else {}),
@@ -2389,6 +2411,14 @@ class RustCore(
             messages,
         )
 
+    def _sync_pick_pre_routes(self) -> bool:
+        """Whether a sync pick asks for the ``pre_route`` step: always for a custom strategy, else
+        when a strategy router is registered. A router with routing plugins never pre-routes a sync
+        pick, so router-core refuses it (the pipeline only runs on the async path)."""
+        if self._custom_strategy is not None:
+            return True
+        return not self._resolved.routing_plugins and self._prerouter.has_strategy_routers()
+
     def _custom_pick_sync(
         self,
         step: Mapping[str, object],
@@ -2397,10 +2427,15 @@ class RustCore(
         input: object = _NO_INPUT,
         specific_deployment: object = _NO_INPUT,
     ) -> object:
-        """A custom strategy's sync pick (``get_available_deployment``); without one, no pre-routing."""
+        """A custom strategy's sync pick (``get_available_deployment``); without one, the async
+        pre-routing hook run to completion (``_pre_route``)."""
         custom: Final = self._custom_strategy
         if custom is None:
-            return None
+            from litellm.litellm_core_utils import asyncify
+
+            return asyncify.run_async_function(  # pyright: ignore[reportUnknownMemberType]  # the untyped sync bridge
+                partial(self._pre_route, step, request, messages, input, specific_deployment)
+            )
         picked: Final[object] = custom.get_available_deployment(  # pyright: ignore[reportUnknownMemberType]  # the strategy's untyped pick
             model=str(step.get("model")),
             messages=request.get("messages") if messages is _NO_INPUT else messages,  # pyright: ignore[reportArgumentType]  # see _pre_route
@@ -2665,9 +2700,6 @@ class RustCore(
             message: Final = (
                 f"Model {model} has no deployments configured with use_in_pass_through=True. "
                 "Please add use_in_pass_through: true to the deployment configuration"
-                if pass_through == "async_pass_through"
-                else f"Model {model} has no deployment configured with use_in_pass_through=True. "
-                "Please add use_in_pass_through: true in the deployment configuration"
             )
             return litellm_exceptions.BadRequestError(message=message, model=model, llm_provider="")
         if kind == "context_window_exceeded":
@@ -2805,7 +2837,7 @@ class _Selection:
             fields["specific_deployment"] = True
         if probe:
             fields["health_check_probe"] = True
-        if kind == "pick" or (kind == "sync_pick" and core._custom_strategy is not None):  # pyright: ignore[reportPrivateUsage]  # the selection serves its own core
+        if kind == "pick" or (kind == "sync_pick" and core._sync_pick_pre_routes()):  # pyright: ignore[reportPrivateUsage]  # the selection serves its own core
             fields["pre_routes"] = True
         self._specific_deployment: Final = specific_deployment
         # The error a callback filter raised, which a failed selection raises.
@@ -3262,15 +3294,35 @@ class _Driver:
         """A routing pre-call check refused the attempt (``async_routing_strategy_pre_call_checks``):
         a rate limit cools the deployment down (``set_cooldown_deployments``); the attempt's failure
         is recorded by nothing else."""
+        report: Final = self._refusal_report(deployment, error)
+        if report is not None:
+            await self._core._drive_cache_steps(report)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        return {**self._failed(step, deployment, call, error), "recorded": True}
+
+    def _refused_sync(
+        self,
+        step: Mapping[str, object],
+        deployment: Mapping[str, object],
+        call: "AttemptCall",
+        error: BaseException,
+    ) -> Mapping[str, object]:
+        """``_refused`` on the sync path (``routing_strategy_pre_call_checks``): a rate limit cools
+        the deployment down here too."""
+        report: Final = self._refusal_report(deployment, error)
+        if report is not None:
+            self._core._drive_sync_steps(report)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        return {**self._failed(step, deployment, call, error), "recorded": True}
+
+    def _refusal_report(self, deployment: Mapping[str, object], error: BaseException) -> "RouterCall | None":
+        """The uncounted failure report that cools down a deployment a pre-call check rate-limited."""
         import litellm.exceptions as litellm_exceptions
 
-        core: Final = self._core
-        if isinstance(error, litellm_exceptions.RateLimitError):
-            deployment_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
-            if isinstance(deployment_id, str):
-                report: Final = core._handle.report_failure(deployment_id, dict(attempt_failure(error)), uncounted=True)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-                await core._drive_cache_steps(report)  # pyright: ignore[reportPrivateUsage]  # see above
-        return {**self._failed(step, deployment, call, error), "recorded": True}
+        if not isinstance(error, litellm_exceptions.RateLimitError):
+            return None
+        deployment_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
+        if not isinstance(deployment_id, str):
+            return None
+        return self._core._handle.report_failure(deployment_id, dict(attempt_failure(error)), uncounted=True)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
 
     def _pick_kwargs(self, step: Mapping[str, object]) -> Mapping[str, object]:
         """The request kwargs the pick sees: the request with its level's retry count."""
@@ -3365,8 +3417,7 @@ class _Driver:
             try:
                 self._core._endpoints.sync_pre_call_checks(self._plan, deployment, self._request)  # pyright: ignore[reportPrivateUsage]  # see above
             except Exception as refused:  # noqa: BLE001  # handed to the Rust call loop like any attempt failure
-                # The sync path records no outcome for a refused pre-call check: no cooldown.
-                return {**self._failed(step, deployment, call, refused), "recorded": True}
+                return self._refused_sync(step, deployment, call, refused)
             answered: Final = self._core._host.invoke(call.host_op)(**call.kwargs)  # pyright: ignore[reportPrivateUsage]  # a sync endpoint
             if inspect.isawaitable(answered):
                 raise _NotSynchronous(f"the host's {call.host_op} endpoint is not synchronous")

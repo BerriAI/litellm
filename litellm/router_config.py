@@ -58,6 +58,7 @@ class RouterDynamicConfig:
     input_callback: Sequence[object]
     callback_manager: "LoggingCallbackManager"
     cache: "Cache | None"
+    request_timeout_explicitly_set: bool = False
 
 
 _versions: Final = itertools.count(1)
@@ -110,6 +111,7 @@ def current_dynamic_config() -> RouterDynamicConfig:
         input_callback=litellm.input_callback,
         callback_manager=litellm.logging_callback_manager,
         cache=litellm.cache,
+        request_timeout_explicitly_set=litellm.request_timeout_explicitly_set,
     )
 
 
@@ -120,6 +122,7 @@ _LIVE_SOURCES: Final = MappingProxyType(
         "router_max_fallbacks": "ROUTER_MAX_FALLBACKS",
         "allowed_fails": "allowed_fails",
         "request_timeout": "request_timeout",
+        "request_timeout_explicitly_set": "request_timeout_explicitly_set",
         "fallbacks": "fallbacks",
         "default_fallbacks": "default_fallbacks",
         "context_window_fallbacks": "context_window_fallbacks",

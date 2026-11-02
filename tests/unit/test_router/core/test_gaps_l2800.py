@@ -328,9 +328,10 @@ async def test_a_per_user_github_copilot_deployment_rejects_another_credential_n
 async def test_the_process_request_timeout_outranks_the_router_timeout_once_a_router_timeout_is_set(
     make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Oddity: this per-attempt timeout is read from ``litellm.request_timeout`` itself (not the host's
-    process settings), and only when the router has a ``timeout`` of its own."""
-    monkeypatch.setattr(litellm, "request_timeout", 33.0)
+    """This per-attempt timeout is read from the host's process settings (not ``litellm.request_timeout``
+    itself), and only when the router has a ``timeout`` of its own."""
+    host.set_dynamic(request_timeout=33.0)
+    monkeypatch.setattr(litellm, "request_timeout", 77.0)  # pyright: ignore[reportUnknownMemberType]  # pytest and the cores' untyped members
     core: Final = make_core(model_list=[deployment("g", "d1")], timeout=42)
     await core.acompletion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]
     assert host.calls[0].kwargs["timeout"] == 33.0
@@ -341,7 +342,8 @@ async def test_the_process_request_timeout_is_the_stream_timeout_without_a_strea
 ) -> None:
     from tests.unit.test_router.core.streaming_helpers import chat_stream, collect_texts
 
-    monkeypatch.setattr(litellm, "request_timeout", 33.0)
+    host.set_dynamic(request_timeout=33.0)
+    monkeypatch.setattr(litellm, "request_timeout", 77.0)  # pyright: ignore[reportUnknownMemberType]  # pytest and the cores' untyped members
     host.answer("openai/d1", chat_stream("A"))
     core: Final = make_core(model_list=[deployment("g", "d1")], timeout=42)
     await collect_texts(await core.acompletion(model="g", messages=MESSAGES, stream=True))  # pyright: ignore[reportAttributeAccessIssue]
@@ -424,8 +426,18 @@ async def test_acompletion_counts_total_success_and_failed_calls_per_deployment_
     assert counts == (2, 1, 1)
 
 
-def test_sync_completion_does_not_count_calls(make_core: MakeCore, host: ScriptedHost) -> None:
-    """Oddity: only the async path updates ``total_calls``/``success_calls``/``fail_calls``."""
-    core: Final = make_core(model_list=[deployment("g", "d1")])
+def test_completion_counts_total_success_and_failed_calls_per_deployment_model(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    """The sync path counts calls as ``acompletion`` does."""
+    core: Final = make_core(model_list=[deployment("g", "d1")], num_retries=0)
     core.completion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]
-    assert core.total_calls["openai/d1"] == 0  # pyright: ignore[reportAttributeAccessIssue]
+    host.answer("openai/d1", rate_limit())
+    with pytest.raises(litellm.RateLimitError):  # pyright: ignore[reportUnknownMemberType]  # pytest and the cores' untyped members
+        core.completion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    counts: Final = (  # pyright: ignore[reportUnknownVariableType]  # pytest and the cores' untyped members
+        core.total_calls["openai/d1"],  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+        core.success_calls["openai/d1"],  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+        core.fail_calls["openai/d1"],  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    )
+    assert counts == (2, 1, 1)

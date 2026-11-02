@@ -98,6 +98,16 @@ def _as_router(obj: "DeprecatedRouterMembers") -> "Router":
     raise TypeError(f"{type(obj).__name__} is not a litellm.Router; DeprecatedRouterMembers is mixed into Router only")
 
 
+def _registry_source(obj: "DeprecatedRouterMembers") -> "Router":
+    """What ``registry()`` reads: the Router on the Python core, the host registry on the Rust core.
+
+    A deprecated member whose ``registry()`` query checks for a name reads it directly, as the
+    member did before ``registry()`` existed, so a ``None`` name gets the old result on both cores
+    instead of ``registry()``'s ``TypeError``.
+    """
+    return _as_router(obj).registry()._router  # pyright: ignore[reportPrivateUsage]  # the shim is part of the router
+
+
 def _public_attribute_error(obj: object, core_name: str, public_name: str, error: AttributeError) -> AttributeError:
     """
     ``error`` renamed to the public attribute when it is the router's own ``core_name`` that is
@@ -507,8 +517,8 @@ class DeprecatedRouterMembers:
         self, model_name: str, model_alias: str | None = None, team_id: str | None = None
     ) -> "list[DeploymentTypedDict]":  # mutable-ok: the old return type, unchanged
         _note("get_all_deployments", "registry().deployments(model_name, source='all')")
-        return (
-            _as_router(self).registry().deployments(model_name, source="all", model_alias=model_alias, team_id=team_id)
+        return _registry_source(self)._core_get_all_deployments(
+            model_name=model_name, model_alias=model_alias, team_id=team_id
         )
 
     _get_all_deployments = _private_alias("get_all_deployments", get_all_deployments)
@@ -519,7 +529,7 @@ class DeprecatedRouterMembers:
 
     def deployments_named(self, model_name: str) -> "tuple[DeploymentTypedDict, ...] | None":
         _note("deployments_named", "registry().deployments(model_name, source='named')")
-        return _as_router(self).registry().deployments(model_name, source="named")
+        return _registry_source(self)._core_deployments_named(model_name)
 
     def get_model_list_from_model_alias(
         self, model_name: str | None = None
@@ -535,11 +545,11 @@ class DeprecatedRouterMembers:
         self, model_group: str
     ) -> "list[DeploymentTypedDict]":  # mutable-ok: the old return type, unchanged
         _note("get_model_list_of_routed_group", "registry().deployments(model_group, source='routed_group')")
-        return _as_router(self).registry().deployments(model_group, source="routed_group")
+        return _registry_source(self)._core_get_model_list_of_routed_group(model_group)
 
     def wildcard_route_deployments(self, model: str, team_id: str | None) -> Sequence[Mapping[str, object]]:
         _note("wildcard_route_deployments", "registry().deployments(model, source='wildcard')")
-        return _as_router(self).registry().deployments(model, source="wildcard", team_id=team_id)
+        return _registry_source(self)._core_wildcard_route_deployments(model, team_id)
 
     def get_routable_deployments(
         self,
@@ -550,21 +560,17 @@ class DeprecatedRouterMembers:
         _note(
             "get_routable_deployments", "registry().deployments(model, source='routable', request=..., call_type=...)"
         )
-        return (
-            _as_router(self)
-            .registry()
-            .deployments(model, source="routable", request=request_kwargs, call_type=call_type)
-        )
+        return _registry_source(self)._core_get_routable_deployments(model, request_kwargs, call_type)
 
     def get_deployment_by_model_group_name(self, model_group_name: str) -> "Deployment | None":
         _note("get_deployment_by_model_group_name", "registry().deployments(name, source='first_in_group')")
-        return _as_router(self).registry().deployments(model_group_name, source="first_in_group")
+        return _registry_source(self)._core_get_deployment_by_model_group_name(model_group_name=model_group_name)
 
     def deployments_for_request(
         self, model: str, request_kwargs: Mapping[str, object]
     ) -> "Sequence[DeploymentTypedDict]":
         _note("deployments_for_request", "registry().deployments(model, source='for_request', request=...)")
-        return _as_router(self).registry().deployments(model, source="for_request", request=request_kwargs)
+        return _registry_source(self)._core_deployments_for_request(model, request_kwargs)
 
     def should_include_deployment(
         self,
@@ -599,34 +605,32 @@ class DeprecatedRouterMembers:
         self, model_name: str, team_id: str | None = None, *, use_base_model: bool = False
     ) -> tuple[str, ...]:
         _note("resolved_litellm_models", "registry().names(model_name, kind='litellm_models' or 'litellm_base_models')")
-        return (
-            _as_router(self)
-            .registry()
-            .names(model_name, kind="litellm_base_models" if use_base_model else "litellm_models", team_id=team_id)
+        return _registry_source(self)._core_resolved_litellm_models(
+            model_name, team_id=team_id, use_base_model=use_base_model
         )
 
     def wildcard_routed_models(self, model: str, team_id: str | None) -> frozenset[str]:
         _note("wildcard_routed_models", "registry().names(model, kind='wildcard')")
-        return _as_router(self).registry().names(model, kind="wildcard", team_id=team_id)
+        return _registry_source(self)._core_wildcard_routed_models(model, team_id)
 
     def get_candidate_model_ids_for_route(self, model: str, team_id: str | None = None) -> frozenset[str]:
         _note("get_candidate_model_ids_for_route", "registry().names(model, kind='route_candidates')")
-        return _as_router(self).registry().names(model, kind="route_candidates", team_id=team_id)
+        return _registry_source(self)._core_get_candidate_model_ids_for_route(model, team_id=team_id)
 
     # -- registry: resolving names ---------------------------------------------------------------
     def routable_model_group(self, model_name: str) -> str:
         _note("routable_model_group", "registry().resolve(name)")
-        return _as_router(self).registry().resolve(model_name)
+        return _registry_source(self)._core_routable_model_group(model_name)
 
     def get_model_from_alias(self, model: str) -> str | None:
         _note("get_model_from_alias", "registry().resolve(name, kind='alias')")
-        return _as_router(self).registry().resolve(model, kind="alias")
+        return _registry_source(self)._core_get_model_from_alias(model=model)
 
     _get_model_from_alias = _private_alias("get_model_from_alias", get_model_from_alias)
 
     def resolve_served_model_name(self, model_name: str, served_model: str) -> str:
         _note("resolve_served_model_name", "registry().resolve(name, kind='served', served_model=...)")
-        return _as_router(self).registry().resolve(model_name, kind="served", served_model=served_model)
+        return _registry_source(self)._core_resolve_served_model_name(model_name, served_model)
 
     def resolve_model_name_from_model_id(
         self, model_id: str | None, custom_llm_provider: str | None = None
@@ -646,23 +650,25 @@ class DeprecatedRouterMembers:
 
     def is_recognized_model(self, model: str) -> bool:
         _note("is_recognized_model", "registry().resolve(name, kind='recognized')")
-        return _as_router(self).registry().resolve(model, kind="recognized")
+        return _registry_source(self)._core_is_recognized_model(model)
 
     def get_routable_upstream_model(self, model_name: str, team_id: str | None = None) -> str | None:
         _note("get_routable_upstream_model", "registry().resolve(name, kind='upstream')")
-        return _as_router(self).registry().resolve(model_name, kind="upstream", team_id=team_id)
+        return _registry_source(self)._core_get_routable_upstream_model(model_name, team_id=team_id)
 
     def get_search_tool_support(self, model_name: str, team_id: str | None = None) -> tuple[bool | None, ...]:
         _note("get_search_tool_support", "registry().resolve(name, kind='search_tool_support')")
-        return _as_router(self).registry().resolve(model_name, kind="search_tool_support", team_id=team_id)
+        return _registry_source(self)._core_get_search_tool_support(model_name, team_id=team_id)
 
     def get_model_group(self, id: str) -> list | None:  # mutable-ok: the old return type, unchanged
         _note("get_model_group", "registry().resolve(id, kind='group_of_id')")
-        return _as_router(self).registry().resolve(id, kind="group_of_id")
+        return _registry_source(self)._core_get_model_group(id=id)
 
     def is_model_access_group_for_wildcard_route(self, model_access_group: str) -> bool:
         _note("is_model_access_group_for_wildcard_route", "registry().resolve(group, kind='wildcard_access_group')")
-        return _as_router(self).registry().resolve(model_access_group, kind="wildcard_access_group")
+        return _registry_source(self)._core_is_model_access_group_for_wildcard_route(
+            model_access_group=model_access_group
+        )
 
     _is_model_access_group_for_wildcard_route = _private_alias(
         "is_model_access_group_for_wildcard_route", is_model_access_group_for_wildcard_route
@@ -670,7 +676,7 @@ class DeprecatedRouterMembers:
 
     def team_model_has_alternatives(self, deployment_id: str) -> bool:
         _note("team_model_has_alternatives", "registry().resolve(id, kind='team_model_alternatives')")
-        return _as_router(self).registry().resolve(deployment_id, kind="team_model_alternatives")
+        return _registry_source(self)._core_team_model_has_alternatives(deployment_id)
 
     def routing_group_has_alternatives(self, model_group: str | None) -> bool:
         _note("routing_group_has_alternatives", "registry().resolve(group, kind='routing_group_alternatives')")

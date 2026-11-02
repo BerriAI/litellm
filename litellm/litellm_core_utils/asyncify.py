@@ -81,7 +81,11 @@ def can_block_current_thread() -> bool:
     return threading.current_thread() is threading.main_thread() and not is_event_loop_running()
 
 
-def run_async_function(async_function, *args, **kwargs):
+def run_async_function(
+    async_function: Callable[..., Awaitable[T_Retval]],
+    *args: object,
+    **kwargs: object,  # kwargs-ok: forwarded to async_function as given
+) -> T_Retval:
     """
     Helper utility to run an async function in a sync context.
     Handles the case where there is an existing event loop running.

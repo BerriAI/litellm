@@ -171,25 +171,17 @@ async def test_cache_responses_turned_on_after_construction_reaches_the_host(
 # --- sync text completion and image generation ----------------------------------------------
 
 
-async def test_sync_text_completion_sends_the_router_num_retries_and_no_routing_fields(
-    make_core: MakeCore, host: EndpointHost
-):
-    core: Final = make_core(model_list=[deployment("g", "d1")], num_retries=4)
+async def test_sync_text_completion_shapes_the_request_like_atext_completion(make_core: MakeCore, host: EndpointHost):
+    core: Final = make_core(model_list=[deployment("g", "d1", timeout=7)], num_retries=4)
     core.text_completion(model="g", prompt="p")
     sent: Final = _sent(host)
-    assert sent["num_retries"] == 4
-    assert "model_info" not in sent
-    assert "litellm_trace_id" not in sent
-    assert sent.get("timeout") is None
+    assert "num_retries" not in sent
+    assert sent["model_info"]["id"] == "d1"  # pyright: ignore[reportIndexIssue]
+    trace_id: Final = sent["litellm_trace_id"]
+    assert isinstance(trace_id, str) and len(trace_id) == 36
+    assert sent["timeout"] == 7
     metadata: Final = _bucket(sent)
-    assert metadata["model_group"] == "g"
-    assert "deployment" not in metadata
-
-
-async def test_sync_text_completion_request_num_retries_wins(make_core: MakeCore, host: EndpointHost):
-    core: Final = make_core(model_list=[deployment("g", "d1")], num_retries=4)
-    core.text_completion(model="g", prompt="p", num_retries=1)
-    assert _sent(host)["num_retries"] == 1
+    assert (metadata["model_group"], metadata["deployment"]) == ("g", "openai/d1")
 
 
 async def test_sync_text_completion_merges_default_metadata_into_request_metadata(
@@ -204,23 +196,36 @@ async def test_sync_text_completion_merges_default_metadata_into_request_metadat
     assert (metadata["x"], metadata["y"], metadata["model_group"], sent["user"]) == (1, 2, "g", "u")
 
 
-async def test_sync_text_completion_sends_the_model_group_name_not_the_deployment_model(
-    make_core: MakeCore, host: EndpointHost
-):
-    """The request's model="g" is spread after the deployment params, so it replaces "openai/d1"."""
+async def test_sync_text_completion_sends_the_deployment_model(make_core: MakeCore, host: EndpointHost):
     core: Final = make_core(model_list=[deployment("g", "d1", api_base="https://d1.example")])
     core.text_completion(model="g", prompt="p")
     call: Final = host.calls[0]
-    assert (call.model, call.kwargs["api_base"]) == ("g", "https://d1.example")
+    assert (call.model, call.kwargs["api_base"]) == ("openai/d1", "https://d1.example")
 
 
-async def test_sync_text_completion_is_not_retried(make_core: MakeCore, host: EndpointHost):
-    host.answer("g", litellm.InternalServerError(message="boom", llm_provider="openai", model="d1"))
+async def test_sync_text_completion_is_retried_with_the_router_num_retries(make_core: MakeCore, host: EndpointHost):
+    host.answer("openai/d1", litellm.InternalServerError(message="boom", llm_provider="openai", model="d1"))
     core: Final = make_core(model_list=[deployment("g", "d1")], num_retries=3)
     with pytest.raises(litellm.InternalServerError):
         core.text_completion(model="g", prompt="p")
-    assert len(host.calls) == 1
-    assert host.sleeps == []
+    assert len(host.calls) == 4
+
+
+async def test_sync_text_completion_request_num_retries_wins(make_core: MakeCore, host: EndpointHost):
+    host.answer("openai/d1", litellm.InternalServerError(message="boom", llm_provider="openai", model="d1"))
+    core: Final = make_core(model_list=[deployment("g", "d1")], num_retries=4)
+    with pytest.raises(litellm.InternalServerError):  # pyright: ignore[reportUnknownMemberType]  # pytest and the cores' untyped members
+        core.text_completion(model="g", prompt="p", num_retries=1)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # pytest and the cores' untyped members
+    assert len(host.calls) == 2
+
+
+async def test_sync_text_completion_falls_back_like_atext_completion(make_core: MakeCore, host: EndpointHost):
+    host.answer("openai/d1", litellm.InternalServerError(message="boom", llm_provider="openai", model="d1"))
+    core: Final = make_core(
+        model_list=[deployment("g", "d1"), deployment("h", "d2")], num_retries=0, fallbacks=[{"g": ["h"]}]
+    )
+    core.text_completion(model="g", prompt="p")  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # pytest and the cores' untyped members
+    assert host.deployments_called() == ["d1", "d2"]
 
 
 async def test_sync_image_generation_sends_routing_metadata_without_a_trace_id(make_core: MakeCore, host: EndpointHost):

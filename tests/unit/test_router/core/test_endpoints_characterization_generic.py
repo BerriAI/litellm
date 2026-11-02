@@ -288,9 +288,9 @@ async def test_generic_call_sends_the_declared_custom_llm_provider(make_core: Ma
 
 @pytest.mark.parametrize(
     ("endpoint", "expected"),
-    [("aocr", 600.0), ("aresponses", 600.0), ("ocr", 6000.0), ("generate_content", 6000.0)],
+    [("aocr", 600.0), ("aresponses", 600.0), ("ocr", 600.0), ("generate_content", 600.0), ("responses", 600.0)],
 )
-async def test_generic_default_timeout_is_the_passthrough_default_for_async_and_the_process_setting_for_sync(
+async def test_generic_default_timeout_is_the_passthrough_default_for_sync_and_async(
     make_core: MakeCore, host: EndpointHost, endpoint: str, expected: float
 ):
     core: Final = make_core(model_list=[deployment("g", "d1")])
@@ -304,6 +304,20 @@ async def test_generic_timeout_takes_the_router_timeout(make_core: MakeCore, hos
     core: Final = make_core(model_list=[deployment("g", "d1")], timeout=42)
     await _call(core, endpoint, {"model": "g", "document": {}})
     assert host.calls[0].kwargs["timeout"] == 42
+
+
+@pytest.mark.parametrize("endpoint", ["aocr", "ocr"])  # pyright: ignore[reportUnknownMemberType, reportUntypedFunctionDecorator]  # pytest and the cores' untyped members
+async def test_generic_timeout_without_a_router_timeout_takes_the_host_request_timeout(
+    make_core: MakeCore,
+    host: EndpointHost,
+    endpoint: str,
+    monkeypatch: pytest.MonkeyPatch,  # pyright: ignore[reportUnknownMemberType, reportUnknownParameterType]  # pytest and the cores' untyped members
+):
+    host.set_dynamic(request_timeout=33.0)
+    monkeypatch.setattr(litellm, "request_timeout", 77.0)  # pyright: ignore[reportUnknownMemberType]  # pytest and the cores' untyped members
+    core: Final = make_core(model_list=[deployment("g", "d1")])
+    await _call(core, endpoint, {"model": "g", "document": {}})
+    assert host.calls[0].kwargs["timeout"] == 33.0
 
 
 @pytest.mark.parametrize(

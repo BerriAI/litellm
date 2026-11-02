@@ -669,7 +669,7 @@ class HostRegistry(HostModelInfo):
             info_dict: UntypedEntry = model_info if isinstance(model_info, dict) else {}  # pyright: ignore[reportAssignmentType]  # a configured model_info
             declared_id = None if info_dict.get("id") is None else str(info_dict["id"])
             if "id" not in info_dict:
-                info_dict["id"] = deployment_id(str(model_name), litellm_params)
+                info_dict["id"] = deployment_id(model_name, litellm_params)  # pyright: ignore[reportArgumentType]  # the configured model_name, as Python passes it
             organization = litellm_params.get("organization")
             if isinstance(organization, list):
                 # Each organization's deployment has its own id (``organization_deployment_id``).
@@ -677,7 +677,7 @@ class HostRegistry(HostModelInfo):
                     litellm_params["organization"] = org
                     self._create_deployment(
                         model,
-                        str(model_name),
+                        model_name,  # pyright: ignore[reportArgumentType]  # the configured model_name, as Python passes it
                         litellm_params,
                         {
                             **info_dict,
@@ -685,7 +685,7 @@ class HostRegistry(HostModelInfo):
                                 declared_id,
                                 position,
                                 org,
-                                lambda: deployment_id(str(model_name), litellm_params),
+                                lambda: deployment_id(model_name, litellm_params),  # pyright: ignore[reportArgumentType]  # the configured model_name, as Python passes it
                             ),
                         },
                         declared_id=declared_id,
@@ -694,12 +694,14 @@ class HostRegistry(HostModelInfo):
             else:
                 self._create_deployment(
                     model,
-                    str(model_name),
+                    model_name,  # pyright: ignore[reportArgumentType]  # the configured model_name, as Python passes it
                     litellm_params,
                     info_dict,
                     declared_id=declared_id,
                     duplicate_ids=duplicate_ids,
                 )
+        # Python logs the group names here, which reads every alias entry (a malformed one raises).
+        verbose_router_logger.debug("\nInitialized Model List %s", self._core_get_model_names())
         self._core_model_names = {str(_LITELLM_PARAMS_ADAPTER.validate_python(m).get("model_name")) for m in model_list}
         if self.strategies is not None:
             self.strategies.finalize()

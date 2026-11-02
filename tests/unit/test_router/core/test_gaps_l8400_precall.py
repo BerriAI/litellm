@@ -100,10 +100,10 @@ async def test_a_passing_pre_call_check_sees_the_deployment_that_is_then_called(
     assert gate.seen == [("async", host.deployments_called("acompletion")[0])]
 
 
-def test_a_rate_limit_from_a_sync_pre_call_check_is_raised_without_a_cooldown(
+def test_a_rate_limit_from_a_sync_pre_call_check_cools_the_deployment_down_and_is_raised(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
-    """Oddity: the sync twin raises the gate's error but, unlike the async path, sets no cooldown."""
+    """The sync twin cools the refused deployment down as the async path does."""
     core: Final = make_core(model_list=GROUP, num_retries=0, cooldown_time=33)
     gate: Final = gated(host, rate_limit(message="gate says no"))
 
@@ -111,7 +111,23 @@ def test_a_rate_limit_from_a_sync_pre_call_check_is_raised_without_a_cooldown(
 
     assert isinstance(error, litellm.RateLimitError)
     assert host.calls == []
-    assert [kind for kind, _ in gate.seen] == ["sync"]
+    ((kind, checked),) = gate.seen
+    assert kind == "sync"
+    cooled: Final = cooled_down(core, ["a", "b"])
+    assert list(cooled) == [checked]
+    assert cooled[checked]["cooldown_time"] == 33
+
+
+def test_any_other_error_from_a_sync_pre_call_check_is_raised_without_a_cooldown(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=GROUP, num_retries=0, cooldown_time=33)
+    gated(host, ValueError("gate broke"))
+
+    error: Final = attempt_sync(core)
+
+    assert type(error) is ValueError
+    assert host.calls == []
     assert cooled_down(core, ["a", "b"]) == {}
 
 

@@ -632,11 +632,10 @@ def test_select_deployment_sync_returns_none_without_selector():
     assert result is None
 
 
-def test_select_deployment_sync_does_not_dispatch_cost_based_routing():
+def test_select_deployment_sync_dispatches_cost_based_routing():
     """
-    `LowestCostLoggingHandler` only implements `async_get_available_deployments`,
-    so the sync dispatch must fall through to None for `cost-based-routing`
-    instead of raising AttributeError.
+    `LowestCostLoggingHandler` has a sync `get_available_deployments` as well, so the sync dispatch
+    picks with it for `cost-based-routing` as the async dispatch does.
     """
     router = _build_router(
         routing_strategy="simple-shuffle",
@@ -649,21 +648,19 @@ def test_select_deployment_sync_does_not_dispatch_cost_based_routing():
         ],
     )
     cost_selector = router._group_selectors["cheap"]["cost-based-routing"]
-    assert not hasattr(cost_selector, "get_available_deployments"), (
-        "test premise broken: LowestCostLoggingHandler unexpectedly grew a "
-        "sync method — revisit the sync dispatch arm."
-    )
+    healthy = router._core_get_model_list(model_name="filtered-model")  # pyright: ignore[reportPrivateUsage]  # pytest and the cores' untyped members
+    assert healthy
 
     result = router._select_deployment_sync(
         strategy="cost-based-routing",
         selector=cost_selector,
         model="filtered-model",
-        healthy_deployments=[],
+        healthy_deployments=healthy,
         messages=None,
         input=None,
         request_kwargs=None,
     )
-    assert result is None
+    assert result in healthy
 
 
 @pytest.mark.asyncio
@@ -1036,7 +1033,7 @@ def test_sync_usage_based_v2_override_stays_scoped_to_the_request_that_asked_for
         plain = router.completion(model="other-model", messages=messages, mock_response="ok")
         assert plain.choices[0].message.content == "ok"
 
-    with pytest.raises(ValueError, match="No deployments available"):
+    with pytest.raises(litellm.RateLimitError, match="No deployments available"):  # pyright: ignore[reportUnknownMemberType]  # pytest and the cores' untyped members
         router.completion(
             model="other-model", messages=messages, mock_response="ok", routing_strategy="usage-based-routing-v2"
         )

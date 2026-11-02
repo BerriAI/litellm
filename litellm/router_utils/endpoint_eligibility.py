@@ -17,6 +17,7 @@ CHAT_ENDPOINT_BY_CALL: Final[Mapping[str, str]] = MappingProxyType(
         "_acompletion": "/v1/chat/completions",
         "text_completion": "/v1/completions",
         "atext_completion": "/v1/completions",
+        "_text_completion": "/v1/completions",
         "_atext_completion": "/v1/completions",
         "anthropic_messages": "/v1/messages",
         "aresponses": "/v1/responses",
