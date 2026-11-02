@@ -40,12 +40,7 @@ class TestParseDeprecationDate:
 
     def test_should_return_none_for_documentation_sentinel(self):
         # The JSON map ships a sentinel string under the "sample_spec" key.
-        assert (
-            _parse_deprecation_date(
-                "date when the model becomes deprecated in the format YYYY-MM-DD"
-            )
-            is None
-        )
+        assert _parse_deprecation_date("date when the model becomes deprecated in the format YYYY-MM-DD") is None
 
     def test_should_return_none_for_none(self):
         assert _parse_deprecation_date(None) is None
@@ -54,9 +49,7 @@ class TestParseDeprecationDate:
         assert _parse_deprecation_date(12345) is None
 
     def test_should_narrow_datetime_to_date(self):
-        assert _parse_deprecation_date(
-            datetime(2026, 12, 31, 23, 59, tzinfo=timezone.utc)
-        ) == date(2026, 12, 31)
+        assert _parse_deprecation_date(datetime(2026, 12, 31, 23, 59, tzinfo=timezone.utc)) == date(2026, 12, 31)
 
 
 class TestClassify:
@@ -137,9 +130,7 @@ class TestCollectModelDeprecations:
             ]
         )
 
-        snapshot = collect_model_deprecations(
-            llm_router=router, warn_within_days=30, today=today
-        )
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=today)
 
         assert [m.model_name for m in snapshot.deprecated] == ["deprecated-alias"]
         assert [m.model_name for m in snapshot.imminent] == ["imminent-alias"]
@@ -169,9 +160,7 @@ class TestCollectModelDeprecations:
             ]
         )
 
-        snapshot = collect_model_deprecations(
-            llm_router=router, warn_within_days=30, today=today
-        )
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=today)
 
         assert len(snapshot.imminent) == 1
         assert snapshot.imminent[0].deprecation_date == date(2026, 6, 10)
@@ -198,9 +187,7 @@ class TestCollectModelDeprecations:
             ]
         )
 
-        snapshot = collect_model_deprecations(
-            llm_router=router, warn_within_days=30, today=today
-        )
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=today)
 
         assert len(snapshot.imminent) == 1
 
@@ -220,9 +207,7 @@ class TestCollectModelDeprecations:
             ]
         )
 
-        snapshot = collect_model_deprecations(
-            llm_router=router, warn_within_days=30, today=date(2026, 6, 1)
-        )
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
 
         assert [m.litellm_model for m in snapshot.imminent] == ["gpt-4o"]
 
@@ -247,9 +232,7 @@ class TestCollectModelDeprecations:
             ]
         )
 
-        snapshot = collect_model_deprecations(
-            llm_router=router, warn_within_days=30, today=date(2026, 6, 1)
-        )
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
 
         assert len(snapshot.imminent) == 1
         assert len(snapshot.upcoming) == 1
@@ -271,25 +254,21 @@ class TestCollectModelDeprecations:
             ]
         )
 
-        snapshot = collect_model_deprecations(
-            llm_router=router, warn_within_days=30, today=today
-        )
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=today)
 
         assert len(snapshot.imminent) == 1
         assert snapshot.imminent[0].litellm_model == "base-thing"
 
 
 class TestProviderScopedResolution:
-    COST_MAP = {
+    CATALOG = {
         "gpt-4o": {"deprecation_date": "2027-01-14", "litellm_provider": "openai"},
         "azure/gpt-4o": {"deprecation_date": "2027-04-14", "litellm_provider": "azure"},
-        "azure_ai/gpt-4o": AliasedCostEntry({"deprecation_date": "2027-01-14", "mode": "chat"}, ()),
         "github_copilot/gpt-4o": {"litellm_provider": "github_copilot"},
         "azure_ai/gpt-4.1": AliasedCostEntry(
             {"deprecation_date": "2027-05-01", "litellm_provider": "azure_ai", "mode": "chat"}, ()
         ),
         "custom-base": {"deprecation_date": "2026-12-01"},
-        "registered-base": AliasedCostEntry({"deprecation_date": "2026-12-15"}, (), frozenset({"deprecation_date"})),
         "gpt-4.1": {"deprecation_date": "2027-01-14", "litellm_provider": "openai"},
         "azure/gpt-4.1": {"deprecation_date": "2027-04-14", "litellm_provider": "azure"},
         "gpt-4o-2024-05-13": {"deprecation_date": "2026-10-23", "litellm_provider": "openai"},
@@ -298,6 +277,13 @@ class TestProviderScopedResolution:
             {"deprecation_date": "2026-11-20"}, ("azure/aliased-base", "azure/aliased-base-v1")
         ),
         "aliased-base": {"deprecation_date": "2027-02-01"},
+    }
+    COST_MAP = {
+        **CATALOG,
+        "azure_ai/gpt-4o": AliasedCostEntry(
+            {"deprecation_date": "2027-01-14", "litellm_provider": "azure", "mode": "chat"}, ()
+        ),
+        "registered-base": AliasedCostEntry({"deprecation_date": "2026-12-15"}, (), frozenset({"deprecation_date"})),
     }
 
     @pytest.mark.parametrize(
@@ -325,6 +311,11 @@ class TestProviderScopedResolution:
             (
                 {"model": "azure_ai/prod-chat"},
                 {"base_model": "gpt-4o"},
+                ("azure/gpt-4o", date(2027, 4, 14), "azure"),
+            ),
+            (
+                {"model": "azure_ai/gpt-4o"},
+                {"base_model": "azure_ai/gpt-4o"},
                 ("azure/gpt-4o", date(2027, 4, 14), "azure"),
             ),
             ({"model": "azure_ai/gpt-4.1"}, {}, ("azure_ai/gpt-4.1", date(2027, 5, 1), "azure_ai")),
@@ -359,6 +350,7 @@ class TestProviderScopedResolution:
             "undated-own-row",
             "azure-ai-reads-azure",
             "azure-ai-base-model-reads-azure",
+            "azure-ai-copied-base-model-yields-to-azure",
             "azure-ai-own-row-wins",
             "custom-base-model-row-wins",
             "registered-base-model-row-wins",
@@ -379,7 +371,9 @@ class TestProviderScopedResolution:
             [{"model_name": "alias", "litellm_params": litellm_params, "model_info": {"id": "1", **model_info}}]
         )
 
-        snapshot: Final = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
+        snapshot: Final = collect_model_deprecations(
+            llm_router=router, warn_within_days=30, today=date(2026, 6, 1), loaded_catalog=lambda: self.CATALOG
+        )
 
         assert [(m.litellm_model, m.deprecation_date, m.litellm_provider) for m in snapshot.upcoming] == [expected]
 
@@ -429,9 +423,7 @@ class TestFormatDeprecationAlertMessage:
             ]
         )
 
-        snapshot = collect_model_deprecations(
-            llm_router=router, warn_within_days=30, today=today
-        )
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=today)
         message = format_deprecation_alert_message(snapshot)
 
         assert message is not None
@@ -458,9 +450,7 @@ class TestFormatDeprecationAlertMessage:
             ]
         )
 
-        snapshot = collect_model_deprecations(
-            llm_router=router, warn_within_days=30, today=today
-        )
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=today)
         message = format_deprecation_alert_message(snapshot)
 
         assert message is not None

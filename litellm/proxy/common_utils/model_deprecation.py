@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from itertools import groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry, GetModelCostMap
 from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_WARN_DAYS,
     DeprecationStatus,
@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 
 _NO_MODEL_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 _SHARED_SCHEDULE_PROVIDER: Final[Mapping[str, str]] = MappingProxyType({"azure_ai": "azure"})
+
+LoadedCatalog: TypeAlias = Callable[[], Mapping[str, Mapping[str, object]]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +52,7 @@ def _successor_model(raw_value: object) -> str | None:
     return raw_value.strip() or None if isinstance(raw_value, str) else None
 
 
-def _cost_map_lookup(model_key: str | None) -> _ResolvedDeprecation | None:
+def _cost_map_lookup(model_key: str | None, catalog: Mapping[str, object]) -> _ResolvedDeprecation | None:
     if model_key is None:
         return None
     entry: Final = litellm.model_cost.get(model_key)
@@ -65,14 +67,15 @@ def _cost_map_lookup(model_key: str | None) -> _ResolvedDeprecation | None:
         litellm_model=model_key,
         litellm_provider=provider if isinstance(provider, str) else None,
         copied_from_another_row=isinstance(entry, AliasedCostEntry)
-        and not entry.names
         and "deprecation_date" not in entry.registered_fields
-        and not isinstance(provider, str),
+        and model_key not in catalog,
     )
 
 
-def _first_own_row(model_keys: Sequence[str | None]) -> _ResolvedDeprecation | None:
-    found: Final = tuple(resolved for resolved in (_cost_map_lookup(key) for key in model_keys) if resolved is not None)
+def _first_own_row(model_keys: Sequence[str | None], catalog: Mapping[str, object]) -> _ResolvedDeprecation | None:
+    found: Final = tuple(
+        resolved for resolved in (_cost_map_lookup(key, catalog) for key in model_keys) if resolved is not None
+    )
     return next((resolved for resolved in found if not resolved.copied_from_another_row), next(iter(found), None))
 
 
@@ -110,7 +113,7 @@ def _mapping_field(deployment: Mapping[str, object], key: str) -> Mapping[str, o
 
 
 def _resolve_deployment_deprecation(
-    deployment: Mapping[str, object],
+    deployment: Mapping[str, object], catalog: Mapping[str, object]
 ) -> _ResolvedDeprecation | None:
     """Resolve a deployment's deprecation date, preferring its explicit override"""
     model_info: Final = _mapping_field(deployment, "model_info")
@@ -132,14 +135,15 @@ def _resolve_deployment_deprecation(
     picks: Final = tuple(
         pick
         for pick in (
-            _first_own_row(_schedule_keys(provider, base_model)),
+            _first_own_row(_schedule_keys(provider, base_model), catalog),
             _first_own_row(
-                (_provider_qualified(provider, model_key), model_key, *_schedule_keys(provider, model_name))
+                (_provider_qualified(provider, model_key), model_key, *_schedule_keys(provider, model_name)), catalog
             ),
         )
         if pick is not None
     )
-    return min(picks, key=lambda pick: pick.deprecation_date, default=None)
+    own_rows: Final = tuple(pick for pick in picks if not pick.copied_from_another_row)
+    return min(own_rows or picks, key=lambda pick: pick.deprecation_date, default=None)
 
 
 def _classify(days_until: int, warn_within_days: int) -> DeprecationStatus:
@@ -166,13 +170,17 @@ def _checked_successor(model_name: str, model_info: Mapping[str, object], llm_ro
 
 
 def _build_info(
-    deployment: Mapping[str, object], llm_router: Router, today: date, warn_within_days: int
+    deployment: Mapping[str, object],
+    llm_router: Router,
+    today: date,
+    warn_within_days: int,
+    catalog: Mapping[str, object],
 ) -> ModelDeprecationInfo | None:
     model_name: Final = deployment.get("model_name")
     if not isinstance(model_name, str) or not model_name:
         return None
 
-    resolved: Final = _resolve_deployment_deprecation(deployment)
+    resolved: Final = _resolve_deployment_deprecation(deployment, catalog)
     if resolved is None:
         return None
 
@@ -224,15 +232,12 @@ def _bucket(models: Sequence[ModelDeprecationInfo], status: DeprecationStatus) -
     )
 
 
-def _collect_from_router(llm_router: Router, today: date, warn_within_days: int) -> tuple[ModelDeprecationInfo, ...]:
+def _collect_from_router(
+    llm_router: Router, today: date, warn_within_days: int, catalog: Mapping[str, object]
+) -> tuple[ModelDeprecationInfo, ...]:
     deployments: Final = llm_router.get_model_list() or ()
-    deduped: Final = _dedupe(
-        tuple(
-            info
-            for info in (_build_info(deployment, llm_router, today, warn_within_days) for deployment in deployments)
-            if info is not None
-        )
-    )
+    infos: Final = (_build_info(deployment, llm_router, today, warn_within_days, catalog) for deployment in deployments)
+    deduped: Final = _dedupe(tuple(info for info in infos if info is not None))
 
     verbose_logger.debug(
         "model_deprecation: %d/%d deployments carry a deprecation date",
@@ -246,12 +251,15 @@ def collect_model_deprecations(
     llm_router: Router | None,
     warn_within_days: int = DEFAULT_DEPRECATION_WARN_DAYS,
     today: date | None = None,
+    loaded_catalog: LoadedCatalog = GetModelCostMap.loaded_model_cost_map,
 ) -> ModelDeprecationResponse:
     """Bucket every deployment carrying a deprecation date by how urgent it is"""
     snapshot_time: Final = datetime.now(timezone.utc)
     effective_today: Final = today or snapshot_time.date()
     deduped: Final = (
-        _collect_from_router(llm_router, effective_today, warn_within_days) if llm_router is not None else ()
+        _collect_from_router(llm_router, effective_today, warn_within_days, loaded_catalog())
+        if llm_router is not None
+        else ()
     )
 
     return ModelDeprecationResponse(
