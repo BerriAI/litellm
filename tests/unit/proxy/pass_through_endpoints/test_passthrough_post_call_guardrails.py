@@ -18,6 +18,7 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
 )
 from litellm.proxy._types import ProxyException
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import _run_post_call_guardrails_keeping_the_charge
 
 _PT_MOD = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
 _COLLECT = "litellm.proxy.pass_through_endpoints.passthrough_guardrails.PassthroughGuardrailHandler.collect_guardrails"
@@ -335,3 +336,37 @@ def test_modify_response_exception_importable_from_both_paths():
     )
 
     assert FromExceptions is FromGuardrail
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_response_settles_the_provider_charge_and_keeps_the_block():
+    blocked = HTTPException(status_code=400, detail="blocked")
+    settle = AsyncMock()
+
+    with pytest.raises(HTTPException) as caught:
+        await _run_post_call_guardrails_keeping_the_charge(AsyncMock(side_effect=blocked), settle)
+
+    assert caught.value is blocked
+    settle.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_settlement_does_not_replace_the_block():
+    blocked = HTTPException(status_code=400, detail="blocked")
+
+    with pytest.raises(HTTPException) as caught:
+        await _run_post_call_guardrails_keeping_the_charge(
+            AsyncMock(side_effect=blocked), AsyncMock(side_effect=ValueError("no price"))
+        )
+
+    assert caught.value is blocked
+
+
+@pytest.mark.asyncio
+async def test_an_allowed_response_leaves_the_charge_to_the_success_path():
+    settle = AsyncMock()
+
+    response = await _run_post_call_guardrails_keeping_the_charge(AsyncMock(return_value={"id": "kept"}), settle)
+
+    assert response == {"id": "kept"}
+    settle.assert_not_awaited()
