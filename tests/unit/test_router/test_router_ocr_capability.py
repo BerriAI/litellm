@@ -18,6 +18,9 @@ def test_router_ocr_capability_gate_skips_chat_fallbacks() -> None:
         enable_pre_call_checks=True,
     )
 
+    async def ocr(*args, **kwargs):
+        return None
+
     async def aocr(*args, **kwargs):
         return None
 
@@ -34,11 +37,12 @@ def test_router_ocr_capability_gate_skips_chat_fallbacks() -> None:
     )
     assert [deployment["model_info"]["id"] for deployment in chat_deployments] == ["ocr", "chat"]
 
-    ocr_deployments = router._pre_call_checks(
-        model="document-ocr",
-        healthy_deployments=deployments,
-        messages=None,
-        input=None,
-        request_kwargs={"original_function": aocr},
-    )
-    assert [deployment["model_info"]["id"] for deployment in ocr_deployments] == ["ocr"]
+    for ocr_function in (ocr, aocr):
+        ocr_deployments = router._pre_call_checks(
+            model="document-ocr",
+            healthy_deployments=deployments,
+            messages=None,
+            input=None,
+            request_kwargs={"original_function": ocr_function},
+        )
+        assert [deployment["model_info"]["id"] for deployment in ocr_deployments] == ["ocr"]
