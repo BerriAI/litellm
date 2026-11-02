@@ -13835,7 +13835,7 @@
         "input_cost_per_token_flex": 3.7e-07,
         "input_cost_per_token_priority": 1.295e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 164000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 2.22e-06,
@@ -13849,7 +13849,7 @@
         "supports_audio_input": false,
         "supports_response_schema": true,
         "supports_vision": false,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     "bedrock/ap-northeast-1/minimax.minimax-m2.1": {
         "deprecation_date": "2027-03-30",
@@ -14006,7 +14006,7 @@
         "input_cost_per_token_flex": 3.7e-07,
         "input_cost_per_token_priority": 1.295e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 164000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 2.22e-06,
@@ -14020,7 +14020,7 @@
         "supports_audio_input": false,
         "supports_response_schema": true,
         "supports_vision": false,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     "bedrock/ap-south-1/minimax.minimax-m2.1": {
         "deprecation_date": "2027-03-30",
@@ -14144,12 +14144,12 @@
         "input_cost_per_token": 7.4e-07,
         "input_cost_per_token_flex": 3.7e-07,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 164000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 2.22e-06,
         "output_cost_per_token_flex": 1.11e-06,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md",
         "supports_audio_input": false,
         "supports_function_calling": true,
         "supports_native_structured_output": true,
@@ -14254,7 +14254,7 @@
         "input_cost_per_token_flex": 3.7e-07,
         "input_cost_per_token_priority": 1.295e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 164000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 2.22e-06,
@@ -14268,7 +14268,7 @@
         "supports_audio_input": false,
         "supports_response_schema": true,
         "supports_vision": false,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     "bedrock/eu-north-1/minimax.minimax-m2.1": {
         "deprecation_date": "2027-03-30",
@@ -14790,7 +14790,7 @@
         "input_cost_per_token_flex": 3.7e-07,
         "input_cost_per_token_priority": 1.295e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 164000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 2.22e-06,
@@ -14804,7 +14804,7 @@
         "supports_audio_input": false,
         "supports_response_schema": true,
         "supports_vision": false,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     "bedrock/sa-east-1/minimax.minimax-m2.1": {
         "deprecation_date": "2027-03-30",
@@ -15039,7 +15039,7 @@
         "input_cost_per_token_flex": 3.1e-07,
         "input_cost_per_token_priority": 1.085e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 164000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 1.85e-06,
@@ -15053,7 +15053,7 @@
         "supports_audio_input": false,
         "supports_response_schema": true,
         "supports_vision": false,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     "bedrock/us-east-1/minimax.minimax-m2.1": {
         "deprecation_date": "2027-03-30",
@@ -15160,7 +15160,7 @@
         "input_cost_per_token_flex": 3.1e-07,
         "input_cost_per_token_priority": 1.085e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 164000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 1.85e-06,
@@ -15174,7 +15174,7 @@
         "supports_audio_input": false,
         "supports_response_schema": true,
         "supports_vision": false,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     "bedrock/us-east-2/minimax.minimax-m2.1": {
         "deprecation_date": "2027-03-30",
@@ -15556,6 +15556,7 @@
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md"
     },
     "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0": {
+        "deprecation_date": "2027-03-30",
         "input_cost_per_token": 2.65e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 8000,
@@ -15566,6 +15567,7 @@
         "supports_pdf_input": true
     },
     "bedrock/us-gov-west-1/meta.llama3-8b-instruct-v1:0": {
+        "deprecation_date": "2027-03-30",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 8000,
@@ -15712,7 +15714,7 @@
         "input_cost_per_token_flex": 3.1e-07,
         "input_cost_per_token_priority": 1.085e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 164000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 1.85e-06,
@@ -15726,7 +15728,7 @@
         "supports_audio_input": false,
         "supports_response_schema": true,
         "supports_vision": false,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     "bedrock/us-west-2/minimax.minimax-m2.1": {
         "deprecation_date": "2027-03-30",
