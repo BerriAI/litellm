@@ -65,13 +65,13 @@ def _operator_verdict(action: str) -> Callable[[Request], Reply]:
     return reply
 
 
-def _airs(policy_url: str) -> dict[str, JsonValue]:
+def _airs(policy_url: str, default_on: bool = True) -> dict[str, JsonValue]:
     return {
         "guardrail_name": "airs-" + uuid.uuid4().hex[:8],
         "litellm_params": {
             "guardrail": "panw_prisma_airs",
             "mode": "pre_call",
-            "default_on": True,
+            "default_on": default_on,
             "api_base": policy_url,
             "api_key": "synthetic-panw-key",
             "profile_name": "synthetic-profile",
@@ -184,6 +184,32 @@ def test_unknown_model_burst_while_the_scanner_is_down_never_reaches_it(gateway:
                 scanned: Final = [json.loads(scan.body)["contents"][0]["prompt"] for scan in policy.drain()]
                 assert scanned and all("routable burst prompt" in prompt for prompt in scanned), scanned
                 assert [request.target for request in upstream.drain() if request.method == "POST"] == []
+
+
+def test_opt_in_guardrail_is_named_in_the_header_only_when_it_ran(gateway: Gateway, tmp_path: Path) -> None:
+    model: Final = "no-such-model-" + uuid.uuid4().hex[:8]
+    with wire_server(_scanner("allow")) as policy, wire_server(_provider) as upstream:
+        guardrail: Final = _airs(policy.url, default_on=False)
+        opt_in: Final = {"guardrails": [guardrail["guardrail_name"]]}
+        with owned_proxy(gateway, tmp_path, {}, config=_config(tmp_path, guardrail)) as candidate:
+            with candidate.scenario() as scenario:
+                routable: Final = scenario.model(
+                    model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
+                )
+                ran: Final = candidate.request(
+                    "POST", "/v1/chat/completions", {**_requests(routable)[0][1], "metadata": opt_in}
+                )
+                assert ran.status_code == 200, ran.text
+                assert ran.headers["x-litellm-applied-guardrails"] == guardrail["guardrail_name"]
+                assert len(policy.drain()) == 1
+
+                for target, body in _requests(model):
+                    refused = candidate.request("POST", target, {**body, "metadata": opt_in})
+
+                    assert refused.status_code == 400, refused.text
+                    assert "Invalid model name" in refused.text
+                    assert "x-litellm-applied-guardrails" not in refused.headers, target
+                assert policy.drain() == ()
 
 
 def test_operator_guardrail_and_the_guardrail_before_it_still_run_for_an_unknown_model(

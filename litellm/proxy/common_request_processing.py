@@ -2667,7 +2667,7 @@ class ProxyBaseLLMRequestProcessing:
             )
         finally:
             if routing_probe is not None and routing_probe.refusal is not None:
-                self._redact_request_its_skipped_guardrails_never_scanned()
+                self._redact_request_its_skipped_guardrails_never_scanned(routing_probe.skipped_guardrails)
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
             tags_before_guardrails=self._tags_before_guardrails,
@@ -2703,15 +2703,21 @@ class ProxyBaseLLMRequestProcessing:
 
         return self.data, logging_obj
 
-    def _redact_request_its_skipped_guardrails_never_scanned(self) -> None:
+    def _redact_request_its_skipped_guardrails_never_scanned(self, skipped_guardrails: frozenset[str]) -> None:
         """Redact the request body, its logged snapshot and the logged messages, so failure callbacks never see
-        content a skipped masking guardrail would have rewritten.
+        content a skipped masking guardrail would have rewritten, and leave the skipped guardrails out of the
+        logged ``applied_guardrails``.
         """
         self.data.update(without_unscanned_content(self.data))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
         refresh_proxy_server_request_body_snapshot(self.data)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
         logging_obj: Final = self.data.get("litellm_logging_obj")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # self.data is the untyped request dict
         if isinstance(logging_obj, LiteLLMLoggingObj):
             logging_obj.update_messages([{"role": "user", "content": REDACTED_BY_LITELLM}])
+            logging_obj.model_call_details["applied_guardrails"] = [
+                name
+                for name in logging_obj.model_call_details.get("applied_guardrails") or ()
+                if name not in skipped_guardrails
+            ]
 
     async def _pre_call_with_fallbacks(
         self,

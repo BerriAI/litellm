@@ -13137,6 +13137,7 @@ class _FailureLogRecorder(CustomLogger):
                 "request_model": logged_request.get("model"),
                 "request_messages": logged_request.get("messages"),
                 "request_has_call_id": "litellm_call_id" in logged_request,
+                "applied_guardrails": (standard.get("metadata") or {}).get("applied_guardrails"),
             }
         )
 
@@ -13538,6 +13539,38 @@ class TestUnroutableModelFailureLogHidesUnscannedContent:
 
         assert sent.status == 400
         assert _shows_no_raw_content(sent) is content_hidden, sent.failure_dumps
+
+
+class TestUnroutableModelFailureLogNamesOnlyGuardrailsThatRan:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("run_in_parallel", [False, True], ids=["sequential", "parallel"])
+    async def test_failure_log_leaves_out_a_skipped_default_on_guardrail(self, monkeypatch, run_in_parallel):
+        sent: Final = await _send(monkeypatch, [_VendorGuardrail(run_in_parallel=run_in_parallel)])
+
+        assert sent.status == 400
+        assert sent.failure_logs[0]["applied_guardrails"] == []
+
+    @pytest.mark.asyncio
+    async def test_failure_log_keeps_an_operator_guardrail_that_ran(self, monkeypatch):
+        class OperatorGuardrail(_VendorGuardrail):
+            __module__ = "operator_guardrails.checks"
+
+        operator: Final = OperatorGuardrail(name="operator")
+        skipped: Final = _VendorGuardrail(name="skipped")
+
+        sent: Final = await _send(monkeypatch, [operator, skipped])
+
+        assert (operator.calls, skipped.calls) == (1, 0)
+        assert sent.failure_logs[0]["applied_guardrails"] == ["operator"]
+
+    @pytest.mark.asyncio
+    async def test_failure_log_names_a_guardrail_that_blocked_a_routable_model(self, monkeypatch):
+        guardrail: Final = _VendorGuardrail(behavior="block")
+
+        sent: Final = await _send(monkeypatch, [guardrail], model="gpt-4o-mini")
+
+        assert guardrail.calls == 1
+        assert sent.failure_logs[0]["applied_guardrails"] == ["vendor-guardrail"]
 
 
 class TestUnroutableModelLeavesEverythingElseAsBefore:
