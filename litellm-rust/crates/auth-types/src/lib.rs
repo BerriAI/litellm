@@ -5,7 +5,6 @@ mod error;
 pub mod http;
 mod params;
 mod policy;
-mod secret;
 mod token;
 
 use serde::{Deserialize, Serialize};
@@ -55,5 +54,4 @@ pub use error::{Error, ErrorDetail};
 pub use http::CredentialPlacement;
 pub use params::{AwsParams, ParamKind, ParamSpec, VertexParams};
 pub use policy::{CredentialPlanKind, CredentialRule, ExistingHeaderBehavior, ProviderAuthPolicy};
-pub use secret::SecretValue;
 pub use token::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};

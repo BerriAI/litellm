@@ -5,7 +5,7 @@ use litellm_core_utils::settings::Lookup;
 use crate::{Error, KeyManagementSettings, KeyManagementSystem, Secret};
 
 #[cfg(any(feature = "aws", feature = "google"))]
-use crate::SecretValue;
+use litellm_secret_value::SecretValue;
 
 #[cfg(any(
     feature = "google",
