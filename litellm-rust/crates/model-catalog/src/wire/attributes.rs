@@ -104,6 +104,8 @@ attributes! {
     /// Cloud regions the model is available in ('global' or region ids).
     supported_regions: Vec<String>,
     thinking_always_on: bool,
+    /// Whether the model thinks when the request carries no thinking param.
+    thinking_on_by_default: bool,
     token_count_framing: u64 as NumericCount,
     token_count_model: TokenCountModel,
     token_count_responses_framing: u64 as NumericCount,
@@ -301,6 +303,8 @@ mod tests {
     #[case::known_mode("mode", json!("chat"), true)]
     #[case::unknown_mode("mode", json!("chatt"), false)]
     #[case::negative_dbu("input_dbu_cost_per_token", json!(-1), false)]
+    #[case::thinking_on_by_default("thinking_on_by_default", json!(true), true)]
+    #[case::thinking_on_by_default_not_a_flag("thinking_on_by_default", json!("yes"), false)]
     #[case::reasoning_contexts("reasoning_contexts", json!(["reasoning", "non_reasoning"]), true)]
     #[case::reasoning_modes("reasoning_modes", json!(["none", "adaptive"]), true)]
     #[case::reasoning_context_not_a_list("reasoning_contexts", json!("reasoning"), false)]
