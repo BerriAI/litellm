@@ -2,8 +2,8 @@ use litellm_llms_types::{
     formats::{
         chat_completions::ReasoningEffort,
         messages::{
-            EffortLevel, MessagesOptionalParams, MessagesRequest, OutputConfig, ThinkingConfig,
-            ThinkingDisplay,
+            AdaptiveThinking, EffortLevel, MessagesOptionalParams, MessagesRequest, OutputConfig,
+            ThinkingConfig, ThinkingDisplay,
         },
     },
     recognized::Recognized,
@@ -36,16 +36,17 @@ fn budget_for_effort(budgets: &ThinkingBudgets, effort: ReasoningEffort) -> Opti
 
 fn effort_for_budget(
     budgets: &ThinkingBudgets,
-    budget_tokens: u64,
+    budget_tokens: i64,
     capabilities: &MessagesModelCapabilities,
 ) -> EffortLevel {
-    if budget_tokens >= budgets.xhigh && capabilities.effort_tiers.xhigh {
+    let reaches = |tier: u64| i128::from(budget_tokens) >= i128::from(tier);
+    if reaches(budgets.xhigh) && capabilities.effort_tiers.xhigh {
         return EffortLevel::Xhigh;
     }
-    if budget_tokens >= budgets.high {
+    if reaches(budgets.high) {
         return EffortLevel::High;
     }
-    if budget_tokens >= budgets.medium {
+    if reaches(budgets.medium) {
         return EffortLevel::Medium;
     }
     EffortLevel::Low
@@ -231,32 +232,129 @@ fn drop_disabled_thinking(request: MessagesRequest, context: &ThinkingContext) -
     }
 }
 
+/// `_numeric_budget_tokens`: Python reads any int, float (truncated) or int-parseable string
+/// as a budget, and nothing else.
+fn numeric_budget_tokens(budget: &Recognized<u64>) -> Option<i64> {
+    let value = match budget {
+        Recognized::Known(budget) => return Some(i64::try_from(*budget).unwrap_or(i64::MAX)),
+        Recognized::Unrecognized(value) => value,
+    };
+    match value {
+        Value::Number(number) => number
+            .as_i64()
+            .or_else(|| number.as_f64().map(|float| float.trunc() as i64)),
+        Value::String(text) => python_int(text),
+        Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+/// Python's `int(str)`: surrounding whitespace, a sign, and single underscores between digits.
+fn python_int(text: &str) -> Option<i64> {
+    let trimmed = text.trim();
+    let digits = trimmed.trim_start_matches(['+', '-']);
+    let well_formed = trimmed.len() - digits.len() <= 1
+        && !digits.is_empty()
+        && !digits.starts_with('_')
+        && !digits.ends_with('_')
+        && !digits.contains("__")
+        && digits.chars().all(|ch| ch.is_ascii_digit() || ch == '_');
+    if !well_formed {
+        return None;
+    }
+    let cleaned: String = trimmed.chars().filter(|ch| *ch != '_').collect();
+    cleaned.parse::<i64>().ok().or_else(|| {
+        Some(if cleaned.starts_with('-') {
+            i64::MIN
+        } else {
+            i64::MAX
+        })
+    })
+}
+
+fn python_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "NoneType",
+        Value::Bool(_) => "bool",
+        Value::Number(number) if number.is_f64() => "float",
+        Value::Number(_) => "int",
+        Value::String(_) => "str",
+        Value::Array(_) => "list",
+        Value::Object(_) => "dict",
+    }
+}
+
+fn kept_display(
+    display: Option<&Recognized<ThinkingDisplay>>,
+    context: &ThinkingContext,
+) -> Option<Recognized<ThinkingDisplay>> {
+    match display? {
+        Recognized::Known(ThinkingDisplay::Summarized | ThinkingDisplay::Omitted) => {
+            display.cloned()
+        }
+        Recognized::Known(ThinkingDisplay::Updates) if context.keeps_display_updates => {
+            display.cloned()
+        }
+        Recognized::Known(ThinkingDisplay::Updates) | Recognized::Unrecognized(_) => None,
+    }
+}
+
+/// Keys Python's `carried_thinking_keys` keeps on the rebuilt adaptive config: the adaptive
+/// keys always, and any other key unless `drop_params` is set.
+fn carried_thinking_keys(
+    extra: &serde_json::Map<String, Value>,
+    context: &ThinkingContext,
+) -> serde_json::Map<String, Value> {
+    extra
+        .iter()
+        .filter(|(key, _)| key.as_str() == "block_binding" || !context.drop_params)
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// `AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model_silently`.
 fn translate_legacy_thinking_for_adaptive_model(
     request: MessagesRequest,
     context: &ThinkingContext,
-) -> MessagesRequest {
+) -> Result<MessagesRequest, Error> {
     let capabilities = &context.capabilities;
     if !capabilities.supports_adaptive_thinking || capabilities.supports_legacy_thinking {
-        return request;
+        return Ok(request);
     }
     let Some(ThinkingConfig::Enabled(enabled)) = known_thinking(&request) else {
-        return request;
+        return Ok(request);
     };
-    let budget = enabled
-        .budget_tokens
-        .as_ref()
-        .and_then(Recognized::known)
-        .copied()
-        .unwrap_or(0);
-    let level = effort_for_budget(&context.budgets, budget, capabilities);
-    MessagesRequest {
+    let budget = match &enabled.budget_tokens {
+        None => Some(0),
+        Some(budget) => numeric_budget_tokens(budget),
+    };
+    if budget.is_none() && !context.drop_params {
+        let actual = match &enabled.budget_tokens {
+            Some(Recognized::Unrecognized(value)) => python_type_name(value),
+            Some(Recognized::Known(_)) | None => "int",
+        };
+        return Err(Error::InvalidRequest(
+            crate::ErrorDetail::NonNumericThinkingBudget { actual },
+        ));
+    }
+    let thinking = ThinkingConfig::Adaptive(AdaptiveThinking {
+        display: kept_display(enabled.display.as_ref(), context),
+        extra: carried_thinking_keys(&enabled.extra, context),
+    });
+    let output_config = match budget {
+        Some(budget) => with_default_effort(
+            request.params.output_config,
+            effort_for_budget(&context.budgets, budget, capabilities),
+        ),
+        None => request.params.output_config,
+    };
+    Ok(MessagesRequest {
         params: MessagesOptionalParams {
-            thinking: Some(Recognized::Known(ThinkingConfig::adaptive(None))),
-            output_config: with_default_effort(request.params.output_config, level),
+            thinking: Some(Recognized::Known(thinking)),
+            output_config,
             ..request.params
         },
         ..request
-    }
+    })
 }
 
 fn translate_adaptive_effort_for_non_adaptive_model(
@@ -337,7 +435,7 @@ pub fn translate_thinking(
 ) -> Result<MessagesRequest, Error> {
     let request = translate_reasoning_effort(request, context)?;
     let request = drop_disabled_thinking(request, context);
-    let request = translate_legacy_thinking_for_adaptive_model(request, context);
+    let request = translate_legacy_thinking_for_adaptive_model(request, context)?;
     let request = translate_adaptive_effort_for_non_adaptive_model(request, context)?;
     Ok(drop_incompatible_temperature_for_thinking(request, context))
 }
@@ -363,6 +461,7 @@ mod tests {
         ThinkingContext {
             capabilities,
             budgets: ThinkingBudgets::default(),
+            ..ThinkingContext::default()
         }
     }
 
@@ -1239,10 +1338,102 @@ mod tests {
         let context = ThinkingContext {
             capabilities,
             budgets: overridden_budgets(overrides),
+            ..ThinkingContext::default()
         };
         assert_eq!(
             translate_thinking(request(input), &context),
             Ok(request(expected))
+        );
+    }
+
+    use serde_json::json;
+
+    fn legacy_context(drop_params: bool, keeps_display_updates: bool) -> ThinkingContext {
+        ThinkingContext {
+            drop_params,
+            keeps_display_updates,
+            ..context(opus_4_7())
+        }
+    }
+
+    #[rstest]
+    #[case::float_budget(json!(8192.0), "xhigh")]
+    #[case::float_below_a_tier(json!(1023.9), "low")]
+    #[case::string_budget(json!(" 16_000 "), "xhigh")]
+    #[case::negative_budget(json!(-5), "low")]
+    fn legacy_budgets_read_like_python_numbers(#[case] budget: Value, #[case] effort: &str) {
+        let translated = translate_thinking(
+            request(
+                json!({"max_tokens": 64000, "thinking": {"type": "enabled", "budget_tokens": budget}}),
+            ),
+            &legacy_context(false, false),
+        );
+        assert_eq!(
+            translated,
+            Ok(request(json!({
+                "max_tokens": 64000,
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": effort},
+            })))
+        );
+    }
+
+    #[rstest]
+    #[case::text(json!("lots"), "str")]
+    #[case::list(json!([1]), "list")]
+    #[case::null(Value::Null, "NoneType")]
+    #[case::boolean(json!(true), "bool")]
+    fn a_non_numeric_legacy_budget_is_rejected_unless_dropped(
+        #[case] budget: Value,
+        #[case] actual: &'static str,
+    ) {
+        let fields =
+            json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": budget}});
+        assert_eq!(
+            translate_thinking(request(fields.clone()), &legacy_context(false, false)),
+            Err(Error::InvalidRequest(
+                crate::ErrorDetail::NonNumericThinkingBudget { actual }
+            ))
+        );
+        assert_eq!(
+            translate_thinking(request(fields), &legacy_context(true, false)),
+            Ok(request(
+                json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}})
+            ))
+        );
+    }
+
+    #[rstest]
+    #[case::summarized("summarized", false, Some("summarized"))]
+    #[case::updates_kept("updates", true, Some("updates"))]
+    #[case::updates_dropped("updates", false, None)]
+    #[case::unknown("verbose", true, None)]
+    fn legacy_display_survives_only_where_python_keeps_it(
+        #[case] display: &str,
+        #[case] keeps_display_updates: bool,
+        #[case] kept: Option<&str>,
+    ) {
+        let translated = translate_thinking(
+            request(json!({"max_tokens": 4096, "thinking": {"type": "enabled", "budget_tokens": 2048, "display": display}})),
+            &legacy_context(false, keeps_display_updates),
+        )
+        .unwrap();
+        let thinking = serde_json::to_value(translated.params.thinking).unwrap();
+        assert_eq!(thinking.get("display").and_then(Value::as_str), kept);
+    }
+
+    #[rstest]
+    #[case::kept(false, json!({"type": "adaptive", "block_binding": "strict", "note": "x"}))]
+    #[case::dropped(true, json!({"type": "adaptive", "block_binding": "strict"}))]
+    fn legacy_extra_keys_follow_drop_params(#[case] drop_params: bool, #[case] expected: Value) {
+        let translated = translate_thinking(
+            request(json!({"max_tokens": 4096, "thinking": {"type": "enabled", "budget_tokens": 2048, "block_binding": "strict", "note": "x"}})),
+            &legacy_context(drop_params, false),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(translated.params.thinking).unwrap(),
+            expected
         );
     }
 }

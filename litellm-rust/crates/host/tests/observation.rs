@@ -74,9 +74,7 @@ fn snapshots_do_not_retain_runtime_objects(capacity: NonZeroUsize, #[case] faile
 
 #[rstest]
 fn provider_snapshots_own_the_response_body(capacity: NonZeroUsize) {
-    let mut raw = RawResponse {
-        body: "provider response".into(),
-    };
+    let mut raw = RawResponse::new("provider response".into());
     let event: CallEvent<(), (), &RawResponse> =
         CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw: &raw });
     let expected = raw.clone();

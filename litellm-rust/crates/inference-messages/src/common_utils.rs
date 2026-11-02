@@ -35,6 +35,14 @@ impl MessagesProvider {
     pub(crate) fn config(self) -> &'static dyn BaseMessagesConfig {
         self.config
     }
+
+    /// Python's `MESSAGES_SERVICE_TIER_PROVIDERS`: everyone else has `service_tier` dropped.
+    pub(crate) fn accepts_service_tier(self) -> bool {
+        matches!(
+            self.provider,
+            LlmProviders::Anthropic | LlmProviders::AzureAi | LlmProviders::BedrockMantle
+        )
+    }
 }
 
 /// Python's `get_provider_anthropic_messages_config`: Vertex AI serves only its Claude
@@ -117,5 +125,71 @@ mod tests {
                 actual: "number",
             })
         );
+    }
+}
+
+/// Python's `_merge_messages_header_sources`: later sources win per header name, except
+/// `anthropic-beta` (any casing), whose values from every source are unioned, deduplicated and
+/// sorted into one lowercase `anthropic-beta` entry.
+pub fn merge_messages_header_sources(
+    sources: impl IntoIterator<Item = Map<String, Value>>,
+) -> Map<String, Value> {
+    let mut merged = Map::new();
+    let mut betas = std::collections::BTreeSet::new();
+    for (name, value) in sources.into_iter().flatten() {
+        if !name.eq_ignore_ascii_case("anthropic-beta") {
+            merged.insert(name, value);
+            continue;
+        }
+        let values: Vec<&str> = match &value {
+            Value::String(text) => vec![text.as_str()],
+            Value::Array(entries) => entries.iter().filter_map(Value::as_str).collect(),
+            _ => Vec::new(),
+        };
+        betas.extend(
+            values
+                .iter()
+                .flat_map(|value| value.split(','))
+                .map(str::trim)
+                .filter(|beta| !beta.is_empty())
+                .map(str::to_owned),
+        );
+    }
+    if !betas.is_empty() {
+        merged.insert(
+            "anthropic-beta".to_owned(),
+            Value::String(betas.into_iter().collect::<Vec<_>>().join(",")),
+        );
+    }
+    merged
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use serde_json::{Map, Value, json};
+
+    use super::merge_messages_header_sources;
+
+    fn map(value: Value) -> Map<String, Value> {
+        value.as_object().cloned().unwrap()
+    }
+
+    #[test]
+    fn later_sources_win_except_anthropic_beta_which_is_unioned_and_sorted() {
+        let merged = merge_messages_header_sources([
+            map(json!({"x-a": "1", "anthropic-beta": "b-2, a-1"})),
+            map(json!({"x-a": "2", "Anthropic-Beta": ["c-3", 7, "a-1"]})),
+            map(json!({"anthropic-beta": 5})),
+        ]);
+        assert_eq!(
+            Value::Object(merged),
+            json!({"x-a": "2", "anthropic-beta": "a-1,b-2,c-3"})
+        );
+    }
+
+    #[test]
+    fn no_beta_values_leave_no_beta_header() {
+        let merged = merge_messages_header_sources([map(json!({"anthropic-beta": ""}))]);
+        assert!(merged.is_empty());
     }
 }

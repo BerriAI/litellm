@@ -56,7 +56,7 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        transform_messages_request(request, context)
+        transform_messages_request(request, &context.keeping_display_updates())
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
@@ -206,6 +206,8 @@ fn feature_betas(request: &MessagesRequest) -> BetaSet {
             .then_some(AnthropicBeta::PerTurnControl20260701),
         uses_thinking_display_updates(params)
             .then_some(AnthropicBeta::ThinkingDisplayUpdates20260818),
+        uses_thinking_block_binding(params)
+            .then_some(AnthropicBeta::ThinkingBindingControls20260801),
         messages_carry_tool_changes(&request.messages)
             .then_some(AnthropicBeta::MidConversationToolChanges20260701),
         has_advisor_tool(tools).then_some(AnthropicBeta::AdvisorTool20260301),
@@ -267,6 +269,25 @@ fn uses_thinking_display_updates(params: &MessagesOptionalParams) -> bool {
     display.and_then(Recognized::known) == Some(&ThinkingDisplay::Updates)
 }
 
+/// `AnthropicModelInfo.thinking_betas`: any thinking object carrying `block_binding`.
+fn uses_thinking_block_binding(params: &MessagesOptionalParams) -> bool {
+    match params.thinking.as_ref() {
+        Some(Recognized::Known(ThinkingConfig::Enabled(thinking))) => {
+            thinking.extra.contains_key("block_binding")
+        }
+        Some(Recognized::Known(ThinkingConfig::Adaptive(thinking))) => {
+            thinking.extra.contains_key("block_binding")
+        }
+        Some(Recognized::Known(ThinkingConfig::Disabled(thinking))) => {
+            thinking.extra.contains_key("block_binding")
+        }
+        Some(Recognized::Unrecognized(Value::Object(thinking))) => {
+            thinking.contains_key("block_binding")
+        }
+        Some(Recognized::Unrecognized(_)) | None => false,
+    }
+}
+
 fn is_tool_reference_change(block: &ContentBlock) -> bool {
     matches!(
         &block.block_type,
@@ -297,7 +318,8 @@ fn unsupported_param(model: &str, param: &str, value: &str, hint: &str) -> Error
     })
 }
 
-fn drop_unsupported_params(
+/// The speed and sampling gates of Python's `get_requested_anthropic_messages_optional_param`.
+pub fn drop_unsupported_params(
     request: MessagesRequest,
     context: &MessagesTransformContext,
 ) -> Result<MessagesRequest, Error> {
@@ -838,6 +860,8 @@ mod tests {
                             low: 2000,
                             ..ThinkingBudgets::default()
                         },
+                        drop_params: true,
+                        keeps_display_updates: false,
                     },
                     drop_params: true,
                 }

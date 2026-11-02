@@ -58,8 +58,20 @@ pub(crate) enum Repr {
     Network(#[source] reqwest::Error),
     #[error("upstream request timed out")]
     Timeout(#[source] reqwest::Error),
+    /// No bytes arrived within the read timeout, which the caller enforces per read; `body` says
+    /// the response head had already arrived.
+    #[error("upstream request timed out")]
+    ReadTimeout {
+        #[source]
+        elapsed: Elapsed,
+        body: bool,
+    },
     #[error("upstream request failed with status {status}: {body}")]
-    Status { status: u16, body: UpstreamBody },
+    Status {
+        status: u16,
+        body: UpstreamBody,
+        headers: Vec<(String, String)>,
+    },
 
     #[error("invalid WebSocket URL")]
     WebSocketUrl(#[source] url::ParseError),
@@ -136,11 +148,57 @@ impl Repr {
 
 impl Error {
     pub fn upstream(status: u16, body: String) -> Self {
+        Self::upstream_with_headers(status, body, Vec::new())
+    }
+
+    /// An upstream failure that keeps the provider's response headers (`retry-after`,
+    /// `request-id`) for the caller.
+    pub fn upstream_with_headers(
+        status: u16,
+        body: String,
+        headers: Vec<(String, String)>,
+    ) -> Self {
         Repr::Status {
             status,
             body: UpstreamBody(body),
+            headers,
         }
         .into()
+    }
+
+    /// The provider's response headers on an upstream failure; empty for every other error.
+    pub fn upstream_headers(&self) -> &[(String, String)] {
+        match &*self.0 {
+            Repr::Status { headers, .. } => headers,
+            _ => &[],
+        }
+    }
+
+    /// A timeout reached before the connection was established, as opposed to while reading.
+    pub fn is_connect_timeout(&self) -> bool {
+        matches!(&*self.0, Repr::Timeout(error) if error.is_connect())
+    }
+
+    /// A read the caller timed itself (httpx's per-read timeout) ran out.
+    pub fn read_timeout(elapsed: Elapsed) -> Self {
+        Repr::ReadTimeout {
+            elapsed,
+            body: false,
+        }
+        .into()
+    }
+
+    /// A read of the response body the caller timed itself ran out, after the head arrived.
+    pub fn body_read_timeout(elapsed: Elapsed) -> Self {
+        Repr::ReadTimeout {
+            elapsed,
+            body: true,
+        }
+        .into()
+    }
+
+    pub fn is_body_read_timeout(&self) -> bool {
+        matches!(&*self.0, Repr::ReadTimeout { body: true, .. })
     }
 
     pub fn computed_header(name: impl Into<String>) -> Self {
@@ -169,6 +227,7 @@ impl Error {
         match &*self.0 {
             Repr::Network(_)
             | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
             | Repr::Status { .. }
             | Repr::Handshake(_)
             | Repr::HandshakeTimeout(_)
@@ -227,6 +286,7 @@ impl Error {
             | Repr::Connect(_)
             | Repr::Network(_)
             | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
             | Repr::Status { .. }
             | Repr::Handshake(_)
             | Repr::HandshakeTimeout(_)
@@ -259,6 +319,7 @@ impl Error {
             | Repr::Connect(_)
             | Repr::Network(_)
             | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
             | Repr::Status { .. }
             | Repr::WebSocketUrl(_)
             | Repr::WebSocketScheme(_)
@@ -295,6 +356,7 @@ impl Error {
             | Repr::Connect(_)
             | Repr::Network(_)
             | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
             | Repr::Status { .. }
             | Repr::WebSocketUrl(_)
             | Repr::WebSocketScheme(_)
@@ -333,6 +395,7 @@ impl Error {
             | Repr::Signature(_)
             | Repr::Network(_)
             | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
             | Repr::Status { .. }
             | Repr::WebSocketUrl(_)
             | Repr::WebSocketScheme(_)
@@ -356,7 +419,10 @@ impl Error {
 
     pub fn is_timeout(&self) -> bool {
         match &*self.0 {
-            Repr::Timeout(_) | Repr::HandshakeTimeout(_) | Repr::DownloadTimeout(_) => true,
+            Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
+            | Repr::HandshakeTimeout(_)
+            | Repr::DownloadTimeout(_) => true,
             Repr::Read { .. }
             | Repr::InvalidPem { .. }
             | Repr::Client(_)
@@ -392,7 +458,7 @@ impl Error {
 
     pub fn upstream_response(&self) -> Option<(u16, &str)> {
         match &*self.0 {
-            Repr::Status { status, body } => Some((*status, &body.0)),
+            Repr::Status { status, body, .. } => Some((*status, &body.0)),
             Repr::Read { .. }
             | Repr::InvalidPem { .. }
             | Repr::Client(_)
@@ -408,6 +474,7 @@ impl Error {
             | Repr::Connect(_)
             | Repr::Network(_)
             | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
             | Repr::WebSocketUrl(_)
             | Repr::WebSocketScheme(_)
             | Repr::WebSocketSchemeRewrite(_)
@@ -431,7 +498,7 @@ impl Error {
     pub fn status(&self) -> Option<u16> {
         match &*self.0 {
             Repr::Status { status, .. } | Repr::DownloadStatus(status) => Some(*status),
-            Repr::Timeout(_) | Repr::DownloadTimeout(_) => Some(408),
+            Repr::Timeout(_) | Repr::ReadTimeout { .. } | Repr::DownloadTimeout(_) => Some(408),
             Repr::Read { .. }
             | Repr::InvalidPem { .. }
             | Repr::Client(_)
@@ -482,6 +549,7 @@ impl Error {
             | Repr::Connect(_)
             | Repr::Network(_)
             | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
             | Repr::Status { .. }
             | Repr::WebSocketUrl(_)
             | Repr::WebSocketScheme(_)

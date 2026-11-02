@@ -50,9 +50,18 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
     )
 }
 
+/// Python's sync Messages handler raises for every native provider before it sends anything
+/// or opens a logging object (`BaseLLMHTTPHandler.anthropic_messages_handler`), and Rust copies
+/// that until both sides serve sync calls.
+const SYNC_NOT_IMPLEMENTED: &str = "anthropic_messages_handler is not implemented for sync calls";
+
 #[pyfunction]
-pub(crate) fn messages(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
-    run_messages(py, call, false)
+#[pyo3(signature = (call))]
+pub(crate) fn messages(call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    drop(call);
+    Err(pyo3::exceptions::PyValueError::new_err(
+        SYNC_NOT_IMPLEMENTED,
+    ))
 }
 
 #[pyfunction]
