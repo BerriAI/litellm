@@ -13,13 +13,22 @@ pub enum Error {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("connecting to Redis")]
-pub struct ConnectError(#[from] RedisError);
+pub enum ConnectError {
+    #[error("connecting to Redis")]
+    Redis(#[from] RedisError),
+    #[error("reading the Redis TLS file {path}")]
+    TlsFile {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Deployment {
     Standalone,
     Cluster,
+    Sentinel,
 }
 
 // redis-py 5.3.1 redis/_parsers/base.py EXCEPTION_CLASSES["ERR"] entries that subclass ConnectionError
@@ -63,6 +72,7 @@ fn is_unavailable(kind: ServerErrorKind, deployment: Deployment) -> bool {
                 ServerErrorKind::ClusterDown | ServerErrorKind::MasterDown,
                 Deployment::Cluster
             )
+            | (ServerErrorKind::ReadOnly, Deployment::Sentinel)
     )
 }
 
@@ -100,7 +110,8 @@ mod tests {
     #[case::max_clients_with_suffix("-ERR max number of clients reached, try later\r\n")]
     fn rejections_are_server_errors_on_every_deployment(
         #[case] resp: &str,
-        #[values(Deployment::Standalone, Deployment::Cluster)] deployment: Deployment,
+        #[values(Deployment::Standalone, Deployment::Cluster, Deployment::Sentinel)]
+        deployment: Deployment,
     ) {
         assert!(!is_transport(resp, deployment));
     }
@@ -117,7 +128,8 @@ mod tests {
     )]
     fn unavailable_nodes_are_transport_errors_on_every_deployment(
         #[case] resp: &str,
-        #[values(Deployment::Standalone, Deployment::Cluster)] deployment: Deployment,
+        #[values(Deployment::Standalone, Deployment::Cluster, Deployment::Sentinel)]
+        deployment: Deployment,
     ) {
         assert!(is_transport(resp, deployment));
     }
@@ -152,6 +164,21 @@ mod tests {
         "-READONLY You can't write against a read only replica.\r\n",
         Deployment::Cluster,
         false
+    )]
+    #[case::master_down_on_sentinel(
+        "-MASTERDOWN Link with MASTER is down\r\n",
+        Deployment::Sentinel,
+        false
+    )]
+    #[case::cluster_down_on_sentinel(
+        "-CLUSTERDOWN The cluster is down\r\n",
+        Deployment::Sentinel,
+        false
+    )]
+    #[case::read_only_on_sentinel(
+        "-READONLY You can't write against a read only replica.\r\n",
+        Deployment::Sentinel,
+        true
     )]
     fn topology_decides_like_redis_py(
         #[case] resp: &str,

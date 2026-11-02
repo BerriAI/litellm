@@ -1,0 +1,3 @@
+- Turns a `litellm_config::ResolvedRedis` into a `RedisClient`, the same way for every host. The endpoint passes through unchanged because config already resolves to `litellm-redis-types`. `redis-client` stays cloud-agnostic, so credentials are mapped here
+- `RedisAuth::Host` (a Python `credential_provider` object) fails at connect with an error naming the key, since no Rust host can build one. Cloud auth (GCP, Azure, AWS) fails the same way until its token sources land, so a config that needs it never silently runs without Redis
+- Tests run against real Redis from `litellm-redis-testing`

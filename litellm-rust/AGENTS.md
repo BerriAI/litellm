@@ -8,6 +8,8 @@ For string-valued enums and their Serde conversions, follow [.agents/skills/rust
 
 For error types, error variants and conversions between crate errors, follow [.agents/skills/rust-error/SKILL.md](.agents/skills/rust-error/SKILL.md)
 
+The process-wide rustls `CryptoProvider` (ring) is installed once by the host. rust-proxy does it at the top of `main` through `litellm_gateway::install_crypto_provider`, and python-bridge must do the same in its module init before it builds any rustls config. Library crates never install it. The AWS SDK links aws-lc-rs next to ring, so without an installed default the first rustls config a library builds, such as redis-rs TLS, panics
+
 For fieldless enums, derive `strum::VariantArray` and use `VARIANTS` instead of a hand-listed `ALL` array. Derive Strum string conversions instead of hand-written variant-to-string matches
 
 Use the derived conversions directly (`<&'static str>::from(x)` / `.into()`, `str::parse`) with no `as_str`/`parse` wrapper that only delegates, and spell each variant with explicit `#[strum(serialize = "...")]` instead of `serialize_all`
