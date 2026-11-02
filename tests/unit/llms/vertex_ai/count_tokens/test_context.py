@@ -649,7 +649,7 @@ async def test_anthropic_view_counts_the_unedited_body_without_an_error_log_when
     assert not any(record.levelno >= logging.ERROR for record in caplog.records)
 
 
-async def test_anthropic_view_counts_the_turns_after_a_compaction_block_when_an_edit_before_compact_fails() -> None:
+async def test_anthropic_view_clears_only_the_turns_after_a_compaction_block_when_clear_runs_before_compact() -> None:
     clear_before_compact: Final[JsonValue] = {
         "edits": [
             {
@@ -666,7 +666,8 @@ async def test_anthropic_view_counts_the_turns_after_a_compaction_block_when_an_
         *_agent_turns(2, first_round=3),
     )
 
-    view: Final = await inference_request_view(turns, None, "anthropic", _edits(clear_before_compact))
+    with patch.object(litellm, "token_counter", side_effect=RuntimeError("tokenizer unavailable")):
+        view: Final = await inference_request_view(turns, None, "anthropic", _edits(clear_before_compact))
 
     assert isinstance(view, InferenceRequestView)
     assert _tool_outputs_kept(view) == (True, True)

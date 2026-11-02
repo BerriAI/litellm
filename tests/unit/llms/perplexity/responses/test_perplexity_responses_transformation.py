@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.perplexity.responses.transformation import PerplexityResponsesConfig
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -361,6 +362,19 @@ class TestPerplexityResponsesTransformation:
         assert isinstance(data["input"], list)
         assert data["input"][0]["type"] == "message"
         assert data["input"][0]["role"] == "user"
+
+    def test_preset_drops_a_set_created_by_under_drop_params(self):
+        tool_output: Final = {"type": "function_call_output", "call_id": "call_1", "output": "sunny"}
+
+        data: Final = PerplexityResponsesConfig().transform_responses_api_request(
+            model="preset/pro-search",
+            input=[{**tool_output, "created_by": "user_1"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+            headers={},
+        )
+
+        assert data["input"] == [tool_output]
 
     def test_non_preset_list_input(self):
         """Non-preset with list input preserves type field"""

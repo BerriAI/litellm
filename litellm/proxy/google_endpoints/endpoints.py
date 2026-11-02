@@ -1,11 +1,11 @@
 from collections.abc import Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import Final
+from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, ORJSONResponse
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types
 from litellm.proxy._types import *
@@ -27,14 +27,67 @@ from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
 
+def _google_repeated_field(value: JsonValue) -> JsonValue:
+    match value:
+        case None:
+            return []
+        case dict():
+            return [value]
+        case list():
+            return [item for item in value if item is not None]
+        case _:
+            return value
+
+
+def _google_content(value: JsonValue) -> JsonValue:
+    match value:
+        case {"parts": parts}:
+            return {**value, "parts": _google_repeated_field(parts)}
+        case _:
+            return value
+
+
+def _google_contents(value: JsonValue) -> JsonValue:
+    match _google_repeated_field(value):
+        case list() as contents:
+            return [_google_content(content) for content in contents]
+        case other:
+            return other
+
+
+_GOOGLE_PART_TEXT_AND_METADATA_FIELDS: Final = frozenset(
+    {"text", "thought", "thoughtSignature", "thought_signature", "partMetadata", "part_metadata"}
+)
+
+
+def _google_part_has_non_text_content(part: Mapping[str, JsonValue]) -> bool:
+    return any(field is not None for key, field in part.items() if key not in _GOOGLE_PART_TEXT_AND_METADATA_FIELDS)
+
+
+def _google_system_part(value: JsonValue) -> JsonValue:
+    match value:
+        case dict() if value.get("text") is None and _google_part_has_non_text_content(value):
+            return {key: field for key, field in value.items() if key != "text"}
+        case dict():
+            return {"text": None, **value}
+        case _:
+            return value
+
+
+_GOOGLE_REPEATED_FIELD: Final = BeforeValidator(_google_repeated_field)
+
+
 class _GoogleCountTokensTextPart(BaseModel):
     model_config = ConfigDict(frozen=True)
-    text: str
+    text: str | None
 
 
 class _GoogleCountTokensSystemInstruction(BaseModel):
     model_config = ConfigDict(frozen=True)
-    parts: tuple[_GoogleCountTokensTextPart, ...]
+    parts: Annotated[
+        tuple[Annotated[_GoogleCountTokensTextPart, BeforeValidator(_google_system_part)], ...],
+        _GOOGLE_REPEATED_FIELD,
+    ] = ()
 
 
 class _GoogleCountTokensFunctionDeclaration(BaseModel):
@@ -47,16 +100,16 @@ class _GoogleCountTokensFunctionDeclaration(BaseModel):
 
 class _GoogleCountTokensTool(BaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
-    function_declarations: tuple[_GoogleCountTokensFunctionDeclaration, ...] = Field(
+    function_declarations: Annotated[tuple[_GoogleCountTokensFunctionDeclaration, ...], _GOOGLE_REPEATED_FIELD] = Field(
         default=(), alias="functionDeclarations"
     )
 
 
 class _GoogleCountTokensRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
-    contents: tuple[Mapping[str, JsonValue], ...] = ()
+    contents: Annotated[tuple[Mapping[str, JsonValue], ...], BeforeValidator(_google_contents)] = ()
     system_instruction: _GoogleCountTokensSystemInstruction | None = Field(default=None, alias="systemInstruction")
-    tools: tuple[_GoogleCountTokensTool, ...] = ()
+    tools: Annotated[tuple[_GoogleCountTokensTool, ...], _GOOGLE_REPEATED_FIELD] = ()
 
 
 router: Final = APIRouter(
@@ -112,7 +165,11 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
         GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
     )
     system: Final = (
-        [{"type": "text", "text": part.text} for part in validated_data.system_instruction.parts]
+        [
+            {"type": "text", "text": part.text}
+            for part in validated_data.system_instruction.parts
+            if part.text is not None
+        ]
         if validated_data.system_instruction is not None
         else None
     )

@@ -81,7 +81,7 @@ def test_a_skipped_migration_diff_is_one_json_record_in_json_mode(
     monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
     """
-    With json_logs on, the notice that the migration diff was skipped is one INFO record on stdout,
+    With json_logs on, the notice that the migration diff was skipped is one WARNING record on stdout,
     also while the loggers sit at WARNING, as they do at boot without LITELLM_LOG.
     """
     from litellm.proxy.db.check_migration import check_prisma_schema_diff_helper
@@ -101,7 +101,7 @@ def test_a_skipped_migration_diff_is_one_json_record_in_json_mode(
     assert len(lines) == 1, lines
     record: Final = json.loads(lines[0])
     assert (record["level"], record["message"]) == (
-        "INFO",
+        "WARNING",
         "Skipping the migration diff: litellm-proxy-extras has no Prisma runner. "
         "Error: import of litellm_proxy_extras.prisma_toolchain halted; None in sys.modules",
     )

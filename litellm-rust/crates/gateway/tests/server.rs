@@ -159,7 +159,7 @@ async fn mounts_ui_without_exposing_credentials_or_authorizing_inference(inferen
     std::fs::write(assets.path().join("index.html"), "dashboard").unwrap();
     let backend = litellm_gateway_auth::UiBackend::new(
         "admin".into(),
-        litellm_auth_types::SecretValue::new("ui-password"),
+        litellm_secret_value::SecretValue::new("ui-password"),
     )
     .unwrap();
     let ui = litellm_gateway_ui::router(

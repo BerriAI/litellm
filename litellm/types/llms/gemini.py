@@ -81,6 +81,14 @@ class BidiGenerateContentServerMessage(TypedDict, total=False):
     """Output only. The setup complete message."""
 
 
+class BidiGenerateContentActivityStart(TypedDict):
+    pass
+
+
+class BidiGenerateContentActivityEnd(TypedDict):
+    pass
+
+
 class BidiGenerateContentRealtimeInput(TypedDict, total=False):
     text: str
     """The text to be sent to the model."""
@@ -94,11 +102,11 @@ class BidiGenerateContentRealtimeInput(TypedDict, total=False):
     audioStreamEnd: bool
     """Output only. If true, indicates that the audio stream has ended."""
 
-    activityStart: bool
-    """Output only. If true, indicates that the activity has started."""
+    activityStart: BidiGenerateContentActivityStart
+    """Marks the start of user activity when automatic activity detection is disabled."""
 
-    activityEnd: bool
-    """Output only. If true, indicates that the activity has ended."""
+    activityEnd: BidiGenerateContentActivityEnd
+    """Marks the end of user activity when automatic activity detection is disabled."""
 
 
 StartOfSpeechSensitivityEnum = Literal[

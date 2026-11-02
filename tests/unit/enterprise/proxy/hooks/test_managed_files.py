@@ -252,7 +252,7 @@ def test_provider_credentials_warning_sanitizes_newlines(
 ) -> None:
     model_id: Final = "deployment-123\nforged warning"
     router: Final = MagicMock()
-    router.get_deployment_credentials_with_provider.side_effect = RuntimeError(
+    router.registry.return_value.credentials.side_effect = RuntimeError(
         "credential lookup failed\nforged warning"
     )
 
@@ -794,7 +794,7 @@ async def test_output_file_id_for_batch_retrieve():
         "unified_batch_id": "litellm_proxy;model_id:12345679;llm_batch_id:batch_685c5e5d63988190b85bdb2147ba131d",
     }
     router = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     provider_file_object = OpenAIFileObject(
         id="file-provider-output",
         object="file",
@@ -887,7 +887,7 @@ async def test_output_file_id_preserves_target_model_names_when_model_name_missi
         purpose="batch_output",
     )
     router = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma()
 
     with (
@@ -980,7 +980,7 @@ async def test_error_file_id_for_failed_batch():
         status="processed",
     )
     router = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
 
     # Mock the afile_retrieve to simulate retrieving error file metadata
     with (
@@ -1889,7 +1889,7 @@ async def test_store_batch_output_file_stores_provider_object_with_unified_id():
         purpose="batch_output",
     )
     router = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     sleep_calls: list[float] = []
 
     async def record_sleep(delay: float) -> None:
@@ -2036,7 +2036,7 @@ async def test_store_batch_output_file_falls_back_when_provider_retrieve_raises(
     from litellm.proxy._types import UserAPIKeyAuth
 
     router = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma()
 
     with (
@@ -2088,7 +2088,7 @@ async def test_store_batch_output_file_falls_back_when_provider_retrieve_hangs(
         await asyncio.Event().wait()
 
     router = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma()
 
     with (
@@ -2121,7 +2121,7 @@ async def test_afile_retrieve_returns_marked_fallback_when_refresh_hangs():
         await asyncio.Event().wait()
 
     router = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(_marked_fallback_file_row())
 
     with (
@@ -2245,7 +2245,7 @@ async def test_batch_retrieve_registration_fetches_details_by_default():
     proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma()
     response: Final = _batch_response_for_output_listing()
     router: Final = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {
+    router.registry.return_value.credentials.return_value = {
         "api_key": "key",
         "custom_llm_provider": "bedrock",
     }
@@ -2329,7 +2329,7 @@ async def test_batch_file_detail_retry_classification(
         sleep=record_sleep
     )
     router: Final = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     provider_file_object: Final = OpenAIFileObject(
         id="provider-output",
         object="file",
@@ -2395,7 +2395,7 @@ async def test_store_batch_output_file_ignores_unmarked_row_with_provider_route(
         existing_file_row
     )
     router: Final = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     with (
         patch.object(proxy_server_module, "llm_router", router),
         patch("litellm.afile_retrieve", new_callable=AsyncMock) as retrieve,
@@ -2421,7 +2421,7 @@ _OPENAI_FILE_ID: Final = "file-lit9385"
 
 def _provider_router(provider: str) -> MagicMock:
     router: Final = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = (
+    router.registry.return_value.credentials.return_value = (
         {"custom_llm_provider": "xai", "api_key": "xai-test-key", "api_base": _XAI_API_BASE}
         if provider == "xai"
         else {"custom_llm_provider": "openai", "api_key": "sk-test-key", "api_base": _OPENAI_API_BASE}
@@ -3111,7 +3111,7 @@ async def test_store_batch_output_file_marks_fallback_after_four_transient_failu
     from litellm.proxy._types import UserAPIKeyAuth
 
     router = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     sleep_calls: list[float] = []
 
     async def record_sleep(delay: float) -> None:
@@ -3154,7 +3154,7 @@ async def test_store_batch_output_file_skips_lookup_for_fallback_written_moments
     from litellm.proxy._types import UserAPIKeyAuth
 
     router = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(
         _marked_fallback_file_row(created_at=int(time.time()))
     )
@@ -3189,7 +3189,7 @@ async def test_store_batch_output_file_does_not_retry_not_found():
     from litellm.proxy._types import UserAPIKeyAuth
 
     router = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     sleep_calls: list[float] = []
 
     async def record_sleep(delay: float) -> None:
@@ -3238,7 +3238,7 @@ async def test_store_batch_output_file_refreshes_marked_fallback_on_later_write(
         status="processed",
     )
     router = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(row)
     with (
         patch.object(proxy_server_module, "llm_router", router),
@@ -3282,7 +3282,7 @@ async def test_store_batch_output_file_does_not_recreate_deleted_row_after_refre
         _marked_fallback_file_row()
     )
     router: Final = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
 
     async def delete_then_return_file(**_kwargs: object) -> OpenAIFileObject:
         await managed_file_table.delete(where={"unified_file_id": "unified-output"})
@@ -3327,7 +3327,7 @@ async def test_store_batch_output_file_keeps_marked_fallback_when_retryable_deta
     from litellm.proxy._types import UserAPIKeyAuth
 
     router = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(
         _marked_fallback_file_row()
     )
@@ -3358,7 +3358,7 @@ async def test_store_batch_output_file_updates_only_size_for_failed_marked_fallb
     from litellm.proxy._types import UserAPIKeyAuth
 
     router = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(
         _marked_fallback_file_row()
     )
@@ -3484,7 +3484,7 @@ async def test_afile_retrieve_fetches_from_provider_when_file_object_none():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value={
             "api_key": "test-key",
             "api_base": "https://api.openai.com",
@@ -3594,7 +3594,7 @@ async def test_afile_retrieve_refreshes_marked_fallback_and_preserves_ownership(
     )
     proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(row)
     router = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
 
     with patch("litellm.afile_retrieve", new_callable=AsyncMock, return_value=provider_object) as retrieve:
         response = await proxy_managed_files.afile_retrieve(
@@ -3677,7 +3677,7 @@ async def test_afile_retrieve_uses_model_name_when_router_does_not_know_deployme
         status="processed",
     )
     router: Final = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = None
+    router.registry.return_value.credentials.return_value = None
     proxy_managed_files, _ = _managed_files_with_fake_prisma(row)
 
     with patch(
@@ -3693,8 +3693,8 @@ async def test_afile_retrieve_uses_model_name_when_router_does_not_know_deployme
 
     assert response.bytes == 836
     retrieve.assert_awaited_once()
-    router.get_deployment_credentials_with_provider.assert_called_once_with(
-        "bedrock/model-x"
+    router.registry.return_value.credentials.assert_called_once_with(
+        "bedrock/model-x", form="with_provider"
     )
     assert retrieve.await_args.kwargs["custom_llm_provider"] == "bedrock"
     assert retrieve.await_args.kwargs["max_retries"] == 0
@@ -3714,7 +3714,7 @@ async def test_afile_retrieve_does_not_recreate_deleted_row_after_refresh():
         status="processed",
     )
     router: Final = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(row)
 
     async def delete_row_then_return_file(
@@ -3758,7 +3758,7 @@ async def test_afile_retrieve_case3_includes_provider_error_text():
         created_by="user-123",
     )
     router: Final = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = None
+    router.registry.return_value.credentials.return_value = None
     proxy_managed_files, _ = _managed_files_with_fake_prisma(stored_file)
 
     with (
@@ -3798,7 +3798,7 @@ async def test_afile_retrieve_case3_uses_default_provider_for_unknown_router_dep
         created_by="user-123",
     )
     router: Final = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = None
+    router.registry.return_value.credentials.return_value = None
     proxy_managed_files, _ = _managed_files_with_fake_prisma(stored_file)
     provider_file_object: Final = OpenAIFileObject(
         id="provider-output",
@@ -3839,7 +3839,7 @@ async def test_afile_retrieve_case3_times_out_on_default_provider_route():
         created_by="user-123",
     )
     router: Final = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = None
+    router.registry.return_value.credentials.return_value = None
     proxy_managed_files, _ = _managed_files_with_fake_prisma(stored_file)
 
     async def never_answers(**_options: object) -> None:
@@ -3901,7 +3901,7 @@ async def test_afile_retrieve_case3_without_route_raises_accurate_error():
 @pytest.mark.asyncio
 async def test_afile_retrieve_returns_marked_fallback_without_marker_when_refresh_fails():
     router = MagicMock()
-    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    router.registry.return_value.credentials.return_value = {"api_key": "key"}
     proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(
         _marked_fallback_file_row()
     )

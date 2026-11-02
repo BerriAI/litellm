@@ -211,7 +211,7 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
-    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   },
   "scx-ai": {
     "base_url": "https://api.scx.ai/v1",
@@ -230,6 +230,16 @@
     "api_key_env": "PRISM_API_KEY",
     "api_base_env": "PRISM_API_BASE",
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+  },
+  "hostinger_router": {
+    "base_url": "https://router.hostinger.com/v1",
+    "api_key_env": "HOSTINGER_ROUTER_API_KEY",
+    "api_base_env": "HOSTINGER_ROUTER_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/embeddings"],
+    "model_supported_endpoints": {
+      "claude-sonnet-5": ["/v1/messages"],
+      "gpt-5.2": ["/v1/responses"]
+    }
   },
   "sail": {
     "base_url": "https://api.sailresearch.com/v1",
@@ -274,5 +284,28 @@
       "/v1/chat/completions",
       "/v1/responses"
     ]
+  },
+  "kyma": {
+    "base_url": "https://kymaapi.com/v1",
+    "api_key_env": "KYMA_API_KEY",
+    "provider_info": {
+      "supports_function_calling": true
+    }
+  },
+  "streamlake": {
+    "base_url": "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
+    "api_key_env": "STREAMLAKE_API_KEY",
+    "api_base_env": "STREAMLAKE_API_BASE",
+    "param_mappings": {
+      "max_tokens": "max_completion_tokens"
+    },
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
+    "special_handling": {
+      "preserve_cache_control": true
+    },
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }

@@ -107,6 +107,7 @@ ignored_function_names = [
     "_deployment_num_retries",  # Tested through the deployment num_retries mid-stream budget test in test_router.py
     "_request_fallback_list",  # Tested through every mid-stream retry test in test_router.py
     "_request_model_group",  # Tested through test_anthropic_messages_retry_budget_precedence_direct_call
+    "_search_tool_support",  # Tested through the test_get_search_tool_support_* tests
     "_mid_stream_retry_trigger",  # Tested through the retry policy mid-stream budget test in test_router.py
     "_anthropic_messages_group_retry_policy",  # Tested through the retry budget precedence test in test_router.py
     "_anthropic_messages_resolved_retry_policy",  # Tested through the malformed retry policy tests in test_router.py
@@ -123,6 +124,8 @@ ignored_function_names = [
     "_is_fallback_hop",  # Tested through the order fallback hop tests in test_router_order_fallback.py
     "_deployment_that_just_failed",  # Tested through the same-boundary hop test in test_router_order_fallback.py
     "_merged_tools",  # Tested through the _update_kwargs_with_deployment tools merge tests in test_router.py
+    "_malformed_request_params_the_deployment_sets",  # Run by _update_kwargs_with_deployment, tested through the drop_params deployment test in test_thought_signature_in_tool_call_id.py
+    "_drop_malformed_request_params_the_deployment_sets",  # Run by _update_kwargs_with_deployment, tested through the drop_params deployment test in test_thought_signature_in_tool_call_id.py
     "_drops_malformed_request_tools",  # Tested through the _update_kwargs_with_deployment tools merge tests in test_router.py
     "_collect_ptu_share_teams",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
     "_resolve_team_ptu_ceiling",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
@@ -175,24 +178,36 @@ ignored_function_names = [
     "_responses_continuation",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_responses_continuation_ceilings",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py
+    "_served_openai_models",  # Cached as served_openai_models, tested through the pre-call check token count tests in test_router.py
     "priority_header_update",  # Tested through the priority header tests in test_common_request_processing.py
     "_drops_params",  # Read by split_request_priority and priority_header_update, tested through both
     "_responses_event_announces_background_run",  # Tested through the background Responses stream tests in test_router.py
     "_aresponses_background_stream_can_release",  # Tested through the background Responses stream tests in test_router.py
     "_raise_released_stream_error",  # Tested through the background Responses stream content-policy tests in test_router.py
     "_mid_stream_error_before_output",  # Tested through the Responses mid-stream fallback and background stream tests
+    "_without_decisions_deployments_refusing_media",  # Tested through the mixed media-flag group tests in tests/unit/decisions/test_main.py
+    "_decisions_deployment_refuses_media",  # Read by _without_decisions_deployments_refusing_media, tested through the same group tests
+    "_active_default_litellm_params",  # Tested through the router default drop_params test in tests/unit/decisions/test_main.py
 ]
+
+
+def public_name(function_name):
+    """
+    The deprecated public name a ``_core_<name>`` router member is reached through. Tests that call the
+    old name run the core member, since ``DeprecatedRouterMembers`` forwards it there.
+    """
+    return function_name.removeprefix("_core_")
 
 
 def main():
     router_file = [
         "./litellm/router.py",
         "./litellm/litellm_core_utils/batch_utils.py",
-        "./litellm/router_utils/pattern_match_deployments.py",
+        "./litellm/litellm_core_utils/pattern_match_deployments.py",
     ]
     # router_file = [
     #     "../../litellm/router.py",
-    #     "../../litellm/router_utils/pattern_match_deployments.py",
+    #     "../../litellm/litellm_core_utils/pattern_match_deployments.py",
     #     "../../litellm/litellm_core_utils/batch_utils.py",
     # ]  ## LOCAL TESTING
     tests_dir = "./tests/"  # Update this path if your tests directory is located elsewhere
@@ -203,12 +218,16 @@ def main():
         router_functions.extend(get_functions_from_router(file))
     print("router_functions: ", router_functions)
     called_functions_in_tests = get_all_functions_called_in_tests(tests_dir)
-    untested_functions = [fn for fn in router_functions if fn not in called_functions_in_tests]
+    untested_functions = [
+        fn
+        for fn in router_functions
+        if fn not in called_functions_in_tests and public_name(fn) not in called_functions_in_tests
+    ]
 
     if untested_functions:
         all_untested_functions = []
         for func in untested_functions:
-            if func not in ignored_function_names:
+            if func not in ignored_function_names and public_name(func) not in ignored_function_names:
                 all_untested_functions.append(func)
         untested_perc = (len(all_untested_functions)) / len(router_functions)
         print("untested_perc: ", untested_perc)

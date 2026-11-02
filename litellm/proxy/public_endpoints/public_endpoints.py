@@ -367,19 +367,23 @@ async def get_mcp_servers():
     tags=["public", "Claude Code Marketplace"],
 )
 async def public_skill_hub():
-    """Return enabled (public) Claude Code skills — no auth required."""
+    """Return enabled (public) Claude Code skills, or none when the marketplace requires a key."""
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
         MANIFEST_FIELDS,
         get_installation_preference,
-        get_prisma_client,
     )
+    from litellm.proxy.common_utils.claude_code_marketplace_auth import marketplace_auth_required
+    from litellm.proxy.proxy_server import prisma_client
     from litellm.types.proxy.claude_code_endpoints import (
         ListPluginsResponse,
         PluginListItem,
     )
 
+    if marketplace_auth_required():
+        return ListPluginsResponse(plugins=[], count=0)
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     try:
-        prisma_client: Final = await get_prisma_client()
         plugins: Final = await _plugin_table(prisma_client).find_many(where={"enabled": True})
         items: Final = []
         for plugin in plugins:
@@ -406,7 +410,8 @@ async def public_skill_hub():
             )
         return ListPluginsResponse(plugins=items, count=len(items))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        verbose_logger.exception("Error listing public skills: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to list skills")
 
 
 @router.get(

@@ -29,6 +29,24 @@ def sse_events(text: str) -> tuple[tuple[str, dict[str, object]], ...]:
     )
 
 
+def streamed_blocks(events: tuple[tuple[str, dict[str, object]], ...]) -> tuple[dict[str, object], ...]:
+    input_json: Final = tuple(
+        (event["index"], event["delta"]["partial_json"])
+        for name, event in events
+        if name == "content_block_delta" and event["delta"]["type"] == "input_json_delta"
+    )
+    return tuple(
+        {
+            **event["content_block"],
+            "input": json.loads("".join(part for index, part in input_json if index == event["index"])),
+        }
+        if any(index == event["index"] for index, _ in input_json)
+        else event["content_block"]
+        for name, event in events
+        if name == "content_block_start"
+    )
+
+
 @pytest.mark.covers("other.provider_wire.bedrock.websearch_interception_streamed_capped_turn_ends_with_native_results")
 def test_streamed_web_search_turn_capped_by_max_agentic_loops_ends_turn_with_snippets_and_ordered_blocks(
     gateway: Gateway, tmp_path: Path
@@ -136,7 +154,7 @@ def test_streamed_web_search_turn_capped_by_max_agentic_loops_ends_turn_with_sni
                         for earlier, earlier_event in events[:position]
                         if earlier == "content_block_start"
                     }, response.text
-            started: Final = tuple(event["content_block"] for name, event in events if name == "content_block_start")
+            started: Final = streamed_blocks(events)
             search_ids: Final = tuple(block["id"] for block in started if block["type"] == "server_tool_use")
             assert search_ids and all(search_id.startswith("srvtoolu_") for search_id in search_ids), response.text
             assert started[-1] == {"type": "text", "text": ""}, response.text
@@ -162,7 +180,12 @@ def test_streamed_web_search_turn_capped_by_max_agentic_loops_ends_turn_with_sni
                 )
             ), response.text
             assert (
-                "".join(event["delta"]["text"] for name, event in events if name == "content_block_delta") == "turn-1"
+                "".join(
+                    event["delta"]["text"]
+                    for name, event in events
+                    if name == "content_block_delta" and event["delta"]["type"] == "text_delta"
+                )
+                == "turn-1"
             ), response.text
             assert [event["delta"]["stop_reason"] for name, event in events if name == "message_delta"] == [
                 "end_turn"

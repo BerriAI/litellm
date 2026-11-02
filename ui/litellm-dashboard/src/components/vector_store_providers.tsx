@@ -1,4 +1,5 @@
 import { getProviderLogoAndName, Providers, providerLogoMap } from "@/components/provider_info_helpers";
+import awsLogo from "../../public/assets/logos/aws.svg";
 import milvusLogo from "../../public/assets/logos/milvus.svg";
 import mongodbLogo from "../../public/assets/logos/mongodb.svg";
 import postgresqlLogo from "../../public/assets/logos/postgresql.svg";
@@ -8,6 +9,7 @@ import valkeyLogo from "../../public/assets/logos/valkey.svg";
 export enum VectorStoreProviders {
   Bedrock = "Amazon Bedrock",
   S3Vectors = "Amazon S3 Vectors",
+  OpenSearch = "Amazon OpenSearch",
   PgVector = "PostgreSQL pgvector (LiteLLM Connector)",
   VertexRagEngine = "Vertex AI RAG Engine",
   VertexAiSearch = "Vertex AI Search",
@@ -28,6 +30,7 @@ export const vectorStoreProviderMap: Record<string, string> = {
   Milvus: "milvus",
   MongoDB: "mongodb",
   S3Vectors: "s3_vectors",
+  OpenSearch: "opensearch",
   Valkey: "valkey",
 };
 
@@ -41,6 +44,7 @@ export const vectorStoreProviderLogoMap: Record<string, string> = {
   [VectorStoreProviders.Milvus]: milvusLogo.src,
   [VectorStoreProviders.MongoDB]: mongodbLogo.src,
   [VectorStoreProviders.S3Vectors]: s3VectorLogo.src,
+  [VectorStoreProviders.OpenSearch]: awsLogo.src,
   [VectorStoreProviders.Valkey]: valkeyLogo.src,
 };
 
@@ -311,6 +315,64 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       required: false,
       type: "text",
       initialValue: "embedding",
+    },
+  ],
+  opensearch: [
+    {
+      name: "api_base",
+      label: "OpenSearch Endpoint",
+      tooltip:
+        "The endpoint of your OpenSearch Serverless collection or OpenSearch Service domain, starting with https://",
+      placeholder: "https://abc123.us-east-1.aoss.amazonaws.com",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "aws_region_name",
+      label: "AWS Region (optional)",
+      tooltip:
+        "The AWS region of the collection or domain. Leave blank to use the region in the endpoint, and set it when the endpoint is a custom domain",
+      placeholder: "us-east-1",
+      required: false,
+      type: "text",
+    },
+    {
+      name: "embedding_model",
+      label: "Embedding Model",
+      tooltip:
+        "The embedding model on this proxy that created the vectors already stored in your index. LiteLLM embeds every search query with it, so it must be the same model. Add it under Models first if it is not listed",
+      placeholder: "text-embedding-3-small",
+      required: true,
+      type: "select",
+    },
+    {
+      name: "opensearch_embedding_field",
+      label: "Vector Field Name",
+      tooltip:
+        "The top-level knn_vector field in your index mapping that holds each document's embedding (default: embedding)",
+      placeholder: "embedding",
+      required: false,
+      type: "text",
+      initialValue: "embedding",
+    },
+    {
+      name: "opensearch_text_field",
+      label: "Text Field",
+      tooltip:
+        "The top-level field in each document that holds its readable text. LiteLLM returns this text in search results (default: text)",
+      placeholder: "text",
+      required: false,
+      type: "text",
+      initialValue: "text",
+    },
+    {
+      name: "opensearch_index_name",
+      label: "Index Name (optional)",
+      tooltip:
+        "The OpenSearch index to search. Leave blank to use the Vector Store ID, and set it to register same-named indexes from two endpoints under different IDs",
+      placeholder: "my-knn-index",
+      required: false,
+      type: "text",
     },
   ],
   s3_vectors: [

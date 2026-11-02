@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::{FutureExt, StreamExt, TryStreamExt, stream::BoxStream};
-use litellm_auth::{AuthServices, SecretValue};
+use litellm_auth::AuthServices;
+use litellm_secret_value::SecretValue;
+
 use litellm_core_utils::{
     dot_notation_indexing::delete_nested_value,
     get_provider_specific_headers::get_provider_specific_headers, settings::Lookup,

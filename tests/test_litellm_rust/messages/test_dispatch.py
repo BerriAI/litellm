@@ -442,6 +442,7 @@ class _Agentic(CustomLogger):
 
 
 ADVISOR_TOOL: Final = {"type": ANTHROPIC_ADVISOR_TOOL_TYPE, "name": "advisor", "model": "claude-opus-5-5"}
+STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict": True}
 
 
 @pytest.mark.parametrize(
@@ -471,6 +472,12 @@ ADVISOR_TOOL: Final = {"type": ANTHROPIC_ADVISOR_TOOL_TYPE, "name": "advisor", "
             Feature.THINKING_SIGNATURE_RETRY,
             "anthropic/claude-sonnet-4-5",
             {"messages": [{"role": "assistant", "content": [{"type": "redacted_thinking", "data": "x"}]}]},
+            {},
+        ),
+        (
+            Feature.TOOL_CUSTOM_FIELD,
+            "anthropic/claude-sonnet-4-5",
+            {"tools": [{"name": "a", "input_schema": {"type": "object"}, "custom": {"eager_input_streaming": True}}]},
             {},
         ),
         (
@@ -521,6 +528,45 @@ def test_each_detected_feature_reaches_its_rule(
     assert served(kwargs) is python_result
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        pytest.param({"tools": [STRICT_TOOL]}, id="drop-params-unset"),
+        pytest.param({"drop_params": False, "tools": [STRICT_TOOL]}, id="drop-params-off"),
+        pytest.param(
+            {"drop_params": True, "tools": [{"name": "a", "input_schema": {"type": "object"}}]}, id="no-strict"
+        ),
+    ),
+)
+async def test_strict_tools_stay_native_unless_python_could_drop_strict(
+    monkeypatch: pytest.MonkeyPatch, kwargs: Mapping[str, object]
+) -> None:
+    rules: Final[Rules] = (
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.STRICT_TOOLS_RETRY})),
+        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
+    )
+    native_result: Final = response()
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    async def python(*call_args: object, **python_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
+        pytest.fail("Python cannot drop strict here")
+
+    async def native(request: NativeCall) -> AnthropicMessagesResponse:
+        return native_result
+
+    served: Final = await _ADISPATCH.arun(
+        (16, MESSAGES, "anthropic/claude-sonnet-4-5"),
+        kwargs,
+        python=python,
+        binding=amessages_binding(native),
+        native=lambda hook, request, call_args, native_kwargs: hook(request),
+        rules=rules,
+    )
+
+    assert served is native_result
+
+
 ASYNC_ONLY_FEATURES: Final = (
     pytest.param(Feature.PRE_REQUEST_HOOK, {}, {"callbacks": [_Rewrite()]}, id="pre-request-hook"),
     pytest.param(
@@ -531,6 +577,12 @@ ASYNC_ONLY_FEATURES: Final = (
         {"model": "deepseek/deepseek-v4-flash", "tools": [ADVISOR_TOOL]},
         {},
         id="messages-interceptor",
+    ),
+    pytest.param(
+        Feature.STRICT_TOOLS_RETRY, {"drop_params": True, "tools": [STRICT_TOOL]}, {}, id="strict-tools-retry"
+    ),
+    pytest.param(
+        Feature.STRICT_TOOLS_RETRY, {"tools": [STRICT_TOOL]}, {"drop_params": True}, id="strict-tools-retry-global"
     ),
 )
 

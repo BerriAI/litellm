@@ -290,7 +290,7 @@ def _check_team_project_limits(
 
 
 def _router_access_group_names(llm_router: "Router | None") -> frozenset[str]:
-    return frozenset(llm_router.get_model_access_groups()) if llm_router is not None else frozenset()
+    return frozenset(llm_router.registry().access_groups()) if llm_router is not None else frozenset()
 
 
 def _project_models_expanding_at_request_time(

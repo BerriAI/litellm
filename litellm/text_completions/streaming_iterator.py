@@ -1,6 +1,7 @@
 from typing import Final
 
-from litellm.types.utils import Choices, ModelResponse, TextChoices, TextCompletionResponse
+from litellm.litellm_core_utils.stream_usage_chunks import is_injected_stream_usage_artifact
+from litellm.types.utils import Choices, ModelResponse, ModelResponseStream, TextChoices, TextCompletionResponse
 
 
 class TextCompletionStreamWrapper:
@@ -10,11 +11,18 @@ class TextCompletionStreamWrapper:
         model,
         stream_options: dict | None = None,
         custom_llm_provider: str | None = None,
+        usage_injected_by_proxy: bool = False,
     ):
         self.completion_stream = completion_stream
         self.model = model
         self.stream_options = stream_options
         self.custom_llm_provider = custom_llm_provider
+        self.usage_injected_by_proxy: Final = usage_injected_by_proxy
+        self.include_usage: Final = (
+            not usage_injected_by_proxy
+            and stream_options is not None
+            and stream_options.get("include_usage", False) is True
+        )
 
     def __iter__(self):
         return self
@@ -22,7 +30,7 @@ class TextCompletionStreamWrapper:
     def __aiter__(self):
         return self
 
-    def convert_to_text_completion_object(self, chunk: ModelResponse):
+    def convert_to_text_completion_object(self, chunk: ModelResponse | ModelResponseStream):
         try:
             response: Final = TextCompletionResponse()
             response["id"] = chunk.get("id", None)
@@ -43,8 +51,7 @@ class TextCompletionStreamWrapper:
             else:
                 response["choices"] = []
 
-            # only pass usage when stream_options["include_usage"] is True
-            if self.stream_options and self.stream_options.get("include_usage", False) is True:
+            if self.include_usage:
                 response.usage = chunk.get("usage", None)
             else:
                 response.usage = None
@@ -53,6 +60,9 @@ class TextCompletionStreamWrapper:
         except Exception as e:
             raise Exception(f"Error occurred converting to text completion object - chunk: {chunk}; Error: {e}")
 
+    def _is_injected_usage_artifact(self, chunk: ModelResponseStream) -> bool:
+        return self.usage_injected_by_proxy and is_injected_stream_usage_artifact(chunk)
+
     def __next__(self):
         # model_response = ModelResponse(stream=True, model=self.model)
         TextCompletionResponse()
@@ -60,8 +70,9 @@ class TextCompletionStreamWrapper:
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
-                processed_chunk = self.convert_to_text_completion_object(chunk=chunk)
-                return processed_chunk
+                if isinstance(chunk, ModelResponseStream) and self._is_injected_usage_artifact(chunk):
+                    continue
+                return self.convert_to_text_completion_object(chunk=chunk)
             raise StopIteration
         except StopIteration:
             raise StopIteration
@@ -81,8 +92,9 @@ class TextCompletionStreamWrapper:
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
-                processed_chunk = self.convert_to_text_completion_object(chunk=chunk)
-                return processed_chunk
+                if isinstance(chunk, ModelResponseStream) and self._is_injected_usage_artifact(chunk):
+                    continue
+                return self.convert_to_text_completion_object(chunk=chunk)
             raise StopIteration
         except StopIteration:
             raise StopAsyncIteration

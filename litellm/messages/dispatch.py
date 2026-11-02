@@ -111,6 +111,7 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
         Feature.STREAM_COST_INJECTION: route_detectors.stream_cost_injection,
         Feature.THINKING_SIGNATURE_RETRY: route_detectors.thinking_signature_retry,
+        Feature.TOOL_CUSTOM_FIELD: route_detectors.tool_custom_field,
     }
 )
 
@@ -120,6 +121,7 @@ _ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.PRE_REQUEST_HOOK: route_detectors.pre_request_hook,
         Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
         Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,
+        Feature.STRICT_TOOLS_RETRY: route_detectors.strict_tools_retry,
     }
 )
 

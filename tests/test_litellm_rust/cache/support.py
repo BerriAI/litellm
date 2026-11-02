@@ -7,7 +7,7 @@ from typing import Final, Literal
 from pydantic import BaseModel, TypeAdapter
 
 import litellm
-from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
 from litellm.rust_bridge.chat_completions.entrypoints import NATIVE_ACOMPLETION

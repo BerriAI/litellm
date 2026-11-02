@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
-use litellm_secrets::{
-    SecretValue,
-    hashicorp::{HashicorpVault, RawOperationError},
-};
+use litellm_secret_value::SecretValue;
+use litellm_secrets::hashicorp::{HashicorpVault, RawOperationError};
+
 use litellm_secrets_types::{HashicorpOperationContext, SecretWriteContext};
 use serde_json::value::RawValue;
 

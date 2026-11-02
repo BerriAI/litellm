@@ -198,6 +198,11 @@ def _genai_message_part(part: object) -> _GenAIMessagePart | None:
     return ChatCompletionTextObject(type="text", text=text) if isinstance(text, str) else _genai_media_part(fields)
 
 
+def _genai_content_parts(value: object) -> Sequence[object]:
+    single_part: Final = _validated(_CONFIG_FIELDS, value)
+    return (single_part,) if single_part is not None else _validated(_GENAI_CONTENT_PARTS, value) or ()
+
+
 def _genai_message_parts(parts: object) -> tuple[_GenAIMessagePart, ...]:
     items: Final = _validated(_GENAI_CONTENT_PARTS, parts) or ()
     return tuple(converted for part in items if (converted := _genai_message_part(part)) is not None)
@@ -248,7 +253,7 @@ def _genai_content_messages(content: object) -> tuple[AllMessageValues, ...]:
     fields: Final = _validated(_CONFIG_FIELDS, content)
     if fields is None:
         return ()
-    parts: Final = _validated(_GENAI_CONTENT_PARTS, fields.get("parts", ())) or ()
+    parts: Final = _genai_content_parts(fields.get("parts", ()))
     converted: Final = _genai_message_parts(parts)
     role: Final = fields.get("role", "user")
     if role == "user":

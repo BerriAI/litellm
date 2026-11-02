@@ -1,5 +1,7 @@
 # Rust workspace rules
 
+For keeping secrets out of Debug output, follow [.agents/skills/rust-redaction/SKILL.md](.agents/skills/rust-redaction/SKILL.md)
+
 For diagnostic tracing changes, follow [.agents/skills/rust-tracing/SKILL.md](.agents/skills/rust-tracing/SKILL.md)
 
 For string-valued enums and their Serde conversions, follow [.agents/skills/rust-string-enums/SKILL.md](.agents/skills/rust-string-enums/SKILL.md)

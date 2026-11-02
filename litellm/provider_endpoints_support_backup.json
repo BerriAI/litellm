@@ -857,6 +857,32 @@
         "generateContent": false
       }
     },
+    "clf_ai_gateway": {
+      "display_name": "CLF AI Gateway (`clf_ai_gateway`)",
+      "url": "https://docs.litellm.ai/docs/providers/clf_ai_gateway",
+      "endpoints": {
+        "chat_completions": true,
+        "responses": true,
+        "text_completion": true,
+        "embeddings": false,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": true,
+        "interactions": true,
+        "systemone": false,
+        "a2a": true,
+        "generateContent": true
+      }
+    },
     "cloudflare": {
       "display_name": "Cloudflare AI Workers (`cloudflare`)",
       "url": "https://docs.litellm.ai/docs/providers/cloudflare_workers",
@@ -1091,6 +1117,32 @@
         "generateContent": false
       }
     },
+    "hostinger_router": {
+      "display_name": "Hostinger Router (`hostinger_router`)",
+      "url": "https://docs.litellm.ai/docs/providers/hostinger_router",
+      "endpoints": {
+        "chat_completions": true,
+        "responses": true,
+        "text_completion": true,
+        "embeddings": true,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": true,
+        "interactions": true,
+        "systemone": false,
+        "a2a": true,
+        "generateContent": true
+      }
+    },
     "crusoe": {
       "display_name": "Crusoe (`crusoe`)",
       "url": "https://docs.litellm.ai/docs/providers/crusoe",
@@ -1178,9 +1230,9 @@
         "text_completion": true,
         "embeddings": false,
         "image_generations": true,
-        "image_edits": false,
+        "image_edits": true,
         "audio_transcriptions": false,
-        "audio_speech": false,
+        "audio_speech": true,
         "rerank": false,
         "ocr": false,
         "search": false,
@@ -2248,6 +2300,32 @@
     "bespoke": {
       "display_name": "Bespoke Nimble (`bespoke`)",
       "url": "https://docs.litellm.ai/docs/auto_router/decision_classifiers",
+      "endpoints": {
+        "chat_completions": false,
+        "responses": false,
+        "text_completion": false,
+        "embeddings": false,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": false,
+        "interactions": false,
+        "systemone": true,
+        "a2a": false,
+        "generateContent": false
+      }
+    },
+    "eu_jev": {
+      "display_name": "eu/jev (`eu_jev`)",
+      "url": "https://docs.litellm.ai/docs/pass_through/eu_jev",
       "endpoints": {
         "chat_completions": false,
         "responses": false,
@@ -3754,7 +3832,7 @@
         "ocr": false,
         "search": false,
         "moderations": false,
-        "realtime": false,
+        "realtime": true,
         "video_generations": false,
         "batches": false,
         "messages": false,
@@ -3792,6 +3870,32 @@
     "tensormesh": {
       "display_name": "Tensormesh (`tensormesh`)",
       "url": "https://docs.litellm.ai/docs/providers/tensormesh",
+      "endpoints": {
+        "chat_completions": true,
+        "responses": true,
+        "text_completion": true,
+        "embeddings": false,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": true,
+        "interactions": true,
+        "systemone": false,
+        "a2a": true,
+        "generateContent": true
+      }
+    },
+    "streamlake": {
+      "display_name": "StreamLake (`streamlake`)",
+      "url": "https://docs.litellm.ai/docs/providers/openai_compatible",
       "endpoints": {
         "chat_completions": true,
         "responses": true,
@@ -4914,6 +5018,33 @@
         "vector_stores_search": true
       }
     },
+    "opensearch": {
+      "display_name": "Amazon OpenSearch (`opensearch`)",
+      "url": "https://docs.litellm.ai/docs/providers/opensearch_vector_stores",
+      "endpoints": {
+        "chat_completions": false,
+        "responses": false,
+        "text_completion": false,
+        "embeddings": false,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": false,
+        "interactions": false,
+        "systemone": false,
+        "a2a": false,
+        "generateContent": false,
+        "vector_stores_search": true
+      }
+    },
     "helicone": {
       "display_name": "Helicone (`helicone`)",
       "url": "https://docs.litellm.ai/docs/providers/helicone",
@@ -5329,6 +5460,58 @@
         "systemone": false,
         "a2a": false,
         "generateContent": false
+      }
+    },
+    "kyma": {
+      "display_name": "Kyma API (`kyma`)",
+      "url": "https://docs.litellm.ai/docs/providers/kyma",
+      "endpoints": {
+        "chat_completions": true,
+        "responses": true,
+        "text_completion": true,
+        "embeddings": false,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": true,
+        "interactions": true,
+        "systemone": false,
+        "a2a": true,
+        "generateContent": true
+      }
+    },
+    "bigmodel": {
+      "display_name": "BigModel (Zhipu AI) (`bigmodel`)",
+      "url": "https://docs.bigmodel.cn/cn/guide/develop/responses/introduction",
+      "endpoints": {
+        "chat_completions": true,
+        "responses": true,
+        "text_completion": true,
+        "embeddings": false,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": true,
+        "interactions": true,
+        "systemone": false,
+        "a2a": true,
+        "generateContent": true
       }
     }
   },

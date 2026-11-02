@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -41,9 +42,11 @@ from litellm.llms.vertex_ai.batches.handler import (  # noqa: E402
     VertexAIBatchPrediction,
 )
 from litellm.llms.vertex_ai.common_utils import VertexAIError  # noqa: E402
+from litellm.proxy.utils import handle_exception_on_proxy  # noqa: E402
 from litellm.types.utils import LiteLLMBatch  # noqa: E402
 
 HMOD = "litellm.llms.vertex_ai.batches.handler"
+_CLIENT_ERROR_429: Final = "Client error '429 Too Many Requests' for url 'https://x/batchPredictionJobs'"
 TOKEN = "ya29.fake-access-token"
 PROJECT = "my-project"
 LOCATION = "us-central1"
@@ -370,19 +373,19 @@ def test_create_batch_sync_endpoint_without_deployed_model_raises_400():
     client.post.assert_not_called()
 
 
-def test_create_batch_sync_httpstatuserror_propagates():
-    """``HTTPHandler.post`` raises for non-2xx via ``raise_for_status``; the
-    sync create path must surface that error, not swallow it."""
+def test_create_batch_sync_httpstatuserror_carries_vertex_status_body_and_headers():
     h = _make_handler()
     client = MagicMock()
     request = httpx.Request("POST", "https://x/batchPredictionJobs")
-    err_response = httpx.Response(status_code=500, request=request, text="boom")
+    err_response: Final = httpx.Response(
+        status_code=429, request=request, text="boom", headers={"retry-after": "30"}
+    )
     client.post.side_effect = httpx.HTTPStatusError(
-        "boom", request=request, response=err_response
+        _CLIENT_ERROR_429, request=request, response=err_response
     )
 
     with patch(f"{HMOD}.get_httpx_client", return_value=client):
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
             h.create_batch(
                 _is_async=False,
                 create_batch_data=CREATE_DATA,
@@ -393,6 +396,11 @@ def test_create_batch_sync_httpstatuserror_propagates():
                 timeout=600.0,
                 max_retries=None,
             )
+    assert exc_info.value.response.status_code == 429
+    assert exc_info.value.response.headers["retry-after"] == "30"
+    assert handle_exception_on_proxy(exc_info.value).code == "429"
+    assert (getattr(exc_info.value, "message", None), getattr(exc_info.value, "text", None)) == ("boom", "boom")
+    assert str(exc_info.value).splitlines() == [_CLIENT_ERROR_429, "boom"]
 
 
 def test_create_batch_input_file_id_without_model_raises_400_before_post():
@@ -800,14 +808,16 @@ def test_cancel_batch_sync_httpstatuserror_logged_and_reraised():
     client.get.assert_not_called()
 
 
-def test_create_batch_async_httpstatuserror_logged_and_reraised():
+def test_create_batch_async_httpstatuserror_carries_vertex_status_body_and_headers():
     h = _make_handler()
     async_client = MagicMock()
     request = httpx.Request("POST", "https://x/batchPredictionJobs")
-    err_response = httpx.Response(status_code=500, request=request, text="boom")
+    err_response: Final = httpx.Response(
+        status_code=429, request=request, text="boom", headers={"retry-after": "30"}
+    )
     async_client.post = AsyncMock(
         side_effect=httpx.HTTPStatusError(
-            "boom", request=request, response=err_response
+            _CLIENT_ERROR_429, request=request, response=err_response
         )
     )
 
@@ -825,8 +835,13 @@ def test_create_batch_async_httpstatuserror_logged_and_reraised():
             timeout=600.0,
             max_retries=None,
         )
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
             _run(coro)
+    assert exc_info.value.response.status_code == 429
+    assert exc_info.value.response.headers["retry-after"] == "30"
+    assert handle_exception_on_proxy(exc_info.value).code == "429"
+    assert (getattr(exc_info.value, "message", None), getattr(exc_info.value, "text", None)) == ("boom", "boom")
+    assert str(exc_info.value).splitlines() == [_CLIENT_ERROR_429, "boom"]
 
 
 def test_async_retrieve_batch_non_200_raises():
@@ -1043,15 +1058,7 @@ async def test_vertex_list_batches(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_vertex_async_create_batch_logs_error_body_on_http_error():
-    """
-    When Vertex AI returns an HTTP error (e.g. 400), _async_create_batch should
-    re-raise httpx.HTTPStatusError (not swallow it) and log the response body.
-
-    Before the fix the error body was lost because AsyncHTTPHandler.post()
-    calls raise_for_status() internally, raising before the handler's own
-    status-code check could log the body.
-    """
+async def test_vertex_async_create_batch_httpstatuserror_carries_vertex_error_body():
     from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
 
     handler = VertexAIBatchPrediction(gcs_bucket_name="test-bucket")
@@ -1081,4 +1088,4 @@ async def test_vertex_async_create_batch_logs_error_body_on_http_error():
             )
 
         assert exc_info.value.response.status_code == 400
-        assert "gemini-2.0-flash" in exc_info.value.response.text
+        assert "Do not support publisher model gemini-2.0-flash" in str(exc_info.value)

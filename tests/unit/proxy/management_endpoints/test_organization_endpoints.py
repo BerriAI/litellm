@@ -1618,6 +1618,37 @@ async def test_delete_organization_is_refused_while_one_of_its_teams_holds_a_ptu
 
 
 @pytest.mark.asyncio
+async def test_organization_member_add_reports_an_unknown_org_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LitellmUserRoles,
+        OrganizationMemberAddRequest,
+        OrgMember,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
+
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_organizationtable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await organization_member_add(
+            data=OrganizationMemberAddRequest(
+                organization_id="no-such-org",
+                member=OrgMember(role="internal_user", user_id="someone"),
+            ),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("404", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("budget_duration", ["30d", None])
 async def test_new_organization_schedules_budget_reset_from_duration(monkeypatch, budget_duration):
     """/organization/new with an inline budget_duration must write budget_reset_at on the auto-created

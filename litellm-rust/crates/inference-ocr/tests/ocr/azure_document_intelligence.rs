@@ -12,6 +12,7 @@ use rstest::rstest;
 use super::*;
 
 const MODEL: &str = "azure_ai/doc-intelligence/prebuilt-read";
+const LAYOUT_MODEL: &str = "azure_ai/doc-intelligence/prebuilt-layout";
 
 fn read_request(base: &str, options: Value) -> LiteLLMOcrRequest {
     ocr_request(MODEL, base, options)
@@ -70,6 +71,7 @@ async fn pages_features_and_extra_options_map_to_the_analyze_call() {
 #[case(json!({"pages": "1&&features=bad"}), Error::Pages(PagesFault::Range))]
 #[case(json!({"features": "languages&pages=1"}), Error::Features)]
 #[case(json!({"req_format": "azure"}), Error::RequestFormat)]
+#[case(json!({"outputContentFormat": "html"}), Error::OutputContentFormat)]
 #[tokio::test]
 async fn invalid_pages_features_and_format_are_rejected_before_sending(
     #[case] options: Value,
@@ -128,6 +130,137 @@ async fn an_inline_document_is_sent_as_base64_and_only_page_text_is_kept(#[case]
         assert_eq!(sent.query(field), None, "{field}");
     }
     assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
+}
+
+#[rstest]
+#[case::lower_case("markdown")]
+#[case::capitalized("Markdown")]
+#[tokio::test]
+async fn markdown_output_is_requested_on_the_analyze_call_and_split_into_pages(
+    #[case] output_content_format: &str,
+) {
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {
+            "content": "# Tïtle\n\n<!-- PageBreak -->\n\n| a |",
+            "contentFormat": "markdown",
+            "stringIndexType": "unicodeCodePoint",
+            "pages": [
+                {"pageNumber": 1, "spans": [{"offset": 0, "length": 29}], "lines": [{"content": "Tïtle"}]},
+                {"pageNumber": 2, "spans": [{"offset": 29, "length": 5}], "lines": [{"content": "a"}]}
+            ]
+        }
+    }))])
+    .await;
+
+    let response = perform(ocr_request(
+        LAYOUT_MODEL,
+        &upstream.uri(),
+        json!({"outputContentFormat": output_content_format, "pages": [0, 1]}),
+    ))
+    .await
+    .unwrap();
+
+    let sent = only_request(&upstream).await;
+    assert_eq!(
+        sent.query("outputContentFormat").as_deref(),
+        Some("markdown")
+    );
+    assert_eq!(
+        sent.query("stringIndexType").as_deref(),
+        Some("unicodeCodePoint")
+    );
+    assert_eq!(sent.query("pages").as_deref(), Some("1,2"));
+    assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
+    assert_eq!(
+        response.content.as_deref(),
+        Some("# Tïtle\n\n<!-- PageBreak -->\n\n| a |")
+    );
+    let pages = response
+        .pages
+        .iter()
+        .map(|page| page.markdown.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(pages, ["# Tïtle\n\n<!-- PageBreak -->\n\n", "| a |"]);
+    assert_eq!(
+        response.extra_fields.get("stringIndexType"),
+        Some(&json!("unicodeCodePoint"))
+    );
+    assert_eq!(
+        response.usage_info.as_ref().unwrap().pages_processed,
+        Some(2)
+    );
+}
+
+#[rstest]
+#[case::native_markdown(LAYOUT_MODEL, json!({"outputContentFormat": "markdown", "req_format": "native"}), Some("markdown"))]
+#[case::markdown_on_read(MODEL, json!({"outputContentFormat": "markdown"}), Some("markdown"))]
+#[case::text(LAYOUT_MODEL, json!({"outputContentFormat": "text"}), Some("text"))]
+#[case::omitted(LAYOUT_MODEL, json!({}), None)]
+#[tokio::test]
+async fn only_layout_markdown_in_litellm_format_asks_for_code_point_offsets(
+    #[case] model: &str,
+    #[case] options: Value,
+    #[case] output_content_format: Option<&str>,
+) {
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {
+            "contentFormat": "text",
+            "stringIndexType": "textElements",
+            "pages": [{"pageNumber": 1, "lines": [{"content": "hello"}]}]
+        }
+    }))])
+    .await;
+
+    let response = perform(ocr_request(model, &upstream.uri(), options))
+        .await
+        .unwrap();
+
+    let sent = only_request(&upstream).await;
+    assert_eq!(
+        sent.query("outputContentFormat").as_deref(),
+        output_content_format
+    );
+    assert_eq!(sent.query("stringIndexType"), None);
+    assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
+    assert_eq!(response.pages[0].markdown, "hello");
+    assert_eq!(response.extra_fields.get("stringIndexType"), None);
+}
+
+#[rstest]
+#[case::snake_case(json!({"output_content_format": "markdown"}), Some("markdown"))]
+#[case::padded(json!({"outputContentFormat": " markdown "}), Some("markdown"))]
+#[case::empty(json!({"outputContentFormat": ""}), None)]
+#[case::empty_camel_case_falls_back_to_snake_case(
+    json!({"outputContentFormat": "", "output_content_format": "markdown"}),
+    Some("markdown")
+)]
+#[case::dropped(json!({"outputContentFormat": "html", "drop_params": true}), None)]
+#[tokio::test]
+async fn the_requested_output_content_format_reaches_azure_in_its_query_spelling(
+    #[case] options: Value,
+    #[case] output_content_format: Option<&str>,
+) {
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {"pages": [{"pageNumber": 1, "lines": [{"content": "hello"}]}]}
+    }))])
+    .await;
+
+    let response = perform(ocr_request(MODEL, &upstream.uri(), options))
+        .await
+        .unwrap();
+
+    let sent = only_request(&upstream).await;
+    assert_eq!(
+        sent.query("outputContentFormat").as_deref(),
+        output_content_format
+    );
+    assert_eq!(sent.query("output_content_format"), None);
+    assert_eq!(sent.query("drop_params"), None);
+    assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
+    assert_eq!(response.pages[0].markdown, "hello");
 }
 
 #[tokio::test]

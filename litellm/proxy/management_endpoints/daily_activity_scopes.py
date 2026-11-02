@@ -17,6 +17,7 @@ from litellm.proxy.management_endpoints.organization_endpoints import resolve_or
 from litellm.proxy.management_endpoints.tag_management_endpoints import get_tag_daily_activity_api_key_filter
 from litellm.proxy.management_endpoints.team_endpoints import resolve_team_daily_activity_scope
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.daily_activity_buckets import raw_api_key_filter
 from litellm.types.repositories.daily_activity import DailyActivityScope, DailyActivityTable
 
 
@@ -77,13 +78,7 @@ def _build_scope(
 ) -> ResolvedScope:
     start_date: Final[str] = query.start_date or ""
     end_date: Final[str] = query.end_date or ""
-    api_keys: Final[tuple[str, ...] | None] = (
-        None
-        if api_key_filter is None or api_key_filter == ""
-        else (api_key_filter,)
-        if isinstance(api_key_filter, str)
-        else tuple(api_key_filter)
-    )
+    api_keys: Final = raw_api_key_filter(api_key_filter)
     return ResolvedScope(
         scope=DailyActivityScope(
             table=resolver.table,
@@ -221,7 +216,11 @@ def _user_query(
     start_date: str | None = Query(default=None, description="Start date in YYYY-MM-DD format"),
     end_date: str | None = Query(default=None, description="End date in YYYY-MM-DD format"),
     model: str | None = Query(default=None, description="Filter by specific model"),
-    api_key: str | None = Query(default=None, description="Filter by specific API key"),
+    api_key: str | None = Query(
+        default=None,
+        description="Filter by reporting API key ID. Missing keys are reported as unattributed. "
+        "For a literal key unattributed or a key starting with raw:, add an extra raw: prefix",
+    ),
     user_id: str | None = Query(
         default=None,
         description="Filter by specific user ID. Admins can filter by any user or omit for global view. "

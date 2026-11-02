@@ -17,12 +17,15 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_gated_fields import active_beta_values, log_beta_gated_strips, strip_beta_gated_thinking
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
+    drops_unsupported_params,
     filter_exceptions_from_params,
     filter_internal_params,
     map_finish_reason,
@@ -48,6 +51,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     message_field,
     parts_of,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING,
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
@@ -61,6 +65,7 @@ from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_image
 from litellm.llms.bedrock.common_utils import (
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
+    bedrock_model_is_unknown,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
     bedrock_native_output_is_opt_in,
@@ -117,6 +122,7 @@ from litellm.utils import (
 )
 
 from ..common_utils import (
+    DROP_DISABLED_REASONING_EFFORT_WARNING,
     BedrockError,
     BedrockModelInfo,
     bedrock_cache_point_ttl_supported,
@@ -183,6 +189,8 @@ def _tools_the_model_accepts(
 
 
 _OUTPUT_CONFIG_BLOCK: Final = TypeAdapter(OutputConfigBlock)
+_DEEPSEEK_THINKING_REASON: Final = "DeepSeek on Bedrock reasons natively and takes no thinking field."
+_DEEPSEEK_R1_EFFORT_REASON: Final = "DeepSeek R1 on Bedrock always reasons and rejects reasoning_effort."
 
 
 def _has_native_text_format(output_config: object) -> bool:
@@ -526,13 +534,14 @@ class AmazonConverseConfig(BaseConfig):
         """
         Handle the reasoning_effort parameter based on the model type.
 
-        - GPT-OSS and DeepSeek V3 models: passed through unchanged via additionalModelRequestFields.
+        - GPT-OSS, DeepSeek V3 and unknown models (``bedrock_model_is_unknown``): passed through unchanged
+          via additionalModelRequestFields.
         - OpenAI GPT-5.x and GPT-6 models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
         - Nova 2 models: transformed to reasoningConfig.
         - Anthropic models: mapped to ``thinking`` (and ``output_config.effort`` on
           adaptive Claude 4.6 / 4.7).
         """
-        if "gpt-oss" in model or "deepseek" in model:
+        if "gpt-oss" in model or "deepseek" in model or bedrock_model_is_unknown(model):
             optional_params["reasoning_effort"] = reasoning_effort
         elif self._is_openai_gpt_reasoning_model(model):
             reasoning: Final[BedrockConverseGptReasoningEffortBlock] = {"effort": reasoning_effort}
@@ -635,6 +644,10 @@ class AmazonConverseConfig(BaseConfig):
             or supports_reasoning(model=base_model, custom_llm_provider=self.custom_llm_provider)
         )
 
+    def _warn_native_reasoning_drop(self, param: str, value: object, model: str, reason: str) -> None:
+        if param in self.get_supported_openai_params(model):
+            warn_dropped_reasoning(param, value, model, reason, drop_params_gated=False)
+
     def _model_rejects_reasoning_effort_param(self, model: str, base_model: str) -> bool:
         """Whether the model returns a 400 for every ``reasoning_effort`` shape on Converse.
 
@@ -678,7 +691,7 @@ class AmazonConverseConfig(BaseConfig):
             "parallel_tool_calls",
         ]
 
-        if "arn" in model:  # we can't infer the model from the arn, so just add all params
+        if "arn" in model or bedrock_model_is_unknown(model):
             supported_params.append("tools")
             supported_params.append("tool_choice")
             supported_params.append("thinking")
@@ -1138,9 +1151,8 @@ class AmazonConverseConfig(BaseConfig):
                     "tool_choice": {"type": "auto", "disable_parallel_tool_use": not value}
                 }
             if param == "thinking" and drop_thinking_param:
-                verbose_logger.debug(
-                    "Dropping unsupported `thinking` param for Bedrock model=%s; it reasons natively.",
-                    model,
+                self._warn_native_reasoning_drop(
+                    param, OPAQUE_VALUE.validate_python(value), model, _DEEPSEEK_THINKING_REASON
                 )
             elif param == "thinking" and not self._is_openai_gpt_reasoning_model(model):
                 if (
@@ -1174,10 +1186,7 @@ class AmazonConverseConfig(BaseConfig):
                         drop_params=drop_params,
                     )
             elif param == "reasoning_effort" and isinstance(value, str) and drop_reasoning_effort_param:
-                verbose_logger.debug(
-                    "Dropping unsupported `reasoning_effort` param for Bedrock model=%s; it always reasons and rejects it.",
-                    model,
-                )
+                self._warn_native_reasoning_drop(param, value, model, _DEEPSEEK_R1_EFFORT_REASON)
             elif (
                 param == "reasoning_effort"
                 and isinstance(value, str)
@@ -1192,11 +1201,7 @@ class AmazonConverseConfig(BaseConfig):
                         ),
                         status_code=400,
                     )
-                verbose_logger.debug(
-                    "Dropping unsupported `reasoning_effort=%s` for Bedrock model=%s.",
-                    value,
-                    model,
-                )
+                verbose_logger.warning(DROP_DISABLED_REASONING_EFFORT_WARNING, "reasoning_effort", value, model)
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params
@@ -1828,7 +1833,16 @@ class AmazonConverseConfig(BaseConfig):
                 filtered_tools.append(tool)
 
         base_model: Final = BedrockModelInfo.get_base_model(model)
-        client_beta_list: Final = get_anthropic_beta_from_headers(headers or {})
+        header_beta_list: Final = get_anthropic_beta_from_headers(headers or {})
+        client_beta_list: Final = header_beta_list or filter_and_transform_beta_headers(
+            sorted(
+                active_beta_values(
+                    {},
+                    additional_request_params.get("anthropic_beta"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # additional_request_params is a bare dict
+                )
+            ),
+            provider="bedrock_converse",
+        )
         eager_beta: Final = (
             (ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,)
             if base_model.startswith("anthropic")
@@ -1836,7 +1850,15 @@ class AmazonConverseConfig(BaseConfig):
             and ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER not in client_beta_list
             else ()
         )
-        anthropic_beta_list: Final = [*client_beta_list, *eager_beta]
+        thinking_betas: Final = AnthropicModelInfo().thinking_betas(
+            additional_request_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # additional_request_params is a bare dict
+        )
+        missing_thinking_betas: Final = (
+            tuple(beta for beta in thinking_betas if beta not in client_beta_list)
+            if base_model.startswith("anthropic")
+            else ()
+        )
+        anthropic_beta_list: Final = [*client_beta_list, *eager_beta, *missing_thinking_betas]
 
         # Only separate tools if computer use tools are actually present
         if filtered_tools and self.is_computer_use_tool_used(filtered_tools, model):
@@ -1906,7 +1928,8 @@ class AmazonConverseConfig(BaseConfig):
                 else:
                     computer_use_header = "computer-use-2024-10-22"
 
-                anthropic_beta_list.append(computer_use_header)
+                if computer_use_header not in anthropic_beta_list:
+                    anthropic_beta_list.append(computer_use_header)
                 # Transform computer use tools to proper Bedrock format
                 transformed_computer_tools: Final = self._transform_computer_use_tools(computer_use_tools)
                 additional_request_params["tools"] = transformed_computer_tools
@@ -2031,6 +2054,16 @@ class AmazonConverseConfig(BaseConfig):
         bedrock_tools, anthropic_beta_list = self._process_tools_and_beta(
             original_tools, model, headers, additional_request_params, litellm_params, deployment_model
         )
+        requested_thinking: Final = additional_request_params.get("thinking")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # _prepare_request_params hands back a bare dict
+        body_betas: Final = additional_request_params.get("anthropic_beta")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # same bare dict
+        gated_thinking: Final = strip_beta_gated_thinking(
+            requested_thinking,  # pyright: ignore[reportUnknownArgumentType]  # same bare dict
+            active_beta_values({}, body_betas) | frozenset(anthropic_beta_list),  # pyright: ignore[reportUnknownArgumentType]  # _process_tools_and_beta hands back a bare list
+            drop_params=drop_params,
+        )
+        if gated_thinking.stripped:
+            log_beta_gated_strips(gated_thinking.stripped, model=model, provider="bedrock_converse")
+            additional_request_params["thinking"] = gated_thinking.thinking
 
         # Append cachePoint to tools if cache_control_injection_points has tool_config
         cache_injection_points: Final = additional_request_params.pop("cache_control_injection_points", None)
@@ -2097,6 +2130,24 @@ class AmazonConverseConfig(BaseConfig):
 
         return data
 
+    @staticmethod
+    def _claude_messages_within_cache_control_cap(
+        messages: Sequence[AllMessageValues],
+        capability_model: str,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+    ) -> Sequence[AllMessageValues]:
+        if not drops_unsupported_params(litellm_params.get("drop_params")) or "claude" not in capability_model.lower():
+            return messages
+        from litellm.integrations.anthropic_cache_control_hook import (
+            messages_within_cache_control_cap,
+            tool_message_with_single_cache_mark,
+        )
+
+        return messages_within_cache_control_cap(
+            tuple(map(tool_message_with_single_cache_mark, messages)), optional_params.get("tools")
+        )
+
     async def _async_transform_request(
         self,
         model: str,
@@ -2108,7 +2159,13 @@ class AmazonConverseConfig(BaseConfig):
         base_model: Final = litellm_params.get("base_model")
         capability_model: Final = bedrock_capability_model(model, base_model)
         messages, system_content_blocks = self._transform_system_message(
-            messages, model=capability_model, deployment_model=model
+            list(
+                self._claude_messages_within_cache_control_cap(
+                    messages, capability_model, _JSON_OBJECT.validate_python(optional_params), litellm_params
+                )
+            ),
+            model=capability_model,
+            deployment_model=model,
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
@@ -2189,7 +2246,13 @@ class AmazonConverseConfig(BaseConfig):
         base_model: Final = litellm_params.get("base_model")
         capability_model: Final = bedrock_capability_model(model, base_model)
         messages, system_content_blocks = self._transform_system_message(
-            messages, model=capability_model, deployment_model=model
+            list(
+                self._claude_messages_within_cache_control_cap(
+                    messages, capability_model, _JSON_OBJECT.validate_python(optional_params), litellm_params
+                )
+            ),
+            model=capability_model,
+            deployment_model=model,
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
