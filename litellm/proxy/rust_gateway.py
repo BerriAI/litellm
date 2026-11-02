@@ -224,7 +224,7 @@ async def _drive(
     return await _drive(following, events, children)
 
 
-async def _supervise(binary: str, command: Sequence[str], host: str, port: int) -> ExitCode:
+async def _supervise(binary: str, command: Sequence[str], host: str, port: int, environ: Mapping[str, str]) -> ExitCode:
     loop: Final = asyncio.get_running_loop()
     events: Final[asyncio.Queue[Event]] = asyncio.Queue()
     for signum in (signal.SIGTERM, signal.SIGINT):
@@ -233,9 +233,9 @@ async def _supervise(binary: str, command: Sequence[str], host: str, port: int) 
         listener.bind((RUST_HOP, 0))
         listener.listen()
         _, upstream_port = _ADDRESS.validate_python(listener.getsockname())
-        python: Final = await _spawn(python_spec(command, listener.fileno(), upstream_port, host, os.environ))
+        python: Final = await _spawn(python_spec(command, listener.fileno(), upstream_port, host, environ))
         try:
-            rust: Final = await _spawn(rust_spec(binary, upstream_port, host, port, os.environ))
+            rust: Final = await _spawn(rust_spec(binary, upstream_port, host, port, environ))
         except OSError:
             _terminate_group(python)
             await python.wait()
@@ -252,9 +252,9 @@ async def _supervise(binary: str, command: Sequence[str], host: str, port: int) 
         await asyncio.gather(*waiters)
 
 
-def supervise(binary: str, command: Sequence[str], host: str, port: int) -> int:
+def supervise(binary: str, command: Sequence[str], host: str, port: int, environ: Mapping[str, str]) -> int:
     try:
-        return asyncio.run(_supervise(binary, command, host, port))
+        return asyncio.run(_supervise(binary, command, host, port, environ))
     except OSError as error:
         sys.stderr.write(f"Rust gateway startup failed: {error}\n")
         return ExitCode.CHILD_FAILED

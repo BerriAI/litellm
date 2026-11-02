@@ -1309,7 +1309,7 @@ def run_server(
         public_port: Final = (
             random.randint(1024, 49152) if port == 4000 and ProxyInitializationHelpers.is_port_in_use(port) else port
         )
-        raise SystemExit(supervise(binary, cli_command(sys.argv[1:]), host, public_port))
+        raise SystemExit(supervise(binary, cli_command(sys.argv[1:]), host, public_port, os.environ))
     supervised: Final = gateway_mode if isinstance(gateway_mode, Supervised) else None
 
     args: Final = locals()
