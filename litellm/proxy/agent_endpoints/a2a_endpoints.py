@@ -12,7 +12,6 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 
 import json
 from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping
-from copy import deepcopy
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import urlparse
@@ -29,6 +28,7 @@ from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.a2a.agent_card import point_agent_card_at_proxy
 from litellm.proxy.a2a.version_convert import (
     A2AVersion,
     normalize_agent_card,
@@ -750,16 +750,12 @@ async def get_agent_card(
             )
 
         proxy_url: Final = get_custom_url(str(request.base_url), route=f"a2a/{agent_id}")
-        agent_card = deepcopy(agent.agent_card_params)
-        agent_card["url"] = proxy_url
-        interfaces: Final = agent_card.get("supportedInterfaces")
-        if isinstance(interfaces, list) and interfaces:
-            interfaces[0]["url"] = proxy_url
+        agent_card: Final = point_agent_card_at_proxy(agent.agent_card_params, proxy_url)
         served_version: Final = _served_version(agent, request)
-        agent_card = normalize_agent_card(agent_card, served_version)
+        normalized_agent_card: Final = normalize_agent_card(agent_card, served_version)
 
         verbose_proxy_logger.debug("Returning agent card for '%s' with proxy URL: %s", agent_id, proxy_url)
-        return JSONResponse(content=agent_card)
+        return JSONResponse(content=normalized_agent_card)
 
     except HTTPException:
         raise

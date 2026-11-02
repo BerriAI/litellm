@@ -505,9 +505,10 @@ export default function ChatConversationPage() {
 
   const inputBar = (inConversation: boolean) => {
     const hint = mode === "chat" || background.pending ? backgroundHint() : null;
-    const chatPlaceholder = inConversation
+    const defaultPlaceholder = inConversation
       ? "Send a message..."
-      : "Describe a change, paste an error, or ask a question…";
+      : "Ask a question, attach a file, or paste something to work on…";
+    const chatPlaceholder = research ? "What should I research on the web?" : defaultPlaceholder;
     const preparing = isLoadingModels || isReadingAttachments;
     const researchBlocked = research && !canResearch;
     const submitDisabled =
@@ -718,6 +719,7 @@ export default function ChatConversationPage() {
         {showBlankState ? (
           <MoyaiChatHome
             imageMode={mode === "image"}
+            researchMode={research}
             draft={inputText}
             busy={isStreaming}
             conversations={conversations}

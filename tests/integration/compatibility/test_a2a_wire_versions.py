@@ -859,6 +859,59 @@ def test_a2a_message_send_aliases_and_agent_name_reach_the_same_agent_with_the_s
         ), posts
 
 
+def test_a2a_data_part_skill_call_and_data_artifact_reach_each_side_unchanged(gateway: Gateway) -> None:
+    marker: Final = "a2adata" + uuid.uuid4().hex
+    invocation: Final[dict[str, JsonValue]] = {"skill": "search_items", "params": {"region": "emea", "limit": 3}}
+    found: Final[dict[str, JsonValue]] = {
+        "total": 2,
+        "count": 2,
+        "listings": [{"id": marker + "-1", "region": "emea"}, {"id": marker + "-2", "region": "emea"}],
+    }
+    task: Final[dict[str, JsonValue]] = {
+        "kind": "task",
+        "id": marker + "-task",
+        "contextId": marker + "-context",
+        "status": {"state": "completed"},
+        "artifacts": [
+            {"artifactId": marker + "-artifact", "name": "search_results", "parts": [{"kind": "data", "data": found}]}
+        ],
+    }
+
+    def upstream(request: Request) -> Reply:
+        if request.method == "GET":
+            return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
+        body: Final = json.loads(request.body)
+        return Reply(body=json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": task}).encode())
+
+    with wire_server(upstream) as wire, gateway.scenario() as scenario:
+        identity: Final = _register_agent(
+            gateway, scenario, {"agent_name": marker, "agent_card_params": _peer_card(wire.url, marker)}
+        )
+        response: Final = gateway.client.post(
+            f"/a2a/{identity}",
+            headers={"Authorization": f"Bearer {gateway.key}"},
+            json={
+                "jsonrpc": "2.0",
+                "id": marker,
+                "method": "message/send",
+                "params": {
+                    "message": {
+                        "kind": "message",
+                        "role": "user",
+                        "messageId": marker + "-in",
+                        "parts": [{"kind": "data", "data": invocation}],
+                    }
+                },
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {"jsonrpc": "2.0", "id": marker, "result": task}, response.text
+        posts: Final = tuple(json.loads(item.body) for item in wire.drain() if item.method == "POST")
+        assert len(posts) == 1, posts
+        assert posts[0]["method"] == "message/send", posts
+        assert posts[0]["params"]["message"]["parts"] == [{"kind": "data", "data": invocation}], posts
+
+
 def test_a2a_task_methods_pass_through_verbatim_and_push_callbacks_are_validated_before_forwarding(
     gateway: Gateway,
 ) -> None:

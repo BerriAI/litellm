@@ -15603,6 +15603,10 @@
               ],
               "title": "Metadata"
             },
+            "response_format": {
+              "$ref": "#/components/schemas/GuardrailResponseFormat",
+              "default": "standard"
+            },
             "text": {
               "title": "Text",
               "type": "string"
@@ -16480,6 +16484,14 @@
           "title": "BedrockChecksSensitiveInformationModel",
           "type": "object"
         },
+        "BedrockGuardrailOutputScope": {
+          "enum": [
+            "INTERVENTIONS",
+            "FULL"
+          ],
+          "title": "BedrockGuardrailOutputScope",
+          "type": "string"
+        },
         "BlockedWord": {
           "description": "Represents a blocked word with its action and optional description",
           "properties": {
@@ -17023,6 +17035,14 @@
           "title": "GuardrailInfoResponse",
           "type": "object"
         },
+        "GuardrailResponseFormat": {
+          "enum": [
+            "standard",
+            "native"
+          ],
+          "title": "GuardrailResponseFormat",
+          "type": "string"
+        },
         "GuardrailSubmissionItem": {
           "properties": {
             "created_at": {
@@ -17275,6 +17295,7 @@
           "title": "HTTPValidationError",
           "type": "object"
         },
+        "JsonValue": {},
         "LakeraCategoryThresholds": {
           "additionalProperties": true,
           "properties": {
@@ -18201,6 +18222,18 @@
               "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
+            "file_checkpoint_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "File-checkpoint ID for the Ovalix Tracker service (falls back to pre/post).",
+              "title": "File Checkpoint Id"
+            },
             "file_guardrail_timeout": {
               "anyOf": [
                 {
@@ -18702,6 +18735,17 @@
                 }
               ],
               "description": "Optional parameters for the guardrail"
+            },
+            "outputScope": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/BedrockGuardrailOutputScope"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ApplyGuardrail response scope. FULL includes detected and non-detected findings. Omit to retain Bedrock's default of returning detected findings only."
             },
             "output_parse_pii": {
               "anyOf": [
@@ -20585,7 +20629,24 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                      },
+                      {
+                        "additionalProperties": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "items": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "array"
+                      }
+                    ],
+                    "title": "Response Apply Guardrail Apply Guardrail Post"
                   }
                 }
               },
@@ -20677,7 +20738,24 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                      },
+                      {
+                        "additionalProperties": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "items": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "array"
+                      }
+                    ],
+                    "title": "Response Apply Guardrail Guardrails Apply Guardrail Post"
                   }
                 }
               },
