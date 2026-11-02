@@ -35,6 +35,12 @@ from litellm.types.utils import (
 
 BUDGET_RESERVATION_METADATA_KEYS: Final = frozenset({"user_api_key_budget_reservation"})
 
+ITPM_RESERVED_KEY: Final = "_litellm_itpm_reserved"
+OTPM_RESERVED_KEY: Final = "_litellm_otpm_reserved"
+ITPM_CACHE_KEY: Final = "_litellm_itpm_cache_key"
+OTPM_CACHE_KEY: Final = "_litellm_otpm_cache_key"
+IO_TOKEN_RESERVATION_KEYS: Final = frozenset({ITPM_RESERVED_KEY, OTPM_RESERVED_KEY, ITPM_CACHE_KEY, OTPM_CACHE_KEY})
+
 MODEL_ACCESS_GROUP_METADATA_KEY: Final = "user_api_key_matched_model_access_groups"
 """Where auth records the model access groups that authorized the request, for the spend writer.
 

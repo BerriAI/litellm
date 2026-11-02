@@ -9,12 +9,13 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # narrows a duck-typed value to the Protocol its caller reads
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+from litellm.litellm_core_utils.hidden_params import set_extra_attribute
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
@@ -310,9 +311,12 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     "tool_use": "tool_calls",
     "refusal": "content_filter",
     "compaction": "length",
+    "pause_turn": "length",
     "model_context_window_exceeded": "length",
     # Cohere
     "COMPLETE": "stop",
+    "STOP_SEQUENCE": "stop",
+    "TOOL_CALL": "tool_calls",
     "ERROR_TOXIC": "content_filter",
     "ERROR": "stop",
     # HuggingFace / Together AI
@@ -710,9 +714,9 @@ def preserve_upstream_non_openai_attributes(
     _assign_attributes(model_response, original_chunk.model_dump(include=frozenset(candidate_keys)).items())
 
 
-def _assign_attributes(target: object, values: Iterable[tuple[str, object]]) -> None:
+def _assign_attributes(target: BaseModel, values: Iterable[tuple[str, object]]) -> None:
     for key, value in values:
-        setattr(target, key, value)
+        set_extra_attribute(target, key, value)
 
 
 def safe_deep_copy(data):
@@ -982,25 +986,36 @@ def _usage_field(usage: object, name: str) -> object:
     return getattr(usage, name, None)
 
 
-def _cost_number(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
+def finite_cost(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
         return None
     return float(value)
+
+
+def single_log_line(value: object) -> str:
+    return str(value).replace("\r", "").replace("\n", "")
+
+
+def finite_reported_cost(value: object) -> float | None:
+    cost: Final = finite_cost(value)
+    if cost is None and isinstance(value, float):
+        verbose_logger.warning("Ignoring a non-finite provider-reported cost %s", value)
+    return cost
 
 
 def _reported_cost_value(value: object) -> float | None:
     """A reported cost is a number, or a breakdown whose total lives under ``total_cost``."""
     raw: Final[object] = value
     if isinstance(value, Mapping):
-        return _cost_number(_usage_field(raw, "total_cost"))
-    return _cost_number(value)
+        return finite_reported_cost(_usage_field(raw, "total_cost"))
+    return finite_reported_cost(value)
 
 
 def response_cost_in_hidden_params(response: _CarriesHiddenParams) -> float | None:
     additional_headers: Final[object] = response.hidden_params.get("additional_headers")
     if not isinstance(additional_headers, Mapping):
         return None
-    return _cost_number(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
+    return finite_reported_cost(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
 
 
 def override_stamped_response_cost(response: _CarriesHiddenParams, cost: float) -> None:
@@ -1061,9 +1076,14 @@ def billed_usage_cost(response: object, custom_llm_provider: str | None) -> floa
 _MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})
 
 
+def reports_native_messages_cost(custom_llm_provider: object) -> bool:
+    """Whether a Messages upstream is one whose own reported cost litellm bills from instead of the price map."""
+    return isinstance(custom_llm_provider, str) and custom_llm_provider in _MESSAGES_REPORTED_COST_PROVIDERS
+
+
 def native_messages_reported_cost(usage: object, custom_llm_provider: object) -> float | None:
     """Only a Messages upstream known to price its own responses is trusted, every other one keeps the price map."""
-    if not isinstance(custom_llm_provider, str) or custom_llm_provider not in _MESSAGES_REPORTED_COST_PROVIDERS:
+    if not isinstance(custom_llm_provider, str) or not reports_native_messages_cost(custom_llm_provider):
         return None
     return provider_reported_usage_cost(usage, custom_llm_provider)
 

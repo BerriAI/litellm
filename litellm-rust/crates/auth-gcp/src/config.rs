@@ -4,7 +4,9 @@ use base64::{
     Engine, alphabet,
     engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
 };
-use litellm_auth_types::{Error, ErrorDetail, InputSource, SecretValue, Sourced};
+use litellm_auth_types::{Error, ErrorDetail, InputSource, Sourced};
+use litellm_secret_value::SecretValue;
+
 use serde_json::{Map, Value};
 
 use litellm_auth_types::VertexParams;

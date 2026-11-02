@@ -223,6 +223,10 @@ async def _execute_query_pipeline(
     """
     Execute the RAG query pipeline.
     """
+    parent_request_id: Final[str | None] = TypeAdapter[str | None](str | None).validate_python(
+        TypeAdapter(dict[str, object]).validate_python(kwargs).get("litellm_call_id")
+    )
+
     # Extract router from kwargs - use it for completion if available
     # to properly resolve virtual model names
     router: Final[Router | None] = kwargs.pop("router", None)
@@ -252,7 +256,7 @@ async def _execute_query_pipeline(
     forwarded_search_params: Final = MappingProxyType(
         {**provider_search_params, **kwargs, **filter_search_params, **store_search_params}
     )
-    with internal_sub_call():
+    with internal_sub_call(parent_request_id):
         search_response: Final = await litellm.vector_stores.asearch(
             vector_store_id=retrieval_config["vector_store_id"],
             query=query_text,
@@ -286,7 +290,7 @@ async def _execute_query_pipeline(
     if rerank and rerank.get("enabled"):
         documents: Final = RAGQuery.extract_documents_from_search(search_response)
         if documents:
-            with internal_sub_call():
+            with internal_sub_call(parent_request_id):
                 rerank_response = await litellm.arerank(
                     model=rerank["model"],
                     query=query_text,
@@ -304,7 +308,7 @@ async def _execute_query_pipeline(
     modified_messages: Final = messages[:-1] + [context_message] + [messages[-1]]
 
     # Use router if available to properly resolve virtual model names
-    with internal_sub_call():
+    with internal_sub_call(parent_request_id):
         if router is not None:
             response = await router.acompletion(
                 model=model,
