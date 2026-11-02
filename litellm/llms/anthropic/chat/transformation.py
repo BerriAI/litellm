@@ -1768,13 +1768,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         json_schema: Mapping[str, object] | None,
         request_params: Mapping[str, object],
     ) -> bool:
-        open_object_takes_forced_json_tool: Final = (
-            json_schema is not None
-            and schema_has_open_object(json_schema)
-            and not request_params.get("tools")
-            and AnthropicModelInfo.response_format_tool_can_be_forced(model, self._resolved_provider, request_params)
+        open_object_takes_json_tool: Final = (
+            json_schema is not None and schema_has_open_object(json_schema) and not request_params.get("tools")
         )
-        return self.uses_native_structured_output(model) and not open_object_takes_forced_json_tool
+        return self.uses_native_structured_output(model) and not open_object_takes_json_tool
 
     def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
         return self.filter_anthropic_output_schema(dict(self._defs_unpacked(json_schema)))

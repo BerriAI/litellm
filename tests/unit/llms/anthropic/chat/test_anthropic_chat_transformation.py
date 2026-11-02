@@ -1398,26 +1398,34 @@ _DICT_FIELD_RESPONSE_FORMAT: Final = {
         ("claude-opus-4-8", {"reasoning_effort": "low"}),
         ("claude-opus-5", {}),
         ("claude-sonnet-5-5", {}),
-        (
-            "claude-opus-4-8",
-            {"tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]},
-        ),
     ],
-    ids=[
-        "adaptive-thinking",
-        "reasoning-effort",
-        "default-thinking-model",
-        "model-without-forced-tools",
-        "caller-tools",
-    ],
+    ids=["adaptive-thinking", "reasoning-effort", "default-thinking-model", "model-without-forced-tools"],
 )
-def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(
+def test_dict_fields_take_the_unforced_json_tool_when_it_cannot_be_forced(
     local_model_cost_map, model, thinking_params
 ):
     optional_params: Final = AnthropicConfig().map_openai_params(
         non_default_params={**thinking_params, "response_format": _DICT_FIELD_RESPONSE_FORMAT},
         optional_params={},
         model=model,
+        drop_params=False,
+    )
+
+    assert "output_format" not in optional_params
+    assert "tool_choice" not in optional_params
+    assert [
+        (tool["name"], tool["input_schema"]["properties"]["field"]) for tool in optional_params["tools"]
+    ] == [("json_tool_call", {"type": "object", "additionalProperties": {"type": "integer"}})]
+
+
+def test_dict_fields_keep_native_output_next_to_caller_tools(local_model_cost_map):
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={
+            "tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+            "response_format": _DICT_FIELD_RESPONSE_FORMAT,
+        },
+        optional_params={},
+        model="claude-opus-4-8",
         drop_params=False,
     )
 
