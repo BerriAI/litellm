@@ -68,6 +68,7 @@ from fastapi import FastAPI
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.byok_oauth_endpoints import (
     _byok_session_auth,
+    _byok_session_user_id_or_none,
 )
 
 _test_app = FastAPI()
@@ -81,10 +82,12 @@ def client():
     _test_app.dependency_overrides[_byok_session_auth] = lambda: UserAPIKeyAuth(
         api_key="hashed", user_id="user-123"
     )
+    _test_app.dependency_overrides[_byok_session_user_id_or_none] = lambda: "user-123"
     try:
         yield TestClient(_test_app, raise_server_exceptions=False)
     finally:
         _test_app.dependency_overrides.pop(_byok_session_auth, None)
+        _test_app.dependency_overrides.pop(_byok_session_user_id_or_none, None)
 
 
 @pytest.fixture
@@ -280,6 +283,100 @@ def test_authorize_get_rejects_non_loopback_redirect_uri(client):
             "response_type": "code",
             "code_challenge": "abc",
         },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+
+
+_AUTHORIZE_GET_PARAMS: Final = {
+    "client_id": "test-client",
+    "redirect_uri": "http://127.0.0.1:3000/callback",
+    "response_type": "code",
+    "code_challenge": "abc123",
+    "code_challenge_method": "S256",
+    "state": "xyz",
+    "server_id": "my-server",
+}
+
+
+def _assert_redirects_to_login_and_back(resp) -> None:
+    from urllib.parse import parse_qs, urlparse
+
+    assert resp.status_code == 303
+    location = urlparse(resp.headers["location"])
+    assert location.path == "/sso/key/generate"
+    return_to = parse_qs(location.query)["return_to"][0]
+    # Relative, same-origin path back to the exact authorize request.
+    assert return_to.startswith("/v1/mcp/oauth/authorize?")
+    assert parse_qs(urlparse(return_to).query) == {k: [v] for k, v in _AUTHORIZE_GET_PARAMS.items()}
+
+
+def test_authorize_get_without_session_redirects_to_login(unauthenticated_client):
+    """Without a UI session the POST would reject the form with 401
+    ``login_required`` after the user typed the key, so the GET sends the
+    browser to the UI login first, with a return path back to this page."""
+    with patch("litellm.proxy.proxy_server.master_key", "test-master-key"):
+        resp = unauthenticated_client.get(
+            "/v1/mcp/oauth/authorize", params=_AUTHORIZE_GET_PARAMS, follow_redirects=False
+        )
+    _assert_redirects_to_login_and_back(resp)
+    assert "apiKey" not in resp.text
+
+
+def test_authorize_get_with_revoked_session_redirects_to_login(unauthenticated_client):
+    """A signature-valid cookie whose session key no longer resolves is not a session."""
+    import jwt as _jwt
+
+    with (
+        patch("litellm.proxy.proxy_server.master_key", "test-master-key"),
+        patch(
+            "litellm.proxy.mcp_server.byok_oauth_endpoints._session_key_is_live",
+            new=AsyncMock(return_value=False),
+        ),
+    ):
+        cookie_jwt = _jwt.encode(
+            {
+                "user_id": "browser-user-42",
+                "key": "sk-revoked-session-key",
+                "login_method": "sso",
+                "exp": int(time.time()) + 3600,
+            },
+            "test-master-key",
+            algorithm="HS256",
+        )
+        resp = unauthenticated_client.get(
+            "/v1/mcp/oauth/authorize",
+            params=_AUTHORIZE_GET_PARAMS,
+            cookies={"token": cookie_jwt},
+            follow_redirects=False,
+        )
+    _assert_redirects_to_login_and_back(resp)
+
+
+def test_authorize_get_with_session_cookie_renders_form(unauthenticated_client):
+    import jwt as _jwt
+
+    with patch("litellm.proxy.proxy_server.master_key", "test-master-key"):
+        cookie_jwt = _jwt.encode(
+            {"user_id": "browser-user-42", "login_method": "sso", "exp": int(time.time()) + 3600},
+            "test-master-key",
+            algorithm="HS256",
+        )
+        resp = unauthenticated_client.get(
+            "/v1/mcp/oauth/authorize",
+            params=_AUTHORIZE_GET_PARAMS,
+            cookies={"token": cookie_jwt},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 200
+    assert "Connect &amp; Authorize" in resp.text
+
+
+def test_authorize_get_validates_request_before_login_redirect(unauthenticated_client):
+    """A malformed request is rejected outright rather than bounced through login."""
+    resp = unauthenticated_client.get(
+        "/v1/mcp/oauth/authorize",
+        params={**_AUTHORIZE_GET_PARAMS, "redirect_uri": "https://attacker.example.com/cb"},
         follow_redirects=False,
     )
     assert resp.status_code == 400
