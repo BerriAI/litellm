@@ -6247,6 +6247,8 @@ _BETA_THE_TABLE_DOES_NOT_LIST: Final = "not-in-the-beta-table-2099-01-01"
 
 
 def _anthropic_messages_logging_obj():
+    from datetime import datetime, timezone
+
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     return Logging(
@@ -6254,7 +6256,7 @@ def _anthropic_messages_logging_obj():
         messages=[{"role": "user", "content": "Hello"}],
         stream=False,
         call_type="anthropic_messages",
-        start_time=time.time(),
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
         litellm_call_id="foundry-beta-row",
         function_id="foundry-beta-row",
     )
