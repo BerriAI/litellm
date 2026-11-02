@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import openai
 import pytest
+from _pytest.mark.structures import ParameterSet
 from fastapi import HTTPException
 from openai import AsyncOpenAI, OpenAI
 
@@ -1752,6 +1753,208 @@ def test_bedrock_mantle_context_overflow_maps_to_context_window_exceeded():
 
     assert excinfo.value.status_code == 400
     assert "prompt is too long: 1055489 tokens > 1050000 maximum" in excinfo.value.message
+
+
+_GPT_OSS_OVERFLOW_EVENT: Final = (
+    'ErrorEvent { error: APIError { type: "BadRequestError", code: Some(400), '
+    'message: "Input length (360068) exceeds model\'s maximum context length (131072).", param: None } }'
+)
+
+
+@pytest.mark.parametrize(
+    "original_exception",
+    [
+        pytest.param(
+            BaseLLMException(
+                status_code=400,
+                message=json.dumps(
+                    {
+                        "error": {
+                            "code": "validation_error",
+                            "message": _GPT_OSS_OVERFLOW_EVENT,
+                            "param": None,
+                            "type": "invalid_request_error",
+                        }
+                    }
+                ),
+            ),
+            id="400-body",
+        ),
+        pytest.param(OpenAIError(status_code=503, message=_GPT_OSS_OVERFLOW_EVENT), id="streamed-event"),
+        pytest.param(
+            BaseLLMException(
+                status_code=400, message=f"Error code: 400 - { {'error': {'message': _GPT_OSS_OVERFLOW_EVENT}}!r}"
+            ),
+            id="python-repr",
+        ),
+    ],
+)
+def test_bedrock_mantle_gpt_oss_input_length_overflow_maps_to_context_window_exceeded(
+    original_exception: BaseLLMException,
+) -> None:
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="openai.gpt-oss-20b",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.response.status_code == 400
+    assert "prompt is too long: 360068 tokens > 131072 maximum" in excinfo.value.message
+
+
+def test_bedrock_mantle_gpt_oss_streamed_responses_overflow_event_maps_to_context_window_exceeded() -> None:
+    from litellm.responses.streaming_iterator import map_stream_error_to_exception
+
+    mapped_exception: Final = map_stream_error_to_exception(
+        {
+            "code": "invalid_prompt",
+            "message": (
+                'ErrorEvent { error: APIError { type: "invalid_request_error", code: Some(400), message: '
+                '"The engine prompt length 165072 exceeds the max_model_len 131072. Please reduce prompt.", '
+                'param: Some("input") } }'
+            ),
+        },
+        model="openai.gpt-oss-20b",
+        custom_llm_provider="bedrock_mantle",
+    )
+
+    assert isinstance(mapped_exception, litellm.ContextWindowExceededError)
+    assert mapped_exception.status_code == 400
+    assert "prompt is too long: 165072 tokens > 131072 maximum" in mapped_exception.message
+
+
+def _qwen_overflow_event(requested_output_tokens: int) -> str:
+    counted_input_tokens: Final = 32768 - requested_output_tokens + 1
+    return (
+        'ErrorEvent { error: APIError { type: "BadRequestError", code: Some(400), message: "This model\'s maximum '
+        f"context length is 32768 tokens. However, you requested {requested_output_tokens} output tokens and your "
+        f"prompt contains at least {counted_input_tokens} input tokens, for a total of at least 32769 tokens. Please "
+        "reduce the length of the input prompt or the number of requested output tokens. "
+        f'(parameter=input_tokens, value={counted_input_tokens})", param: None }} }}'
+    )
+
+
+def _mantle_overflow_serializations(event: str) -> tuple[ParameterSet, ...]:
+    return (
+        pytest.param(
+            BaseLLMException(
+                status_code=400,
+                message=json.dumps(
+                    {
+                        "error": {
+                            "code": "validation_error",
+                            "message": event,
+                            "param": None,
+                            "type": "invalid_request_error",
+                        }
+                    }
+                ),
+            ),
+            id="400-body",
+        ),
+        pytest.param(OpenAIError(status_code=503, message=event), id="streamed-event"),
+        pytest.param(
+            BaseLLMException(status_code=400, message=f"Error code: 400 - { {'error': {'message': event}}!r}"),
+            id="python-repr",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "original_exception",
+    [
+        *_mantle_overflow_serializations(_qwen_overflow_event(16)),
+        *_mantle_overflow_serializations(_qwen_overflow_event(16384)),
+    ],
+)
+def test_bedrock_mantle_qwen_maximum_context_length_overflow_maps_to_context_window_exceeded(
+    original_exception: BaseLLMException,
+) -> None:
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="qwen.qwen3-32b",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.response.status_code == 400
+    assert "prompt is too long: the prompt and" in excinfo.value.message
+    assert "requested output tokens exceed the 32768 token context window" in excinfo.value.message
+
+
+@pytest.mark.parametrize(
+    "original_exception",
+    [
+        *_mantle_overflow_serializations(_qwen_overflow_event(16385)),
+        *_mantle_overflow_serializations(_qwen_overflow_event(32000)),
+        *_mantle_overflow_serializations(_qwen_overflow_event(32768)),
+    ],
+)
+def test_bedrock_mantle_qwen_output_budget_over_half_the_window_keeps_mantles_message(
+    original_exception: BaseLLMException,
+) -> None:
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="qwen.qwen3-32b",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "prompt is too long" not in excinfo.value.message
+    assert "output tokens and your prompt contains at least" in excinfo.value.message
+
+
+_ANTHROPIC_MAX_TOKENS_OVERFLOW: Final = (
+    "input length and `max_tokens` exceed context limit: 197202 + 21333 > 200000, decrease input length or "
+    "`max_tokens` and try again"
+)
+_VLLM_MAX_TOKENS_OVERFLOW: Final = (
+    "'max_tokens' or 'max_completion_tokens' is too large: 200000. This model's maximum context length is 131072 "
+    "tokens and your request has 83 input tokens (200000 > 131072 - 83)."
+)
+
+
+@pytest.mark.parametrize(
+    "original_exception",
+    (
+        *_mantle_overflow_serializations(_ANTHROPIC_MAX_TOKENS_OVERFLOW),
+        *_mantle_overflow_serializations(_VLLM_MAX_TOKENS_OVERFLOW),
+    ),
+)
+def test_bedrock_mantle_max_tokens_overflow_keeps_mantles_message(original_exception: BaseLLMException) -> None:
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="anthropic.claude-haiku-4-5",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "prompt is too long" not in excinfo.value.message
+    assert "max_tokens" in excinfo.value.message
+    assert "200000" in excinfo.value.message
+
+
+def test_bedrock_mantle_overflow_only_the_shared_list_knows_keeps_mantles_message() -> None:
+    vllm_total_overflow: Final = (
+        "This model's maximum context length is 32768 tokens. However, you requested 40000 tokens (100 in the "
+        "messages, 39900 in the completion). Please reduce the length of the messages or completion."
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="qwen.qwen3-32b",
+            original_exception=BaseLLMException(status_code=400, message=vllm_total_overflow),
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "prompt is too long" not in excinfo.value.message
+    assert "39900 in the completion" in excinfo.value.message
 
 
 def test_bedrock_mantle_openai_envelope_context_overflow_maps_to_context_window_exceeded():

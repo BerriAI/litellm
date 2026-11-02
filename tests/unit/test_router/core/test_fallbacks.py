@@ -355,24 +355,28 @@ async def test_an_error_specific_chain_wins_over_the_general_chain(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("error", "field", "raised"),
-    [
-        (context_window, "context_window_fallbacks", litellm.ContextWindowExceededError),
-        (content_policy, "content_policy_fallbacks", litellm.ContentPolicyViolationError),
-    ],
-    ids=["context-window", "content-policy"],
-)
-async def test_an_error_specific_chain_without_the_group_raises_without_trying_the_general_chain(
-    make_core: MakeCore, host: ScriptedHost, error: Callable[[], Exception], field: str, raised: type[Exception]
+async def test_a_content_policy_chain_without_the_group_raises_without_trying_the_general_chain(
+    make_core: MakeCore, host: ScriptedHost
 ) -> None:
-    core = build(make_core, fallbacks=[{"a": ["b"]}], **{field: [{"other": ["c"]}]})
-    host.answer("openai/a", error())
+    core = build(make_core, fallbacks=[{"a": ["b"]}], content_policy_fallbacks=[{"other": ["c"]}])
+    host.answer("openai/a", content_policy())
 
-    with pytest.raises(raised):
+    with pytest.raises(litellm.ContentPolicyViolationError):
         await complete(core)
 
     assert host.deployments_called("acompletion") == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_a_context_window_chain_without_the_group_falls_back_through_the_general_chain(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core = build(make_core, fallbacks=[{"a": ["b"]}], context_window_fallbacks=[{"other": ["c"]}])
+    host.answer("openai/a", context_window())
+
+    await complete(core)
+
+    assert host.deployments_called("acompletion") == ["a", "b"]
 
 
 @pytest.mark.asyncio

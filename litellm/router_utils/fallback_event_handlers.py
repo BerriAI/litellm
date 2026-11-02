@@ -622,7 +622,7 @@ def get_fallback_model_group(
     prefixed_model_group: Final = _provider_prefixed_model_group(model_group, fallback_keys)
     ## check for specific model group-specific fallbacks
     for idx, item in enumerate(fallbacks):
-        if isinstance(item, dict):
+        if isinstance(item, dict) and item:
             fallback_key = next(iter(item))
             if fallback_key == model_group:  # check exact match
                 fallback_model_group = item[model_group]
