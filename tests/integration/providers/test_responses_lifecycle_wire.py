@@ -694,7 +694,6 @@ def test_delete_returns_the_client_held_id_not_the_provider_id(
     gateway: Gateway,
     prefix: str,
 ) -> None:
-    pytest.skip("BUG: DELETE /v1/responses/{id} returns the raw provider id instead of the proxy-issued id")
     raw_id: Final = f"resp_delete_id_{uuid.uuid4().hex}"
 
     def respond(request: Request) -> Reply:
