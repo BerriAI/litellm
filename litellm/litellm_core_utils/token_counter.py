@@ -990,7 +990,11 @@ def _count_extra(
         tool_section (Optional[ChatTemplateToolSection]): How the model's chat template renders tools, if known.
     """
     reply_primer_tokens: Final = 3
-    tool_choice_tokens: Final = 0 if tool_section is not None else _count_tool_choice(count_function, tool_choice)
+    tool_choice_tokens: Final = (
+        _count_tool_choice(count_function, tool_choice)
+        if tool_section is None or tool_section.counts_tool_choice
+        else 0
+    )
     return (
         reply_primer_tokens
         + _count_tool_definitions(count_function, tools, includes_system_message, tool_section)
@@ -1029,14 +1033,29 @@ def _count_tool_choice(
             return 0
 
 
+def _named_function_definitions(tools: Sequence[object]) -> Iterable[Mapping[str, object]]:
+    return (function for function in _function_definitions(_tools_sent_as_functions(tools)) if function.get("name"))
+
+
+def sends_function_tools(tools: Sequence[object] | None) -> bool:
+    return tools is not None and any(_named_function_definitions(tools))
+
+
+def _without_false_strict(function: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in function.items() if key != "strict" or value}
+
+
 def _count_chat_template_tools(
     count_function: TokenCounterFunction,
     tools: Sequence[object],
     includes_system_message: bool,
     tool_section: ChatTemplateToolSection,
 ) -> int:
-    functions: Final = tuple(
-        function for function in _function_definitions(_tools_sent_as_functions(tools)) if function.get("name")
+    named_functions: Final = tuple(_named_function_definitions(tools))
+    functions: Final = (
+        tuple(map(_without_false_strict, named_functions))
+        if tool_section.renders_strict_only_when_true
+        else named_functions
     )
     if not functions:
         return 0
