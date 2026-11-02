@@ -117,6 +117,40 @@ def _resend_body(signed: Body, placeholders: Callable[[Body], Body | None]) -> B
     return resend_body
 
 
+async def build_with_accepted_thought_signatures_async(
+    build: Callable[[], Awaitable[Body]],
+    placeholders: Callable[[Body], Body | None],
+    uncached: Callable[[], Awaitable[Body]] | None,
+) -> Body:
+    """Vertex validates the signatures in a cache's contents when it creates the cache, so a rejected one there
+    sends the history inline with the placeholder instead."""
+    try:
+        return await build()
+    except BaseLLMException as error:
+        if uncached is None or not names_rejected_thought_signature(*status_and_message(error)):
+            raise
+        inline_body: Final = _resend_body(await uncached(), placeholders)
+        if inline_body is None:
+            raise
+    return inline_body
+
+
+def build_with_accepted_thought_signatures_sync(
+    build: Callable[[], Body],
+    placeholders: Callable[[Body], Body | None],
+    uncached: Callable[[], Body] | None,
+) -> Body:
+    try:
+        return build()
+    except BaseLLMException as error:
+        if uncached is None or not names_rejected_thought_signature(*status_and_message(error)):
+            raise
+        inline_body: Final = _resend_body(uncached(), placeholders)
+        if inline_body is None:
+            raise
+    return inline_body
+
+
 async def post_with_accepted_thought_signatures_async(
     body: Body,
     placeholders: Callable[[Body], Body | None],

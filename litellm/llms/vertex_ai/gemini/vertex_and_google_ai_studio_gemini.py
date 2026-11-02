@@ -134,6 +134,8 @@ from .long_decode import (
     with_spans_shifted,
 )
 from .rejected_thought_signature_retry import (
+    build_with_accepted_thought_signatures_async,
+    build_with_accepted_thought_signatures_sync,
     post_with_accepted_thought_signatures_async,
     post_with_accepted_thought_signatures_sync,
     with_placeholder_thought_signatures,
@@ -3440,7 +3442,9 @@ class VertexLLM(VertexBase):
             vertex_auth_header=auth_header,
         )
         rebuild, uncached = cache_rebuilds(transform, messages, optional_params)
-        request_body: Final = await transform()
+        request_body: Final = await build_with_accepted_thought_signatures_async(
+            transform, with_placeholder_thought_signatures, uncached
+        )
 
         ## LOGGING
         log_request: Final = partial(_log_generate_request, logging_obj, messages, api_base, headers)
@@ -3551,7 +3555,9 @@ class VertexLLM(VertexBase):
             vertex_auth_header=auth_header,
         )
         rebuild, uncached = cache_rebuilds(transform, messages, optional_params)
-        request_body: Final = await transform()
+        request_body: Final = await build_with_accepted_thought_signatures_async(
+            transform, with_placeholder_thought_signatures, uncached
+        )
 
         _async_client_params: Final = {}
         if timeout:
@@ -3739,7 +3745,9 @@ class VertexLLM(VertexBase):
             vertex_auth_header=auth_header,
         )
         rebuild, uncached = cache_rebuilds(transform, messages, optional_params)
-        data: Final = transform()
+        data: Final = build_with_accepted_thought_signatures_sync(
+            transform, with_placeholder_thought_signatures, uncached
+        )
 
         ## LOGGING
         log_request: Final = partial(_log_generate_request, logging_obj, messages, url, headers)

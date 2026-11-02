@@ -303,6 +303,52 @@ async def test_signature_inside_a_cached_prefix_is_resent_inline_with_the_placeh
     assert _signatures_of(generated[1]) == [get_dummy_thought_signature()]
 
 
+def _backend_validating_cached_signatures(
+    stream: bool, created: list[dict[str, object]], generated: list[dict[str, object]]
+) -> Callable[[httpx.Request], httpx.Response]:
+    """Rejects creating a cache whose contents carry a signature it did not mint, the way Vertex answered on
+    2026-11-02."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content) if request.content else {}
+        if request.url.path.endswith("/cachedContents"):
+            if request.method == "GET":
+                return httpx.Response(200, json={})
+            created.append(body)
+        else:
+            generated.append(body)
+        if set(_signatures_of(body)) - {get_dummy_thought_signature()}:
+            return _rejected(VERTEX_REJECTION)
+        if request.url.path.endswith("/cachedContents"):
+            return httpx.Response(
+                200, json={"name": "cachedContents/prefix", "usageMetadata": {"totalTokenCount": 9000}}
+            )
+        return _answer(stream)
+
+    return handler
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.asyncio
+async def test_signature_rejected_while_creating_the_cache_is_sent_inline_with_the_placeholder(
+    is_async: bool, stream: bool
+):
+    created: Final[list[dict[str, object]]] = []
+    generated: Final[list[dict[str, object]]] = []
+    answer: Final = await _complete(
+        _cached_history(f"cache creation async={is_async} stream={stream}"),
+        _backend_validating_cached_signatures(stream, created, generated),
+        is_async,
+        stream,
+    )
+    assert answer == "Berlin is 12C."
+    assert [_signatures_of(cache) for cache in created] == [[VERTEX_MINTED]]
+    assert len(generated) == 1
+    assert "cachedContent" not in generated[0]
+    assert _signatures_of(generated[0]) == [get_dummy_thought_signature()]
+
+
 NATIVE_QUESTION: Final = {"role": "user", "parts": [{"text": "What is the weather in Paris?"}]}
 NATIVE_TOOL_RESULT: Final = {
     "role": "user",
