@@ -2204,6 +2204,36 @@ async def test_utils_token_counter_counts_a_contents_only_body_like_the_google_c
 
 
 @pytest.mark.asyncio
+async def test_utils_token_counter_drops_a_prompt_sent_with_contents_like_one_sent_with_messages(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {"model_name": "kimi", "litellm_params": {"model": "openai/gpt-6-luna", "drop_params": True}}
+            ]
+        ),
+    )
+    prompt: Final = "one two three four five six seven eight nine ten eleven twelve"
+    contents: Final = [{"role": "user", "parts": [{"text": "What is the weather in Paris and Rome?"}]}]
+
+    from_contents: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", prompt=prompt, contents=contents), call_endpoint=False
+    )
+    from_messages: Final = await token_counter(
+        request=TokenCountRequest(
+            model="kimi", prompt=prompt, messages=_google_count_tokens_request("kimi", {"contents": contents}).messages
+        ),
+        call_endpoint=False,
+    )
+    prompt_only: Final = await token_counter(request=TokenCountRequest(model="kimi", prompt=prompt), call_endpoint=False)
+
+    assert from_contents.total_tokens == from_messages.total_tokens != prompt_only.total_tokens
+
+
+@pytest.mark.asyncio
 async def test_framed_deployment_whose_custom_tokenizer_cannot_load_answers_the_provider_error(
     monkeypatch: pytest.MonkeyPatch,
 ):
