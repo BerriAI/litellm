@@ -30,5 +30,4 @@ export enum Page {
   TagManagement = "tag-management",
   VectorStores = "vector-stores",
   NewUsage = "new_usage",
-  Usage = "usage",
 }

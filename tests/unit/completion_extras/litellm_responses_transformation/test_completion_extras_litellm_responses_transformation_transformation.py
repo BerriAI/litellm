@@ -418,6 +418,45 @@ def test_openai_responses_chunk_parser_reasoning_summary():
     assert delta.function_call is None
 
 
+def test_bridged_reasoning_summary_parts_rebuild_into_the_one_choice_they_streamed_on():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    events = (
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 0},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "First part.",
+            "output_index": 0,
+            "summary_index": 0,
+        },
+        {"type": "response.reasoning_summary_part.done", "output_index": 0, "summary_index": 0},
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 1},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "Second part.",
+            "output_index": 0,
+            "summary_index": 1,
+        },
+        {"type": "response.reasoning_summary_part.added", "output_index": 1, "summary_index": 0},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "Next item.",
+            "output_index": 1,
+            "summary_index": 0,
+        },
+        {"type": "response.output_text.delta", "delta": "Answer", "output_index": 2, "content_index": 0},
+    )
+
+    rebuilt = litellm.stream_chunk_builder(chunks=[iterator.chunk_parser(event) for event in events])
+
+    assert [(choice.index, choice.message.reasoning_content, choice.message.content) for choice in rebuilt.choices] == [
+        (0, "First part. Second part. Next item.", "Answer")
+    ]
+
+
 def test_chunk_parser_string_output_text_delta_produces_text():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
@@ -5845,9 +5884,9 @@ _HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS: Final = (
 )
 
 
-def test_convert_chat_completion_messages_to_responses_api_drops_malformed_prompt_cache_breakpoint_under_drop_params():
-    """OpenAI's Responses API answered "Supported values are: '30m'" for a 1h breakpoint ttl on 2026-10-07,
-    so an unsupported ttl drops the marker as a unit while an unknown key is dropped from a valid one."""
+def test_convert_chat_completion_messages_to_responses_api_drops_only_an_unreadable_prompt_cache_breakpoint_under_drop_params():
+    """The target's Responses config decides which ttl and keys its API takes, so the bridge keeps every marker
+    whose mode some target reads."""
     handler = LiteLLMResponsesTransformationHandler()
     messages = [{"role": "user", "content": list(_HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS)}]
 
@@ -5860,12 +5899,12 @@ def test_convert_chat_completion_messages_to_responses_api_drops_malformed_promp
         None,
         None,
         None,
-        None,
-        {"mode": "explicit"},
+        {"mode": "explicit", "ttl": "1h"},
+        {"mode": "explicit", "scope": "all"},
         {"mode": "explicit", "ttl": "30m"},
         {"mode": "explicit"},
     ]
-    assert all("prompt_cache_breakpoint" not in block for block in content[:4])
+    assert all("prompt_cache_breakpoint" not in block for block in content[:3])
 
 
 def test_convert_chat_completion_messages_to_responses_api_keeps_malformed_prompt_cache_breakpoint_by_default():
@@ -5896,6 +5935,41 @@ def test_transform_request_drop_params_in_litellm_params_gates_the_prompt_cache_
     )
 
     assert "prompt_cache_breakpoint" not in result["input"][0]["content"][0]
+
+
+_TTL_MARKED_CONTENT: Final = (
+    {"type": "text", "text": "unsupported ttl", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
+    {"type": "text", "text": "well formed", "prompt_cache_breakpoint": {"mode": "explicit"}},
+)
+
+
+@pytest.mark.parametrize(
+    "global_drop_params,deployment_drop_params,expected",
+    [
+        ("true", None, [None, {"mode": "explicit"}]),
+        (False, True, [{"mode": "explicit", "ttl": "1h"}, {"mode": "explicit"}]),
+        (True, None, [{"mode": "explicit", "ttl": "1h"}, {"mode": "explicit"}]),
+    ],
+    ids=("string-global-target-keeps-raw-markers", "deployment-drop-params", "global-drop-params"),
+)
+def test_transform_request_hands_a_marker_to_the_target_whole_only_when_the_target_trims_it(
+    monkeypatch: pytest.MonkeyPatch,
+    global_drop_params: object,
+    deployment_drop_params: bool | None,
+    expected: list[object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-6.1-sol",
+        messages=[{"role": "user", "content": list(_TTL_MARKED_CONTENT)}],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai", "drop_params": deployment_drop_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    (item,) = cast(list[dict[str, object]], request["input"])  # cast-ok: the bridge emits message item mappings
+    parts: Final = cast(list[dict[str, object]], item["content"])  # cast-ok: message items carry content parts
+    assert [part.get("prompt_cache_breakpoint") for part in parts] == expected
 
 
 def test_convert_response_output_folds_two_messages_and_function_call_into_one_choice() -> None:
