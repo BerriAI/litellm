@@ -102,7 +102,9 @@ def test_proxy_config_upserts_existing_deployment_without_duplicating_it(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_proxy_config_preserves_models_when_config_read_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_proxy_config_preserves_models_when_config_read_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy import proxy_server
 
     router = litellm.Router(model_list=[_deployment("config-deployment").to_json(exclude_none=True)])
@@ -135,6 +137,8 @@ async def test_proxy_config_keeps_database_models_and_deletes_stale_models(
 
     assert desired == frozenset({"kept-deployment"})
     assert router.get_model_ids() == ["kept-deployment"]
+
+
 from tests._master_key import MASTER_KEY
 
 
@@ -148,7 +152,6 @@ async def test_proxy_config_loads_lens_store_from_yaml(tmp_path, monkeypatch) ->
 
     _, _, settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
     assert is_lens_tracing_enabled(settings["tracing"], {}) is True
-
 
 
 @pytest.mark.asyncio
@@ -176,7 +179,9 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
     outcome: Final = pytest.raises(RuntimeError, match="shutdown failure") if shutdown_error else nullcontext()
     with outcome:
         async with manage_tracing(enabled=True, client_factory=client):
-            logger: Final = next(callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter))
+            logger: Final = next(
+                callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter)
+            )
             await logger.async_log_success_event(
                 {"standard_logging_object": {"id": "response-1", "response_cost": 0.25}}, None, None, None
             )
@@ -2693,7 +2698,6 @@ async def test_load_config_rejects_non_boolean_deny_by_default(
         await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "yaml_value", ["files-api-2025-04-14", "[files-api-2025-04-14, 7]"], ids=["bare-string", "non-string-entry"]
@@ -2712,6 +2716,7 @@ async def test_load_config_rejects_a_malformed_vertex_drop_anthropic_betas_list(
 
     with pytest.raises(ValidationError, match="vertex_ai_pass_through_drop_anthropic_betas"):
         await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
 
 @pytest.mark.asyncio
 async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path, monkeypatch):
@@ -4470,6 +4475,86 @@ async def test_ProxyConfig__update_general_settings_updates_health_check_retenti
     reschedule.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_ignores_a_stored_key_no_settings_api_manages_and_warns_once(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    pc: Final = ProxyConfig()
+    stored_row: Final = {"enforce_user_param": True, "store_prompts_in_spend_logs": True}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await pc._update_general_settings(stored_row)
+        await pc._update_general_settings(stored_row)
+    from litellm.proxy import proxy_server
+
+    assert proxy_server.general_settings["store_prompts_in_spend_logs"] is True
+    assert "enforce_user_param" not in proxy_server.general_settings
+    warnings: Final = [record.getMessage() for record in caplog.records if "enforce_user_param" in record.getMessage()]
+    assert warnings == [
+        "general_settings.enforce_user_param is stored in the database, but the proxy does not apply that stored "
+        "value, so it is ignored. Set it in the config file to use it, or remove it with POST /config/field/delete."
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_warns_about_an_ignored_stored_key_the_config_file_also_sets(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pc: Final = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {"enforce_user_param": False}})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await pc._update_general_settings({"enforce_user_param": True})
+    from litellm.proxy import proxy_server
+
+    assert proxy_server.general_settings["enforce_user_param"] is False
+    warnings: Final = [record.getMessage() for record in caplog.records if "enforce_user_param" in record.getMessage()]
+    assert warnings == [
+        "general_settings.enforce_user_param is stored in the database, but the proxy does not apply that stored "
+        "value, so it is ignored. The config file's value applies. Remove the stored copy with POST "
+        "/config/field/delete."
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_does_not_warn_about_a_stored_copy_of_an_admin_ui_field(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pc: Final = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {}})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await pc._update_general_settings({"budget_rollover": True, "enforce_user_param": True})
+
+    warned: Final = [record.getMessage().split(" ")[0] for record in caplog.records if "is ignored" in record.getMessage()]
+    assert warned == ["general_settings.enforce_user_param"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_warns_once_each_time_the_stored_row_stops_being_an_object(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pc: Final = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {}})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await pc._update_general_settings(None)
+        await pc._update_general_settings('{"store_prompts_in_spend_logs": true}')
+        await pc._update_general_settings('{"store_prompts_in_spend_logs": true}')
+        await pc._update_general_settings({"store_prompts_in_spend_logs": True})
+        await pc._update_general_settings('{"store_prompts_in_spend_logs": true}')
+
+    warnings: Final = [record.getMessage() for record in caplog.records if "JSON object" in record.getMessage()]
+    assert warnings == [
+        "general_settings is stored in the database as something other than a JSON object, so the proxy ignores "
+        "every stored general setting."
+    ] * 2
+
+
 def _paused_scheduler(monkeypatch):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -4918,9 +5003,6 @@ async def test_ProxyConfig__update_general_settings_none_input_noop():
     # None input returns early.
     result = await pc._update_general_settings(db_general_settings=None)
     assert result is None
-    # Error-style: dict() will fail on non-mapping non-None input.
-    with pytest.raises(TypeError):
-        await pc._update_general_settings(db_general_settings=12345)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -5080,7 +5162,9 @@ async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omi
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ui_settings_already_synced", [False, True])
-async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch, ui_settings_already_synced):
+async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(
+    monkeypatch: pytest.MonkeyPatch, ui_settings_already_synced: bool
+) -> None:
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
@@ -5104,6 +5188,32 @@ async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endp
 
     non_llm_initialization.assert_awaited_once()
     assert settings_refresh.await_count == (0 if ui_settings_already_synced else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_row, rebuilds_routes",
+    [({"pass_through_endpoints": []}, True), ('{"pass_through_endpoints": []}', False), ([], False)],
+    ids=["object", "json-string", "array"],
+)
+async def test_ProxyConfig_add_deployment_rebuilds_pass_through_routes_only_from_an_object_general_settings_row(
+    monkeypatch: pytest.MonkeyPatch, stored_row: object, rebuilds_routes: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.pass_through_endpoints import pass_through_endpoints
+
+    pc: Final = ProxyConfig()
+    rebuild_routes: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prefetch_config_params", AsyncMock())
+    monkeypatch.setattr(proxy_server, "get_config_param", AsyncMock(return_value=SimpleNamespace(param_value=stored_row)))
+    monkeypatch.setattr(pass_through_endpoints, "initialize_pass_through_endpoints_in_db", rebuild_routes)
+    monkeypatch.setattr(pc, "_should_load_db_object", lambda *, object_type: object_type == "pass_through_endpoints")
+    monkeypatch.setattr(pc, "get_credentials", AsyncMock())
+
+    await pc.add_deployment(prisma_client=MagicMock(), proxy_logging_obj=MagicMock(), ui_settings_already_synced=True)
+
+    assert rebuild_routes.await_count == (1 if rebuilds_routes else 0)
 
 
 # ---------------------------------------------------------------------------
@@ -5285,9 +5395,7 @@ def revision_test_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key)
 
 
-def _environment_variables_row(
-    values: Mapping[str, str | None] | None, revision: int | None
-) -> SimpleNamespace | None:
+def _environment_variables_row(values: Mapping[str, str | None] | None, revision: int | None) -> SimpleNamespace | None:
     if values is None:
         return None
     return SimpleNamespace(
@@ -5473,9 +5581,7 @@ async def test_environment_variables_row_read_before_an_overlapping_newer_sync_i
         await newer_sync_finished.wait()
 
     older_sync: Final = asyncio.create_task(
-        _sync_from(
-            pc, _config_database(read_older_row, AsyncMock(return_value=older_row), wait_for_the_newer_sync)
-        )
+        _sync_from(pc, _config_database(read_older_row, AsyncMock(return_value=older_row), wait_for_the_newer_sync))
     )
     await older_environment_row_read.wait()
     await _sync_from(pc, _rows_database(newer_row, newer_row))
