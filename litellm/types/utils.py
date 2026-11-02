@@ -4230,6 +4230,7 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
         "supports_assistant_prefill",
         "supports_bedrock_native_structured_output",
         "supports_pdf_input",
+        "supports_continuation",
         "reasoning_modes",
         "reasoning_contexts",
     }

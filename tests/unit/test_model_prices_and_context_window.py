@@ -854,6 +854,7 @@ def _supports_continuation_rows(path: Path) -> frozenset[str]:
 
 def test_gemini_4_argon_google_rows_carry_supports_continuation_in_both_cost_map_copies() -> None:
     main_rows: Final = _supports_continuation_rows(PRICES_PATH)
+    # long decode models: https://ai.google.dev/gemini-api/docs/generate-content/long-decode (2026-11-02)
     assert {"gemini/gemini-4-argon", "vertex_ai/gemini-4-argon"} <= main_rows, sorted(main_rows)
     assert _supports_continuation_rows(BACKUP_PRICES_PATH) == main_rows
 
