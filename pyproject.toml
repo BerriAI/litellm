@@ -264,7 +264,7 @@ proxy-dev = [
     "opentelemetry-exporter-otlp==1.45.1",
     "opentelemetry-instrumentation-fastapi==0.66b1",
     "azure-identity==1.25.2",
-    "a2a-sdk==1.1.0",
+    "a2a-sdk==1.3.0",
     "backports-zstd==1.8.0; python_version < '3.14'",
 ]
 ci = [
@@ -310,7 +310,7 @@ benchmarks = [
     "pytest==9.0.3",
     "pytest-codspeed==4.3.0",
     "mcp>=2.3.0,<3",
-    "a2a-sdk==1.1.0",
+    "a2a-sdk==1.3.0",
     "pypdf>=6.21.2,<7.0",
 ]
 

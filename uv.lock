@@ -42,7 +42,7 @@ overrides = [
 
 [[package]]
 name = "a2a-sdk"
-version = "1.1.0"
+version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "culsans", marker = "python_full_version < '3.13'" },
@@ -50,16 +50,15 @@ dependencies = [
     { name = "google-api-core", version = "2.30.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14'" },
     { name = "googleapis-common-protos" },
     { name = "httpx" },
-    { name = "httpx-sse" },
     { name = "json-rpc" },
     { name = "packaging" },
     { name = "protobuf" },
     { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.15'" },
     { name = "pydantic", version = "2.14.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.15'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c7/7e/8ac10bbf8b15b16574355f39b17dbdf617a282c27b41c7ff2116e30336df/a2a_sdk-1.1.0.tar.gz", hash = "sha256:e8102dad1b36709dbdc3d19319e38e6dfa3b3a79c30416030eb2d482576be204", size = 375726, upload-time = "2026-05-29T09:34:43.015Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b8/4d/975373c77f1c390f808e5079495db28982a3118e9bee813a2dcae10e878c/a2a_sdk-1.3.0.tar.gz", hash = "sha256:73694717de50f36aaebd57b8fc6636ecaa825eb0d4437984fa2cd17f703a6808", size = 439840, upload-time = "2026-10-27T10:07:04.845Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d4/ea/3a5b160cfd51c67759b08748051094d9365ceff18127633d0021950c9860/a2a_sdk-1.1.0-py3-none-any.whl", hash = "sha256:d7f5846caf18033d8bf3108b11ec827dd8dd32f867c98848ede0e39474be93be", size = 241886, upload-time = "2026-05-29T09:34:41.484Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/c8/262490a338e07b269ed80f9b26d101532f7af4585238a9973a5f223ff3f4/a2a_sdk-1.3.0-py3-none-any.whl", hash = "sha256:b94a73b5dc7ff1afe5f11d324480f83386a64d02b8a6b719baf013595284cc6c", size = 282393, upload-time = "2026-10-27T10:07:02.914Z" },
 ]
 
 [[package]]
@@ -5337,7 +5336,7 @@ provides-extras = ["proxy", "cli", "extra-proxy", "utils", "mcp", "saml", "seman
 [package.metadata.requires-dev]
 admin-mcp = [{ name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'", url = "https://github.com/BerriAI/liteadmin-mcp/archive/31fb096904ae05684c0779110a93b135b5601182.tar.gz" }]
 benchmarks = [
-    { name = "a2a-sdk", specifier = "==1.1.0" },
+    { name = "a2a-sdk", specifier = "==1.3.0" },
     { name = "mcp", specifier = ">=2.3.0,<3" },
     { name = "pypdf", specifier = ">=6.21.2,<7.0" },
     { name = "pytest", specifier = "==9.0.3" },
@@ -5428,7 +5427,7 @@ healthcheck = [
     { name = "pyyaml", specifier = "==6.0.3" },
 ]
 proxy-dev = [
-    { name = "a2a-sdk", specifier = "==1.1.0" },
+    { name = "a2a-sdk", specifier = "==1.3.0" },
     { name = "azure-identity", specifier = "==1.25.2" },
     { name = "backports-zstd", marker = "python_full_version < '3.14'", specifier = "==1.8.0" },
     { name = "hypercorn", specifier = "==0.17.3" },
