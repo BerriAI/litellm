@@ -3782,10 +3782,10 @@ def _collect_function_call_ids(contents):
     function_response_ids = []
     for content in contents:
         for part in content.get("parts", []):
-            fc = part.get("function_call")
+            fc = part.get("functionCall") or part.get("function_call")
             if fc is not None:
                 function_call_ids.append(fc.get("id"))
-            fr = part.get("function_response")
+            fr = part.get("functionResponse") or part.get("function_response")
             if fr is not None:
                 function_response_ids.append(fr.get("id"))
     return function_call_ids, function_response_ids
@@ -3839,10 +3839,10 @@ def test_gemini_25_tool_calls_omit_function_call_id(custom_llm_provider):
 
     for content in contents:
         for part in content.get("parts", []):
-            fc = part.get("function_call")
+            fc = part.get("functionCall") or part.get("function_call")
             if fc is not None:
                 assert "id" not in fc, f"gemini-2.5 payload must not include id: {fc}"
-            fr = part.get("function_response")
+            fr = part.get("functionResponse") or part.get("function_response")
             if fr is not None:
                 assert "id" not in fr, f"gemini-2.5 payload must not include id: {fr}"
 
@@ -9176,7 +9176,7 @@ def test_tool_call_no_arguments(tool_call_no_arguments):
 
     result = convert_to_gemini_tool_call_invoke(tool_call_no_arguments)
     print(result)
-    assert result == [{"function_call": {"name": "Get-FAQ", "args": {}}}]
+    assert result == [{"functionCall": {"name": "Get-FAQ", "args": {}}}]
 
 
 def vertex_httpx_mock_post_valid_response(*args, **kwargs):
@@ -9585,7 +9585,7 @@ def test_tool_name_conversion():
     ]
     translated_messages = gemini_convert_messages_with_history(messages=messages)
     print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
-    assert translated_messages[-1]["parts"][0]["function_response"]["name"] == "get_weather"
+    assert translated_messages[-1]["parts"][0]["functionResponse"]["name"] == "get_weather"
 
 
 def test_prompt_factory_nested():
@@ -9805,7 +9805,7 @@ def test_gemini_function_call_parameter_in_messages():
                         "role": "model",
                         "parts": [
                             {
-                                "function_call": {
+                                "functionCall": {
                                     "name": "search",
                                     "args": {"queries": ["weather in boston"]},
                                 }
@@ -9816,7 +9816,7 @@ def test_gemini_function_call_parameter_in_messages():
                         "role": "user",
                         "parts": [
                             {
-                                "function_response": {
+                                "functionResponse": {
                                     "name": "search",
                                     "response": {"content": "The current weather in Boston is 22°F."},
                                 }
@@ -9886,7 +9886,7 @@ def test_gemini_function_call_parameter_in_messages_2():
             "parts": [
                 {"text": "Sure, let me check."},
                 {
-                    "function_call": {
+                    "functionCall": {
                         "name": "search",
                         "args": {"queries": ["weather in boston"]},
                     }
@@ -9897,7 +9897,7 @@ def test_gemini_function_call_parameter_in_messages_2():
             "role": "user",
             "parts": [
                 {
-                    "function_response": {
+                    "functionResponse": {
                         "name": "search",
                         "response": {"content": "The weather in Boston is 100 degrees."},
                     }
