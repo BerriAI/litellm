@@ -1,4 +1,1807 @@
 {
+  "agents": {
+    "killSwitchConfig": {
+      "authTypes": {
+        "none": "None",
+        "bearer": "Bearer token",
+        "apiKey": "API key header",
+        "basic": "Basic auth"
+      },
+      "errors": {
+        "invalidJson": "Body must be valid JSON"
+      }
+    },
+    "killSwitchFields": {
+      "errors": {
+        "nameRequired": "Name required",
+        "tokenRequired": "Token required",
+        "apiKeyRequired": "API key required",
+        "usernameRequired": "Username required",
+        "passwordRequired": "Password required"
+      },
+      "auth": {
+        "bearerToken": "Bearer token",
+        "headerName": "Header name",
+        "apiKey": "API key",
+        "username": "Username",
+        "password": "Password"
+      },
+      "webhookUrl": {
+        "label": "Webhook URL",
+        "hint": "Absolute http(s) URL LiteLLM calls when the kill switch is triggered. Leave empty to remove the kill switch."
+      },
+      "method": "Method",
+      "headers": {
+        "title": "Headers",
+        "add": "Add Header",
+        "keyPlaceholder": "Header name",
+        "valuePlaceholder": "Header value"
+      },
+      "queryParams": {
+        "title": "Query Parameters",
+        "add": "Add Query Parameter",
+        "keyPlaceholder": "Parameter name",
+        "valuePlaceholder": "Parameter value"
+      },
+      "body": {
+        "label": "JSON Body",
+        "hint": "Optional JSON object sent as the request body"
+      },
+      "authentication": "Authentication",
+      "removeItem": "Remove {{item}}"
+    },
+    "dangerZone": {
+      "toasts": {
+        "fired": "Kill switch fired (HTTP {{status}})",
+        "fireFailed": "Failed to fire kill switch"
+      },
+      "title": "Danger Zone",
+      "killSwitch": "Kill switch",
+      "configuredDescription": "Calls the configured webhook to stop this agent's upstream runtime. This can cause an outage for everyone using the agent and cannot be undone from LiteLLM",
+      "notConfigured": "Not configured. Add a kill switch webhook under Settings to enable this action",
+      "fire": "Fire Kill Switch",
+      "lastResult": "Last result: HTTP {{status}}",
+      "confirm": {
+        "title": "Fire kill switch for {{name}}?",
+        "outageTitle": "This can cause an outage",
+        "outageDescription": "LiteLLM will call {{method}} {{url}} immediately. Whatever that webhook does to the agent is outside LiteLLM's control and cannot be reverted here",
+        "typeToConfirm": "Type <name/> to confirm:",
+        "inputLabel": "Confirm agent name",
+        "cancel": "Cancel",
+        "firing": "Firing..."
+      }
+    },
+    "identityDetails": {
+      "evidence": {
+        "loadFailed": "Could not load authentication evidence",
+        "lastMatch": "Last authenticated identity match: {{date}}",
+        "awaiting": "Configured, awaiting an authenticated request",
+        "unbound": "Identity unbound; execution is disabled"
+      },
+      "execution": {
+        "enabled": "Enabled",
+        "disabled": "Disabled"
+      },
+      "loading": "Loading",
+      "regionLabel": "Agent Identity",
+      "title": "Agent Identity: Microsoft Entra ID",
+      "tenant": "Tenant:",
+      "clientId": "Application (Client) ID:",
+      "servicePrincipal": "Enterprise application Object ID:",
+      "notConfigured": "Not configured",
+      "executionSummary": "Execution: {{execution}} · Mode: {{mode}}",
+      "evidenceNote": "Recent evidence comes from a validated Entra token matching this binding. It is persisted across restarts and cleared when the binding changes. Tool and model permissions are checked separately.",
+      "refresh": "Refresh authentication evidence",
+      "viewLogs": "View request logs"
+    },
+    "identityFields": {
+      "providers": {
+        "none": "No explicit identity binding",
+        "microsoftEntra": "Microsoft Entra ID"
+      },
+      "executionModes": {
+        "autonomous": "Autonomous",
+        "delegated": "On behalf of a user",
+        "both": "Both"
+      },
+      "execution": {
+        "enabled": "Enabled",
+        "disabled": "Disabled"
+      },
+      "errors": {
+        "providersLoadFailed": "Could not load the gateway's trusted identity providers"
+      },
+      "regionLabel": "Agent Identity",
+      "title": "Agent Identity",
+      "description": "Connect an existing identity provider application to this agent. Its name and runtime address can change independently.",
+      "provider": "Identity Provider",
+      "tenant": {
+        "label": "Trusted Entra Tenant",
+        "required": "Select a trusted tenant",
+        "placeholder": "Select the gateway's trusted tenant",
+        "noneAvailable": "No trusted Entra tenant is available. Configure JWT issuer and audience validation on the gateway first. Dashboard Microsoft SSO is configured separately."
+      },
+      "clientId": {
+        "label": "Application (Client) ID",
+        "required": "Enter the Entra application client ID",
+        "invalid": "Enter a valid application client UUID",
+        "description": "Find this under <registrations>Entra App registrations</registrations>, select your agent application, then Overview. No client secret is required here."
+      },
+      "executionMode": "Execution Mode",
+      "servicePrincipal": {
+        "label": "Enterprise Application Object ID",
+        "required": "Enter the service principal Object ID",
+        "invalid": "Enter a valid service principal UUID",
+        "description": "Open <enterprise>Entra Enterprise applications</enterprise>, select this application, and copy its Object ID. The App registrations Object ID is a different value."
+      },
+      "requiredRoles": {
+        "label": "Required Application Roles",
+        "description": "Comma-separated role values required on autonomous application tokens"
+      },
+      "requiredScopes": {
+        "label": "Required Delegated Scopes",
+        "required": "Enter a delegated scope",
+        "note": "Users must first sign in through this gateway's Microsoft SSO. Subsequent delegated calls must satisfy both user and agent permissions."
+      },
+      "executionLabel": "Execution",
+      "verificationNote": "LiteLLM verifies the agent's Entra token before matching this identity. Saving these fields configures the binding; an authenticated request provides verification. Runtime authentication headers are configured separately."
+    },
+    "formKit": {
+      "noMatchingOptions": "No matching options"
+    },
+    "formConfig": {
+      "basic": {
+        "title": "Basic Information",
+        "protocolVersionHelp": "LiteLLM serves this version to clients and converts the upstream agent's responses to match it, regardless of the original agent's version."
+      },
+      "skills": {
+        "title": "Skills"
+      },
+      "capabilities": {
+        "title": "Capabilities"
+      },
+      "optional": {
+        "title": "Optional Settings"
+      },
+      "litellm": {
+        "title": "LiteLLM Parameters"
+      },
+      "cost": {
+        "title": "Cost Configuration"
+      },
+      "tracing": {
+        "title": "Tracing"
+      },
+      "skillFields": {
+        "id": "Skill ID",
+        "idPlaceholder": "e.g., hello_world",
+        "name": "Skill Name",
+        "namePlaceholder": "e.g., Returns hello world",
+        "description": "Description",
+        "descriptionPlaceholder": "What this skill does",
+        "tags": "Tags",
+        "tagsPlaceholder": "Type a tag and press Enter",
+        "examples": "Examples",
+        "examplesPlaceholder": "Type an example and press Enter"
+      }
+    },
+    "formFields": {
+      "errors": {
+        "required": "Required",
+        "enterField": "Please enter {{field}}"
+      },
+      "skills": {
+        "remove": "Remove Skill",
+        "add": "Add Skill"
+      },
+      "staticHeaders": {
+        "errors": {
+          "nameRequired": "Header name required",
+          "valueRequired": "Value required"
+        },
+        "namePlaceholder": "Header name (e.g. Authorization)",
+        "valuePlaceholder": "Value (e.g. Bearer token123)",
+        "remove": "Remove static header",
+        "add": "Add Static Header"
+      },
+      "agentName": {
+        "label": "Agent Name",
+        "hint": "Unique identifier for the agent",
+        "required": "Please enter a unique agent name",
+        "placeholder": "e.g., customer-support-agent"
+      },
+      "requiredSection": "{{section}} (Required)",
+      "authHeaders": {
+        "title": "Authentication Headers",
+        "staticHeaders": "Static Headers",
+        "staticHeadersHint": "Headers always sent to the backend agent, regardless of the client request. Admin-configured, static wins on conflict.",
+        "forwardHeaders": "Forward Client Headers",
+        "forwardHeadersHint": "Header names to extract from the client's request and forward to the agent. Type a name and press Enter.",
+        "forwardHeadersPlaceholder": "e.g. x-api-key, Authorization"
+      },
+      "killSwitch": "Kill Switch"
+    },
+    "dynamicFields": {
+      "errors": {
+        "malformed": "{{field}} looks incomplete or malformed",
+        "enterField": "Please enter {{field}}"
+      },
+      "agentName": {
+        "label": "Agent Name",
+        "hint": "Unique identifier for the agent",
+        "required": "Please enter a unique agent name",
+        "placeholder": "e.g., my-langgraph-agent"
+      },
+      "description": {
+        "label": "Description",
+        "hint": "Brief description of what this agent does",
+        "placeholder": "Describe what this agent does..."
+      },
+      "killSwitch": "Kill Switch"
+    },
+    "costView": {
+      "title": "Cost Configuration",
+      "costPerQuery": "Cost Per Query",
+      "inputCostPerToken": "Input Cost Per Token",
+      "outputCostPerToken": "Output Cost Per Token"
+    },
+    "virtualKeys": {
+      "title": "Virtual Keys",
+      "loading": "Loading keys...",
+      "empty": "No virtual key assigned to this agent.",
+      "unnamed": "Unnamed key"
+    },
+    "table": {
+      "empty": {
+        "filteredTitle": "No matching agents",
+        "title": "No agents yet",
+        "filteredDescription": "Adjust the search to see more agents.",
+        "description": "Add an agent to make it available in your organization."
+      },
+      "loading": "Loading agents…",
+      "searchPlaceholder": "Search agents by name, ID, or description...",
+      "clearSearch": "Clear search",
+      "healthCheck": {
+        "label": "Health Check",
+        "hint": "When enabled, only agents with reachable URLs are shown"
+      },
+      "actions": {
+        "open": "Open agent actions",
+        "delete": "Delete"
+      },
+      "columns": {
+        "name": "Agent Name",
+        "id": "Agent ID",
+        "spend": "Spend (USD)",
+        "model": "Model",
+        "created": "Created",
+        "status": "Status",
+        "actions": "Actions"
+      },
+      "noModel": "N/A",
+      "status": {
+        "jwtConfigured": "JWT configured",
+        "active": "Active",
+        "needsSetup": "Needs Setup"
+      }
+    },
+    "cardDiscovery": {
+      "errors": {
+        "noAccessToken": "No access token available",
+        "fillConnectionDetails": "Fill in the agent's connection details above first",
+        "enterBaseUrl": "Enter the agent's base URL first",
+        "discoverFailed": "Failed to discover agent card"
+      },
+      "rediscover": "Re-discover",
+      "discover": "Discover",
+      "title": "Discover from agent URL",
+      "titleHint": "LiteLLM will fetch {{path}} from this URL and let you pick which skills and capabilities to expose through the proxy.",
+      "parentDrivenIntro": "Using the connection details you entered above. We'll fetch:",
+      "fillFieldsFirst": "Fill in the fields above first",
+      "manualIntro": "Paste the upstream agent's base URL. We'll try <cardfile/>, <agentfile/>, and <rootfile/> in order.",
+      "failedTitle": "Discovery failed",
+      "dismissError": "Dismiss error",
+      "cardLoaded": "Upstream card loaded",
+      "nameLabel": "Name (shown to API clients)",
+      "namePlaceholder": "Agent name",
+      "descriptionLabel": "Description",
+      "descriptionPlaceholder": "What this agent does",
+      "skills": "Skills",
+      "skillsSelected": "{{selected}} / {{total}} selected",
+      "noSkills": "Upstream card has no skills",
+      "capabilities": "Capabilities",
+      "capabilitiesHint": "Only capabilities LiteLLM can faithfully proxy today are listed. Others (push notifications, extensions) are coming soon.",
+      "notAdvertised": "not advertised upstream"
+    },
+    "panel": {
+      "toasts": {
+        "deleted": "Agent \"{{name}}\" deleted successfully",
+        "deleteFailed": "Failed to delete agent"
+      },
+      "title": "Agents",
+      "description": "List of A2A-spec agents that are available to be used in your organization. Go to AI Hub, to make agents public.",
+      "authAlert": {
+        "title": "How do agents authenticate?",
+        "description": "Agents can authenticate with a virtual key or a trusted identity provider using JWT. Configure an identity binding when adding or editing an agent. JWT authentication does not require a virtual key."
+      },
+      "addAgent": "Add New Agent",
+      "deleteDialog": {
+        "title": "Delete Agent",
+        "description": "Are you sure you want to delete agent: {{name}}? This action cannot be undone.",
+        "cancel": "Cancel",
+        "confirm": "Delete"
+      }
+    },
+    "info": {
+      "toasts": {
+        "loadFailed": "Failed to load agent information",
+        "updated": "Agent updated successfully",
+        "updateFailed": "Failed to update agent"
+      },
+      "notFound": "Agent not found",
+      "backToList": "Back to Agents List",
+      "unlimited": "Unlimited",
+      "backToAgent": "Back to Agent",
+      "backToAgents": "Back to Agents",
+      "unnamed": "Unnamed Agent",
+      "tabs": {
+        "overview": "Overview",
+        "settings": "Settings"
+      },
+      "details": {
+        "agentId": "Agent ID",
+        "agentName": "Agent Name",
+        "displayName": "Display Name",
+        "description": "Description",
+        "url": "URL",
+        "version": "Version",
+        "protocolVersion": "Protocol Version",
+        "streaming": "Streaming",
+        "pushNotifications": "Push Notifications",
+        "stateTransitionHistory": "State Transition History",
+        "skills": "Skills",
+        "model": "Model",
+        "makePublic": "Make Public",
+        "iconUrl": "Icon URL",
+        "documentationUrl": "Documentation URL",
+        "tpmLimit": "TPM Limit",
+        "rpmLimit": "RPM Limit",
+        "sessionTpmLimit": "Session TPM Limit",
+        "sessionRpmLimit": "Session RPM Limit",
+        "accessGroups": "Access Groups",
+        "createdAt": "Created At",
+        "updatedAt": "Updated At"
+      },
+      "yes": "Yes",
+      "no": "No",
+      "skillsConfigured_one": "{{count}} configured",
+      "skillsConfigured_other": "{{count}} configured",
+      "none": "None",
+      "mcpPermissions": {
+        "title": "MCP Tool Permissions",
+        "servers": "MCP Servers",
+        "accessGroups": "MCP Access Groups",
+        "toolsets": "MCP Toolsets",
+        "toolsPerServer": "Tool permissions per server"
+      },
+      "skillsSection": {
+        "title": "Skills",
+        "fallbackName": "Skill {{number}}",
+        "id": "ID:",
+        "description": "Description:",
+        "tags": "Tags:",
+        "examples": "Examples:"
+      },
+      "settings": {
+        "title": "Agent Settings",
+        "edit": "Edit Settings",
+        "agentId": "Agent ID",
+        "rateLimits": "Rate Limits",
+        "tpmLimit": "TPM Limit",
+        "rpmLimit": "RPM Limit",
+        "sessionTpmLimit": "Session TPM Limit",
+        "sessionRpmLimit": "Session RPM Limit",
+        "accessGroups": {
+          "title": "Access Groups",
+          "label": "Access Groups",
+          "hint": "Attached groups cap which models, MCP servers, and agents this agent can reach, on top of its key and team permissions. Leave empty to apply no extra cap.",
+          "placeholder": "Select access groups (optional)"
+        },
+        "mcpServers": {
+          "title": "MCP Servers",
+          "label": "Allowed MCP Servers",
+          "hint": "Select which MCP servers or access groups this agent can access. Keys bound to this agent can only reach servers granted here.",
+          "placeholder": "Select MCP servers or access groups (optional)"
+        },
+        "cancel": "Cancel",
+        "save": "Save Changes",
+        "editHint": "Click \"Edit Settings\" to modify agent configuration."
+      }
+    },
+    "addForm": {
+      "steps": {
+        "configure": "Configure",
+        "entitlements": "Entitlements",
+        "governance": "Governance",
+        "agentManagement": "Agent Management",
+        "ready": "Ready",
+        "ariaLabel": "Agent creation steps"
+      },
+      "agentType": {
+        "custom": "Custom / Other"
+      },
+      "toasts": {
+        "noAccessToken": "No access token available",
+        "selectExistingKey": "Please select an existing key to assign",
+        "buildFailed": "Failed to build agent data",
+        "createFailedWithError": "Failed to create agent: {{error}}",
+        "createFailed": "Failed to create agent"
+      },
+      "entitlements": {
+        "description": "Configure which models, agents, and MCP tools this agent is allowed to use. Leave fields empty to allow all (subject to key/team permissions).",
+        "models": {
+          "label": "Allowed Models",
+          "hint": "Restrict which models this agent can call. Leave empty to allow all.",
+          "loading": "Loading models...",
+          "placeholder": "Select models (leave empty for all)"
+        },
+        "agents": {
+          "label": "Allowed Agents (Sub-Agents)",
+          "hint": "Restrict which other agents this agent can invoke as sub-agents. Leave empty to allow all.",
+          "loading": "Loading agents...",
+          "placeholder": "Select agents (leave empty for all)"
+        },
+        "accessGroups": {
+          "label": "Access Groups",
+          "hint": "Attach access groups to this agent. Attached groups cap which models, MCP servers, and agents the agent can reach, on top of its key and team permissions. Leave empty to apply no extra cap.",
+          "placeholder": "Select access groups (optional)"
+        },
+        "mcpServers": {
+          "label": "Allowed MCP Servers",
+          "hint": "Select which MCP servers or access groups this agent can access",
+          "placeholder": "Select MCP servers or access groups (optional)"
+        }
+      },
+      "governance": {
+        "tracing": {
+          "title": "Tracing",
+          "inbound": {
+            "label": "Require {{header}} on calls TO this agent",
+            "description": "Only accept this agent being invoked with a trace-id (e.g. when used as a sub-agent)."
+          },
+          "outbound": {
+            "label": "Require {{header}} on calls BY this agent",
+            "description": "Requires LLM/MCP calls made by this agent to include {{header}} for session tracking."
+          }
+        },
+        "budgets": {
+          "title": "Budgets & Rate Limits",
+          "requiresOutbound": "Enable \"Require {{header}} on calls BY this agent\" in Tracing to configure budgets and rate limits.",
+          "session": {
+            "title": "Session Budgets",
+            "maxIterations": {
+              "label": "Max Iterations",
+              "placeholder": "e.g. 25",
+              "hint": "Hard cap on LLM calls per session"
+            },
+            "maxBudget": {
+              "label": "Max Budget Per Session ($)",
+              "placeholder": "e.g. 5.00",
+              "hint": "Max spend per trace before returning 429"
+            }
+          }
+        },
+        "rateLimits": {
+          "agent": {
+            "title": "Agent Rate Limits",
+            "description": "Global rate limits applied across all callers of this agent.",
+            "tpm": {
+              "label": "TPM Limit",
+              "placeholder": "e.g. 100000"
+            },
+            "rpm": {
+              "label": "RPM Limit",
+              "placeholder": "e.g. 100"
+            }
+          },
+          "session": {
+            "tpm": {
+              "label": "Session TPM Limit",
+              "placeholder": "e.g. 10000"
+            },
+            "rpm": {
+              "label": "Session RPM Limit",
+              "placeholder": "e.g. 20"
+            },
+            "title": "Per-Session Rate Limits",
+            "description": "Rate limits per session ({{header}}). Each session gets its own counters."
+          }
+        },
+        "guardrails": {
+          "title": "Guardrails",
+          "description": "Apply guardrails to this agent. Selected guardrails will run on all calls made by this agent."
+        }
+      },
+      "configure": {
+        "agentType": {
+          "label": "Agent Type",
+          "hint": "Select the type of agent you want to create",
+          "notListed": "Not listed?",
+          "genericBadge": "GENERIC",
+          "customDescription": "For outbound agents using an identity provider or virtual key"
+        },
+        "custom": {
+          "agentName": {
+            "label": "Agent Name",
+            "required": "Please enter an agent name",
+            "placeholder": "e.g. my-custom-agent"
+          },
+          "description": {
+            "label": "Description",
+            "placeholder": "Describe what this agent does…"
+          }
+        },
+        "typeSettings": "{{type}} Settings",
+        "enterField": "Please enter {{field}}"
+      },
+      "assignKey": {
+        "agentNameFallback": "your-agent",
+        "team": {
+          "label": "Assign to Team",
+          "hint": "Optionally select a team for the virtual key. The agent identity and its permissions are managed separately."
+        },
+        "entraNotice": "This agent will authenticate with Microsoft Entra ID. You can skip virtual key creation.",
+        "createNew": {
+          "title": "Create a new key for this agent",
+          "description": "A dedicated key scoped to this agent.",
+          "keyName": {
+            "label": "Key Name",
+            "placeholder": "e.g. my-agent-key"
+          },
+          "recommended": "Recommended"
+        },
+        "existing": {
+          "title": "Assign an existing key",
+          "description": "Re-assign a key you already have to this agent.",
+          "loading": "Loading keys…",
+          "placeholder": "Search by key name…"
+        },
+        "skip": {
+          "entra": "Use Entra JWT authentication",
+          "later": "Skip for now, I’ll assign a key later"
+        }
+      },
+      "ready": {
+        "title": "Agent Created!",
+        "keyAssigned": "Key <alias/> has been assigned to this agent.",
+        "entraConfigured": "Microsoft Entra ID is configured. Send an authenticated agent request to verify the connection.",
+        "noKey": "No key assigned. You can create one from the Virtual Keys page."
+      },
+      "dialog": {
+        "logoLabel": "Agent",
+        "title": "Add New Agent",
+        "back": "← Back",
+        "cancel": "Cancel",
+        "next": "Next →",
+        "creating": "Creating...",
+        "create": "Create Agent →",
+        "done": "Done"
+      }
+    }
+  },
+  "vectorStores": {
+    "page": {
+      "title": "Vector Store Management",
+      "lastRefreshed": "Last Refreshed: {{time}}",
+      "refresh": "Refresh",
+      "description": "You can use vector stores to store and retrieve LLM embeddings.",
+      "tabs": {
+        "create": "Create Vector Store",
+        "manage": "Manage Vector Stores",
+        "test": "Test Vector Store",
+        "indexes": "Indexes"
+      },
+      "addVectorStore": "+ Add Vector Store",
+      "deleteModal": {
+        "title": "Delete Vector Store",
+        "message": "Are you sure you want to delete this vector store? This action cannot be undone.",
+        "resourceTitle": "Vector Store Information",
+        "vectorStoreId": "Vector Store ID"
+      },
+      "toasts": {
+        "fetchStoresFailed": "Error fetching vector stores: {{error}}",
+        "fetchCredentialsFailed": "Error fetching credentials: {{error}}",
+        "deleted": "Vector store deleted successfully",
+        "deleteFailed": "Error deleting vector store: {{error}}"
+      }
+    },
+    "table": {
+      "loading": "Loading vector stores…",
+      "empty": {
+        "title": "No vector stores",
+        "description": "Connect a vector store to enable retrieval-augmented generation."
+      },
+      "columns": {
+        "vectorStoreId": "Vector Store ID",
+        "name": "Name",
+        "description": "Description",
+        "source": "Source",
+        "files": "Files",
+        "provider": "Provider",
+        "createdAt": "Created At",
+        "updatedAt": "Updated At",
+        "actions": "Actions"
+      },
+      "source": {
+        "config": "Config",
+        "db": "DB"
+      },
+      "files": {
+        "unknown": "Unknown",
+        "count_one": "{{count}} file",
+        "count_other": "{{count}} files"
+      },
+      "actions": {
+        "open": "Open vector store actions",
+        "edit": "Edit",
+        "copyId": "Copy vector store ID",
+        "idCopied": "Vector store ID copied",
+        "delete": "Delete",
+        "configHint": "Read only: this vector store is defined in the config file and cannot be edited or deleted on the dashboard."
+      }
+    },
+    "documents": {
+      "empty": {
+        "title": "No documents uploaded yet",
+        "description": "Upload documents above to get started."
+      },
+      "columns": {
+        "name": "Name",
+        "status": "Status",
+        "actions": "Actions"
+      },
+      "actions": {
+        "open": "Open document actions",
+        "copyId": "Copy document ID",
+        "idCopied": "Document ID copied to clipboard",
+        "remove": "Remove"
+      }
+    },
+    "indexes": {
+      "intro": "Vector store indexes registered on this proxy via the <endpoint/> API. See the <docs>vector store index docs</docs> for how this works. Index passthrough is supported for Azure AI Search and Milvus today; support for more providers can be added, so please <issues>file a GitHub issue</issues> if you want your provider supported.",
+      "loading": "Loading indexes…",
+      "empty": {
+        "title": "No indexes registered yet",
+        "description": "Indexes registered on this proxy will appear here."
+      },
+      "columns": {
+        "indexName": "Index Name",
+        "vectorStore": "Vector Store",
+        "providerIndex": "Provider Index",
+        "createdBy": "Created By",
+        "createdAt": "Created At"
+      },
+      "toasts": {
+        "fetchFailed": "Error fetching indexes: {{error}}"
+      }
+    },
+    "testTab": {
+      "noToken": "Access token is required to test vector stores.",
+      "noStores": "No vector stores available. Create one first to test it.",
+      "selectTitle": "Select Vector Store",
+      "selectDescription": "Choose a vector store to test search queries against",
+      "selectPlaceholder": "Select a vector store",
+      "noMatch": "No matching vector stores"
+    },
+    "tester": {
+      "title": "Test Vector Store",
+      "clearHistory": "Clear History",
+      "emptyHint": "Test your vector store by entering a search query below",
+      "query": "Query",
+      "results": "Vector Store Results",
+      "resultCount_one": "{{count}} results",
+      "resultCount_other": "{{count}} results",
+      "result": "Result {{number}}",
+      "score": "Score: {{score}}",
+      "content": "Content ({{type}})",
+      "metadata": "Metadata",
+      "fileId": "File ID:",
+      "filename": "Filename:",
+      "attributes": "Attributes:",
+      "searchFailed": "Search failed: {{error}}",
+      "noResults": "No results found",
+      "placeholder": "Enter your search query... (Shift+Enter for new line)",
+      "search": "Search",
+      "toasts": {
+        "emptyQuery": "Please enter a search query",
+        "historyCleared": "Search history cleared"
+      }
+    },
+    "s3Config": {
+      "errors": {
+        "bucketTooShort": "Bucket name must be at least 3 characters",
+        "indexTooShort": "Index name must be at least 3 characters if provided"
+      },
+      "setup": {
+        "title": "AWS S3 Vectors Setup",
+        "intro": "AWS S3 Vectors allows you to store and query vector embeddings directly in S3:",
+        "autoCreate": "Vector buckets and indexes will be automatically created if they don't exist",
+        "dimensions": "Vector dimensions are auto-detected from your selected embedding model",
+        "permissions": "Ensure your AWS credentials have permissions for S3 Vectors operations",
+        "learnMore": "Learn more: <docs>AWS S3 Vectors Documentation</docs>"
+      },
+      "fields": {
+        "bucketName": "Vector Bucket Name",
+        "bucketNameHint": "S3 bucket name for vector storage (must be at least 3 characters, lowercase letters, numbers, hyphens, and periods only)",
+        "bucketNamePlaceholder": "my-vector-bucket (min 3 chars)",
+        "indexName": "Index Name",
+        "indexNameHint": "Name for the vector index (optional, will be auto-generated if not provided). If provided, must be at least 3 characters.",
+        "indexNamePlaceholder": "my-vector-index (optional, min 3 chars)",
+        "region": "AWS Region",
+        "regionHint": "AWS region where the S3 bucket is located (e.g., us-west-2)",
+        "embeddingModel": "Embedding Model",
+        "embeddingModelHint": "Select the embedding model to use for vector generation",
+        "embeddingModelPlaceholder": "Select an embedding model",
+        "loadingModels": "Loading models...",
+        "noModels": "No embedding models found."
+      }
+    },
+    "create": {
+      "title": "Create Vector Store",
+      "description": "Upload documents and select a provider to create a new vector store with embedded content.",
+      "upload": {
+        "title": "Step 1: Upload Documents",
+        "description": "Upload one or more documents (PDF, TXT, DOCX, MD). Maximum file size: 50MB per file.",
+        "dropzone": "Click or drag files to this area to upload",
+        "formats": "Support for single or bulk upload. Supported formats: PDF, TXT, DOCX, MD"
+      },
+      "uploadedDocuments_one": "Uploaded Documents ({{count}})",
+      "uploadedDocuments_other": "Uploaded Documents ({{count}})",
+      "configure": {
+        "title": "Step 2: Configure Vector Store",
+        "description": "Choose the provider and optionally provide a name and description for your vector store."
+      },
+      "fields": {
+        "name": "Vector Store Name",
+        "nameHint": "Optional: Give your vector store a meaningful name",
+        "namePlaceholder": "e.g., Product Documentation, Customer Support KB",
+        "description": "Description",
+        "descriptionHint": "Optional: Describe what this vector store contains",
+        "descriptionPlaceholder": "e.g., Contains all product documentation and user guides",
+        "provider": "Provider",
+        "providerHint": "Select the provider for embedding and vector store operations",
+        "providerPlaceholder": "Select a provider"
+      },
+      "buttons": {
+        "create": "Create Vector Store",
+        "creating": "Creating Vector Store..."
+      },
+      "success": {
+        "title": "Vector Store Created Successfully",
+        "vectorStoreId": "Vector Store ID:",
+        "documentsIngested": "Documents Ingested:",
+        "close": "Close"
+      },
+      "toasts": {
+        "unsupportedType": "{{name}} is not a supported file type. Please upload PDF, TXT, DOCX, or MD files.",
+        "tooLarge": "{{name}} must be smaller than 50MB!",
+        "noDocuments": "Please upload at least one document",
+        "noProvider": "Please select a provider",
+        "fieldRequired": "Please provide {{field}}",
+        "bucketTooShort": "Vector bucket name must be at least 3 characters",
+        "indexTooShort": "Index name must be at least 3 characters if provided",
+        "noAccessToken": "No access token available",
+        "partialFailure_one": "Vector store {{id}} was created with {{count}} document(s), but {{name}} failed to ingest",
+        "partialFailure_other": "Vector store {{id}} was created with {{count}} document(s), but {{name}} failed to ingest",
+        "created_one": "Successfully created vector store with {{count}} document(s). Vector Store ID: {{id}}",
+        "created_other": "Successfully created vector store with {{count}} document(s). Vector Store ID: {{id}}",
+        "createFailed": "Failed to create vector store: {{error}}"
+      }
+    },
+    "info": {
+      "back": "Back to Vector Stores",
+      "notFound": {
+        "title": "Vector store not found",
+        "description": "Vector store {{id}} could not be loaded. It may have been deleted."
+      },
+      "loading": "Loading...",
+      "heading": "Vector Store ID: {{id}}",
+      "source": {
+        "config": "Config",
+        "db": "DB"
+      },
+      "noDescription": "No description",
+      "editButton": "Edit Vector Store",
+      "readOnly": {
+        "title": "Read only: defined in the config file",
+        "description": "This vector store comes from the proxy config YAML, so it cannot be edited or deleted on the dashboard. Change or remove it in the config file and restart the proxy."
+      },
+      "tabs": {
+        "details": "Details",
+        "test": "Test Vector Store"
+      },
+      "edit": {
+        "title": "Edit Vector Store",
+        "vectorStoreId": "Vector Store ID",
+        "name": "Vector Store Name",
+        "description": "Description",
+        "provider": "Provider",
+        "providerHint": "Select the provider for this vector store",
+        "credentialsHint": "Either select existing credentials OR enter provider credentials below",
+        "credentials": "Existing Credentials",
+        "credentialsPlaceholder": "Select or search for existing credentials",
+        "or": "OR",
+        "metadata": "Metadata",
+        "metadataHint": "JSON metadata for the vector store",
+        "cancel": "Cancel",
+        "save": "Save Changes"
+      },
+      "details": {
+        "title": "Vector Store Details",
+        "id": "ID",
+        "name": "Name",
+        "description": "Description",
+        "provider": "Provider",
+        "metadata": "Metadata",
+        "created": "Created",
+        "lastUpdated": "Last Updated"
+      },
+      "errors": {
+        "idRequired": "Please input a vector store ID",
+        "providerRequired": "Please select a provider"
+      },
+      "toasts": {
+        "fetchFailed": "Error fetching vector store details: {{error}}",
+        "invalidMetadata": "Invalid JSON in metadata field",
+        "updated": "Vector store updated successfully",
+        "updateFailed": "Error updating vector store: {{error}}"
+      }
+    },
+    "form": {
+      "title": "Add New Vector Store",
+      "fields": {
+        "provider": "Provider",
+        "providerHint": "Select the provider for this vector store",
+        "vectorStoreId": "Vector Store ID",
+        "vectorStoreIdHint": "Enter the vector store ID from your api provider",
+        "name": "Vector Store Name",
+        "nameHint": "Custom name you want to give to the vector store, this name will be rendered on the LiteLLM UI",
+        "description": "Description",
+        "credentials": "Existing Credentials",
+        "credentialsHint": "Optionally select API provider credentials for this vector store eg. Bedrock API KEY",
+        "credentialsPlaceholder": "Select or search for existing credentials",
+        "metadata": "Metadata",
+        "metadataHint": "JSON metadata for the vector store (optional)"
+      },
+      "idPlaceholders": {
+        "default": "Enter vector store ID from your provider",
+        "vertexRagEngine": "6917529027641081856 (corpus ID from Vertex AI / \"RAG Engine\" console)",
+        "vertexAiSearch": "my-datastore_1234567890 (data store ID from Vertex AI / \"Agent Search\" console)",
+        "vertexAiSearchWithEngine": "Any identifier you'll use to reference this in LiteLLM",
+        "valkey": "my-search-index (FT index name in Valkey)",
+        "mongodb": "my-vector-index (MongoDB Vector Search index name)",
+        "opensearch": "my-knn-index (OpenSearch index name)"
+      },
+      "password": {
+        "show": "Show Password",
+        "hide": "Hide Password"
+      },
+      "noMatchingOptions": "No matching options",
+      "buttons": {
+        "cancel": "Cancel",
+        "create": "Create"
+      },
+      "errors": {
+        "providerRequired": "Please select a provider",
+        "vectorStoreIdRequired": "Please input the vector store ID from your api provider",
+        "selectField": "Please select the {{field}}",
+        "inputField": "Please input the {{field}}"
+      },
+      "toasts": {
+        "invalidMetadata": "Invalid JSON in metadata field",
+        "created": "Vector store created successfully",
+        "createFailed": "Error creating vector store: {{error}}"
+      },
+      "pgVector": {
+        "title": "PG Vector Setup Required",
+        "intro": "LiteLLM provides a server to connect to PG Vector. To use this provider:",
+        "steps": {
+          "deploy": "Deploy the litellm-pgvector server from:",
+          "configure": "Configure your PostgreSQL database with pgvector extension",
+          "start": "Start the server and note the API base URL and API key",
+          "enter": "Enter those details in the fields below"
+        }
+      },
+      "valkey": {
+        "title": "Valkey Setup Required",
+        "intro": "LiteLLM searches documents you have already stored in Valkey. It does not create the index or upload documents for you. Before creating this vector store, make sure:",
+        "steps": {
+          "searchEnabled": "Your Valkey server has vector search enabled (the valkey-search module, included in the valkey-bundle image and in AWS ElastiCache / MemoryDB for Valkey)",
+          "indexLoaded": "You have already created a search index and loaded your documents and their embeddings into it. Enter that index name as the Vector Store ID",
+          "embeddingModel": "You know which embedding model created those stored embeddings. That model must be added to this proxy under Models so you can pick it below. Using a different model returns wrong results",
+          "fieldNames": "You know the field names your documents use for their text and their embedding. If they are not \"text\" and \"embedding\", set them below"
+        },
+        "howItWorks": "When a query comes in, LiteLLM converts it to an embedding with the model below and returns the closest matching documents from your index."
+      },
+      "opensearch": {
+        "title": "OpenSearch Setup Required",
+        "intro": "LiteLLM searches a k-NN index you already have in an OpenSearch Serverless collection or an OpenSearch Service domain. It does not create the index or upload documents. Before creating this vector store, make sure:",
+        "steps": {
+          "knnField": "The index has a knn_vector field holding each document's embedding. Enter the index name as the Vector Store ID, or under Index Name when another endpoint already uses that ID",
+          "embeddingModel": "You know which embedding model created those embeddings. That model must be added to this proxy under Models so you can pick it below. Using a different model returns wrong results",
+          "credentials": "The proxy has AWS credentials that can read the index, either its own (environment variables or an IAM role) or a saved credential picked under Existing Credentials. A Serverless collection needs a data access policy for them, and a domain needs its access policy to allow them"
+        }
+      },
+      "vertexRagEngine": {
+        "title": "Vertex AI RAG Engine Setup",
+        "intro": "To use Vertex AI RAG Engine:",
+        "renameNote": "Note: Google Cloud has renamed this to \"RAG Engine\" in its console — the steps below still apply.",
+        "steps": {
+          "guide": "Set up your Vertex AI RAG Engine corpus following the guide: <guide>Vertex AI RAG Engine Overview</guide>",
+          "createCorpus": "Create a corpus in your Google Cloud project",
+          "noteCorpusId": "Note the corpus ID from the Vertex AI console (now labeled \"RAG Engine\" in Google Cloud)",
+          "enterCorpusId": "Enter the corpus ID in the Vector Store ID field below"
+        }
+      },
+      "vertexAiSearch": {
+        "title": "Vertex AI Search Setup",
+        "intro": "To use Vertex AI Search (Discovery Engine):",
+        "renameNote": "Note: Google Cloud has renamed this to \"Agent Search\" in its console — the steps below still apply.",
+        "steps": {
+          "guide": "Enable the Discovery Engine API on your Google Cloud project and create a data store following the guide: <guide>Create a Vertex AI Search data store</guide>",
+          "location": "Pick a supported location: global, us, or eu",
+          "dataStoreId": "For most data store types (Cloud Storage, BigQuery, Media): copy the data store ID and enter it in the Vector Store ID field below.",
+          "engineId": "For website, healthcare, and connector-based sources (Drive, Gmail, Slack, Jira, etc.): create a search app on top of the data store, then copy the <strong>Engine ID</strong> and enter it in the Engine ID field. The Vector Store ID is still required as the LiteLLM-side name for this record, but it isn't used in the GCP URL when Engine ID is set."
+        }
+      }
+    },
+    "providerFields": {
+      "labels": {
+        "apiBase": "API Base",
+        "apiKey": "API Key",
+        "vertexProject": "Vertex Project",
+        "vertexLocation": "Vertex Location",
+        "collectionIdOptional": "Collection ID (optional)",
+        "engineIdOptional": "Engine ID (optional)",
+        "embeddingModel": "Embedding Model",
+        "sidecarUrl": "Sidecar URL",
+        "sidecarApiKey": "Sidecar API Key",
+        "database": "Database",
+        "collection": "Collection",
+        "vectorFieldName": "Vector Field Name",
+        "textField": "Text Field",
+        "candidatesConsidered": "Candidates Considered",
+        "valkeyHost": "Valkey Host",
+        "valkeyPort": "Valkey Port",
+        "valkeyPassword": "Valkey Password",
+        "useTls": "Use TLS",
+        "opensearchEndpoint": "OpenSearch Endpoint",
+        "awsRegionOptional": "AWS Region (optional)",
+        "indexNameOptional": "Index Name (optional)",
+        "vectorBucketName": "Vector Bucket Name",
+        "indexName": "Index Name",
+        "awsRegion": "AWS Region"
+      },
+      "tooltips": {
+        "pgVector": {
+          "apiBase": "Enter the base URL of your deployed litellm-pgvector server (e.g., http://your-server:8000)",
+          "apiKey": "Enter the API key from your deployed litellm-pgvector server"
+        },
+        "vertexAiSearch": {
+          "project": "Google Cloud project ID that hosts the Vertex AI Search data store.",
+          "location": "Vertex AI Search data store location. Must be one of global, us, or eu.",
+          "collectionId": "Discovery Engine collection ID. Leave blank to use the default collection.",
+          "engineId": "Search app (engine) ID. Required for website, healthcare, and connector-based data stores (Workspace, Slack, Jira, etc.) because these sources route search through an engine. Leave blank to query the data store directly."
+        },
+        "openai": {
+          "apiKey": "Enter your OpenAI API key"
+        },
+        "azure": {
+          "apiKey": "Enter your Azure OpenAI API key",
+          "apiBase": "Enter your Azure OpenAI endpoint (e.g., https://your-resource.openai.azure.com/)"
+        },
+        "milvus": {
+          "apiKey": "To obtain a token, you should use a colon (:) to concatenate the username and password that you use to access your Milvus instance (e.g., username:password)",
+          "apiBase": "Enter your Milvus endpoint (e.g., https://your-milvus-endpoint.com/)",
+          "embeddingModel": "Select the embedding model to use"
+        },
+        "mongodb": {
+          "apiBase": "Use HTTPS for a remote sidecar, or HTTP with a loopback IP for a sidecar on the same host or Pod",
+          "apiKey": "The MONGODB_SIDECAR_API_KEY configured in your MongoDB sidecar",
+          "database": "The MongoDB database holding the collection you want to search",
+          "collection": "The collection your MongoDB Vector Search index was built on",
+          "embeddingModel": "The embedding model on this proxy that created the vectors already stored in your collection. LiteLLM embeds every search query with it, so it must be the same model. A different model of the same size will not error, it will just return wrong results. Add it under Models first if it is not listed",
+          "embeddingField": "The field in each document that holds its embedding. It must match the path your MongoDB Vector Search index was created on (default: embedding)",
+          "textField": "The field in each document that holds its readable text. LiteLLM returns this text in search results, and it accepts a dotted path such as metadata.body (default: text)",
+          "numCandidates": "How many nearest neighbours MongoDB examines before returning the top results. Higher is more accurate and slower. Leave blank to let LiteLLM scale it with the requested result count"
+        },
+        "valkey": {
+          "host": "Hostname or IP of your Valkey server, without redis:// or a port (e.g. my-valkey.example.com)",
+          "port": "Port your Valkey server listens on. Leave as 6379 unless you changed it",
+          "password": "Password used to log in to your Valkey server. Leave blank if it has no password",
+          "ssl": "Set to true if your Valkey server requires an encrypted (TLS) connection, for example AWS ElastiCache with in-transit encryption turned on",
+          "embeddingModel": "The embedding model on this proxy that was used to create the embeddings already stored in your Valkey index. LiteLLM uses it to embed each search query, so it must be the same model or results will be wrong. Add it under Models first if it is not listed",
+          "textField": "The field in each stored document that holds its readable text. LiteLLM returns this text in search results. Must match how your documents were stored (default: text)",
+          "embeddingField": "The field in each stored document that holds its embedding. LiteLLM searches against this field, so it must match the field your index was created on (default: embedding)"
+        },
+        "opensearch": {
+          "apiBase": "The endpoint of your OpenSearch Serverless collection or OpenSearch Service domain, starting with https://",
+          "region": "The AWS region of the collection or domain. Leave blank to use the region in the endpoint, and set it when the endpoint is a custom domain",
+          "embeddingModel": "The embedding model on this proxy that created the vectors already stored in your index. LiteLLM embeds every search query with it, so it must be the same model. Add it under Models first if it is not listed",
+          "embeddingField": "The top-level knn_vector field in your index mapping that holds each document's embedding (default: embedding)",
+          "textField": "The top-level field in each document that holds its readable text. LiteLLM returns this text in search results (default: text)",
+          "indexName": "The OpenSearch index to search. Leave blank to use the Vector Store ID, and set it to register same-named indexes from two endpoints under different IDs"
+        },
+        "s3Vectors": {
+          "bucketName": "S3 bucket name for vector storage (will be auto-created if it doesn't exist)",
+          "indexName": "Name for the vector index (optional, will be auto-generated if not provided)",
+          "region": "AWS region where the S3 bucket is located (e.g., us-west-2)",
+          "embeddingModel": "Select the embedding model to use for vector generation"
+        }
+      }
+    }
+  },
+  "prompts": {
+    "panel": {
+      "environments": {
+        "all": "All Environments",
+        "development": "Development",
+        "staging": "Staging",
+        "production": "Production"
+      },
+      "addNew": "Add New Prompt",
+      "uploadFile": "Upload .prompt File",
+      "deleteDialog": {
+        "title": "Delete Prompt",
+        "description": "Are you sure you want to delete the {{environment}} copy of prompt: {{name}}? This action cannot be undone.",
+        "cancel": "Cancel",
+        "confirm": "Delete"
+      },
+      "toasts": {
+        "deleted": "Prompt \"{{name}}\" deleted successfully from {{environment}}",
+        "deleteFailed": "Failed to delete prompt"
+      }
+    },
+    "table": {
+      "empty": {
+        "title": "No prompts yet",
+        "description": "Add a prompt to start managing reusable templates."
+      },
+      "loading": "Loading prompts…",
+      "columns": {
+        "promptId": "Prompt ID",
+        "model": "Model",
+        "createdAt": "Created At",
+        "updatedAt": "Updated At",
+        "environment": "Environment",
+        "createdBy": "Created By",
+        "type": "Type",
+        "actions": "Actions"
+      },
+      "rowActions": {
+        "open": "Open prompt actions",
+        "copyId": "Copy prompt ID",
+        "idCopied": "Prompt ID copied",
+        "delete": "Delete",
+        "unknownPrompt": "Unknown Prompt"
+      }
+    },
+    "addForm": {
+      "title": "Add New Prompt",
+      "fields": {
+        "promptId": "Prompt ID",
+        "promptIdPlaceholder": "Enter unique prompt ID (e.g., my_prompt_id)",
+        "integration": "Prompt Integration",
+        "file": "Prompt File",
+        "fileInput": "Prompt file",
+        "selectFile": "Select .prompt File",
+        "selected": "Selected: {{name}}",
+        "removeFile": "Remove {{name}}",
+        "fileDescription": "Upload a .prompt file that follows the Dotprompt specification"
+      },
+      "errors": {
+        "idRequired": "Please enter a prompt ID",
+        "idInvalid": "Prompt ID can only contain letters, numbers, underscores, and hyphens"
+      },
+      "toasts": {
+        "fileRequired": "Please upload a .prompt file",
+        "convertFailed": "Failed to convert prompt file to JSON",
+        "tokenRequired": "Access token is required",
+        "created": "Prompt created successfully!",
+        "createFailed": "Failed to create prompt"
+      },
+      "cancel": "Cancel",
+      "submit": "Create Prompt"
+    },
+    "info": {
+      "loading": "Loading...",
+      "notFound": "Prompt not found",
+      "toasts": {
+        "loadFailed": "Failed to load prompt information",
+        "deleted": "Prompt \"{{name}}\" deleted successfully",
+        "deleteFailed": "Failed to delete prompt",
+        "loadVersionFailed": "Failed to load version v{{version}}"
+      },
+      "back": "Back to Prompts",
+      "title": "Prompt Details",
+      "openStudio": "Prompt Studio",
+      "deletePrompt": "Delete Prompt",
+      "environmentVersion": "(v{{version}})",
+      "oldVersionBanner": "Viewing v{{selected}} — not the latest version (v{{latest}})",
+      "goToLatest": "Go to latest",
+      "tabs": {
+        "overview": "Overview",
+        "template": "Prompt Template",
+        "rawJson": "Raw JSON"
+      },
+      "overview": {
+        "version": "Version",
+        "promptType": "Prompt Type",
+        "createdBy": "Created By",
+        "createdAt": "Created At",
+        "updated": "Updated: {{date}}"
+      },
+      "versionLabel": "v{{version}}",
+      "history": {
+        "title": "Version History — {{environment}}",
+        "loading": "Loading versions...",
+        "columns": {
+          "version": "Version",
+          "createdBy": "Created By",
+          "date": "Date",
+          "actions": "Actions"
+        },
+        "latest": "latest",
+        "edit": "Edit",
+        "empty": "No versions found in {{environment}}"
+      },
+      "copied": "Copied!",
+      "template": {
+        "title": "Prompt Template",
+        "copy": "Copy Content",
+        "id": "Template ID",
+        "content": "Content",
+        "metadata": "Template Metadata"
+      },
+      "rawJson": {
+        "title": "Raw API Response",
+        "copy": "Copy JSON"
+      },
+      "deleteDialog": {
+        "title": "Delete Prompt",
+        "description": "Are you sure you want to delete prompt: <strong><name/></strong> from every environment?",
+        "warning": "This action cannot be undone.",
+        "cancel": "Cancel",
+        "confirm": "Delete"
+      }
+    },
+    "editor": {
+      "unnamedTool": "Unnamed Tool",
+      "viewModes": {
+        "pretty": "PRETTY"
+      },
+      "toasts": {
+        "parseFailed": "Failed to parse prompt data",
+        "invalidJson": "Invalid JSON format",
+        "loadVersionFailed": "Failed to load prompt version",
+        "tokenRequired": "Access token is required",
+        "nameRequired": "Please enter a valid prompt name",
+        "updated": "Prompt updated successfully!",
+        "created": "Prompt created successfully!",
+        "updateFailed": "Failed to update prompt",
+        "saveFailed": "Failed to save prompt"
+      }
+    },
+    "editorHeader": {
+      "environments": {
+        "development": "Development",
+        "staging": "Staging",
+        "production": "Production"
+      },
+      "back": "Back",
+      "nameLabel": "Prompt name",
+      "environmentLabel": "Environment",
+      "draft": "Draft",
+      "unsaved": "Unsaved changes",
+      "history": "History",
+      "update": "Update",
+      "save": "Save"
+    },
+    "codeSnippets": {
+      "trigger": "Get Code",
+      "title": "Generated Code",
+      "language": "Language",
+      "copy": "Copy to Clipboard",
+      "copied": "Copied to clipboard!",
+      "typeLabel": "Generated code type",
+      "tabs": {
+        "basic": "Basic",
+        "messages": "With Messages",
+        "version": "With Version"
+      }
+    },
+    "modelConfig": {
+      "parameters": "Parameters",
+      "title": "Model Parameters",
+      "temperature": "Temperature",
+      "maxTokens": "Max Tokens"
+    },
+    "developerMessage": {
+      "title": "Developer message",
+      "description": "Optional system instructions for the model",
+      "placeholder": "e.g., You are a helpful assistant..."
+    },
+    "messagesCard": {
+      "title": "Prompt messages",
+      "syntaxHint": "Use <code><variable/></code> syntax for template variables",
+      "roles": {
+        "user": "User",
+        "assistant": "Assistant",
+        "system": "System"
+      },
+      "roleLabel": "Message {{number}} role",
+      "remove": "Remove message {{number}}",
+      "contentPlaceholder": "Enter prompt content...",
+      "add": "Add message"
+    },
+    "toolsCard": {
+      "title": "Tools",
+      "add": "Add",
+      "empty": "No tools added",
+      "edit": "Edit",
+      "remove": "Remove {{name}}"
+    },
+    "toolModal": {
+      "title": "Add Tool",
+      "invalidJson": "Invalid JSON format. Please check your syntax.",
+      "jsonLabel": "Tool JSON",
+      "jsonPlaceholder": "Paste your tool JSON here...",
+      "cancel": "Cancel",
+      "add": "Add"
+    },
+    "variableTextarea": {
+      "detected": "Detected variables:",
+      "editTitle": "Edit variable name",
+      "namePlaceholder": "Variable name",
+      "save": "Save",
+      "cancel": "Cancel"
+    },
+    "publishModal": {
+      "title": "Publish Prompt",
+      "description": "Published prompts are versioned and can be used in API calls.",
+      "nameLabel": "Name",
+      "namePlaceholder": "Enter prompt name",
+      "hint": "Published prompts can be used in API calls and are versioned for easy tracking.",
+      "cancel": "Cancel",
+      "publish": "Publish"
+    },
+    "versionHistory": {
+      "title": "Version History",
+      "close": "Close",
+      "loading": "Loading version history",
+      "empty": "No version history available.",
+      "latest": "Latest",
+      "active": "Active",
+      "savedToDatabase": "Saved to Database",
+      "configPrompt": "Config Prompt"
+    },
+    "dotpromptView": {
+      "title": "Generated .prompt file",
+      "description": "This is the dotprompt format that will be saved to the database"
+    },
+    "conversation": {
+      "emptyState": {
+        "withVariables": "Fill in the variables above, then type a message to start testing",
+        "withoutVariables": "Type a message below to start testing your prompt"
+      },
+      "input": {
+        "placeholder": "Type your message... (Shift+Enter for new line)",
+        "send": "Send message",
+        "cancel": "Cancel"
+      },
+      "list": {
+        "loadingResponse": "Loading response"
+      },
+      "variables": {
+        "title": "Fill in template variables to start testing",
+        "placeholder": "Enter value for {{name}}"
+      },
+      "warning": {
+        "title": "Please fill in all template variables above",
+        "missing": "Missing: {{variables}}"
+      },
+      "panel": {
+        "clearChat": "Clear Chat"
+      },
+      "toasts": {
+        "tokenRequired": "Access token is required",
+        "variablesRequired": "Please fill in all template variables",
+        "cancelled": "Request cancelled",
+        "cleared": "Chat history cleared."
+      }
+    }
+  },
+  "searchTools": {
+    "page": {
+      "title": "Search Tools",
+      "subtitle": "Configure and manage your search providers",
+      "addButton": "+ Add New Search Tool",
+      "missingAuth": "Missing required authentication parameters.",
+      "toasts": {
+        "deleted": "Deleted search tool successfully",
+        "deleteFailed": "Failed to delete search tool",
+        "updated": "Search tool updated successfully",
+        "updateFailed": "Failed to update search tool"
+      },
+      "deleteModal": {
+        "title": "Delete Search Tool",
+        "message": "Are you sure you want to delete this search tool? This action cannot be undone.",
+        "infoTitle": "Search Tool Information",
+        "fields": {
+          "name": "Name",
+          "id": "ID",
+          "provider": "Provider",
+          "description": "Description"
+        }
+      },
+      "editModal": {
+        "title": "Edit Search Tool",
+        "cancel": "Cancel",
+        "ok": "OK"
+      },
+      "editForm": {
+        "labels": {
+          "name": "Search Tool Name",
+          "provider": "Search Provider",
+          "apiKey": "API Key",
+          "cost": "Cost per Query (USD)",
+          "description": "Description"
+        },
+        "descriptions": {
+          "apiKey": "API key for the search provider",
+          "cost": "Overrides the cost map price for this tool. Leave blank to use the provider's default price"
+        },
+        "placeholders": {
+          "name": "e.g., my-perplexity-search",
+          "provider": "Select a search provider",
+          "apiKey": "Enter API key",
+          "cost": "e.g., 0.007",
+          "description": "Description of this search tool"
+        },
+        "errors": {
+          "nameRequired": "Please enter a search tool name",
+          "providerRequired": "Please select a search provider",
+          "costNegative": "Cost per query cannot be negative"
+        }
+      }
+    },
+    "createForm": {
+      "title": "Add New Search Tool",
+      "labels": {
+        "name": "Search Tool Name",
+        "provider": "Search Provider",
+        "apiKey": "API Key",
+        "cost": "Cost per Query (USD, Optional)",
+        "description": "Description (Optional)"
+      },
+      "hints": {
+        "name": "A unique name to identify this search tool configuration (e.g., 'perplexity-search', 'tavily-news-search').",
+        "provider": "Select the search provider you want to use. Each provider has different capabilities and pricing.",
+        "apiKey": "The API key for authenticating with the search provider. This will be securely stored.",
+        "cost": "Your negotiated price per search query. It overrides the LiteLLM cost map price for this tool in the response cost header and spend logs. Leave blank to use the provider's default price."
+      },
+      "placeholders": {
+        "name": "e.g., perplexity-search, my-tavily-tool",
+        "provider": "Select a search provider",
+        "apiKey": "Enter your API key",
+        "cost": "e.g., 0.007",
+        "description": "Brief description of this search tool's purpose"
+      },
+      "noProviders": "No matching search providers",
+      "help": "Need Help?",
+      "helpTooltip": "Get help on our github",
+      "testConnection": "Test Connection",
+      "submit": "Add Search Tool",
+      "testResultsTitle": "Connection Test Results",
+      "close": "Close",
+      "errors": {
+        "nameRequired": "Please enter a search tool name",
+        "nameInvalid": "Name can only contain letters, numbers, hyphens, and underscores",
+        "providerRequired": "Please select a search provider",
+        "costNegative": "Cost per query cannot be negative"
+      },
+      "toasts": {
+        "created": "Search tool created successfully",
+        "createFailed": "Error creating search tool: {{error}}",
+        "testMissingFields": "Please fill in Search Provider and API Key before testing"
+      }
+    },
+    "connectionTest": {
+      "toastSuccess": "Connection test successful!",
+      "unknownErrorOccurred": "Unknown error occurred",
+      "unknownError": "Unknown error",
+      "authFailed": "Authentication failed: Invalid API key or credentials",
+      "authError": "Authentication error - please check your API key",
+      "fallbackProvider": "search provider",
+      "testing": "Testing connection to {{provider}}...",
+      "success": "Connection to {{provider}} successful!",
+      "testQuery": "Test query: <query/>",
+      "resultsRetrieved": "Results retrieved: {{results}}",
+      "failed": "Connection to {{provider}} failed",
+      "errorLabel": "Error: ",
+      "errorType": "Error type:",
+      "hideDetails": "Hide Details",
+      "showDetails": "Show Details",
+      "fullDetails": "Full Error Details",
+      "troubleshooting": {
+        "title": "Troubleshooting tips:",
+        "apiKey": "Verify your API key is correct and active",
+        "serviceStatus": "Check if the search provider service is operational",
+        "quota": "Ensure you have sufficient credits/quota with the provider",
+        "docs": "Review the provider's documentation for any additional requirements"
+      },
+      "docsLink": "View Search Documentation"
+    },
+    "table": {
+      "empty": {
+        "title": "No search tools configured",
+        "description": "Add a search tool to enable web search for your models."
+      },
+      "loading": "Loading search tools…",
+      "configEditHint": "Config search tools cannot be edited on the dashboard. Please edit the config file.",
+      "configDeleteHint": "Config search tools cannot be deleted on the dashboard. Please edit the config file.",
+      "actions": {
+        "open": "Open search tool actions",
+        "edit": "Edit search tool",
+        "delete": "Delete search tool"
+      },
+      "columns": {
+        "id": "Search Tool ID",
+        "name": "Name",
+        "provider": "Provider",
+        "createdAt": "Created At",
+        "updatedAt": "Updated At",
+        "source": "Source",
+        "actions": "Actions"
+      },
+      "source": {
+        "config": "Config",
+        "db": "DB"
+      }
+    },
+    "view": {
+      "back": "Back to All Search Tools",
+      "copyName": "Copy search tool name",
+      "copyId": "Copy search tool ID",
+      "provider": "Provider",
+      "apiKey": "API Key",
+      "apiKeyNotSet": "Not set",
+      "cost": "Cost per Query",
+      "costDefault": "Provider default",
+      "createdAt": "Created At",
+      "createdUnknown": "Unknown",
+      "description": "Description"
+    },
+    "tester": {
+      "title": "Test Search Tool",
+      "placeholder": "Enter your search query...",
+      "search": "Search",
+      "emptyTitle": "Test your search tool",
+      "emptyDescription": "Enter a query above to see search results",
+      "searching": "Searching...",
+      "queryLabel": "Search Query",
+      "resultCount_one": "{{count}} result",
+      "resultCount_other": "{{count}} results",
+      "latency": "{{latency}}ms",
+      "openResult": "Open result in new tab",
+      "showLess": "Show less",
+      "showMore": "Show more",
+      "noResults": "No results found",
+      "noResultsHint": "Try a different search query",
+      "previous": "Previous Searches",
+      "clearAll": "Clear All",
+      "toasts": {
+        "emptyQuery": "Please enter a search query",
+        "cleared": "Search history cleared"
+      }
+    }
+  },
+  "memory": {
+    "page": {
+      "title": "Memory"
+    },
+    "view": {
+      "title": "Memory",
+      "intro": "Inspect what your agents have stored under <endpoint/>. Scoped to memories visible to your user / team (admins see all).",
+      "newMemory": "New memory",
+      "toasts": {
+        "created": "Created {{name}}",
+        "updated": "Updated {{name}}",
+        "deleted": "Deleted {{name}}",
+        "saveFailed": "Save failed: {{error}}",
+        "deleteFailed": "Delete failed: {{error}}",
+        "invalidMetadata": "Metadata must be valid JSON (or leave empty)."
+      },
+      "deleteModal": {
+        "title": "Delete memory",
+        "message": "This action cannot be undone.",
+        "infoTitle": "Memory",
+        "fields": {
+          "key": "Key",
+          "memoryId": "Memory ID",
+          "userId": "User ID",
+          "teamId": "Team ID"
+        }
+      }
+    },
+    "editModal": {
+      "createTitle": "Create memory",
+      "editTitle": "Edit {{name}}",
+      "labels": {
+        "key": "Key",
+        "value": "Value",
+        "metadata": "Metadata <muted>(optional JSON)</muted>"
+      },
+      "hints": {
+        "key": "Globally unique — two memories cannot share a key. Namespace your own keys if you need per-user isolation (e.g. user:123:notes).",
+        "value": "Markdown/text injected into LLM context. Plain strings are fine.",
+        "metadata": "Optional structured metadata — must be valid JSON if provided."
+      },
+      "placeholders": {
+        "key": "e.g. user_role",
+        "value": "What the agent should remember…"
+      },
+      "errors": {
+        "keyRequired": "Key is required",
+        "valueRequired": "Value is required"
+      },
+      "cancel": "Cancel",
+      "create": "Create",
+      "save": "Save"
+    },
+    "table": {
+      "empty": {
+        "titleSearch": "No matching memories",
+        "title": "No memories stored yet",
+        "descriptionSearch": "No memories match your search.",
+        "description": "Memories your agents store under /v1/memory will appear here."
+      },
+      "loading": "Loading memories…",
+      "searchPlaceholder": "Search by key prefix or memory ID…",
+      "actions": {
+        "open": "Open memory actions",
+        "view": "View",
+        "edit": "Edit",
+        "delete": "Delete"
+      },
+      "columns": {
+        "id": "ID",
+        "name": "Name",
+        "preview": "Preview",
+        "userId": "User ID",
+        "teamId": "Team ID",
+        "updated": "Updated",
+        "actions": "Actions"
+      }
+    },
+    "detailDrawer": {
+      "title": "Memory",
+      "memoryId": "Memory ID",
+      "userId": "User ID",
+      "teamId": "Team ID",
+      "value": "Value",
+      "metadata": "Metadata",
+      "created": "Created {{time}}",
+      "updated": "Updated {{time}}",
+      "by": " by {{name}}"
+    }
+  },
+  "skills": {
+    "panel": {
+      "title": "Skills",
+      "intro": "Register Claude Code skills. Published skills appear in the Skill Hub for all users and are served via <endpoint/>.",
+      "addButton": "+ Add Skill",
+      "deleteDialog": {
+        "title": "Delete Skill",
+        "confirm": "Are you sure you want to delete skill: <name/>?",
+        "irreversible": "This action cannot be undone.",
+        "cancel": "Cancel",
+        "delete": "Delete"
+      },
+      "toasts": {
+        "deleted": "Skill \"{{name}}\" deleted successfully",
+        "deleteFailed": "Failed to delete skill"
+      }
+    },
+    "table": {
+      "empty": {
+        "title": "No skills found",
+        "description": "Add one to get started."
+      },
+      "loading": "Loading skills…",
+      "uncategorized": "Uncategorized",
+      "noDescription": "No description",
+      "versionMissing": "N/A",
+      "publicYes": "Yes",
+      "publicNo": "No",
+      "actions": {
+        "open": "Open skill actions",
+        "copyId": "Copy skill ID",
+        "idCopied": "Skill ID copied",
+        "delete": "Delete"
+      },
+      "columns": {
+        "name": "Skill Name",
+        "version": "Version",
+        "description": "Description",
+        "category": "Category",
+        "public": "Public",
+        "createdAt": "Created At",
+        "actions": "Actions"
+      }
+    },
+    "addForm": {
+      "title": "Add New Skill",
+      "labels": {
+        "sourceUrl": "Source URL",
+        "subPath": "Subfolder path (Optional)",
+        "sha256": "Archive SHA-256 (Optional)",
+        "name": "Skill Name",
+        "domain": "Domain (Optional)",
+        "namespace": "Namespace (Optional)",
+        "description": "Description (Optional)",
+        "category": "Category (Optional)",
+        "keywords": "Keywords (Optional)",
+        "version": "Version (Optional)",
+        "authorName": "Author Name (Optional)",
+        "authorEmail": "Author Email (Optional)"
+      },
+      "hints": {
+        "sourceUrl": "Paste an HTTPS git repository URL from GitHub, GitLab, Bitbucket, or a self-hosted host (e.g. github.com/org/repo or github.com/org/repo/tree/main/my-skill), or an HTTPS link to a .zip archive of the skill hosted on S3 or any static file server. For a private repository use its SSH clone URL (git@ghe.example.com:org/repo.git) so Claude Code clones it with your own SSH key.",
+        "subPath": "Path within the repository where the skill lives (e.g., plugins/my-skill). Leave empty if the skill is at the repo root.",
+        "sha256": "Hex digest of the zip file. Claude Code refuses to install the archive if its checksum does not match.",
+        "name": "Unique identifier in kebab-case format (e.g., my-skill)",
+        "domain": "Top-level grouping in the Skill Hub (e.g., Productivity)",
+        "namespace": "Sub-grouping within domain (e.g., workflows)",
+        "description": "Brief description of what the skill does",
+        "category": "Select a category or enter a custom one",
+        "keywords": "Comma-separated list of keywords for search",
+        "version": "Semantic version (e.g., 1.0.0)",
+        "authorName": "Name of the skill author or organization",
+        "authorEmail": "Contact email for the skill author"
+      },
+      "placeholders": {
+        "sourceUrl": "https://github.com/org/repo or https://bucket.s3.amazonaws.com/my-skill.zip",
+        "sha256": "64 hex characters",
+        "domain": "Productivity",
+        "description": "A skill that helps with...",
+        "category": "Select or type a category",
+        "keywords": "search, web, api",
+        "authorName": "Your Name or Organization"
+      },
+      "subPathLock": {
+        "gitSubdir": "The URL already points to a subfolder, so this field is disabled",
+        "archive": "A zip archive is installed as a whole, so this field is disabled"
+      },
+      "detected": "Detected: {{source}}",
+      "noCategories": "No matching categories",
+      "cancel": "Cancel",
+      "adding": "Adding...",
+      "submit": "Add Skill",
+      "errors": {
+        "urlRequired": "Please enter a repository or zip archive URL",
+        "subPathInvalid": "Subfolder must be a relative path like plugins/my-skill (letters, numbers, dots, hyphens, underscores)",
+        "sha256Invalid": "SHA-256 must be a 64-character hex digest",
+        "nameRequired": "Please enter skill name",
+        "nameInvalid": "Name must be kebab-case (lowercase, numbers, hyphens only)",
+        "emailInvalid": "Please enter a valid email"
+      },
+      "toasts": {
+        "noToken": "No access token available",
+        "invalidUrl": "Please enter a valid repository or zip archive URL",
+        "invalidName": "Skill name must be kebab-case (lowercase letters, numbers, and hyphens only)",
+        "invalidVersion": "Version must be in semantic versioning format (e.g., 1.0.0)",
+        "invalidEmail": "Invalid email format",
+        "registered": "Skill registered successfully",
+        "registerFailed": "Failed to register skill"
+      }
+    }
+  },
+  "claudeCodePlugins": {
+    "sources": {
+      "githubRepo": "GitHub repo — {{repo}}",
+      "githubSubdir": "GitHub subdir — {{repo}} @ {{path}}",
+      "gitRepo": "{{kind}} repo — {{url}}",
+      "gitSubdir": "{{kind}} subdir — {{url}} @ {{path}}",
+      "zipArchive": "Zip archive — {{location}}",
+      "githubDisplay": "GitHub: {{repo}}",
+      "unknown": "Unknown source"
+    },
+    "skillDetail": {
+      "back": "Skills",
+      "tabs": {
+        "overview": "Overview",
+        "usage": "How to Use"
+      },
+      "properties": {
+        "category": "Category",
+        "domain": "Domain",
+        "namespace": "Namespace",
+        "version": "Version",
+        "author": "Author",
+        "added": "Added"
+      },
+      "overview": {
+        "title": "Skill Details",
+        "subtitle": "Metadata registered with this skill",
+        "propertyHeader": "Property",
+        "status": "Status",
+        "public": "Public",
+        "draft": "Draft",
+        "source": "Source",
+        "tags": "Tags",
+        "skillId": "Skill ID"
+      },
+      "runInClaudeCode": "Run in Claude Code",
+      "copy": "Copy",
+      "copied": "Copied",
+      "usage": {
+        "title": "Using this skill",
+        "intro": "Once your proxy is set as a marketplace, enable this skill in Claude Code with one command:",
+        "staleCatalog": "If you see \"Plugin {{name}} not found in marketplace\", update the catalog first:",
+        "notConfigured": "Don't have the marketplace configured yet?",
+        "seeSetup": "See one-time setup →"
+      },
+      "setup": {
+        "title": "One-time marketplace setup",
+        "removeFirst": "If you added this marketplace before without a key, remove it first in Claude Code. Removing it also uninstalls the plugins you installed from it, so install them again from /plugin after you add the snippet:",
+        "requiresKey": "This proxy requires a LiteLLM key to read the marketplace. Add this to <settings/> and replace <placeholder/> with your key:",
+        "runCommand": "Run this command in Claude Code to register the marketplace:",
+        "orSettings": "Or add this to <settings/> for a persistent configuration:"
+      }
+    },
+    "makePublic": {
+      "title": "Publish to Skill Hub",
+      "steps": {
+        "select": "Select Skills",
+        "confirm": "Confirm"
+      },
+      "step1": {
+        "title": "Select Skills to Publish",
+        "selectAll": "Select All ({{total}})",
+        "description": "Selected skills will be visible to all users in the Skill Hub. Deselected skills will be unpublished.",
+        "empty": "No skills registered yet.",
+        "public": "Public",
+        "selectedCount_one": "<strong>{{count}}</strong> skill will be published",
+        "selectedCount_other": "<strong>{{count}}</strong> skills will be published"
+      },
+      "step2": {
+        "title": "Confirm Publish to Skill Hub",
+        "note": "<strong>Note:</strong> Published skills will be visible to all users in the Skill Hub tab. Skills not in the list below will be unpublished.",
+        "listTitle": "Skills to be published:",
+        "total_one": "Total: <strong>{{count}}</strong> skill will be published",
+        "total_other": "Total: <strong>{{count}}</strong> skills will be published"
+      },
+      "buttons": {
+        "cancel": "Cancel",
+        "previous": "Previous",
+        "next": "Next",
+        "publish": "Publish to Hub"
+      },
+      "toasts": {
+        "selectAtLeastOne": "Please select at least one skill",
+        "published_one": "Skill Hub updated — {{count}} skill(s) published",
+        "published_other": "Skill Hub updated — {{count}} skill(s) published",
+        "publishFailed": "Failed to update skills. Please try again."
+      }
+    }
+  },
+  "modelSelector": {
+    "placeholder": "Select a Model",
+    "label": "Select Model",
+    "customOption": "Enter custom model",
+    "customPlaceholder": "Enter custom model name"
+  },
   "workflows": {
     "header": {
       "title": "Workflow Runs",
