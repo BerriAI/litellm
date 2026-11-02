@@ -1100,11 +1100,11 @@ class TestBedrockMantleClaudeChatRoute:
         from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-        mapped_cap = litellm.model_cost["bedrock_mantle/anthropic.claude-haiku-4-5"]["max_output_tokens"]
+        mapped_cap: Final = litellm.model_cost["bedrock_mantle/anthropic.claude-haiku-4-5"]["max_output_tokens"]
         assert mapped_cap != DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the model's mapped cap must differ from the fallback"
         monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "mantle-key")
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
-        handler = Mock(side_effect=_anthropic_message)
+        handler: Final = Mock(side_effect=_anthropic_message)
 
         litellm.completion(
             model="bedrock_mantle/anthropic.claude-haiku-4-5",

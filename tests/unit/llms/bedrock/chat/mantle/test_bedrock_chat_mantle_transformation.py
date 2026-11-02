@@ -2,6 +2,7 @@ import base64
 import json
 import uuid
 from types import SimpleNamespace
+from typing import Final
 
 import httpx
 import pytest
@@ -249,10 +250,10 @@ def test_mantle_claude_default_max_tokens_comes_from_the_mantle_row(local_model_
     from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
     from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
 
-    mapped_cap = litellm.get_max_tokens("bedrock_mantle/anthropic.claude-haiku-4-5")
+    mapped_cap: Final = litellm.get_max_tokens("bedrock_mantle/anthropic.claude-haiku-4-5")
     assert mapped_cap != DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the model's mapped cap must differ from the fallback"
 
-    body = AmazonMantleConfig().transform_request(
+    body: Final = AmazonMantleConfig().transform_request(
         model="mantle/anthropic.claude-haiku-4-5",
         messages=[{"role": "user", "content": "hi"}],
         optional_params={},
