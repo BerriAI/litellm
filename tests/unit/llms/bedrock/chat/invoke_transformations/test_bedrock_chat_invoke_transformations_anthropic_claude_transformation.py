@@ -3,7 +3,7 @@ import copy
 import json
 import uuid
 from types import SimpleNamespace
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -19,6 +19,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transform
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.unit.conftest import NativeStructuredOutputKey
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 ONE_PIXEL_PNG = base64.b64decode(
@@ -635,7 +636,6 @@ def test_shared_defs_reach_native_output_once_instead_of_inlined_per_use(set_nat
     assert "tools" not in result
 
 
-
 class Relabel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -671,6 +671,7 @@ def test_nested_pydantic_response_format_reaches_native_output_with_refs_that_re
     item_ref: Final = sent["properties"]["relabels"]["items"]["$ref"]
     assert item_ref.removeprefix("#/$defs/") in sent["$defs"]
     assert "tools" not in result
+
 
 def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(local_model_cost_map):
     """Bedrock Invoke chat path forwards ``output_config.format`` alongside effort
@@ -1384,6 +1385,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -1392,6 +1394,7 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -1425,6 +1428,7 @@ def setup_and_teardown(event_loop):
         task.cancel()
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
 
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
@@ -1496,6 +1500,7 @@ IN WITNESS WHEREOF, the parties have executed this Agreement.
 """
     * 8
 )  # Repeat to ensure we have enough tokens (need 1024+ for Claude models)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropicPromptCachingRegression:
@@ -1658,6 +1663,7 @@ class TestBedrockAnthropicPromptCachingRegression:
             additional_fields = result["additionalModelRequestFields"]
             if "anthropic_beta" in additional_fields:
                 assert "prompt-caching-2024-07-31" not in additional_fields["anthropic_beta"]
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropic1MContextRegression:
@@ -1844,6 +1850,7 @@ class TestBedrockAnthropic1MContextRegression:
         assert "context-1m-2025-08-07" in beta_headers
         assert "computer-use-2024-10-22" in beta_headers
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropicCombinedRegressions:
     """
@@ -2011,25 +2018,57 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
 
 
 @pytest.mark.parametrize(
-    ("forced_tool_use", "model_info", "native"),
+    ("forced_tool_use", "map_flag", "model_info", "thinking_params", "native"),
     [
-        (False, None, True),
-        (True, None, False),
-        (False, {"supports_bedrock_native_structured_output": False}, False),
+        (False, None, None, {}, True),
+        (False, None, None, {"thinking": {"type": "adaptive"}}, False),
+        (False, True, None, {"thinking": {"type": "adaptive"}}, True),
+        (False, False, None, {}, False),
+        (False, None, {"supports_bedrock_native_structured_output": False}, {}, False),
+        (True, True, None, {}, False),
     ],
-    ids=["cannot-force-tool", "can-force-tool", "cannot-force-tool-deployment-opt-out"],
+    ids=[
+        "cannot-force-tool",
+        "cannot-force-tool-thinking",
+        "cannot-force-tool-thinking-key-true",
+        "cannot-force-tool-key-false",
+        "cannot-force-tool-deployment-opt-out",
+        "can-force-tool",
+    ],
 )
-def test_invoke_native_output_key_applies_without_thinking_when_the_model_cannot_force_the_json_tool(
-    set_native_structured_output, monkeypatch, forced_tool_use, model_info, native
-):
+def test_invoke_model_that_cannot_force_the_json_tool_gets_native_output_without_thinking_unless_opted_out(
+    set_native_structured_output: Callable[[str, NativeStructuredOutputKey], None],
+    monkeypatch: pytest.MonkeyPatch,
+    forced_tool_use: bool,
+    map_flag: bool | None,
+    model_info: Mapping[str, object] | None,
+    thinking_params: Mapping[str, object],
+    native: bool,
+) -> None:
     model: Final = "us.anthropic.claude-haiku-5-5"
     monkeypatch.setitem(litellm.model_cost[model], "supports_forced_tool_use", forced_tool_use)
-    set_native_structured_output(model, "bedrock")
+    set_native_structured_output(model, "bedrock" if map_flag else None)
+    if map_flag is None:
+        monkeypatch.delitem(litellm.model_cost[model], "supports_bedrock_native_structured_output")
 
-    result: Final = _invoke_chat_params(model, model_info, {"response_format": _CITY_RESPONSE_FORMAT})
+    config: Final = AmazonAnthropicClaudeConfig(model_info=model_info)
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"response_format": _CITY_RESPONSE_FORMAT, "max_tokens": 2048, **thinking_params},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    body: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Capital of France?"}],
+        optional_params=optional_params,
+        litellm_params={} if model_info is None else {"model_info": model_info},
+        headers={},
+    )
 
-    assert ("output_format" in result) is native
-    assert ("tools" in result) is not native
+    assert (body.get("output_config", {}).get("format", {}).get("schema") == _CITY_SCHEMA) is native
+    assert ("tools" in body) is not native
+    assert body["messages"][-1]["content"] == [{"type": "text", "text": "Capital of France?"}] or not native
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")

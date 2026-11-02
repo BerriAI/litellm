@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
@@ -30,6 +30,7 @@ from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTI
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock, RequestObject
 from litellm.types.llms.openai import AllMessageValues
+from tests.unit.conftest import NativeStructuredOutputKey
 
 
 def test_transform_usage():
@@ -4977,26 +4978,69 @@ _FORCED_JSON_TOOL_CHOICE: Final = {"tool": {"name": "json_tool_call"}}
 
 
 @pytest.mark.parametrize(
-    ("forced_tool_use", "model_info", "native", "tool_choice"),
+    ("forced_tool_use", "map_flag", "model_info", "thinking_params", "native", "tool_choice"),
     [
-        (False, None, True, None),
-        (True, None, False, _FORCED_JSON_TOOL_CHOICE),
-        (False, {"supports_bedrock_native_structured_output": False}, False, None),
+        (False, None, None, None, True, None),
+        (False, None, None, {"thinking": {"type": "adaptive"}}, False, None),
+        (False, True, None, {"thinking": {"type": "adaptive"}}, True, None),
+        (False, False, None, None, False, None),
+        (False, None, {"supports_bedrock_native_structured_output": False}, None, False, None),
+        (True, True, None, None, False, _FORCED_JSON_TOOL_CHOICE),
     ],
-    ids=["cannot-force-tool", "can-force-tool", "cannot-force-tool-deployment-opt-out"],
+    ids=[
+        "cannot-force-tool",
+        "cannot-force-tool-thinking",
+        "cannot-force-tool-thinking-key-true",
+        "cannot-force-tool-key-false",
+        "cannot-force-tool-deployment-opt-out",
+        "can-force-tool",
+    ],
 )
-def test_bedrock_native_output_key_applies_without_thinking_when_the_model_cannot_force_the_json_tool(
-    set_native_structured_output, monkeypatch, forced_tool_use, model_info, native, tool_choice
-):
+def test_a_model_that_cannot_force_the_json_tool_gets_native_output_without_thinking_unless_opted_out(
+    set_native_structured_output: Callable[[str, NativeStructuredOutputKey], None],
+    monkeypatch: pytest.MonkeyPatch,
+    forced_tool_use: bool,
+    map_flag: bool | None,
+    model_info: Mapping[str, object] | None,
+    thinking_params: Mapping[str, object] | None,
+    native: bool,
+    tool_choice: Mapping[str, object] | None,
+) -> None:
     model: Final = "us.anthropic.claude-haiku-5-5"
     monkeypatch.setitem(litellm.model_cost[model], "supports_forced_tool_use", forced_tool_use)
-    set_native_structured_output(model, "bedrock")
+    set_native_structured_output(model, "bedrock" if map_flag else None)
+    if map_flag is None:
+        monkeypatch.delitem(litellm.model_cost[model], "supports_bedrock_native_structured_output")
 
-    _, request = _converse_request_for_json_schema(model, False, model_info=model_info)
+    _, request = _converse_request_for_json_schema(model, False, thinking_params, model_info=model_info)
 
     assert ("outputConfig" in request) is native
     assert ("toolConfig" in request) is not native
     assert request.get("toolConfig", {}).get("toolChoice") == tool_choice
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "thinking_params", "native"),
+    [
+        ("us.anthropic.claude-opus-5-5", None, True),
+        ("us.anthropic.claude-opus-5-5", {"thinking": {"type": "adaptive"}}, False),
+        ("global.anthropic.claude-fable-5-1", None, True),
+        ("global.anthropic.claude-fable-5-1", {"reasoning_effort": "low"}, False),
+        ("us-gov.anthropic.claude-opus-5-5", None, False),
+        ("us-gov.anthropic.claude-fable-5-1", None, False),
+        ("us-gov-west-1/anthropic.claude-opus-5-5", None, False),
+        ("converse/us-gov-east-1/anthropic.claude-fable-5-1", None, False),
+        ("us-east-1/anthropic.claude-opus-5-5", None, True),
+    ],
+)
+def test_models_whose_thinking_stops_under_native_output_keep_the_json_tool_only_when_thinking(
+    model: str, thinking_params: Mapping[str, object] | None, native: bool
+) -> None:
+    _, request = _converse_request_for_json_schema(model, False, thinking_params)
+
+    assert ("outputConfig" in request) is native
+    assert ("toolConfig" in request) is not native
 
 
 def test_adaptive_thinking_is_kept_next_to_json_schema_on_a_native_output_profile(set_native_structured_output):

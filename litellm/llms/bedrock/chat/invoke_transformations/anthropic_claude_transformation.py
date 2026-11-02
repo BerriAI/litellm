@@ -270,10 +270,17 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
+        model_info: Final = deployment_model_info(_LITELLM_PARAMS.validate_python(litellm_params))
         apply_bedrock_invoke_structured_output(
             model=model,
             request_body=anthropic_request,
-            model_info=deployment_model_info(_LITELLM_PARAMS.validate_python(litellm_params)),
+            model_info=model_info,
+            response_format_is_native="output_format" in anthropic_request
+            and bedrock_chat_uses_native_structured_output(
+                model,
+                self.is_thinking_requested(_NON_DEFAULT_PARAMS.validate_python(filtered_params)),
+                model_info=model_info,
+            ),
         )
         strip_unsupported_bedrock_invoke_output_config_keys(
             model=model,

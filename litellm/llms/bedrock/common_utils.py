@@ -309,24 +309,52 @@ def bedrock_supports_native_structured_output(
     ) or _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
 
 
+def _bedrock_map_native_output_flag(model: str) -> object:
+    routed: Final = strip_bedrock_routing_prefix(model)
+    flags: Final = (
+        (entry or {}).get("supports_bedrock_native_structured_output")
+        for entry in (
+            _model_cost_entry(f"bedrock/{routed}"),
+            _model_cost_entry(routed),
+            _model_cost_entry(split_bedrock_region_path(model)[1]),
+        )
+    )
+    return next((flag for flag in flags if isinstance(flag, bool)), None)
+
+
+def _bedrock_native_output_opted_out(model: str, model_info: Mapping[str, object] | None) -> bool:
+    deployment_flag: Final = (model_info or {}).get("supports_bedrock_native_structured_output")
+    if isinstance(deployment_flag, bool):
+        return not deployment_flag
+    return _bedrock_map_native_output_flag(model) is False
+
+
+def _bedrock_native_output_replaces_unforceable_tool(model: str, model_info: Mapping[str, object] | None) -> bool:
+    return AnthropicModelInfo.forced_tool_use_unsupported(model) and not _bedrock_native_output_opted_out(
+        model, model_info
+    )
+
+
 def bedrock_chat_uses_native_structured_output(
     model: str,
     thinking_requested: bool,
     custom_llm_provider: str = "bedrock",
     model_info: Mapping[str, object] | None = None,
 ) -> bool:
-    return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) or (
-        (thinking_requested or AnthropicModelInfo.forced_tool_use_unsupported(model))
-        and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
-    )
+    if _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider):
+        return True
+    if thinking_requested:
+        return _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+    return _bedrock_native_output_replaces_unforceable_tool(model, model_info)
 
 
 def bedrock_native_output_is_opt_in(
     model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
 ) -> bool:
-    return not _bedrock_model_supports(
-        model, "supports_native_structured_output", custom_llm_provider
-    ) and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+    return not _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) and (
+        _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+        or _bedrock_native_output_replaces_unforceable_tool(model, model_info)
+    )
 
 
 def without_bedrock_native_output_opt_in(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
@@ -497,6 +525,7 @@ def apply_bedrock_invoke_structured_output(
     model: str,
     request_body: dict[str, object],  # mutable-ok: edited in place like siblings
     model_info: Mapping[str, object] | None = None,
+    response_format_is_native: bool = False,
 ) -> None:
     """
     Route Anthropic structured-output params to what the Bedrock model supports.
@@ -508,7 +537,8 @@ def apply_bedrock_invoke_structured_output(
     forwarded as ``output_config.format``, which Bedrock relays to the model for
     enforced structured output. For every other model the schema is inlined into
     the last user message as best-effort text, with a warning because nothing
-    enforces it.
+    enforces it. ``response_format_is_native`` keeps the native ``output_format``
+    the chat path already built from ``response_format``.
     """
     legacy_output_format: Final = request_body.pop("output_format", None)
     output_config_format: Final = pop_bedrock_invoke_output_config_format(request_body)
@@ -517,7 +547,11 @@ def apply_bedrock_invoke_structured_output(
     if schema_format is None:
         return
 
-    native_format: Final = bedrock_native_output_format(model, schema_format, model_info=model_info)
+    native_format: Final = (
+        legacy_format
+        if response_format_is_native and legacy_format is not None
+        else bedrock_native_output_format(model, schema_format, model_info=model_info)
+    )
     if native_format is not None:
         existing_output_config: Final = request_body.get("output_config")
         if isinstance(existing_output_config, dict):

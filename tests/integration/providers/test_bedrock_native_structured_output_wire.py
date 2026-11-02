@@ -18,9 +18,9 @@ from pydantic import JsonValue, TypeAdapter
 _HAIKU: Final = "us.anthropic.claude-haiku-5-5"
 _FABLE: Final = "us.anthropic.claude-fable-5"
 _SONNET: Final = "us.anthropic.claude-sonnet-4-6"
-_OPUS: Final = "us.anthropic.claude-opus-5"
+_OPUS: Final = "us.anthropic.claude-opus-5-5"
 _OPT_IN: Final = _OPUS
-_UNFORCEABLE_TOOL: Final = "us.anthropic.claude-opus-5-5"
+_UNFORCEABLE_TOOL: Final = _OPUS
 _OPUS_4_8: Final = "us.anthropic.claude-opus-4-8"
 _DEEPSEEK: Final = "deepseek.v3.2"
 _AWS: Final[dict[str, JsonValue]] = {
@@ -836,6 +836,25 @@ def test_thinking_with_a_caller_tool_on_a_bedrock_native_model_sends_only_the_ca
         assert _tools(body, False).keys() == {_USER_TOOL}, body
         assert _native_schema(body, False) == _SCHEMA, body
         assert _thinking_requested(body, False), body
+
+
+def test_a_caller_tool_next_to_json_schema_without_thinking_on_a_model_that_cannot_force_the_json_tool(
+    gateway: Gateway,
+) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, "converse", _UNFORCEABLE_TOOL)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            _chat_body(model, marker, tools=[_USER_TOOL_SPEC], response_format=_response_format(_SCHEMA)),
+        )
+        (call,) = list_value(_chat_message(response)["tool_calls"])
+        function: Final = object_value(object_value(call)["function"])
+        assert function["name"] == _USER_TOOL, response.text
+        _, body = _one_call(wire, marker_hex)
+        assert _tools(body, False).keys() == {_USER_TOOL}, body
+        assert _native_schema(body, False) == _SCHEMA, body
 
 
 @pytest.mark.parametrize(
