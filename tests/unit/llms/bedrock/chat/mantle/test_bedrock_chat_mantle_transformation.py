@@ -246,6 +246,42 @@ async def test_mantle_claude_async_completion_streams_a_wrapped_json_schema_answ
     assert _streamed_answer(chunks) == BARE_STREAMED_ANSWER
 
 
+def _json_tool_message(request):
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "anthropic.claude-opus-5-5",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "json_tool_call", "input": RISK_ANSWER}],
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 9},
+        },
+    )
+
+
+@pytest.mark.parametrize("model", ("bedrock_mantle/anthropic.claude-opus-5-5", "bedrock/mantle/anthropic.claude-opus-5-5"))
+def test_mantle_claude_that_cannot_force_a_tool_keeps_json_schema_on_the_json_tool(local_model_cost_map, model):
+    sent_bodies: Final = []
+
+    def handle(request):
+        sent_bodies.append(json.loads(request.content))
+        return _json_tool_message(request)
+
+    response: Final = litellm.completion(
+        **{**_json_schema_stream_kwargs(model), "stream": False},
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle))),
+    )
+
+    assert json.loads(response.choices[0].message.content) == RISK_ANSWER
+    assert [
+        (body.get("output_config", {}).get("format"), [tool["name"] for tool in body.get("tools", [])])
+        for body in sent_bodies
+    ] == [(None, ["json_tool_call"])]
+
+
 def test_mantle_claude_default_max_tokens_comes_from_the_mantle_row(local_model_cost_map):
     from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
     from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig

@@ -10,7 +10,7 @@ import json
 import os
 import re
 import warnings
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
@@ -342,17 +342,26 @@ def _bedrock_native_output_replaces_unforceable_tool(model: str, model_info: Map
     )
 
 
+def bedrock_chat_opts_into_native_structured_output(
+    model: str,
+    thinking_requested: bool,
+    custom_llm_provider: str = "bedrock",
+    model_info: Mapping[str, object] | None = None,
+) -> bool:
+    return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) or (
+        thinking_requested and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+    )
+
+
 def bedrock_chat_uses_native_structured_output(
     model: str,
     thinking_requested: bool,
     custom_llm_provider: str = "bedrock",
     model_info: Mapping[str, object] | None = None,
 ) -> bool:
-    if _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider):
-        return True
-    if thinking_requested:
-        return _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
-    return _bedrock_native_output_replaces_unforceable_tool(model, model_info)
+    return bedrock_chat_opts_into_native_structured_output(
+        model, thinking_requested, custom_llm_provider, model_info
+    ) or (not thinking_requested and _bedrock_native_output_replaces_unforceable_tool(model, model_info))
 
 
 def bedrock_native_output_is_opt_in(
@@ -521,7 +530,7 @@ def apply_bedrock_invoke_structured_output(
     model: str,
     request_body: dict[str, object],  # mutable-ok: edited in place like siblings
     model_info: Mapping[str, object] | None = None,
-    response_format_is_native: bool = False,
+    chat_uses_native_output: Callable[[], bool] = lambda: False,
 ) -> None:
     """
     Route Anthropic structured-output params to what the Bedrock model supports.
@@ -533,8 +542,8 @@ def apply_bedrock_invoke_structured_output(
     forwarded as ``output_config.format``, which Bedrock relays to the model for
     enforced structured output. For every other model the schema is inlined into
     the last user message as best-effort text, with a warning because nothing
-    enforces it. ``response_format_is_native`` sends the schema natively, after
-    the same cleanup, when the chat path already chose native output for the model.
+    enforces it. ``chat_uses_native_output`` is asked only when a schema is
+    present, and a true answer sends it natively after the same cleanup.
     """
     legacy_output_format: Final = request_body.pop("output_format", None)
     output_config_format: Final = pop_bedrock_invoke_output_config_format(request_body)
@@ -548,7 +557,7 @@ def apply_bedrock_invoke_structured_output(
         schema_format,
         model_info=(
             {**(model_info or {}), "supports_bedrock_native_structured_output": True}
-            if response_format_is_native
+            if chat_uses_native_output()
             else model_info
         ),
     )
