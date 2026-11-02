@@ -550,15 +550,12 @@ async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monke
 
     deployment = {
         "model_name": "*",
-        "litellm_params": {"model": "openai/*"},
+        "litellm_params": {"model": "openai/*", "api_key": "sk-star"},
     }
-    router = route_entry_points_to_stubs(MagicMock())
-    router.get_model_access_groups = MagicMock(return_value={})
-    router.get_model_names = MagicMock(return_value=["*"])
-    router.get_model_list = MagicMock(return_value=[deployment])
+    router = litellm.Router(model_list=[deployment])
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
 
-    expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info([deployment])
+    expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info(router.get_model_list(), router)
     allowed_model_names = await proxy_server._get_v1_model_info_allowed_model_names_with_access_groups(
         user_api_key_dict=UserAPIKeyAuth(
             api_key="sk-test",
@@ -575,7 +572,8 @@ async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monke
         allowed_model_names=allowed_model_names,
     )
 
-    assert [model["model_name"] for model in result] == ["openai/gpt-4o"]
+    assert [(model["model_name"], model["litellm_params"]["model"]) for model in result] == [("gpt-4o", "openai/gpt-4o")]
+    assert router.registry().names("gpt-4o", kind="wildcard") == frozenset({"openai/gpt-4o"})
 
 
 # ---------------------------------------------------------------------------
