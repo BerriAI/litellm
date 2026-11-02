@@ -120,10 +120,17 @@ class AzureContentSafetyImageModerationGuardrail(AzureGuardrailBase, CustomGuard
                 )
             return {"content": stripped_payload}
         if image.startswith(("http://", "https://")):
-            return {"blobUrl": image}
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"{GUARDRAIL_LABEL}: remote image URLs are not supported, send the image as a base64 data URL"
+                    ),
+                },
+            )
         raise HTTPException(
             status_code=400,
-            detail={"error": f"{GUARDRAIL_LABEL}: image must be a base64 data URL or an http(s) URL"},
+            detail={"error": f"{GUARDRAIL_LABEL}: image must be a base64 data URL"},
         )
 
     async def async_make_request(self, image: str) -> "AzureImageModerationGuardrailResponse":

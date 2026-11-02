@@ -12,14 +12,14 @@ from .base import AzureCategoriesAnalysis, AzureContentSafetyConfigModel
 AZURE_CONTENT_SAFETY_IMAGE_CATEGORIES: Final = ["Hate", "SelfHarm", "Sexual", "Violence"]
 
 
-class AzureImageModerationImage(TypedDict, total=False):
-    """One image for the Azure Content Safety image analysis endpoint.
+class AzureImageModerationImage(TypedDict):
+    """One base64 image for the Azure Content Safety image analysis endpoint
 
-    Exactly one of ``content`` (base64) or ``blobUrl`` (public URL) must be set.
+    Remote URLs are rejected by the guardrail because the bytes Azure scans and
+    the bytes the model later fetches can differ.
     """
 
     content: str
-    blobUrl: str
 
 
 class AzureImageModerationGuardrailRequestBody(TypedDict, total=False):

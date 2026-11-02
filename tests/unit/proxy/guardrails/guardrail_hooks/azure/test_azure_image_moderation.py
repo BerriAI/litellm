@@ -62,19 +62,20 @@ async def test_image_moderation_posts_base64_content():
 
 
 @pytest.mark.asyncio
-async def test_image_moderation_uses_blob_url_for_remote_images():
+async def test_image_moderation_rejects_remote_image_urls():
     guardrail = _image_guardrail()
 
-    with patch.object(guardrail.async_handler, "post", return_value=_image_response(0)) as mock_post:
-        await guardrail.apply_guardrail(
-            inputs={"images": [REMOTE_IMAGE_URL]},
-            request_data={},
-            input_type="request",
-        )
+    with patch.object(guardrail.async_handler, "post") as mock_post:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"images": [REMOTE_IMAGE_URL]},
+                request_data={},
+                input_type="request",
+            )
 
-    body = mock_post.call_args.kwargs["json"]
-    assert body["image"] == {"blobUrl": REMOTE_IMAGE_URL}
-    assert "content" not in body["image"]
+    mock_post.assert_not_called()
+    assert exc_info.value.status_code == 400
+    assert "remote image URLs are not supported" in exc_info.value.detail["error"]
 
 
 @pytest.mark.asyncio
@@ -141,7 +142,7 @@ async def test_image_moderation_rejects_plain_paths():
 
     mock_post.assert_not_called()
     assert exc_info.value.status_code == 400
-    assert "base64 data URL or an http(s) URL" in exc_info.value.detail["error"]
+    assert "image must be a base64 data URL" in exc_info.value.detail["error"]
 
 
 @pytest.mark.asyncio
