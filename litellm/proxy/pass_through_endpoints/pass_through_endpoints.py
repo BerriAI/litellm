@@ -2428,6 +2428,7 @@ async def pass_through_request(
             e.guardrail_name,
             str(e.message or "")[:200],
         )
+        modified_response_headers: Final = _guardrail_response_headers(_parsed_body, kwargs, post_call_guardrail_data)  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
         try:
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -2460,7 +2461,7 @@ async def pass_through_request(
             media_type="application/json",
             headers={
                 "x-litellm-call-id": litellm_call_id,
-                **_guardrail_response_headers(_parsed_body, kwargs, post_call_guardrail_data),  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
+                **modified_response_headers,
             },
         )
     except Exception as e:

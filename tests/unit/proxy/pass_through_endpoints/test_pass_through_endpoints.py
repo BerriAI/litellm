@@ -8,7 +8,7 @@ import os
 import sys
 import uuid
 import zlib
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -13312,6 +13312,8 @@ class TestInheritAuthGuardrails:
         inherit: bool,
         user_api_key_dict: UserAPIKeyAuth,
         guardrails: tuple[CustomGuardrail, ...] = (),
+        post_call_side_effect: Callable[..., Awaitable[None]] | None = None,
+        failure_side_effect: Callable[..., Awaitable[None]] | None = None,
     ) -> tuple[Response, list[dict[str, object]], AsyncMock]:
         pre_call_data: Final[list[dict[str, object]]] = []
 
@@ -13321,7 +13323,10 @@ class TestInheritAuthGuardrails:
 
         proxy_logging: Final = MagicMock()
         proxy_logging.pre_call_hook = AsyncMock(side_effect=_record_pre_call)
-        proxy_logging.post_call_success_hook = AsyncMock(return_value={"id": "chatcmpl-1"})
+        proxy_logging.post_call_success_hook = AsyncMock(
+            return_value={"id": "chatcmpl-1"}, side_effect=post_call_side_effect
+        )
+        proxy_logging.post_call_failure_hook = AsyncMock(side_effect=failure_side_effect)
         proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
         upstream: Final = httpx.Response(
             status_code=200,
@@ -13372,6 +13377,30 @@ class TestInheritAuthGuardrails:
     @staticmethod
     def _chat_body(**extra: object) -> dict[str, object]:
         return {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], **extra}
+
+    @pytest.mark.asyncio
+    async def test_modified_response_names_a_guardrail_the_failure_hook_drops(self):
+        async def _modify_response(**kwargs: object) -> None:
+            data: Final = cast(dict[str, dict[str, object]], kwargs["data"])  # cast-ok: the hook data the handler built
+            data["metadata"]["applied_guardrails"] = ["key-guard"]
+            raise ModifyResponseException(
+                message="replaced", model="gpt-4o", request_data=data, guardrail_name="key-guard"
+            )
+
+        async def _drop_guardrail_fields(**kwargs: object) -> None:
+            cast(dict[str, dict[str, object]], kwargs["request_data"])["metadata"].pop("applied_guardrails", None)  # cast-ok: payload
+
+        response, _, _ = await self._run_with_response(
+            self._chat_body(),
+            inherit=True,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]}),
+            guardrails=(self._guardrail("key-guard", GuardrailEventHooks.post_call),),
+            post_call_side_effect=_modify_response,
+            failure_side_effect=_drop_guardrail_fields,
+        )
+
+        assert response.status_code == 200
+        assert response.headers["x-litellm-applied-guardrails"] == "key-guard"
 
     @pytest.mark.asyncio
     async def test_key_team_and_project_guardrails_reach_pre_and_post_call(self):
