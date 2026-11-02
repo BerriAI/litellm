@@ -2026,6 +2026,28 @@ class TestStreamingHttpErrorFrames:
         _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
 
     @pytest.mark.asyncio
+    async def test_v1_a2a_stream_route_scans_response_chunks(self):
+        guardrail: Final = RecordingGuardrail()
+        guardrail.streaming_sampling_rate = 1
+        chunk: Final = {
+            "jsonrpc": "2.0",
+            "id": "stream-1",
+            "result": {
+                "kind": "task",
+                "artifacts": [{"parts": [{"kind": "text", "text": "streamed text"}]}],
+            },
+        }
+
+        await _drive_stream(
+            UnifiedLLMGuardrails(),
+            guardrail,
+            [chunk],
+            request_route="/v1/a2a/my-agent/message/stream",
+        )
+
+        assert guardrail.apply_calls[0]["inputs"]["texts"] == ["streamed text"]
+
+    @pytest.mark.asyncio
     async def test_chat_eos_block_emits_data_error_frame(self):
         import json as _json
 

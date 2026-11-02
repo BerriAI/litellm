@@ -290,7 +290,11 @@ def _router(redis_cache: FakeRedisCache, routing_strategy: str = "usage-based-ro
 
 
 @pytest.mark.asyncio
-async def test_armed_routing_read_rides_the_admission_pipeline_and_routing_issues_no_read_of_its_own():
+async def test_armed_routing_read_rides_the_admission_pipeline_and_routing_issues_no_read_of_its_own(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime",
+        lambda: datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc),
+    )
     client = FakeClient(_lua_ok_replies)
     redis_cache = FakeRedisCache(client)
     router = _router(redis_cache)

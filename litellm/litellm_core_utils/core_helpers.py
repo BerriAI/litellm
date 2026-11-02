@@ -4,7 +4,7 @@ import copy
 import logging
 import math
 import re
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
@@ -102,6 +102,10 @@ _DROP_PARAMS_BOOL: Final = TypeAdapter(bool)
 
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None
+
+
+def as_object_list(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, list) else None
 
 
 def decoded_json_object(value: object) -> Mapping[str, object]:
@@ -315,6 +319,8 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     "model_context_window_exceeded": "length",
     # Cohere
     "COMPLETE": "stop",
+    "STOP_SEQUENCE": "stop",
+    "TOOL_CALL": "tool_calls",
     "ERROR_TOXIC": "content_filter",
     "ERROR": "stop",
     # HuggingFace / Together AI

@@ -33,7 +33,7 @@ from collections.abc import (
 from collections.abc import (
     Set as AbstractSet,
 )
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType, TracebackType, UnionType
@@ -61,6 +61,8 @@ import websockets
 import websockets.exceptions
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import FieldInfo, PydanticUndefined
+from pydantic.main import IncEx
+from pydantic_core import PydanticSerializationError, to_jsonable_python
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
@@ -88,6 +90,7 @@ from litellm.constants import (
     LITELLM_UI_SESSION_DURATION,
     OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
+    VLLM_CHOICE_FIELDS,
 )
 from litellm.litellm_core_utils.access_windows import access_windows_config_error
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
@@ -105,6 +108,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     initialize_sentry,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER, LoggingWorker
+from litellm.litellm_core_utils.prompt_templates.chat_template_tools import chat_template_tool_section
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.routing_groups import parse_routing_groups
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -113,6 +117,7 @@ from litellm.litellm_core_utils.token_counter import (
     UnsupportedContentTypeError,
     deployment_openai_model,
     offload_token_count,
+    sends_function_tools,
 )
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     HUGGING_FACE_SOURCE,
@@ -197,6 +202,7 @@ from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     snapshot_tuning_baselines,
     tuning_limit_violation,
 )
+from litellm.rust_bridge.catalog import Target
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
@@ -387,15 +393,23 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_keys,
 )
 from litellm.litellm_core_utils.stream_usage_chunks import is_injected_stream_usage_artifact
+from litellm.llms.anthropic.messages.context_management.inference_view import (
+    InferenceRequestView,
+    InferenceRequestViewError,
+    count_context_edits,
+    inference_request_view,
+)
 from litellm.llms.anthropic.messages.convertible_blocks import (
     deployment_drops_params,
     drop_non_string_tool_result_texts,
     malformed_tool_result_count_error,
 )
+from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.messages.dispatch import messages_target
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
@@ -996,6 +1010,7 @@ from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.responses.main import provider_stores_the_conversation
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.router import (
     AssistantsTypedDict,
@@ -1209,7 +1224,7 @@ ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai
 ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/ai_hub)"
 
 custom_swagger_message: Final = (
-    "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
+    "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/enterprise#operations--branding)"
 )
 
 ### CUSTOM BRANDING [ENTERPRISE FEATURE] ###
@@ -1460,7 +1475,11 @@ async def initialize_shared_aiohttp_session() -> "ClientSession | None":
             connector_kwargs["socket_factory"] = socket_factory
 
         connector: Final = TCPConnector(**connector_kwargs)
-        session: Final = ClientSession(connector=connector, cookie_jar=DummyCookieJar())
+        session: Final = ClientSession(
+            connector=connector,
+            cookie_jar=DummyCookieJar(),
+            trace_configs=[build_pool_wait_trace_config()],
+        )
 
         verbose_proxy_logger.info(
             "SESSION REUSE: Created shared aiohttp session for connection pooling (ID: %s, limit=%s, limit_per_host=%s)",
@@ -3070,6 +3089,29 @@ redis_usage_cache: RedisCache | None = None  # redis cache used for tracking spe
 polling_via_cache_enabled: Literal["all"] | list[str] | bool = False
 native_background_mode: list[str] = []  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
+
+
+class _ResponseBackgroundSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    polling_via_cache: Literal["all"] | tuple[str, ...] | bool = False
+    native_background_mode: tuple[str, ...] = ()
+    ttl: int = 3600
+
+
+def _apply_background_response_settings(value: SettingsJsonValue) -> None:
+    global polling_via_cache_enabled, native_background_mode, polling_cache_ttl
+
+    responses: Final = _as_settings_mapping(value)
+    settings: Final = _ResponseBackgroundSettings.model_validate(responses.get("background_mode") or {})
+    polling: Final = settings.polling_via_cache
+    polling_via_cache_enabled, native_background_mode, polling_cache_ttl = (  # rebind-ok: Refresh runtime config.
+        list(polling) if isinstance(polling, tuple) else polling,
+        list(settings.native_background_mode),
+        settings.ttl,
+    )
+
+
 user_custom_auth = None
 user_custom_key_generate = None
 # Sentinel: prevents PKCE-no-Redis advisory from re-logging on config hot-reload.
@@ -6932,20 +6974,7 @@ class ProxyConfig:
                     # see usage here: https://docs.litellm.ai/docs/proxy/caching
                     pass
                 elif key == "responses":
-                    # Initialize global polling via cache settings
-                    global polling_via_cache_enabled, native_background_mode, polling_cache_ttl
-                    background_mode = value.get("background_mode", {})
-                    polling_via_cache_enabled = background_mode.get("polling_via_cache", False)
-                    native_background_mode = background_mode.get("native_background_mode", [])
-                    polling_cache_ttl = background_mode.get("ttl", 3600)
-                    verbose_proxy_logger.debug(
-                        "%s Initialized polling via cache: enabled=%s, native_background_mode=%s, ttl=%s%s",
-                        blue_color_code,
-                        polling_via_cache_enabled,
-                        native_background_mode,
-                        polling_cache_ttl,
-                        reset_color_code,
-                    )
+                    _apply_background_response_settings(value)
                 elif key == "max_ui_session_budget":
                     litellm.max_ui_session_budget = float(value) if value is not None else None
                     verbose_proxy_logger.debug(
@@ -8653,6 +8682,7 @@ class ProxyConfig:
 
     def _apply_litellm_settings_db_values(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         self.litellm_settings.apply_db_row("litellm_settings", db_values)
+        _apply_background_response_settings(self.litellm_settings.get("responses", {}))
         for key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:
             if key in db_values and (value := self.litellm_settings.get(key)) is not None:
                 setattr(litellm, key, value)
@@ -10170,6 +10200,8 @@ def _event_with_restamped_nested_model(event: Mapping[str, object], target_model
 _SSE_DATA_FIELD: Final = b"data:"
 _SSE_NESTED_RESPONSE_MARKER: Final = b'"response"'
 _SSE_EVENT_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_JSON_OBJECT: Final = TypeAdapter(dict[object, object])
+_JSON_ARRAY: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 def _restamp_nested_response_model_in_sse_frame(frame: bytes, target_model: str) -> bytes:
@@ -10195,91 +10227,110 @@ def _restamp_nested_response_model_in_sse_line(line: bytes, target_model: str) -
     return _SSE_DATA_FIELD + b" " + serialized_event.encode() + line_ending
 
 
-def _fast_serialize_simple_model_response_stream(
-    chunk: ModelResponseStream,
-) -> bytes | None:
-    """
-    Serialize the common OpenAI text streaming chunk without the full Pydantic
-    serializer. Fall back for richer chunks so tool calls, logprobs, usage, and
-    provider-specific fields keep the canonical model_dump_json behavior.
-    """
-    if (
-        getattr(chunk, "provider_specific_fields", None) is not None
-        or getattr(chunk, "system_fingerprint", None) is not None
-        or getattr(chunk, "usage", None) is not None
-    ):
-        return None
-
-    choices: Final = getattr(chunk, "choices", None)
-    if not isinstance(choices, list) or len(choices) != 1:
-        return None
-
-    choice: Final = choices[0]
-    if getattr(choice, "logprobs", None) is not None or getattr(choice, "enhancements", None) is not None:
-        return None
-
-    delta: Final[object] = getattr(choice, "delta", None)
-    if delta is None:
-        return None
-
-    unsupported_delta_fields: Final = (
-        "function_call",
-        "tool_calls",
-        "audio",
-        "images",
-        "annotations",
-        "reasoning_content",
-        "thinking_blocks",
-        "provider_specific_fields",
-        "refusal",
-    )
-    if any(getattr(delta, field, None) is not None for field in unsupported_delta_fields):
-        return None
-
-    delta_dict: Final[dict] = {}
-    role: Final = getattr(delta, "role", None)
-    content: Final = getattr(delta, "content", None)
-    if role is not None:
-        delta_dict["role"] = role
-    if content is not None:
-        delta_dict["content"] = content
-
-    choice_dict: Final = {"index": getattr(choice, "index", 0), "delta": delta_dict}
-    finish_reason: Final = getattr(choice, "finish_reason", None)
-    if finish_reason is not None:
-        choice_dict["finish_reason"] = finish_reason
-
-    # Match the canonical ``model_dump_json(exclude_none=True)`` shape — if a
-    # field is None, omit it entirely rather than emitting ``"key": null``.
-    # Strict OpenAI-compatible clients reject ``null`` for optional fields like
-    # ``model``, so diverging here would surface as a client-side regression
-    # only on the fast path. Fall back to the slow path if a required-looking
-    # top-level identifier is missing.
-    model: Final = getattr(chunk, "model", None)
-    if model is None:
-        return None
-
-    payload: Final[dict] = {
-        "id": getattr(chunk, "id", None),
-        "object": getattr(chunk, "object", None),
-        "created": getattr(chunk, "created", None),
-        "model": model,
-        "service_tier": getattr(chunk, "service_tier", None),
-        "choices": [choice_dict],
-    }
-    for top_level_key in ("id", "object", "created", "service_tier"):
-        if payload[top_level_key] is None:
-            payload.pop(top_level_key)
-    return orjson.dumps(payload)
+def _vllm_choice_fields(choice: BaseModel) -> Mapping[str, object]:
+    choice_extras: Final = choice.model_extra or {}
+    return MappingProxyType({field: choice_extras[field] for field in VLLM_CHOICE_FIELDS if field in choice_extras})
 
 
-def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
-    if isinstance(chunk, ModelResponseStream):
-        serialized_chunk: Final = _fast_serialize_simple_model_response_stream(chunk)
+def _json_encodes(value: object) -> bool:
+    try:
+        to_jsonable_python(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _unencodable_part(value: object, ancestors: frozenset[int]) -> IncEx | bool:
+    if id(value) in ancestors:
+        return True
+    lineage: Final = ancestors | {id(value)}
+    if isinstance(value, BaseModel):
+        return _unencodable_keys(iter(value), lineage) or True
+    if isinstance(value, dict):
+        return _unencodable_entries(_JSON_OBJECT.validate_python(value), lineage)
+    if isinstance(value, (list, tuple)):
+        return _unencodable_indexes(enumerate(_JSON_ARRAY.validate_python(value)), lineage) or True
+    return True
+
+
+def _unencodable_entries(entries: Mapping[object, object], lineage: frozenset[int]) -> IncEx | bool:
+    by_name: Final = {key: item for key, item in entries.items() if isinstance(key, str)}
+    if len(by_name) == len(entries):
+        return _unencodable_keys(by_name.items(), lineage) or True
+    by_index: Final = {key: item for key, item in entries.items() if isinstance(key, int)}
+    if len(by_index) == len(entries):
+        return _unencodable_indexes(by_index.items(), lineage) or True
+    return True
+
+
+def _unencodable_keys(items: Iterable[tuple[str, object]], lineage: frozenset[int]) -> Mapping[str, IncEx | bool]:
+    return {key: _unencodable_part(item, lineage) for key, item in items if not _json_encodes(item)}
+
+
+def _unencodable_indexes(items: Iterable[tuple[int, object]], lineage: frozenset[int]) -> Mapping[int, IncEx | bool]:
+    return {index: _unencodable_part(item, lineage) for index, item in items if not _json_encodes(item)}
+
+
+def _serialize_chat_chunk_leniently(chunk: ModelResponseStream) -> bytes:
+    exclude: Final = _unencodable_keys(iter(chunk), frozenset({id(chunk)}))
+    if exclude:
+        verbose_proxy_logger.warning("Dropping streamed chunk fields that JSON cannot encode: %s", exclude)
+    jsonable: Final = chunk.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=exclude)
+    return json.dumps(jsonable, ensure_ascii=True, separators=(",", ":")).encode()
+
+
+def _serialize_chat_chunk(chunk: ModelResponseStream) -> bytes:
+    try:
+        return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+    except PydanticSerializationError:
+        return _serialize_chat_chunk_leniently(chunk)
+
+
+def _serialize_streaming_chunk(chunk: BaseModel) -> bytes:
+    choices: Final = _streaming_chunk_choices(chunk)
+    null_choice_fields: Final = tuple(_null_vllm_choice_fields(choice) for choice in choices)
+    if any(null_choice_fields):
+        serialized_chunk: Final = _serialize_keeping_null_choice_fields(chunk, choices, null_choice_fields)
         if serialized_chunk is not None:
             return serialized_chunk
+    if isinstance(chunk, ModelResponseStream):
+        return _serialize_chat_chunk(chunk)
+    return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
 
-    return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+
+def _serialize_keeping_null_choice_fields(
+    chunk: BaseModel, choices: Sequence[BaseModel], null_choice_fields: Sequence[Mapping[str, None]]
+) -> bytes | None:
+    try:
+        return json.dumps(
+            {
+                **_dump_set_fields(chunk, exclude=frozenset({"choices"})),
+                "choices": [
+                    {**_dump_set_fields(choice), **nulls}
+                    for choice, nulls in zip(choices, null_choice_fields, strict=True)
+                ],
+            },
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode()
+    except ValueError:
+        return None
+
+
+def _streaming_chunk_choices(chunk: BaseModel) -> Sequence[BaseModel]:
+    match chunk:
+        case ModelResponseStream() | TextCompletionResponse():
+            return chunk.choices
+        case _:
+            return ()
+
+
+def _null_vllm_choice_fields(choice: BaseModel) -> Mapping[str, None]:
+    return MappingProxyType({field: None for field, value in _vllm_choice_fields(choice).items() if value is None})
+
+
+def _dump_set_fields(model: BaseModel, exclude: AbstractSet[str] = frozenset()) -> Mapping[str, object]:
+    return model.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=set(exclude))
 
 
 async def _apply_streaming_chunk_hooks(
@@ -14934,7 +14985,7 @@ async def _try_provider_token_count(
     deployment: Mapping[str, object] | None,
     request_model: str,
     tools: list | None = None,
-    system: str | None = None,
+    system: object | None = None,
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
@@ -15004,6 +15055,7 @@ async def _provider_token_count(
     request_model: str,
     settings: TokenCountSettings,
     local_estimate_allowed: bool,
+    forwarded_edits: bool = False,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Count with the provider, using the token_count_model in its region when one is set.
 
@@ -15027,7 +15079,7 @@ async def _provider_token_count(
     pinned_count_model: Final = None if count_model is None or count_model.region is None else count_model
     region_hint: Final = (
         None
-        if pinned_count_model is None
+        if pinned_count_model is None or (forwarded_edits and counted.status_code == 400)
         else f"This model counts tokens with {pinned_count_model.model} in {pinned_count_model.region}. "
         "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
     )
@@ -15035,7 +15087,7 @@ async def _provider_token_count(
     framing_can_stand_in: Final = (count_model is None or not count_model.configured) and (
         failure.cannot_count_model or (pinned_count_model is not None and failure.denied_in_region)
     )
-    if not (framing_can_stand_in and settings.framing is not None and local_estimate_allowed):
+    if not (framing_can_stand_in and settings.frames_counts and local_estimate_allowed):
         raise failure.to_proxy_exception()
     if pinned_count_model is not None:
         verbose_proxy_logger.warning(
@@ -15235,6 +15287,7 @@ async def _tokenizer_or_provider_error(
 
 async def _local_token_estimate(
     model: str,
+    template_model: str,
     prompt: str | None,
     messages: Sequence[AllMessageValues] | None,
     tools: list[ChatCompletionToolParam] | None,
@@ -15247,7 +15300,7 @@ async def _local_token_estimate(
         else await _tokenizer_or_provider_error(model, custom_tokenizer, provider_failure)
     )
     count: Final = offload_token_count(litellm.token_counter)(
-        model=model,
+        model=template_model,
         text=prompt,
         messages=messages,
         tools=tools,
@@ -15289,6 +15342,9 @@ class _TokenCountDeployment(TypedDict, total=False):
 
 
 _TOKEN_COUNT_DEPLOYMENT: Final = TypeAdapter(_TokenCountDeployment)
+_COUNT_TOOLS: Final[TypeAdapter[tuple[Mapping[str, object], ...] | None]] = TypeAdapter(
+    tuple[Mapping[str, object], ...] | None
+)
 _ROUTED_DEPLOYMENT: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
@@ -15310,10 +15366,15 @@ def _deployment_aws_region(deployment: _TokenCountDeployment) -> str:
     )
 
 
+def _deployment_base_model(deployment: _TokenCountDeployment) -> str | None:
+    return _non_empty_str(deployment.get("model_info", {}).get("base_model")) or _non_empty_str(
+        deployment.get("litellm_params", {}).get("base_model")
+    )
+
+
 def _token_count_settings_model(deployment: _TokenCountDeployment, request_model: str) -> tuple[str, str | None]:
-    model_info: Final = deployment.get("model_info", {})
     params: Final = deployment.get("litellm_params", {})
-    base_model: Final = _non_empty_str(model_info.get("base_model")) or _non_empty_str(params.get("base_model"))
+    base_model: Final = _deployment_base_model(deployment)
     if base_model is not None:
         return base_model, None
     model: Final = _non_empty_str(params.get("model"))
@@ -15358,11 +15419,14 @@ def _count_context_management(
         model, general_settings_view(), user_model if isinstance(user_model, str) else None
     )
     router_defaults: Final = _router_default_litellm_params(llm_router)
-    sent_params: Final = tuple(
-        {**deployment["litellm_params"], **router_defaults, **request_litellm_params}
+    deployment_params: Final = tuple(
+        deployment["litellm_params"]
         for deployment in llm_router.registry().deployments(
             inference_model if isinstance(inference_model, str) else model, source="routable"
         )
+    )
+    sent_params: Final = tuple(
+        {**params, **router_defaults, **request_litellm_params} for params in deployment_params or ({},)
     )
     if any(context_management_explicitly_dropped(params.get("additional_drop_params")) for params in sent_params):
         return None
@@ -15373,17 +15437,104 @@ def _count_context_management(
     )
 
 
+_GATEWAY_EDIT_ROUTES: Final = frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES})
+
+
+def _messages_route(deployment: _TokenCountDeployment, request_model: str) -> Target:
+    params: Final = deployment.get("litellm_params", {})
+    return messages_target(
+        _non_empty_str(params.get("model")) or request_model,
+        _non_empty_str(params.get("custom_llm_provider")),
+        deployment.get("model_info"),
+        _deployment_api_base(deployment),
+    )
+
+
+def _rejected_view(status_code: int, message: str) -> ProxyException:
+    return ProviderCountFailure(
+        status_code=status_code, message=message, rejected_before_provider_call=True
+    ).to_proxy_exception()
+
+
+async def _bridged_request_view(
+    messages: Sequence[Mapping[str, object]],
+    system: object,
+    tools: Sequence[Mapping[str, object]] | None,
+    messages_format: TokenCountMessagesFormat,
+    edits: CountContextManagement | None,
+    deployment: _TokenCountDeployment,
+    fallback_model: str,
+) -> InferenceRequestView | InferenceRequestViewError | None:
+    view: Final = await inference_request_view(
+        messages,
+        system,
+        messages_format,
+        count_context_edits(edits, tools, deployment.get("litellm_params", {}), fallback_model),
+    )
+    return None if isinstance(view, InferenceRequestView) and not view.messages else view
+
+
+async def _responses_request_view(
+    messages: Sequence[Mapping[str, object]],
+    system: object,
+    tools: Sequence[Mapping[str, object]] | None,
+    edits: CountContextManagement,
+    deployment: _TokenCountDeployment,
+    fallback_model: str,
+) -> InferenceRequestView | InferenceRequestViewError:
+    from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
+    from litellm.llms.anthropic.messages.responses_adapters.handler import count_view_messages
+
+    try:
+        edited: Final = await count_view_messages(
+            model=_non_empty_str(deployment.get("litellm_params", {}).get("model")) or fallback_model,
+            messages=messages,
+            tools=tools,
+            system=system,
+            context_management=edits,
+        )
+    except AnthropicContextManagementError as error:
+        if error.status_code >= 500:
+            return InferenceRequestView(messages=messages, system=system)
+        return InferenceRequestViewError(error_message=error.message, status_code=error.status_code)
+    return InferenceRequestView(messages=edited, system=system)
+
+
+async def _gateway_request_view(
+    route: Target,
+    messages: Sequence[Mapping[str, object]],
+    system: object,
+    tools: Sequence[Mapping[str, object]] | None,
+    messages_format: TokenCountMessagesFormat,
+    edits: CountContextManagement | None,
+    deployment: _TokenCountDeployment,
+    fallback_model: str,
+) -> InferenceRequestView | InferenceRequestViewError | None:
+    match route:
+        case Target.CHAT_COMPLETIONS:
+            return await _bridged_request_view(
+                messages, system, tools, messages_format, edits, deployment, fallback_model
+            )
+        case Target.RESPONSES if edits is not None:
+            return await _responses_request_view(messages, system, tools, edits, deployment, fallback_model)
+        case _:
+            return None
+
+
 def _responses_routing_kwargs(responses_request: Mapping[str, object] | None) -> Mapping[str, object]:
     previous_response_id: Final = None if responses_request is None else responses_request.get("previous_response_id")
     return {"previous_response_id": previous_response_id} if isinstance(previous_response_id, str) else {}
 
 
+def _inference_params(
+    litellm_params: Mapping[str, object], responses_request: Mapping[str, object]
+) -> Mapping[str, object]:
+    return {**litellm_params, **_router_default_litellm_params(llm_router), **responses_request}
+
+
 def _count_drop_policy(deployment: Mapping[str, object] | None, responses_request: Mapping[str, object]) -> DropPolicy:
     litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
-    router_defaults: Final[Mapping[str, object]] = (
-        {} if llm_router is None else _router_default_litellm_params(llm_router)
-    )
-    return drop_policy({**litellm_params, **router_defaults, **responses_request})
+    return drop_policy(_inference_params(litellm_params, responses_request))
 
 
 def _native_responses_count(
@@ -15406,8 +15557,54 @@ def _native_responses_count(
     )
 
 
-def _deployment_api_base(deployment: _TokenCountDeployment) -> str | None:
-    return _non_empty_str(deployment.get("litellm_params", {}).get("api_base"))
+def _deployment_api_base(
+    deployment: _TokenCountDeployment, responses_request: Mapping[str, object] | None = None
+) -> str | None:
+    return _non_empty_str(
+        _inference_params(deployment.get("litellm_params", {}), responses_request or {}).get("api_base")
+    )
+
+
+def _deployment_provider(
+    deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
+) -> str | None:
+    params: Final = deployment.get("litellm_params", {})
+    try:
+        return litellm.get_llm_provider(
+            model=_non_empty_str(params.get("model")) or request_model,
+            custom_llm_provider=_non_empty_str(params.get("custom_llm_provider")),
+            api_base=_deployment_api_base(deployment, responses_request),
+        )[1]
+    except litellm.BadRequestError:
+        return None
+
+
+def _serves_native_responses(
+    deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object]
+) -> bool:
+    params: Final = deployment.get("litellm_params", {})
+    inference: Final = _inference_params(params, responses_request)
+    try:
+        return provider_stores_the_conversation(
+            _non_empty_str(params.get("model")) or request_model,
+            _non_empty_str(params.get("custom_llm_provider")),
+            {
+                "use_chat_completions_api": bool(inference.get("use_chat_completions_api")),
+                "model_info": dict(deployment.get("model_info", {})),
+                "api_base": _non_empty_str(inference.get("api_base")),
+            },
+        )
+    except litellm.BadRequestError:
+        return False
+
+
+_AZURE_PROVIDERS: Final = frozenset((litellm.LlmProviders.AZURE.value, litellm.LlmProviders.AZURE_AI.value))
+
+
+def _with_strict_by_default(tools: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        {**tool, "strict": True} if tool.get("type") == "function" and "strict" not in tool else tool for tool in tools
+    )
 
 
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
@@ -15566,6 +15763,40 @@ async def _count_request_tokens(
         )
     prompt_only: Final = bool(prompt) and conversation_empty
     request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
+    local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
+    malformed_messages: Final = (
+        None
+        if local_count_error is None
+        else ProxyException(message=local_count_error, type="token_counting_error", param="messages", code=400)
+    )
+    context_edits: Final = _count_context_management(context_management, request.model, request_litellm_params)
+    route: Final = (
+        _messages_route(deployment_view, request.model)
+        if request_messages is not None and messages_format == "anthropic"
+        else None
+    )
+    if context_edits is not None and route in _GATEWAY_EDIT_ROUTES and malformed_messages is not None:
+        raise malformed_messages
+    edited_request: Final = (
+        None
+        if route is None or request_messages is None
+        else await _gateway_request_view(
+            route,
+            request_messages,
+            system,
+            _COUNT_TOOLS.validate_python(tools),
+            messages_format,
+            context_edits,
+            deployment_view,
+            model_to_use,
+        )
+    )
+    if isinstance(edited_request, InferenceRequestViewError):
+        raise _rejected_view(edited_request.status_code, edited_request.error_message)
+    inference_messages: Final = (
+        request_messages if edited_request is None else [dict(message) for message in edited_request.messages]
+    )
+    inference_system: Final = system if edited_request is None else edited_request.system
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     routed_deployment: Final = _ROUTED_DEPLOYMENT.validate_python(deployment)
@@ -15578,7 +15809,7 @@ async def _count_request_tokens(
         else await chat_count_request(
             model_to_use,
             custom_llm_provider,
-            _deployment_api_base(deployment_view),
+            _deployment_api_base(deployment_view, routed_request),
             routed_request,
             _count_drop_policy(routed_deployment, routed_request),
         )
@@ -15605,30 +15836,30 @@ async def _count_request_tokens(
                     if chat_count is not None
                     else [{"role": "user", "content": prompt}]
                     if prompt_as_message
-                    else request_messages
+                    else inference_messages
                 ),
                 contents=None if prompt_as_message else contents,
                 deployment=count_deployment,
                 request_model=request.model,
                 tools=tools if chat_count is None else [dict(tool) for tool in chat_count.tools or ()] or None,
-                system=system,
+                system=inference_system,
                 messages_format=messages_format,
                 output_format=output_format,
-                context_management=_count_context_management(context_management, request.model, request_litellm_params),
+                context_management=None if edited_request is not None else context_edits,
                 chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
             ),
             model_to_use=model_to_use,
             request_model=request.model,
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
+            forwarded_edits=context_edits is not None and edited_request is None,
         )
     )
     if isinstance(ladder, TokenCountResponse):
         return ladder
 
-    local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
-    if local_count_error is not None:
-        raise ProxyException(message=local_count_error, type="token_counting_error", param="messages", code=400)
+    if malformed_messages is not None:
+        raise malformed_messages
 
     # Check if token counter is disabled before fallback
     if litellm.disable_token_counter is True:
@@ -15639,6 +15870,27 @@ async def _count_request_tokens(
             code=503,
         )
 
+    local_view: Final = (
+        None
+        if route is not Target.MESSAGES or context_edits is None or request_messages is None
+        else await _bridged_request_view(
+            request_messages,
+            system,
+            _COUNT_TOOLS.validate_python(tools),
+            messages_format,
+            replace(context_edits, drop_invalid_edits=False),
+            deployment_view,
+            model_to_use,
+        )
+    )
+    if isinstance(local_view, InferenceRequestViewError):
+        raise _rejected_view(local_view.status_code, local_view.error_message)
+    counted_view: Final = edited_request if local_view is None else local_view
+    local_messages: Final = (
+        request_messages if counted_view is None else [dict(message) for message in counted_view.messages]
+    )
+    local_system: Final = system if counted_view is None else counted_view.system
+
     # Default LiteLLM token counting
     custom_tokenizer: CustomHuggingfaceTokenizer | None = None
     if model_info is not None:
@@ -15646,22 +15898,51 @@ async def _count_request_tokens(
             CustomHuggingfaceTokenizer | None,
             model_info.get("custom_tokenizer", None),
         )
-    system_message: Final = _system_message(system)
+    system_message: Final = _system_message(local_system)
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
-        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else request_messages),
+        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else local_messages),
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
     )
-    counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
+    native_responses: Final = responses_request is not None and _serves_native_responses(
+        deployment_view, request.model, responses_request
+    )
+    sent_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
-    framing: Final = settings.framing if counted_messages is not None and settings.framing is not None else 0
+    openai_model: Final = deployment_openai_model(deployment_view)
+    template_model: Final = openai_model or _deployment_base_model(deployment_view) or model_to_use
+    tool_section: Final = chat_template_tool_section(template_model)
+    counted_tools: Final = (
+        cast(list[ChatCompletionToolParam], list(_with_strict_by_default(sent_tools)))  # cast-ok: strict added
+        if sent_tools is not None
+        and native_responses
+        and _deployment_provider(deployment_view, request.model, responses_request) in _AZURE_PROVIDERS
+        and tool_section is not None
+        and tool_section.renders_strict_only_when_true
+        else sent_tools
+    )
+    framing: Final = (
+        0
+        if counted_messages is None
+        else settings.hidden_prompt_tokens(
+            carries_tools=sends_function_tools(counted_tools), responses_api=native_responses
+        )
+    )
     kimi_k3_messages: Final = counted_messages if settings.tokenizer == "kimi_k3" else None
     exact: Final = (
-        await _kimi_k3_count(request, messages_format, model_to_use, kimi_k3_messages, counted_tools)
+        await _kimi_k3_count(
+            request
+            if counted_view is None
+            else request.model_copy(update={"messages": local_messages, "system": local_system}),
+            messages_format,
+            model_to_use,
+            kimi_k3_messages,
+            counted_tools,
+        )
         if kimi_k3_messages is not None and custom_tokenizer is None
         else None
     )
@@ -15674,7 +15955,8 @@ async def _count_request_tokens(
             count_source="local_estimate",
         )
     estimate: Final = await _local_token_estimate(
-        model=deployment_openai_model(deployment_view) or model_to_use,
+        model=openai_model or model_to_use,
+        template_model=template_model,
         prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
         tools=counted_tools,
@@ -18110,6 +18392,8 @@ async def model_deprecations(
 def get_model_group_info(
     llm_router: Router, all_models_str: Sequence[str], model_group: str | None, team_id: str | None = None
 ) -> list[ModelGroupInfoProxy]:
+    from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
+
     model_groups: Final[list[ModelGroupInfoProxy]] = []
 
     unique_models: Final = tuple(dict.fromkeys(all_models_str))
@@ -18119,6 +18403,14 @@ def get_model_group_info(
         if model_group is not None and model_group != model:
             continue
 
+        supports_background_chat = should_use_polling_for_request(
+            background_mode=True,
+            polling_via_cache_enabled=polling_via_cache_enabled,
+            redis_cache=redis_usage_cache,
+            model=model,
+            llm_router=llm_router,
+            native_background_mode=native_background_mode,
+        )
         _model_group_info = registry.group(model, team_id=team_id)
 
         if _model_group_info is not None:
@@ -18126,6 +18418,7 @@ def get_model_group_info(
                 ModelGroupInfoProxy.model_validate(
                     {
                         **_model_group_info.model_dump(),
+                        "supports_background_chat": supports_background_chat,
                         **model_group_custom_fields(
                             registry.deployments(
                                 resolve_model_group_alias(registry.aliases(), model) or model,
@@ -18140,6 +18433,7 @@ def get_model_group_info(
             model_group_info = ModelGroupInfoProxy(
                 model_group=model,
                 providers=[],
+                supports_background_chat=supports_background_chat,
             )
             model_groups.append(model_group_info)
 
