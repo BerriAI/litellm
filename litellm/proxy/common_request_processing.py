@@ -101,6 +101,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
 from litellm.proxy.bug_report_config import build_proxy_bug_report
+from litellm.proxy.child_request import with_proxy_chat_child_request
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
@@ -3100,7 +3101,9 @@ class ProxyBaseLLMRequestProcessing:
             user_model=user_model,
             user_api_key_dict=user_api_key_dict,
         )
-        llm_call_task: Final = asyncio.create_task(with_proxy_compaction_executor(llm_call, request))
+        llm_call_task: Final = asyncio.create_task(
+            with_proxy_chat_child_request(with_proxy_compaction_executor(llm_call, request), request)
+        )
         tasks.append(llm_call_task)
 
         llm_responses: Final = asyncio.gather(*tasks)  # run the moderation check in parallel to the actual llm api call
