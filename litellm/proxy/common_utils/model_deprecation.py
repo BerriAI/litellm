@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 _NO_MODEL_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
+_SHARED_SCHEDULE_PROVIDER: Final[Mapping[str, str]] = MappingProxyType({"azure_ai": "azure"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +84,15 @@ def _as_model_key(raw_value: object) -> str | None:
     return raw_value if isinstance(raw_value, str) and raw_value else None
 
 
+def _schedule_keys(provider: str | None, model_name: str | None) -> tuple[str | None, ...]:
+    shared_provider: Final = _SHARED_SCHEDULE_PROVIDER.get(provider) if provider is not None else None
+    return (
+        _provider_qualified(provider, model_name),
+        _provider_qualified(shared_provider, model_name),
+        model_name,
+    )
+
+
 def _mapping_field(deployment: Mapping[str, object], key: str) -> Mapping[str, object]:
     value: Final = deployment.get(key)
     return value if isinstance(value, Mapping) else _NO_MODEL_METADATA
@@ -107,18 +117,15 @@ def _resolve_deployment_deprecation(
 
     provider: Final = _deployment_provider(litellm_params)
     base_model: Final = _as_model_key(model_info.get("base_model"))
-    unprefixed: Final = model_key.split("/", 1)[1] if model_key is not None and "/" in model_key else None
+    model_name: Final = model_key.split("/", 1)[1] if model_key is not None and "/" in model_key else model_key
     candidates: Final = (
-        _provider_qualified(provider, base_model),
-        base_model,
+        *_schedule_keys(provider, base_model),
         _provider_qualified(provider, model_key),
         model_key,
-        unprefixed,
+        *_schedule_keys(provider, model_name),
     )
-    return next(
-        (resolved for resolved in (_cost_map_lookup(key) for key in candidates) if resolved is not None),
-        None,
-    )
+    found: Final = tuple(resolved for resolved in (_cost_map_lookup(key) for key in candidates) if resolved is not None)
+    return next((resolved for resolved in found if resolved.litellm_provider is not None), next(iter(found), None))
 
 
 def _classify(days_until: int, warn_within_days: int) -> DeprecationStatus:
