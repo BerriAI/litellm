@@ -2008,3 +2008,25 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
     assert not AmazonAnthropicClaudeConfig().uses_opt_in_native_output(
         model, optional_params, {"model_info": model_info}
     )
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_bedrock_chat_invoke_adds_the_binding_beta_so_block_binding_is_kept(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    block_binding: Final = {"prefix_mismatch_behavior": "error"}
+    result: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "max_tokens": 2048,
+            "thinking": {"type": "enabled", "budget_tokens": 1024, "block_binding": block_binding},
+        },
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024, "block_binding": block_binding}
+    assert "thinking-binding-controls-2026-08-01" in result["anthropic_beta"]

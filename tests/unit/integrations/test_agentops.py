@@ -1,10 +1,14 @@
 import os
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+import respx
 
-
+import litellm
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.integrations.agentops.agentops import AgentOps, AgentOpsConfig
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
 
 @pytest.fixture
@@ -111,3 +115,17 @@ def test_agentops_initialization_no_auth():
     assert agentops.resource_attributes["deployment.environment"] == "test_env"
     assert agentops.resource_attributes["telemetry.sdk.name"] == "agentops"
     assert "project.id" not in agentops.resource_attributes
+
+
+def test_auth_fetch_leaves_the_shared_sync_client_open_for_other_callers(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    auth_endpoint: Final = "https://agentops.example/v3/auth/token"
+    respx_mock.post(auth_endpoint).respond(json={"token": "jwt", "project_id": "project-1"})
+    client_another_caller_is_using: Final = get_httpx_client().client
+
+    agentops: Final = AgentOps(config=AgentOpsConfig(api_key="key", auth_endpoint=auth_endpoint))
+
+    assert agentops.resource_attributes["project.id"] == "project-1"
+    assert not client_another_caller_is_using.is_closed

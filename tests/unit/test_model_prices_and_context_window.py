@@ -12,9 +12,9 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.fallback_generalizations import match_capability_generalizations
+from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.llms.openai.chat.gpt_reasoning_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.types.utils import SearchFreeRequests
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -781,18 +781,6 @@ class TestBedrockClaude35SonnetContextWindow:
 
 PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
 MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "decisions", "evaluation"})
-VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST: Final = frozenset(
-    {
-        "vertex_ai-ai21_models",
-        "vertex_ai-embedding-models",
-        "vertex_ai-image-models",
-        "vertex_ai-llama_models",
-        "vertex_ai-mistral_models",
-        "vertex_ai-openai_models",
-        "vertex_ai-qwen_models",
-        "vertex_ai-video-models",
-    }
-)
 
 
 def is_registered_provider(label: str, model_names: tuple[str, ...]) -> bool:
@@ -814,7 +802,6 @@ def unregistered_providers(rows: Mapping[str, object]) -> list[str]:
         and "litellm_provider" in entry
         and entry.get("mode") not in MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY
         and entry["litellm_provider"] not in PROVIDER_LABELS_WITHOUT_A_MODEL_SET
-        and entry["litellm_provider"] not in VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST
     )
     return sorted(
         label

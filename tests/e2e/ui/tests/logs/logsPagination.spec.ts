@@ -84,7 +84,7 @@ test.describe("Logs pagination with Aria in the header", () => {
       await expect(aria).toBeFocused();
       await visibleTestId(page, "pagination-first").click();
       await expect(visibleTestId(page, "pagination-range")).toHaveText("Showing 1-25 of 26");
-      for (const destination of [Page.Usage, Page.LlmPlayground, Page.ApiKeys]) {
+      for (const destination of [Page.NewUsage, Page.LlmPlayground, Page.ApiKeys]) {
         await navigateToPage(page, destination);
         await aria.click();
         await expect(page.getByRole("dialog", { name: "Aria Agent", exact: true })).toBeVisible();
