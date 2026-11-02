@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_a
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     is_gpt_reasoning_series_name,
+    refused_reasoning_effort_warning,
     unsupported_reasoning_effort_message,
 )
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
@@ -51,10 +52,13 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
-from ..common_utils import OpenAIError
+from ..common_utils import OpenAIError, without_cache_control
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS: Final = 16
+DROP_UNSUPPORTED_REASONING_WARNING: Final = (
+    "Dropping reasoning=%r for model=%r (drop_params=True) because its model cost map entry lacks supports_reasoning."
+)
 _RAW_RESPONSE_JSON: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 if TYPE_CHECKING:
@@ -418,11 +422,18 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return info["key"] in _bundled_openai_reasoning_models()
 
     @staticmethod
+    def _is_known_non_reasoning_model(model: str) -> bool:
+        from litellm.utils import is_known_non_reasoning_model
+
+        return is_known_non_reasoning_model(model.split("/")[-1], LlmProviders.OPENAI.value)
+
+    @staticmethod
     def _requests_reasoning_effort(reasoning: object) -> bool:
-        effort: Final = (
-            reasoning.get("effort") if isinstance(reasoning, Mapping) else getattr(reasoning, "effort", None)
-        )
-        return effort is not None
+        return OpenAIResponsesAPIConfig._requested_effort(reasoning) is not None
+
+    @staticmethod
+    def _requested_effort(reasoning: object) -> object:
+        return reasoning.get("effort") if isinstance(reasoning, Mapping) else getattr(reasoning, "effort", None)
 
     @staticmethod
     def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
@@ -464,9 +475,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> dict:
         return dict(
             self.map_openai_params_for_deployment(
-                response_api_optional_params, model, drop_params, declared_reasoning_efforts=()
+                response_api_optional_params, model, drop_params, declared_reasoning_efforts=None
             )
         )
+
+    def honors_declared_reasoning_efforts(self) -> bool:
+        return type(self).map_openai_params is OpenAIResponsesAPIConfig.map_openai_params
 
     def map_openai_params_for_deployment(
         self,
@@ -474,7 +488,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         model: str,
         drop_params: bool,
         *,
-        declared_reasoning_efforts: Collection[str],
+        declared_reasoning_efforts: Collection[str] | None,
     ) -> Mapping[str, object]:
         """No mapping applied since inputs are in OpenAI spec already.
 
@@ -494,7 +508,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             and not self._supports_reasoning_param(model=model)
         ):
             if drop_params or litellm.drop_params:
-                params.pop("reasoning", None)
+                dropped_reasoning: Final = params.pop("reasoning", None)
+                if self._requested_effort(dropped_reasoning) != "none" or not self._is_known_non_reasoning_model(model):
+                    verbose_logger.warning(DROP_UNSUPPORTED_REASONING_WARNING, dropped_reasoning, model)
             else:
                 raise litellm.UnsupportedParamsError(
                     message=(
@@ -512,7 +528,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             if (
                 isinstance(reasoning, dict)
                 and isinstance(requested_effort, str)
-                and requested_effort not in declared_reasoning_efforts
+                and requested_effort not in (declared_reasoning_efforts or ())
                 and self._effort_level_is_disabled(lookup_name, requested_effort)
             ):
                 if not (drop_params or litellm.drop_params):
@@ -520,6 +536,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                         message=unsupported_reasoning_effort_message("reasoning.effort", requested_effort, model),
                         status_code=400,
                     )
+                verbose_logger.warning(
+                    refused_reasoning_effort_warning(
+                        suggest_declared_levels=declared_reasoning_efforts is not None, suggest_base_model=False
+                    ),
+                    "reasoning.effort",
+                    requested_effort,
+                    model,
+                    lookup_name,
+                )
                 remaining: Final = reasoning.copy()
                 remaining.pop("effort", None)
                 if remaining:
@@ -633,13 +658,6 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             input=self._replayable_input(marker_safe_input, reads_breakpoints, maps_anthropic_tool_search),
             tools=mapped_tools,
         )
-        if marker_safe_input is not validated_input:
-            self._strip_caller_input_as_if_unmarked(
-                model=model,
-                caller_input=validated_input,
-                reads_breakpoints=reads_breakpoints,
-                maps_anthropic_tool_search=maps_anthropic_tool_search,
-            )
         object_schema_tools: Final = self._tools_with_object_parameters(model=model, tools=stripped_tools)
         sanitized_tools: Final = self._sanitized_tool_schemas_for_openai(
             model=model, tools=object_schema_tools, litellm_params=litellm_params
@@ -653,17 +671,6 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if not maps_anthropic_tool_search:
             return marked_input
         return input_without_unanswered_anthropic_tool_search_calls(marked_input)
-
-    def _strip_caller_input_as_if_unmarked(
-        self,
-        model: str,
-        caller_input: str | ResponseInputParam,
-        reads_breakpoints: bool,
-        maps_anthropic_tool_search: bool,
-    ) -> None:
-        self.remove_cache_control_flag_from_input_and_tools(
-            model=model, input=self._replayable_input(caller_input, reads_breakpoints, maps_anthropic_tool_search)
-        )
 
     def _input_with_wire_safe_prompt_cache_breakpoints(
         self,
@@ -775,24 +782,29 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         the chat path. Strips Anthropic-only `cache_control` markers from
         Responses API input content blocks and tools.
 
-        `filter_value_from_dict` mutates each dict in place, so the same
-        objects are returned.
+        `filter_value_from_dict` deletes the key in place and recurses, so each
+        item is copied first: the caller keeps its own input list and may reuse
+        it on a provider that does support prompt caching.
         """
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            filter_value_from_dict,
+        new_input: Final = (
+            cast(  # cast-ok: the comprehension rebuilds the input item for item
+                ResponseInputParam,
+                [without_cache_control(item) for item in input],
+            )
+            if isinstance(input, list)
+            else input
         )
 
-        if isinstance(input, list):
-            for item in input:
-                if isinstance(item, dict):
-                    filter_value_from_dict(cast(dict, item), "cache_control")
+        new_tools: Final = (
+            cast(  # cast-ok: the comprehension rebuilds the tool list item for item
+                Sequence[ALL_RESPONSES_API_TOOL_PARAMS],
+                [without_cache_control(tool) for tool in tools],
+            )
+            if tools is not None
+            else None
+        )
 
-        if tools is not None:
-            for tool in tools:
-                if isinstance(tool, dict):
-                    filter_value_from_dict(cast(dict, tool), "cache_control")
-
-        return input, tools
+        return new_input, new_tools
 
     def _drop_bridge_minted_reasoning_items(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
         if self.custom_llm_provider not in _PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING or not isinstance(input, list):

@@ -29,6 +29,8 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 from litellm.proxy.utils import get_custom_url, join_paths
 
 
@@ -1446,7 +1448,7 @@ def test_create_model_info_response_includes_max_tokens_from_lookup():
 
 
 def test_create_model_info_response_does_not_call_router_group_info():
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_listing_info.return_value = None
 
     response = create_model_info_response(
@@ -1461,7 +1463,7 @@ def test_create_model_info_response_does_not_call_router_group_info():
 
 
 def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map():
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_listing_info.return_value = DeploymentModelListingInfo(
         cost_map_keys=("my-custom-deployment",), max_input_tokens=32000, max_output_tokens=8000
     )
@@ -1520,7 +1522,7 @@ def test_create_model_info_response_uses_deployment_mode_for_auto_router():
 
 
 def test_create_model_info_response_deployment_limits_override_cost_map():
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_listing_info.return_value = DeploymentModelListingInfo(
         cost_map_keys=("gpt-4o",), max_input_tokens=200000, max_output_tokens=None
     )
@@ -1544,7 +1546,7 @@ def test_create_model_info_response_reports_widest_window_in_a_mixed_group():
     }
 
     for keys in (("small-model", "large-model"), ("large-model", "small-model")):
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.get_model_listing_info.return_value = DeploymentModelListingInfo(
             cost_map_keys=keys, max_input_tokens=None, max_output_tokens=None
         )
@@ -1568,7 +1570,7 @@ def test_create_model_info_response_resolves_alias_once_per_listing():
         seen.append(model)
         return _fake_model_info(max_input_tokens=128000)
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_listing_info.return_value = DeploymentModelListingInfo(
         cost_map_keys=("model-a", "model-b"), max_input_tokens=None, max_output_tokens=None
     )
@@ -1841,6 +1843,26 @@ class TestPostCallFailureHookLLMExceptionAlerting:
     async def test_http_exception_429_does_not_alert(self):
         alerting_handler = await self._alerted(HTTPException(status_code=429, detail="rate limited"))
         assert alerting_handler.called is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status_code, should_alert", ((400, False), (422, False), (429, False), (500, True)))
+    async def test_budget_exceeded_alerts_only_for_server_status(
+        self, status_code: int, should_alert: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "budget_exceeded_status_code", status_code)
+        exc: Final = litellm.BudgetExceededError(current_cost=1.0, max_budget=0.5)
+        assert (await self._alerted(exc)).called is should_alert
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "exc",
+        (
+            litellm.AuthenticationError(message="invalid provider key", model="test-model", llm_provider="openai"),
+            litellm.RateLimitError(message="provider quota exceeded", model="test-model", llm_provider="openai"),
+        ),
+    )
+    async def test_provider_client_status_still_alerts(self, exc: Exception) -> None:
+        assert (await self._alerted(exc)).called is True
 
 
 class TestPostCallFailureHookProxyExceptionLogging:
@@ -4107,3 +4129,86 @@ def test_handle_exception_on_proxy_logs_bug_report_only_for_unmapped_500(caplog)
     assert provider_result.code == internal_result.code == "500"
     assert ISSUE_URL_BASE in caplog.text
     assert ISSUE_URL_BASE not in internal_result.message
+
+
+def test_is_client_error_exception_budget_exceeded_is_client_error() -> None:
+    from litellm.exceptions import BudgetExceededError
+    from litellm.proxy.utils import _is_client_error_exception
+
+    exc: Final = BudgetExceededError(current_cost=100.56, max_budget=100.0)
+    assert _is_client_error_exception(exc) is True
+
+
+def test_is_client_error_exception_budget_exceeded_5xx_is_not_client_error() -> None:
+    from litellm.exceptions import BudgetExceededError
+    from litellm.proxy.utils import _is_client_error_exception
+
+    exc: Final = BudgetExceededError(current_cost=100.56, max_budget=100.0)
+    exc.status_code = 500
+    assert _is_client_error_exception(exc) is False
+
+
+def test_is_client_error_exception_existing_behaviour_unchanged() -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.utils import _is_client_error_exception
+
+    assert _is_client_error_exception(HTTPException(status_code=400, detail="x")) is True
+    assert _is_client_error_exception(HTTPException(status_code=500, detail="x")) is False
+    assert _is_client_error_exception(
+        ProxyException(message="x", type="x", param=None, code="429")
+    ) is True
+    assert _is_client_error_exception(ValueError("x")) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tokens", [None, 0, 3])
+async def test_failure_capture_preserves_prepared_usage_observation(tokens: int | None) -> None:
+    from litellm.proxy.db.accounting_ledger import UsageWrite
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime, capture_callback
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
+
+    timestamp: Final = real_datetime.datetime(2026, 1, 1)
+    committed: Final[asyncio.Queue[UsageWrite]] = asyncio.Queue()
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        for write in writes:
+            committed.put_nowait(write)
+
+    logger: Final = Logging(
+        model=FAILURE_USAGE_MODEL,
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=timestamp,
+        litellm_call_id="post-response-failure",
+        function_id="post-response-failure",
+    )
+    logger.update_environment_variables(
+        model=FAILURE_USAGE_MODEL, custom_llm_provider="openai", litellm_params={}, optional_params={}
+    )
+    logger.model_call_details["response_cost"] = 0.2
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(persist, UsageCaptureSettings())
+    try:
+        prepared: Final = logger.prepare_response_cost(
+            {"id": "provider", "usage": None if tokens is None else {"prompt_tokens": tokens, "total_tokens": tokens}},
+            timestamp,
+        )
+        assert prepared is not None
+        lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": logger}, provider_billed=True)
+        assert lifted["combined_usage_object"] is logger.model_call_details["combined_usage_object"]
+        assert lifted["response_cost"] == 0.2
+        assert runtime.meter is not None
+        capture_callback(
+            runtime.meter,
+            {**logger.model_call_details, **lifted, "log_event_type": "failed_api_call"},
+            None,
+            timestamp,
+            timestamp,
+        )
+    finally:
+        await runtime.stop(1)
+    committed.get_nowait()
+    envelope: Final = json.loads(committed.get_nowait().envelope)
+    assert (None if envelope["usage"] is None else envelope["usage"]["total_tokens"]) == tokens
+    assert envelope["usage_source"] == ("unknown" if tokens is None else "measured")

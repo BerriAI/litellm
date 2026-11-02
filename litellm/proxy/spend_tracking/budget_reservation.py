@@ -17,6 +17,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
@@ -40,12 +41,19 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
-from litellm.proxy.spend_tracking.input_tokens import count_input_tokens, count_input_tokens_for_model, tokenizer_models
+from litellm.proxy.spend_tracking.input_tokens import (
+    count_input_tokens,
+    count_input_tokens_for_model,
+    inline_pdf_file_count,
+    models_counted_for,
+    openai_chat_pdf_file_tokens,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
+from litellm.types.utils import CallTypes
 
 
 @dataclass
@@ -271,6 +279,7 @@ async def reserve_budget_for_request(
         request_body=request_body,
         route=route,
         llm_router=llm_router,
+        team_id=valid_token.team_id,
         raw_body=raw_body,
     )
 
@@ -1512,7 +1521,7 @@ def _get_model_cost_info(
     llm_router: Router | None,
 ) -> Mapping[str, object] | None:
     if llm_router is not None:
-        model_group_info: Final = llm_router.cached_model_group_info(model)
+        model_group_info: Final = llm_router.registry().group(model, field="cached_info")
         if model_group_info is not None:
             return model_group_info.model_dump()
     return dict(litellm.get_model_info(model=model))
@@ -1554,7 +1563,7 @@ def _deployment_tiered_pricing_table(
     backend_model: Final = _get_value(_get_value(deployment, "litellm_params"), "model")
     if not isinstance(model_id, str) or not isinstance(backend_model, str):
         return None
-    deployment_model_info: Final = llm_router.cached_deployment_model_info(model_id, backend_model)
+    deployment_model_info: Final = llm_router.registry().deployment_model_info(model_id, backend_model, cached=True)
     if deployment_model_info is None:
         return None
     tiered_pricing: Final = deployment_model_info.get("tiered_pricing")
@@ -1569,7 +1578,7 @@ def _get_deployment_tiered_pricing_tables(
 ) -> Sequence[Sequence[Mapping[str, object]]]:
     if llm_router is None:
         return []
-    deployments: Final = llm_router.get_model_list(model_name=model) or []
+    deployments: Final = llm_router.registry().deployments(model) or []
     return [
         table
         for deployment in deployments
@@ -1592,6 +1601,7 @@ async def count_request_input_tokens(
     request_body: dict,
     route: str,
     llm_router: Router | None,
+    team_id: str | None,
     raw_body: bytes | None = None,
 ) -> Mapping[str, int]:
     """Input-token count per candidate model, counted once per request.
@@ -1600,18 +1610,32 @@ async def count_request_input_tokens(
     models: Final = _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
     if not models:
         return MappingProxyType({})
-    counted_as: Final = MappingProxyType({model: tokenizer_models(model, llm_router) for model in models})
+    counted_models: Final = MappingProxyType(
+        {model: models_counted_for(model, llm_router, team_id) for model in models}
+    )
     counts: Final = await count_input_tokens(
         request_body=request_body,
         raw_body=raw_body,
-        models=tuple(dict.fromkeys(chain.from_iterable(counted_as.values()))),
+        models=tuple(dict.fromkeys(chain.from_iterable(counted_models.values()))),
+    )
+    chat_pdf_files: Final = (
+        inline_pdf_file_count(request_body.get("messages"))
+        if CallTypes.acompletion in (get_call_types_for_route(route) or ())
+        else 0
     )
     return MappingProxyType(
         {
-            model: count
-            for model, names in counted_as.items()
-            if (count := max((counts[name] for name in names if name in counts), default=None)) is not None
+            model: largest
+            for model, names in counted_models.items()
+            if (largest := _largest_count(counts, names, chat_pdf_files)) is not None
         }
+    )
+
+
+def _largest_count(counts: Mapping[str, int], names: Sequence[str], chat_pdf_files: int) -> int | None:
+    return max(
+        (counts[name] + openai_chat_pdf_file_tokens(name, chat_pdf_files) for name in names if name in counts),
+        default=None,
     )
 
 
