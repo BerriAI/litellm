@@ -2559,6 +2559,7 @@ async def test_deleting_a_file_still_succeeds_when_the_upload_its_id_carries_is_
         assert await _upload_then_delete(router, ["gpt-a", "gpt-b"]) == ("file-upload-2", "file-upload-1")
 
     assert "file-upload-1" in caplog.text and "No such File object" in caplog.text
+    assert router.deletes_marked_internal == (False, True)
 
 
 @pytest.mark.asyncio

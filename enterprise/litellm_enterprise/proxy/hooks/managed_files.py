@@ -2827,7 +2827,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             await _delete_provider_file(llm_router, model_id, model_file_id, data)
         unrecorded_upload: Final = _carried_upload_missing_from(file_id, specific_model_file_id_mapping)
         if unrecorded_upload is not None:
-            await _delete_redundant_upload(llm_router, unrecorded_upload, data)
+            await _delete_redundant_uploads(llm_router, (unrecorded_upload,), data)
 
     async def afile_content(
         self,
