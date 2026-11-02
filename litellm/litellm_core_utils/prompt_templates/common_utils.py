@@ -13,9 +13,10 @@ from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from itertools import chain, groupby, islice
 from os import PathLike
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
+from urllib.parse import urlparse
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -1939,8 +1940,6 @@ def get_image_mime_type_from_url(url: str) -> str | None:
     video/mpegps
     video/flv
     """
-    from urllib.parse import urlparse
-
     url = url.lower()
 
     # Parse URL to extract path without query parameters
@@ -1997,8 +1996,8 @@ def infer_content_type_from_url_and_content(
 
     Fallback Strategy:
     1. If current_content_type is valid (not None and not generic octet-stream), return it
-    2. Try to infer from URL extension (handles query parameters)
-    3. Try to detect from binary content signature (magic bytes)
+    2. Try to detect from binary content signature (magic bytes)
+    3. Try to infer from URL extension (handles query parameters)
     4. Raise ValueError if all methods fail
 
     Args:
@@ -2032,6 +2031,20 @@ def infer_content_type_from_url_and_content(
     ]:
         return media_type
 
+    # Try to detect from binary content signature (magic bytes)
+    if content:
+        detected_type: Final = get_image_type(content[:100])
+        if detected_type:
+            type_to_mime: Final = {
+                "png": "image/png",
+                "jpeg": "image/jpeg",
+                "gif": "image/gif",
+                "webp": "image/webp",
+                "heic": "image/heic",
+            }
+            if detected_type in type_to_mime:
+                return type_to_mime[detected_type]
+
     # Extension to MIME type mapping
     # Supports images, documents, and other common file types
     extension_to_mime: Final = {
@@ -2055,24 +2068,10 @@ def infer_content_type_from_url_and_content(
 
     # Try to infer from URL extension
     if url:
-        extension: Final = url.split(".")[-1].lower().split("?")[0]  # Remove query params
+        extension: Final = PurePosixPath(urlparse(url).path).suffix.removeprefix(".").lower()
         inferred_type: Final = extension_to_mime.get(extension)
         if inferred_type:
             return inferred_type
-
-    # Try to detect from binary content signature (magic bytes)
-    if content:
-        detected_type: Final = get_image_type(content[:100])
-        if detected_type:
-            type_to_mime: Final = {
-                "png": "image/png",
-                "jpeg": "image/jpeg",
-                "gif": "image/gif",
-                "webp": "image/webp",
-                "heic": "image/heic",
-            }
-            if detected_type in type_to_mime:
-                return type_to_mime[detected_type]
 
     # If all fallbacks failed, raise error
     raise ValueError(f"Unable to determine content type from URL: {url}. Response content-type: {current_content_type}")

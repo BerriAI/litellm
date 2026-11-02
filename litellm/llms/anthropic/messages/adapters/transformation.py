@@ -1378,8 +1378,10 @@ class LiteLLMAnthropicMessagesAdapter:
             case "text":
                 text: Final = tool_result_text_part(block)
                 return None if text is None else ChatCompletionTextObject(type="text", text=text)
-            case "image" | "document":
+            case "image":
                 return self._source_image_url_part(block.get("source"))
+            case "document":
+                return self._document_source_image_url_part(block.get("source"))
             case "tool_reference":
                 return ChatCompletionToolReferenceObject(
                     type="tool_reference", tool_name=str(block.get("tool_name") or "")
@@ -1392,7 +1394,7 @@ class LiteLLMAnthropicMessagesAdapter:
     ) -> ChatCompletionFileObject | ChatCompletionImageObject | None:
         inline_document: Final = anthropic_inline_document(document)
         if inline_document is None:
-            return self._source_image_url_part(document.get("source"))
+            return self._document_source_image_url_part(document.get("source"))
         return ChatCompletionFileObject(
             type="file",
             file=ChatCompletionFileObjectFile(filename=inline_document.filename, file_data=inline_document.file_data),
@@ -1405,6 +1407,17 @@ class LiteLLMAnthropicMessagesAdapter:
         if not openai_image_url:
             return None
         return ChatCompletionImageObject(type="image_url", image_url=ChatCompletionImageUrlObject(url=openai_image_url))
+
+    def _document_source_image_url_part(self, document_source: object) -> ChatCompletionImageObject | None:
+        if not isinstance(document_source, dict) or document_source.get("type") != "url":
+            return self._source_image_url_part(document_source)
+        document_url: Final = self._translate_anthropic_image_to_openai(document_source)
+        if not document_url:
+            return None
+        return ChatCompletionImageObject(
+            type="image_url",
+            image_url=ChatCompletionImageUrlObject(url=document_url, format="application/pdf"),
+        )
 
     def _translate_openai_content_to_anthropic(
         self,

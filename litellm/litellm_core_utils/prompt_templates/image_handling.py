@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeVar
 from urllib.parse import urlparse
 
 import httpx
@@ -25,6 +25,7 @@ from litellm.types.llms.openai import AllMessageValues
 
 MAX_IMGS_IN_MEMORY: Final = 10
 MAX_CONCURRENT_REMOTE_MEDIA_FETCHES: Final = 20
+_Fetched = TypeVar("_Fetched")
 _FETCH_ATTEMPTS: Final = 3
 
 in_memory_cache: Final = InMemoryCache(max_size_in_memory=MAX_IMGS_IN_MEMORY)
@@ -313,11 +314,14 @@ async def _fetch_data_url(url: str, in_flight: asyncio.Semaphore, timeout: float
         return await async_convert_url_to_base64(url, timeout=timeout)
 
 
-async def async_convert_urls_to_base64(
-    remote_urls: tuple[str, ...], timeout: float | httpx.Timeout | None = None
-) -> tuple[str, ...]:
-    in_flight: Final = asyncio.Semaphore(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES)
-    fetches: Final = tuple(asyncio.create_task(_fetch_data_url(url, in_flight, timeout)) for url in remote_urls)
+async def _fetch_data_url_or_none(url: str, in_flight: asyncio.Semaphore) -> str | None:
+    try:
+        return await _fetch_data_url(url, in_flight, None)
+    except litellm.ImageFetchError:
+        return None
+
+
+async def _gather_or_cancel_all(fetches: tuple["asyncio.Task[_Fetched]", ...]) -> tuple[_Fetched, ...]:
     try:
         return tuple(await asyncio.gather(*fetches))
     except BaseException:
@@ -325,6 +329,15 @@ async def async_convert_urls_to_base64(
             fetch.cancel()
         await asyncio.gather(*fetches, return_exceptions=True)
         raise
+
+
+async def async_convert_urls_to_base64(
+    remote_urls: tuple[str, ...], timeout: float | httpx.Timeout | None = None
+) -> tuple[str, ...]:
+    in_flight: Final = asyncio.Semaphore(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES)
+    return await _gather_or_cancel_all(
+        tuple(asyncio.create_task(_fetch_data_url(url, in_flight, timeout)) for url in remote_urls)
+    )
 
 
 def _remote_urls_to_inline(
@@ -356,3 +369,20 @@ async def async_inline_remote_media(
     data_urls: Final = await async_convert_urls_to_base64(remote_urls)
     inlined: Final = MappingProxyType(dict(zip(remote_urls, data_urls, strict=True)))
     return [_inline_message(message, inlined, should_inline) for message in messages]
+
+
+async def async_inline_reachable_media(
+    messages: list[AllMessageValues],  # mutable-ok: every transform_request takes list[AllMessageValues]
+    should_inline: Callable[[RemoteMedia], bool],
+) -> list[AllMessageValues]:  # mutable-ok: every transform_request takes list[AllMessageValues]
+    remote_urls: Final = _remote_urls_to_inline(messages, should_inline)
+    if not remote_urls:
+        return messages
+    in_flight: Final = asyncio.Semaphore(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES)
+    data_urls: Final = await _gather_or_cancel_all(
+        tuple(asyncio.create_task(_fetch_data_url_or_none(url, in_flight)) for url in remote_urls)
+    )
+    reachable: Final = MappingProxyType(
+        {url: data_url for url, data_url in zip(remote_urls, data_urls, strict=True) if data_url is not None}
+    )
+    return [_inline_message(message, reachable, should_inline) for message in messages]

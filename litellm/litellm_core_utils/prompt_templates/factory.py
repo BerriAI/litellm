@@ -22,6 +22,7 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
+from litellm.litellm_core_utils.asyncify import is_event_loop_running
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
@@ -912,22 +913,33 @@ def _is_pdf_media_type(media_type: str) -> bool:
     return media_type.split(";", 1)[0].strip().lower() == "application/pdf"
 
 
-def _anthropic_https_url_block(
-    image_url: str, image_format: str | None
-) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
-    if is_unformatted_pdf_link(image_url, image_format):
+def _anthropic_url_image_block(image_url: str) -> AnthropicMessagesImageParam:
+    return AnthropicMessagesImageParam(
+        type="image",
+        source=AnthropicContentParamSourceUrl(type="url", url=image_url),
+    )
+
+
+def _downloaded_block_or_link(image_url: str) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
+    try:
         return anthropic_content_element_factory(
             convert_to_anthropic_image_obj(openai_image_url=image_url, format=None)
         )
+    except litellm.ImageFetchError:
+        return _anthropic_url_image_block(image_url)
+
+
+def _anthropic_https_url_block(
+    image_url: str, image_format: str | None
+) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
+    if is_unformatted_pdf_link(image_url, image_format) and not is_event_loop_running():
+        return _downloaded_block_or_link(image_url)
     if image_format and _is_pdf_media_type(image_format):
         return AnthropicMessagesDocumentParam(
             type="document",
             source=AnthropicContentParamSourceUrl(type="url", url=image_url),
         )
-    return AnthropicMessagesImageParam(
-        type="image",
-        source=AnthropicContentParamSourceUrl(type="url", url=image_url),
-    )
+    return _anthropic_url_image_block(image_url)
 
 
 def create_anthropic_image_param(

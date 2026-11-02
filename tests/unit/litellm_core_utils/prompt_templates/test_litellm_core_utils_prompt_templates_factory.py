@@ -15,6 +15,8 @@ import httpx
 import pytest
 import respx
 
+from litellm.litellm_core_utils.prompt_templates import image_handling
+
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
@@ -1347,8 +1349,9 @@ PNG_BYTES: Final = base64.b64decode(
     (
         ("application/pdf; qs=0.001", PDF_BYTES, "document", "application/pdf"),
         ("image/png", PNG_BYTES, "image", "image/png"),
+        ("binary/octet-stream", PNG_BYTES, "image", "image/png"),
     ),
-    ids=("pdf", "png"),
+    ids=("pdf", "png", "png-generic-header"),
 )
 def test_anthropic_messages_pt_lets_a_downloaded_link_pick_its_block_type(
     monkeypatch: pytest.MonkeyPatch,
@@ -1389,6 +1392,73 @@ def test_anthropic_messages_pt_lets_a_downloaded_link_pick_its_block_type(
             "data": base64.b64encode(content).decode("utf-8"),
         },
     }
+
+
+def test_anthropic_messages_pt_reads_the_pdf_extension_of_a_signed_link_with_dots_in_its_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    url: Final = (
+        f"https://storage.example.com/{uuid.uuid4()}/report.pdf"
+        "?X-Goog-Credential=reader%40project.iam.gserviceaccount.com%2F20261102&X-Goog-Expires=900"
+    )
+
+    with respx.mock:
+        respx.get(url).mock(
+            return_value=httpx.Response(200, content=PDF_BYTES, headers={"content-type": "binary/octet-stream"})
+        )
+        result: Final = anthropic_messages_pt(
+            messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}],
+            model="claude-opus-5-5",
+            llm_provider="anthropic",
+        )
+
+    assert result[0]["content"][0] == {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": base64.b64encode(PDF_BYTES).decode("utf-8"),
+        },
+    }
+
+
+@pytest.mark.parametrize("download_limit_mb", (0, 50), ids=("downloads-disabled", "link-unreachable"))
+def test_anthropic_messages_pt_sends_a_pdf_path_link_it_cannot_download_as_a_link(
+    monkeypatch: pytest.MonkeyPatch, download_limit_mb: int
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", download_limit_mb)
+    url: Final = f"https://img.example.com/{uuid.uuid4()}/page.pdf?fm=png"
+
+    with respx.mock:
+        respx.get(url).mock(return_value=httpx.Response(404))
+        result: Final = anthropic_messages_pt(
+            messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}],
+            model="claude-opus-5-5",
+            llm_provider="anthropic",
+        )
+
+    assert result[0]["content"][0] == {"type": "image", "source": {"type": "url", "url": url}}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_pt_never_downloads_a_link_on_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    url: Final = f"https://files.example.com/{uuid.uuid4()}/report.pdf"
+
+    with respx.mock:
+        route: Final = respx.get(url).mock(
+            return_value=httpx.Response(200, content=PDF_BYTES, headers={"content-type": "application/pdf"})
+        )
+        result: Final = anthropic_messages_pt(
+            messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}],
+            model="claude-opus-5-5",
+            llm_provider="anthropic",
+        )
+
+    assert route.call_count == 0
+    assert result[0]["content"][0] == {"type": "image", "source": {"type": "url", "url": url}}
 
 
 @pytest.mark.parametrize(

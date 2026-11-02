@@ -203,31 +203,30 @@ async def test_write_back_keeps_real_tool_results_under_modify_params():
 
 
 @pytest.mark.asyncio
-async def test_write_back_downloads_a_pdf_path_link_off_the_event_loop(async_only_image_fetch):
-    link = "https://img.example/presskit/page.pdf?fm=png"
-
-    written = await _write_back_identity(
-        [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "describe this"},
-                    {"type": "image", "source": {"type": "url", "url": link}},
-                ],
-            }
-        ]
-    )
-
-    assert async_only_image_fetch.fetched == [link]
-    assert written == [
+async def test_write_back_sends_the_client_url_blocks_as_the_client_sent_them(async_only_image_fetch):
+    image_link = "https://img.example/presskit/page.pdf?fm=png"
+    document_link = "https://files.example/reports/q3.pdf"
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "tu_1", "name": "fetch_report", "input": {}}],
+        },
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "describe this"},
                 {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/png", "data": async_only_image_fetch.base64_png},
+                    "type": "tool_result",
+                    "tool_use_id": "tu_1",
+                    "content": [{"type": "document", "source": {"type": "url", "url": document_link}}],
                 },
+                {"type": "text", "text": "compare these"},
+                {"type": "image", "source": {"type": "url", "url": image_link}},
+                {"type": "document", "source": {"type": "url", "url": document_link}},
             ],
-        }
+        },
     ]
+
+    written = await _write_back_identity([dict(m) for m in messages])
+
+    assert async_only_image_fetch.fetched == []
+    assert [m["content"] for m in written[1:]] == [messages[1]["content"][:1], messages[1]["content"][1:]]

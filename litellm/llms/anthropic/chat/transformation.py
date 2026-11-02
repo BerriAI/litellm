@@ -41,6 +41,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     RemoteMedia,
+    async_inline_reachable_media,
     async_inline_remote_media,
     inline_remote_image_urls,
     is_unformatted_pdf_link,
@@ -448,11 +449,10 @@ def tools_without_unsupported_tool_search(
     return [_without_deferral(tool) for tool in tools if not _is_openai_tool_search_tool(tool)]
 
 
-def anthropic_inlines_remote_media(media: RemoteMedia) -> bool:
+def _is_unformatted_pdf_link_image(media: RemoteMedia) -> bool:
     image_format: Final = media.fields.get("format")
-    return inline_remote_image_urls(media) and (
-        media.url.startswith("http://")
-        or is_unformatted_pdf_link(media.url, image_format if isinstance(image_format, str) else None)
+    return inline_remote_image_urls(media) and is_unformatted_pdf_link(
+        media.url, image_format if isinstance(image_format, str) else None
     )
 
 
@@ -2243,7 +2243,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return headers
 
     def inlines_remote_media(self, media: RemoteMedia) -> bool:
-        return anthropic_inlines_remote_media(media)
+        return inline_remote_image_urls(media) and media.url.startswith("http://")
 
     async def async_transform_request(
         self,
@@ -2253,9 +2253,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
         headers: dict[str, object],  # mutable-ok: BaseConfig signature
     ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+        inlined: Final = await async_inline_remote_media(messages, should_inline=self.inlines_remote_media)
         return self.transform_request(
             model=model,
-            messages=await async_inline_remote_media(messages, should_inline=self.inlines_remote_media),
+            messages=await async_inline_reachable_media(inlined, should_inline=_is_unformatted_pdf_link_image),
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
