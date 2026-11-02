@@ -10,8 +10,8 @@ import copy
 import importlib
 import json
 import os
-import random
 import threading
+import time
 import tracemalloc
 from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import datetime
@@ -2273,14 +2273,14 @@ def test_scrub_request_text_replaces_an_escaped_echo_of_a_prompt_that_escaping_c
         "text_longer_than_the_error_cut_inside_an_escaped_quote",
     ],
 )
-def test_scrub_request_text_replaces_both_sides_of_a_pydantic_cut_input_value(value: object) -> None:
+def test_scrub_request_text_replaces_a_pydantic_cut_input_value(value: object) -> None:
     with pytest.raises(ValidationError, match="input_value=") as raised:
         TypeAdapter(int).validate_python(value)
 
     scrubbed: Final = scrub_request_text(str(raised.value), request_texts(value))
 
     assert "my ssn" not in scrubbed and "4321" not in scrubbed
-    assert "redacted-by-litellm...redacted-by-litellm" in scrubbed
+    assert "input_value=redacted-by-litellm, input_type=" in scrubbed
 
 
 SINGLE_QUOTED_PROMPT: Final = "account 'secret' " + "x" * 1_000 + " end 'private'"
@@ -2309,14 +2309,143 @@ DOTTED_PROMPT: Final = "account secret is there." + "x" * 1_000 + ".private secr
         "dots_beside_both_cuts",
     ],
 )
-def test_scrub_request_text_replaces_pydantic_cut_sides_that_hold_the_prompts_own_quotes(value: object) -> None:
+def test_scrub_request_text_replaces_a_pydantic_input_value_that_holds_the_prompts_own_quotes(value: object) -> None:
     with pytest.raises(ValidationError, match="input_value=") as raised:
         TypeAdapter(int).validate_python(value)
 
     scrubbed: Final = scrub_request_text(str(raised.value), request_texts(value))
 
     assert not any(word in scrubbed for word in ("account", "said", "secret", "private"))
-    assert "redacted-by-litellm...redacted-by-litellm" in scrubbed
+    assert "input_value=redacted-by-litellm, input_type=" in scrubbed
+
+
+def test_scrub_request_text_replaces_every_line_of_a_pydantic_error_and_keeps_its_wording() -> None:
+    prompt: Final = "account secret " + "x" * 200 + " private"
+    with pytest.raises(ValidationError) as raised:
+        TypeAdapter(tuple[int, int]).validate_python([prompt, prompt])
+
+    scrubbed: Final = scrub_request_text(str(raised.value), request_texts(prompt))
+
+    assert not any(word in scrubbed for word in ("account", "secret", "private"))
+    assert scrubbed.count("input_value=redacted-by-litellm, input_type=str]") == 2
+    assert "Input should be a valid integer" in scrubbed
+
+
+@pytest.mark.parametrize(
+    "wrapped",
+    [repr, lambda error: json.dumps({"detail": error}), lambda error: str({"error": {"message": error}})],
+    ids=["repr", "json", "dict_str"],
+)
+def test_scrub_request_text_replaces_the_input_values_of_a_pydantic_error_wrapped_onto_one_line(
+    wrapped: Callable[[str], str],
+) -> None:
+    prompt: Final = "account 'secret' " + "x" * 200 + ' end "private"'
+    with pytest.raises(ValidationError) as raised:
+        TypeAdapter(tuple[int, int]).validate_python([prompt, prompt])
+
+    scrubbed: Final = scrub_request_text(wrapped(str(raised.value)), request_texts(prompt))
+
+    assert not any(word in scrubbed for word in ("account", "secret", "private"))
+    assert "input_value=redacted-by-litellm" in scrubbed
+
+
+def test_scrub_request_text_replaces_an_input_value_that_holds_the_input_type_label() -> None:
+    prompt: Final = "account, input_type=str] secret input_value='a' " + "x" * 200 + " private"
+    with pytest.raises(ValidationError) as raised:
+        TypeAdapter(int).validate_python(prompt)
+
+    scrubbed: Final = scrub_request_text(str(raised.value), request_texts(prompt))
+
+    assert not any(word in scrubbed for word in ("account", "secret", "private"))
+    assert "input_value=redacted-by-litellm, input_type=str]" in scrubbed
+
+
+@pytest.mark.parametrize(
+    "other_message",
+    [
+        "value",
+        "input",
+        "input_value",
+        "input_value=",
+        ", input_value=",
+        "int_parsing, input_value=",
+        "_value=",
+        "type",
+        "input_type",
+        ", input_type=",
+    ],
+)
+def test_scrub_request_text_replaces_an_input_value_when_another_message_matches_its_label(other_message: str) -> None:
+    prompt: Final = "account secret " + "x" * 200 + " private"
+    with pytest.raises(ValidationError) as raised:
+        TypeAdapter(int).validate_python(prompt)
+
+    scrubbed: Final = scrub_request_text(str(raised.value), request_texts([other_message, prompt]))
+
+    assert not any(word in scrubbed for word in ("account", "secret", "private"))
+
+
+def test_scrub_request_text_leaves_empty_quotes_when_a_message_is_only_the_input_value_label() -> None:
+    error: Final = "empty value '' rejected"
+
+    assert scrub_request_text(error, request_texts("input_value=")) == error
+
+
+def test_scrub_request_text_replaces_to_the_end_of_the_line_without_an_input_type() -> None:
+    error: Final = "bad value [type=int_parsing, input_value='account sec\nnext line"
+
+    assert scrub_request_text(error, request_texts("hi there")) == (
+        "bad value [type=int_parsing, input_value=redacted-by-litellm\nnext line"
+    )
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    ["account secret input_value=1 private", "input_value=account secret private"],
+    ids=["middle", "start"],
+)
+def test_scrub_request_text_replaces_the_whole_of_a_quoted_prompt_that_holds_the_input_value_label(prompt: str) -> None:
+    assert scrub_request_text(f"Invalid content: <{prompt}> rejected", request_texts(prompt)) == (
+        "Invalid content: <redacted-by-litellm> rejected"
+    )
+
+
+def test_scrub_request_text_replaces_a_quoted_prompt_that_ends_in_the_input_value_label() -> None:
+    prompt: Final = "account secret private input_value="
+
+    scrubbed: Final = scrub_request_text(f"Invalid content: <{prompt}> rejected", request_texts(prompt))
+
+    assert scrubbed.startswith("Invalid content: <redacted-by-litellm")
+    assert not any(word in scrubbed for word in ("account", "secret", "private"))
+
+
+@pytest.mark.parametrize("value", [None, "critic"], ids=["none", "str_that_is_not_request_text"])
+def test_scrub_request_text_replaces_an_input_value_that_is_not_request_text(value: object) -> None:
+    with pytest.raises(ValidationError) as raised:
+        TypeAdapter(int).validate_python(value)
+
+    assert "input_value=redacted-by-litellm, input_type=" in scrub_request_text(
+        str(raised.value), request_texts("hi there")
+    )
+
+
+def test_scrub_request_text_keeps_an_input_value_when_the_request_has_no_text() -> None:
+    error: Final = "bad value [type=int_type, input_value=None, input_type=NoneType]"
+
+    assert scrub_request_text(error, request_texts(None)) == error
+
+
+@pytest.mark.parametrize(
+    "error",
+    ["." * 1_000_000, "input_value=" * 100_000, "input_value=x, input_type=y\n" * 40_000, " ...'x" * 200_000],
+    ids=["dots", "input_value_labels_on_one_line", "input_values_on_many_lines", "quoted_cuts"],
+)
+def test_scrub_request_text_stays_fast_on_a_large_error(error: str) -> None:
+    started: Final = time.perf_counter()
+
+    scrub_request_text(error, request_texts("hi there"))
+
+    assert time.perf_counter() - started < 0.5
 
 
 def test_scrub_request_text_leaves_an_error_that_does_not_quote_the_prompt() -> None:
@@ -2333,14 +2462,6 @@ def test_scrub_request_text_replaces_the_whole_text_when_the_search_is_too_large
     texts: Final = request_texts([f"message number {index}" for index in range(5_000)])
 
     assert scrub_request_text("x" * 5_000, texts) == "redacted-by-litellm"
-
-
-def test_scrub_request_text_replaces_the_whole_text_when_the_cut_side_search_is_too_large() -> None:
-    rng: Final = random.Random(0)
-    error: Final = "".join(rng.choice("'ab") if index % 10 else "..." for index in range(10_000))
-    texts: Final = request_texts([f'say "hi" {index}' for index in range(800)])
-
-    assert scrub_request_text(error, texts) == "redacted-by-litellm"
 
 
 def test_scrub_request_text_never_copies_a_request_text_longer_than_the_error() -> None:

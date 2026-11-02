@@ -429,12 +429,8 @@ _REQUEST_TEXT_KEYS: Final = ("messages", "input", "prompt", "system", "instructi
 _STRUCTURAL_KEYS: Final = frozenset({"role", "type", "id", "tool_call_id", "name"})
 _MIN_UNQUOTED_TEXT_LENGTH: Final = 4
 _ESCAPED_CHARACTERS: Final = ('"', "\\")
-# pydantic shows a long input value as its repr's first 25 and last 24 characters around "...", quotes and
-# container keys included, so each side of the cut shows at most 24 characters of a quoted text
-_CUT_SIDE_LENGTH: Final = 24
-_CUT: Final = "..."
-_CUT_STARTS: Final = re.compile(f"(?={re.escape(_CUT)})")
-_QUOTES: Final = "'\""
+_INPUT_VALUE_LABEL: Final = "input_value="
+_INPUT_TYPE_LABEL: Final = ", input_type="
 _MAX_SCRUB_COMPARISONS: Final = 10_000_000
 
 
@@ -482,63 +478,11 @@ def _echo_forms(text: str) -> frozenset[str]:
     return frozenset({text, json.dumps(text)[1:-1], json.dumps(text, ensure_ascii=False)[1:-1], repr(text)[1:-1]})
 
 
-def _cut_sides(text: str) -> str:
-    """
-    The start and end of ``text`` that a pydantic cut can show, for a text too long to be quoted whole, with
-    ``text``'s quote characters between them so repr escapes the sides as it escapes the whole ``text``.
-    """
-    quotes: Final = "".join(quote for quote in "'\"" if quote in text)
-    return f"{text[:_CUT_SIDE_LENGTH]}{quotes}{text[-_CUT_SIDE_LENGTH:]}"
-
-
-def _cut_echoes(text: str, forms: Collection[str]) -> tuple[tuple[str, str], ...] | None:
-    """
-    Each side of a quoted value ``text`` cuts short with ``...`` that starts or ends one of ``forms``, as
-    pydantic shows a long input value, with its pattern anchored to the quote and the cut. A side can hold
-    the request's own quotes, so every quote within a side's length of the cut is tried as its opening or
-    closing one. ``None`` when checking every side against ``forms`` is too large a search for a failure path.
-    """
-    cuts: Final = tuple(match.start() for match in _CUT_STARTS.finditer(text))
-    heads: Final = frozenset(itertools.chain.from_iterable(_cut_heads(text, cut) for cut in cuts))
-    tails: Final = frozenset(itertools.chain.from_iterable(_cut_tails(text, cut) for cut in cuts))
-    if (len(heads) + len(tails)) * len(forms) > _MAX_SCRUB_COMPARISONS:
-        return None
-    return (
-        *(
-            (head, f"(?<=['\"]){re.escape(head)}(?=\\.\\.\\.)")
-            for head in heads
-            if any(form.startswith(head) for form in forms)
-        ),
-        *(
-            (tail, f"(?<=\\.\\.\\.){re.escape(tail)}(?=['\"])")
-            for tail in tails
-            if any(form.endswith(tail) for form in forms)
-        ),
-    )
-
-
-def _cut_heads(text: str, cut: int) -> tuple[str, ...]:
-    """Each run of ``text`` from just after a quote up to the ``...`` at ``cut``, no longer than a cut side."""
-    return tuple(
-        text[quote + 1 : cut] for quote in range(max(0, cut - _CUT_SIDE_LENGTH - 1), cut - 1) if text[quote] in _QUOTES
-    )
-
-
-def _cut_tails(text: str, cut: int) -> tuple[str, ...]:
-    """Each run of ``text`` from the end of the ``...`` at ``cut`` up to just before a quote, no longer than a cut side."""
-    start: Final = cut + len(_CUT)
-    return tuple(
-        text[start:quote]
-        for quote in range(start + 1, min(len(text), start + _CUT_SIDE_LENGTH + 1))
-        if text[quote] in _QUOTES
-    )
-
-
 def scrub_request_text(text: str, texts: Collection[str]) -> str:
     """
-    ``text`` with every quote of the request's own ``texts`` replaced by ``REDACTED_BY_LITELLM``, so an
-    error that does not echo the prompt keeps its wording. A search too large for a failure path
-    replaces the whole text.
+    ``text`` with every quote of the request's own ``texts`` and every pydantic ``input_value`` replaced by
+    ``REDACTED_BY_LITELLM``, so an error that holds neither keeps its wording. A search too large for a
+    failure path replaces the whole text.
     """
     if not text or not texts:
         return text
@@ -547,20 +491,38 @@ def scrub_request_text(text: str, texts: Collection[str]) -> str:
     forms: Final = frozenset(
         itertools.chain.from_iterable(_echo_forms(each) for each in texts if len(each) <= len(text))
     )
-    cut_forms: Final = frozenset(
-        itertools.chain.from_iterable(_echo_forms(_cut_sides(each)) for each in texts if len(each) > len(text))
-    )
-    cut_echoes: Final = _cut_echoes(text, forms | cut_forms)
-    if cut_echoes is None:
-        return REDACTED_BY_LITELLM
     echoes: Final = sorted(
-        (*((form, _echo_pattern(form)) for form in forms if form in text), *cut_echoes),
-        key=lambda echo: len(echo[0]),
+        (form for form in (each.removesuffix(_INPUT_VALUE_LABEL) for each in forms) if form and form in text),
+        key=len,
         reverse=True,
     )
+    label_quotes: Final = tuple(form for form in echoes if _INPUT_VALUE_LABEL in form)
+    other_quotes: Final = tuple(form for form in echoes if _INPUT_VALUE_LABEL not in form)
+    return _with_echoes_replaced(_with_input_values_replaced(_with_echoes_replaced(text, label_quotes)), other_quotes)
+
+
+def _with_echoes_replaced(text: str, echoes: Collection[str]) -> str:
+    """``text`` with one pass that replaces each of ``echoes``, in order, by ``REDACTED_BY_LITELLM``."""
     if not echoes:
         return text
-    return re.sub("|".join(pattern for _, pattern in echoes), REDACTED_BY_LITELLM, text)
+    return re.sub("|".join(_echo_pattern(form) for form in echoes), REDACTED_BY_LITELLM, text)
+
+
+def _with_input_values_replaced(text: str) -> str:
+    """``text`` with the pydantic ``input_value`` on each of its lines replaced by ``REDACTED_BY_LITELLM``."""
+    if _INPUT_VALUE_LABEL not in text:
+        return text
+    return "\n".join(_line_with_input_value_replaced(line) for line in text.split("\n"))
+
+
+def _line_with_input_value_replaced(line: str) -> str:
+    """``line`` from its first ``input_value=`` up to its last ``, input_type=``, or to its end without one, replaced."""
+    start: Final = line.find(_INPUT_VALUE_LABEL)
+    if start < 0:
+        return line
+    value_start: Final = start + len(_INPUT_VALUE_LABEL)
+    type_start: Final = line.rfind(_INPUT_TYPE_LABEL, value_start)
+    return f"{line[:value_start]}{REDACTED_BY_LITELLM}{line[type_start:] if type_start >= 0 else ''}"
 
 
 def _echo_pattern(form: str) -> str:
