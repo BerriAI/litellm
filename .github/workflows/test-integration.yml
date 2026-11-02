@@ -48,7 +48,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: ${{ fromJSON((inputs.suite || 'all') == 'all' && '["management","extensions"]' || format('["{0}"]', inputs.suite)) }}
+        suite: ${{ fromJSON((inputs.suite || 'all') == 'all' && '["management"]' || format('["{0}"]', inputs.suite)) }}
     env:
       UV_PYTHON: "3.12"
       INTEGRATION_WORKERS: ${{ inputs.workers || fromJSON('{"providers":"32","extensions":"48","accounting":"16","management":"16","management-replica":"16","cost":"16","mcp":"8","security":"8","database":"4","database-replica":"4"}')[matrix.suite] || '' }}

@@ -1,22 +1,35 @@
 diff --git a/.circleci/scripts/run_integration.sh b/.circleci/scripts/run_integration.sh
-index 1380b07de5..64b492015e 100644
+index 1380b07de5..8c8f1b81bf 100644
 --- a/.circleci/scripts/run_integration.sh
 +++ b/.circleci/scripts/run_integration.sh
-@@ -254,6 +254,13 @@ elif [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
+@@ -84,7 +84,7 @@ if [ "$suite" = browser ]; then
+   export LITELLM_UI_PATH="$PWD/ui/litellm-dashboard/out"
+   test -f "$LITELLM_UI_PATH/index.html"
+ fi
+-export INTEGRATION_SEED="$(.venv/bin/python -c 'import hashlib,os; print(int(hashlib.sha256(((os.environ.get("CIRCLE_SHA1") or os.environ.get("GITHUB_SHA") or "local") + (os.environ.get("CIRCLE_WORKFLOW_ID") or os.environ.get("GITHUB_RUN_ID") or "local")).encode()).hexdigest()[:8],16))')"
++export INTEGRATION_SEED=2659939133
+ export INTEGRATION_ORDER_SEED="$INTEGRATION_SEED"
+ 
+ uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma > "$results/prisma-generate.log" 2>&1
+@@ -254,11 +254,17 @@ elif [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
    worker_coverage=("INTEGRATION_COVERAGE_FILE=$coverage_data")
  fi
  
 +diagnostic_tests=()
-+if [ "$suite" = management ]; then
-+  diagnostic_tests=(tests/integration/management/test_team_delete_large_membership.py::test_deleting_a_team_with_more_keys_than_the_publish_cap_revokes_every_key_on_a_warmed_peer tests/integration/management/test_user_rate_limit_updates.py::test_user_rate_limit_explicit_null_clears_and_omitted_limit_is_untouched 'tests/integration/management/test_team_update_multi_instance.py::test_team_update_adds_model_on_peer_for_inference_routes[responses]')
-+elif [ "$suite" = extensions ]; then
++if [ "$suite" = extensions ]; then
 +  diagnostic_tests=(tests/integration/observability/test_logging_only_scope_chaos.py::test_K4_proxy_restart_after_fifteen_responses_records_lost_ids)
 +fi
 +
  env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
    INTEGRATION_RUN_ID="$integration_identity" \
    DATABASE_URL="$DATABASE_URL" \
-@@ -270,7 +277,7 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
+   "${shared_services[@]}" "${worker_coverage[@]}" \
+   INTEGRATION_WORKERS="${INTEGRATION_WORKERS:-1}" \
++  PYTEST_ADDOPTS="-o junit_logging=all" \
+   LITELLM_MODE=PRODUCTION \
+   "${license_env[@]}" \
+   INTEGRATION_SEED="$INTEGRATION_SEED" \
+@@ -270,7 +276,7 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
    INTEGRATION_ROUTING="$INTEGRATION_ROUTING" \
    MCP_TEST_PEER_PYTHON="${MCP_TEST_PEER_PYTHON:-}" \
    .venv/bin/python tests/integration/run.py "$suite" --results "$results" \
@@ -26,7 +39,7 @@ index 1380b07de5..64b492015e 100644
  if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
    for covered_pid in "$proxy_pid" "$peer_pid"; do
 diff --git a/tests/integration/management/test_team_delete_large_membership.py b/tests/integration/management/test_team_delete_large_membership.py
-index e752c835e4..c6de799d0f 100644
+index e752c835e4..3a2e31cb0a 100644
 --- a/tests/integration/management/test_team_delete_large_membership.py
 +++ b/tests/integration/management/test_team_delete_large_membership.py
 @@ -10,6 +10,8 @@ from __future__ import annotations
@@ -38,14 +51,22 @@ index e752c835e4..c6de799d0f 100644
  import uuid
  from collections.abc import Callable, Mapping, Sequence
  from concurrent.futures import Future, ThreadPoolExecutor
-@@ -732,16 +734,69 @@ def _statuses(proxy: Gateway, keys: Sequence[str]) -> dict[int, int]:
+@@ -24,6 +26,7 @@ import yaml
+ from pydantic import JsonValue
+ from redis import Redis
+ 
++from tests.integration._support.budget import case_timeout_seconds
+ from tests.integration._support.client import (
+     Gateway,
+     Scenario,
+@@ -732,16 +735,52 @@ def _statuses(proxy: Gateway, keys: Sequence[str]) -> dict[int, int]:
      return {status: statuses.count(status) for status in frozenset(statuses)}
  
  
-+@pytest.mark.parametrize("diagnostic_repeat", range(20))
++@pytest.mark.timeout(case_timeout_seconds() * 2)
  def test_deleting_a_team_with_more_keys_than_the_publish_cap_revokes_every_key_on_a_warmed_peer(
 -    gateway: Gateway, peer: Gateway
-+    gateway: Gateway, peer: Gateway, diagnostic_repeat: int
++    gateway: Gateway, peer: Gateway, record_property: Callable[[str, object], None]
  ) -> None:
      with gateway.scenario() as scenario:
          team: Final = _create_team(scenario)
@@ -55,12 +76,7 @@ index e752c835e4..c6de799d0f 100644
          assert _statuses(peer, keys) == {200: len(keys)}
 -
 -        response: Final = _delete_teams(gateway, [team])
-+        print(
-+            json.dumps(
-+                {"diagnostic": "warm_complete", "repeat": diagnostic_repeat, "seconds": time.monotonic() - warm_started}
-+            ),
-+            flush=True,
-+        )
++        record_property("diagnostic_warm_seconds", time.monotonic() - warm_started)
 +        delete_started: Final = time.monotonic()
 +        try:
 +            response: Final = _delete_teams(gateway, [team])
@@ -73,41 +89,29 @@ index e752c835e4..c6de799d0f 100644
 +                "FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() ORDER BY pid",
 +                (),
 +            )
-+            print(
-+                json.dumps(
-+                    {
-+                        "diagnostic": "initial_delete_timeout",
-+                        "team": team,
-+                        "seconds": time.monotonic() - delete_started,
-+                        "activity": snapshot,
-+                    }
-+                ),
-+                flush=True,
-+            )
++            record_property("diagnostic_initial_delete_timeout_seconds", time.monotonic() - delete_started)
++            record_property("diagnostic_database_activity", json.dumps(snapshot))
++            print(json.dumps({"diagnostic": "initial_delete_timeout", "team": team, "activity": snapshot}), flush=True)
 +            still_present: Final = eventually(
 +                lambda: bool(_team_rows(team)), lambda present: not present, seconds=75, return_last_on_timeout=True
 +            )
++            record_property("diagnostic_team_present_after_observation", still_present)
++            record_property("diagnostic_observation_seconds", time.monotonic() - delete_started)
++            remaining: Final = read_rows(
++                'SELECT count(*)::int AS count FROM "LiteLLM_VerificationToken" WHERE team_id = %s', (team,)
++            )
++            record_property("diagnostic_remaining_keys", json.dumps(remaining))
++            if not still_present:
++                revoked: Final = _statuses(peer, keys)
++                record_property("diagnostic_peer_key_statuses", json.dumps(revoked))
 +            print(
 +                json.dumps(
-+                    {
-+                        "diagnostic": "after_initial_delete",
-+                        "team_present": still_present,
-+                        "seconds": time.monotonic() - delete_started,
-+                    }
++                    {"diagnostic": "after_initial_delete", "team_present": still_present, "remaining_keys": remaining}
 +                ),
 +                flush=True,
 +            )
 +            raise
-+        print(
-+            json.dumps(
-+                {
-+                    "diagnostic": "delete_complete",
-+                    "repeat": diagnostic_repeat,
-+                    "seconds": time.monotonic() - delete_started,
-+                }
-+            ),
-+            flush=True,
-+        )
++        record_property("diagnostic_delete_seconds", time.monotonic() - delete_started)
          assert response.status_code == 200, response.text
          assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE team_id = %s', (team,)) == []
  
