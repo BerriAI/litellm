@@ -25,7 +25,11 @@ from openai.types.responses import (
     ResponseCustomToolCallInputDeltaEvent,
     ResponseCustomToolCallInputDoneEvent,
     ResponseFunctionToolCall,
+    ResponseOutputMessage,
+    ResponseOutputRefusal,
+    ResponseOutputText,
 )
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -39,7 +43,16 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 from litellm.types.guardrails import ContentFilterAction, ContentFilterPattern
-from litellm.types.llms.openai import ChatCompletionToolCallChunk
+from litellm.types.llms.openai import (
+    ChatCompletionToolCallChunk,
+    ContentPartDoneEvent,
+    ContentPartDonePartRefusal,
+    OutputItemDoneEvent,
+    RefusalDeltaEvent,
+    RefusalDoneEvent,
+    ResponseIncompleteEvent,
+    ResponsesAPIStreamEvents,
+)
 from litellm.responses.litellm_completion_transformation.compaction_items import compaction_summary
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -724,16 +737,23 @@ class TestToolResultItemsReachTextsGuardrails:
         assert blocked.value.status_code == 400
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("empty_output", ["", None], ids=["empty_string", "null"])
-    async def test_empty_tool_output_sends_no_text_and_stays_as_sent(self, empty_output: str | None) -> None:
+    @pytest.mark.parametrize(("call_item", "output_type"), _TOOL_TURNS, ids=["function", "custom"])
+    @pytest.mark.parametrize(
+        "empty_output",
+        ["", None, [], *[[{"type": kind, "text": ""}] for kind in ("input_text", "output_text", "text")]],
+        ids=["empty_string", "null", "empty_list", "input_text", "output_text", "text"],
+    )
+    async def test_empty_tool_output_sends_no_text_and_stays_as_sent(
+        self, call_item: dict[str, str], output_type: str, empty_output: object
+    ) -> None:
         guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
-        call_item, output_type = _TOOL_TURNS[0]
 
         result: Final = await OpenAIResponsesHandler().process_input_messages(
             _tool_result_request(call_item, output_type, empty_output), guardrail
         )
 
         assert guardrail.seen_texts == [["Weather?"]]
+        assert guardrail.seen_message_contents == [["Weather?", None]]
         assert result["input"][2] == {"type": output_type, "call_id": "call_1", "output": empty_output}
 
     @pytest.mark.asyncio
@@ -1103,7 +1123,6 @@ class TestToolResultItemsReachTextsGuardrails:
                 ["visible"],
                 id="non_dict_part",
             ),
-            pytest.param([], ["[]"], id="empty"),
             pytest.param({"result": "SECRET forecast"}, ['{"result": "SECRET forecast"}'], id="dict"),
             pytest.param(
                 [{"type": "input_image", "file_id": "file-map"}],
@@ -3331,6 +3350,25 @@ class TestGetStructuredMessages:
         result = handler.get_structured_messages(data)
         assert result is None
 
+    def test_should_return_none_for_a_moderation_style_list_of_strings(self):
+        handler = OpenAIResponsesHandler()
+        data = {"model": "omni-moderation-latest", "input": ["safe text", "more safe text"]}
+        assert handler.get_structured_messages(data) is None
+
+    def test_should_keep_an_image_item_replayed_with_an_sdk_compaction_item(self):
+        handler = OpenAIResponsesHandler()
+        image_url = "https://example.com/cat.png"
+        data = {
+            "model": "gpt-5.5",
+            "input": [
+                ResponseCompactionItem(type="compaction", id="cmp_1", encrypted_content="abc"),
+                {"role": "user", "content": [{"type": "input_image", "image_url": image_url}]},
+            ],
+        }
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        assert image_url in json.dumps(result)
+
 
 class ToolAppendingGuardrail(CustomGuardrail):
     """Guardrail that appends a new function tool, mimicking a guardrail that
@@ -5011,3 +5049,183 @@ class TestCompactionOutputSummaryReachesOutputGuardrails:
             )
 
         assert ended_key(self.SUMMARY) != ended_key("The user lives elsewhere.")
+
+
+_REFUSAL: Final = "I can't share where Jane lives."
+_MASKED_REFUSAL: Final = "I can't share where [NAME] lives."
+
+
+class NameMaskingGuardrail(CustomGuardrail):
+    def __init__(self, guardrail_name: str) -> None:
+        super().__init__(guardrail_name=guardrail_name)
+        self.seen_texts: list[list[str]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        texts: Final = list(inputs.get("texts", []))
+        self.seen_texts.append(texts)
+        return {**inputs, "texts": [text.replace("Jane", "[NAME]") for text in texts]}
+
+
+def _refused_message(*leading_text: str) -> GenericResponseOutputItem:
+    return GenericResponseOutputItem(
+        type="message",
+        id="msg_123",
+        status="incomplete",
+        role="assistant",
+        content=[
+            *(OutputText(type="output_text", text=text, annotations=[]) for text in leading_text),
+            ResponseOutputRefusal(type="refusal", refusal=_REFUSAL),
+        ],
+    )
+
+
+def _refused_response(*leading_text: str) -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp_123",
+        created_at=1234567890,
+        model="claude-opus-5-5",
+        object="response",
+        status="incomplete",
+        output=[_refused_message(*leading_text)],
+    )
+
+
+class TestRefusalPartsReachTextGuardrails:
+    @pytest.mark.asyncio
+    async def test_input_refusal_part_is_scanned_and_rewritten(self) -> None:
+        guardrail: Final = NameMaskingGuardrail(guardrail_name="test")
+        data: Final = {
+            "model": "claude-opus-5-5",
+            "input": [
+                {"role": "user", "content": "Where does Jane live?"},
+                {"type": "message", "role": "assistant", "content": [{"type": "refusal", "refusal": _REFUSAL}]},
+            ],
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert guardrail.seen_texts == [["Where does Jane live?", _REFUSAL]]
+        assert result["input"][1]["content"] == [{"type": "refusal", "refusal": _MASKED_REFUSAL}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("leading_text", "expected_parts"),
+        [
+            ((), [("refusal", _MASKED_REFUSAL)]),
+            (("Jane asked first.",), [("output_text", "[NAME] asked first."), ("refusal", _MASKED_REFUSAL)]),
+        ],
+        ids=["refusal_only", "text_then_refusal"],
+    )
+    async def test_output_refusal_part_is_scanned_and_rewritten(
+        self, leading_text: tuple[str, ...], expected_parts: list[tuple[str, str]]
+    ) -> None:
+        guardrail: Final = NameMaskingGuardrail(guardrail_name="test")
+
+        result: Final = await OpenAIResponsesHandler().process_output_response(
+            _refused_response(*leading_text), guardrail
+        )
+
+        assert guardrail.seen_texts == [[*leading_text, _REFUSAL]]
+        assert [
+            (part["type"], part.get("text") or part.get("refusal")) for part in result.model_dump()["output"][0]["content"]
+        ] == expected_parts
+
+    @pytest.mark.asyncio
+    async def test_output_refusal_part_in_an_openai_message_is_rewritten(self) -> None:
+        guardrail: Final = NameMaskingGuardrail(guardrail_name="test")
+        openai_message: Final = ResponseOutputMessage(
+            type="message",
+            id="msg_123",
+            role="assistant",
+            status="incomplete",
+            content=[
+                ResponseOutputText(type="output_text", text="Jane asked first.", annotations=[]),
+                ResponseOutputRefusal(type="refusal", refusal=_REFUSAL),
+            ],
+        )
+
+        result: Final = await OpenAIResponsesHandler().process_output_response(
+            _refused_response().model_copy(update={"output": [openai_message]}), guardrail
+        )
+
+        assert guardrail.seen_texts == [["Jane asked first.", _REFUSAL]]
+        assert [
+            (part["type"], part.get("text") or part.get("refusal")) for part in result.model_dump()["output"][0]["content"]
+        ] == [("output_text", "[NAME] asked first."), ("refusal", _MASKED_REFUSAL)]
+
+    @pytest.mark.asyncio
+    async def test_streamed_refusal_events_carry_the_rewrite(self) -> None:
+        position: Final = {"item_id": "msg_123", "output_index": 0, "content_index": 0}
+        events: Final = [
+            RefusalDeltaEvent(type=ResponsesAPIStreamEvents.REFUSAL_DELTA, delta=_REFUSAL, **position),
+            RefusalDoneEvent(type=ResponsesAPIStreamEvents.REFUSAL_DONE, refusal=_REFUSAL, **position),
+            ContentPartDoneEvent(
+                type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+                part=ContentPartDonePartRefusal(type="refusal", refusal=_REFUSAL),
+                **position,
+            ),
+            OutputItemDoneEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=0, item=_refused_message()),
+            ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=_refused_response()),
+        ]
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=NameMaskingGuardrail(guardrail_name="test"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert [json.loads(event.model_dump_json()) for event in events] == [
+            json.loads(event.model_dump_json())
+            for event in (
+                RefusalDeltaEvent(type=ResponsesAPIStreamEvents.REFUSAL_DELTA, delta=_MASKED_REFUSAL, **position),
+                RefusalDoneEvent(type=ResponsesAPIStreamEvents.REFUSAL_DONE, refusal=_MASKED_REFUSAL, **position),
+                ContentPartDoneEvent(
+                    type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+                    part=ContentPartDonePartRefusal(type="refusal", refusal=_MASKED_REFUSAL),
+                    **position,
+                ),
+                OutputItemDoneEvent(
+                    type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                    output_index=0,
+                    item=_refused_message().model_copy(
+                        update={"content": [ResponseOutputRefusal(type="refusal", refusal=_MASKED_REFUSAL)]}
+                    ),
+                ),
+                ResponseIncompleteEvent(
+                    type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                    response=_refused_response().model_copy(
+                        update={
+                            "output": [
+                                _refused_message().model_copy(
+                                    update={"content": [ResponseOutputRefusal(type="refusal", refusal=_MASKED_REFUSAL)]}
+                                )
+                            ]
+                        }
+                    ),
+                ),
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_cut_refusal_stream_carries_the_rewrite(self) -> None:
+        position: Final = {"item_id": "msg_123", "output_index": 0, "content_index": 0}
+        events: Final = [
+            RefusalDeltaEvent(type=ResponsesAPIStreamEvents.REFUSAL_DELTA, delta=_REFUSAL, **position),
+            RefusalDoneEvent(type=ResponsesAPIStreamEvents.REFUSAL_DONE, refusal=_REFUSAL, **position),
+        ]
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=NameMaskingGuardrail(guardrail_name="test"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert (events[0].delta, events[1].refusal) == (_MASKED_REFUSAL, _MASKED_REFUSAL)

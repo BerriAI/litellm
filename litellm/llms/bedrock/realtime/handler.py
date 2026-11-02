@@ -17,7 +17,6 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import redact_string, verbose_proxy_logger
-from litellm._uuid import uuid
 from litellm.constants import (
     BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS,
     BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY,
@@ -31,13 +30,14 @@ from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.realtime_streaming import DefaultLoggedRealTimeEventTypes
+from litellm.llms.base_llm.realtime.transformation import RealtimeSessionUpdateRejection
 from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.llms.openai import OpenAIRealtimeEvents
 from litellm.types.realtime import RealtimeResponseTransformInput
 
 from ..base_aws_llm import BaseAWSLLM, run_aws_signing
 from ..common_utils import BedrockError
-from .transformation import BedrockRealtimeConfig, BedrockSessionUpdateRejection, requested_modalities
+from .transformation import BedrockRealtimeConfig, requested_modalities
 
 _CLIENT_MESSAGE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
@@ -256,23 +256,11 @@ async def _ack_session_update(
 async def _reject_session_update(
     client_ws: RealtimeClientWebSocket,
     parsed_client_message: Mapping[str, JsonValue],
-    rejection: BedrockSessionUpdateRejection,
+    rejection: RealtimeSessionUpdateRejection,
 ) -> bool:
     """Send an error event for a session.update Bedrock cannot apply; False means the client is gone."""
-    client_event_id: Final = parsed_client_message.get("event_id")
-    error_event: Final = {
-        "type": "error",
-        "event_id": f"event_{uuid.uuid4()}",
-        "error": {
-            "type": "invalid_request_error",
-            "code": rejection.code,
-            "message": rejection.message,
-            "param": rejection.param,
-            "event_id": client_event_id if isinstance(client_event_id, str) else None,
-        },
-    }
     try:
-        await client_ws.send_text(json.dumps(error_event))
+        await client_ws.send_text(json.dumps(rejection.error_event(parsed_client_message.get("event_id"))))
     except Exception as e:  # noqa: BLE001  # any send failure means the client is gone
         verbose_proxy_logger.debug("Client to Bedrock forwarding ended: %s", e, exc_info=True)
         return False

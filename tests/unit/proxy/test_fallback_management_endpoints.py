@@ -12,7 +12,7 @@ import copy
 import json
 from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType, SimpleNamespace
-from typing import Final, get_args
+from typing import Final, Literal, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,6 +20,7 @@ from fastapi import HTTPException
 from pydantic import JsonValue, TypeAdapter
 from redis.exceptions import NoPermissionError
 
+import litellm
 from litellm import Router
 from litellm.proxy.config_resolvers.settings_rules import Section
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
@@ -388,6 +389,88 @@ class TestFallbackWritesSeeTheLatestStoredRules:
 
         assert stored.stored_fallbacks() == [GATEWAY_RULE, TEAM_RULE]
 
+    async def test_content_policy_writes_keep_the_litellm_settings_rules_for_other_models(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "content_policy_fallbacks", [TEAM_RULE])
+        router: Final = _team_router()
+        stored: Final = _StoredRouterSettings(None)
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
+            patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            await create_fallback(
+                FallbackCreateRequest(
+                    model="gpt-5.4-mini", fallback_models=["team-fallback"], fallback_type="content_policy"
+                ),
+                MagicMock(),
+            )
+            after_create: Final = await get_fallback("team-primary", "content_policy", MagicMock())
+            await delete_fallback("gpt-5.4-mini", "content_policy", MagicMock())
+            after_delete: Final = await get_fallback("team-primary", "content_policy", MagicMock())
+
+        assert after_create.fallback_models == ["team-fallback"]
+        assert after_delete.fallback_models == ["team-fallback"]
+
+    async def test_a_content_policy_write_applies_beside_an_invalid_stored_rule(self) -> None:
+        router: Final = _team_router()
+        stored: Final = _StoredRouterSettings({"content_policy_fallbacks": [MALFORMED_GATEWAY_RULE]})
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
+            patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            await create_fallback(
+                FallbackCreateRequest(
+                    model="team-primary", fallback_models=["team-fallback"], fallback_type="content_policy"
+                ),
+                MagicMock(),
+            )
+            after_create: Final = await get_fallback("team-primary", "content_policy", MagicMock())
+
+        assert after_create.fallback_models == ["team-fallback"]
+
+    @pytest.mark.parametrize(
+        ("fallback_type", "router_setting"),
+        [("general", "fallbacks"), ("content_policy", "content_policy_fallbacks")],
+    )
+    async def test_get_names_the_model_of_a_dict_target(
+        self, fallback_type: Literal["general", "content_policy"], router_setting: str
+    ) -> None:
+        router: Final = _team_router()
+        router.update_settings(
+            **{router_setting: [{"team-primary": [{"model": "gpt-5.4-mini", "api_key": "sk-test"}, "team-fallback"]}]}
+        )
+        with patch("litellm.proxy.proxy_server.llm_router", router):
+            response: Final = await get_fallback("team-primary", fallback_type, MagicMock())
+
+        assert response.fallback_models == ["gpt-5.4-mini", "team-fallback"]
+
+    @pytest.mark.parametrize(
+        ("fallback_type", "router_setting"),
+        [("general", "fallbacks"), ("content_policy", "content_policy_fallbacks")],
+    )
+    async def test_get_names_the_rules_own_model_for_a_dict_target_that_names_none(
+        self, fallback_type: Literal["general", "content_policy"], router_setting: str
+    ) -> None:
+        router: Final = _team_router()
+        router.update_settings(**{router_setting: [{"team-primary": [{"temperature": 0}, "team-fallback"]}]})
+        with patch("litellm.proxy.proxy_server.llm_router", router):
+            response: Final = await get_fallback("team-primary", fallback_type, MagicMock())
+
+        assert response.fallback_models == ["team-primary", "team-fallback"]
+
+    async def test_get_answers_an_error_for_a_string_valued_rule_instead_of_its_characters(self) -> None:
+        router: Final = _team_router()
+        router.update_settings(fallbacks=[{"team-primary": "team-fallback"}])
+        with patch("litellm.proxy.proxy_server.llm_router", router), pytest.raises(HTTPException) as raised:
+            await get_fallback("team-primary", "general", MagicMock())
+
+        assert raised.value.status_code == 500
+
     async def test_a_create_keeps_a_rule_another_instance_stored_since_this_one_last_read(self) -> None:
         stored: Final = _StoredRouterSettings({})
         await get_config_param(stored.prisma_client, "router_settings")
@@ -567,6 +650,21 @@ class TestFallbackWritesHonourTheConfigFile:
         assert response.fallback_models == ["team-fallback"]
         assert stored.row is None
         assert router.fallbacks == [CONFIG_RULE, CONFIG_WINDOW_RULE]
+
+    async def test_a_content_policy_restate_keeps_the_config_list_without_the_litellm_settings_rules(
+        self, router: Router, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "content_policy_fallbacks", [TEAM_RULE])
+        stored: Final = _StoredRouterSettings(None, config_file={"content_policy_fallbacks": [CONFIG_RULE]})
+        request: Final = FallbackCreateRequest(
+            model="gpt-5.4-mini", fallback_models=["team-fallback"], fallback_type="content_policy"
+        )
+
+        response: Final = await self._create(request, router, stored)
+
+        assert response.fallback_models == ["team-fallback"]
+        assert stored.row is None
+        assert router.content_policy_fallbacks == [CONFIG_RULE]
 
     async def test_a_create_that_restates_a_config_rule_next_to_an_env_reference_writes_nothing(
         self, router: Router, monkeypatch: pytest.MonkeyPatch

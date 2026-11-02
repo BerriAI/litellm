@@ -40,6 +40,7 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_event, phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias, resolve_served_model
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
@@ -79,7 +80,6 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     get_team_object,
     get_user_object,
     get_user_role,
-    is_mcp_discovery_request,
     is_model_cost_zero,
     is_user_proxy_admin,
     is_valid_fallback_model,
@@ -87,6 +87,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     key_access_group_grants_model,
     key_model_aliases_for_auth_check,
     model_max_budget_of,
+    request_skips_budget_checks,
     resolve_and_validate_end_user_id,
     resolve_default_end_user_budget,
     route_skips_budget_checks,
@@ -182,13 +183,7 @@ from litellm.proxy.utils import (
 from litellm.repositories.table_repositories import JWTKeyMappingRepository, TeamMembershipRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
-from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
-from litellm.router_utils.fallback_event_handlers import (
-    PROVIDER_SCOPED_RESOURCE_KEYS,
-    fallback_lookup_groups,
-    fallbacks_disabled_for_request,
-    get_fallback_model_group_for_lookup_groups,
-)
+from litellm.router_api import fallbacks_disabled, references_provider_scoped_resource, request_fallback_chain
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
@@ -811,11 +806,7 @@ async def _check_team_member_model_budget_for_model(
             model=model_name,
         )
     except litellm.BudgetExceededError:
-        if (
-            request_data.get("model") != model_name
-            or llm_router is None
-            or fallbacks_disabled_for_request(kwargs=request_data)
-        ):
+        if request_data.get("model") != model_name or llm_router is None or fallbacks_disabled(request_data):
             raise
         fallback_succeeded: Final = await _try_team_member_model_budget_fallback(
             user_id=user_id,
@@ -857,9 +848,9 @@ async def _try_team_member_model_budget_fallback(
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
 ) -> bool:
-    if request.headers.get("content-type", "").lower().startswith("multipart/form-data") or any(
-        request_data.get(key) for key in PROVIDER_SCOPED_RESOURCE_KEYS
-    ):
+    if request.headers.get("content-type", "").lower().startswith(
+        "multipart/form-data"
+    ) or references_provider_scoped_resource(request_data):
         return False
 
     from litellm.proxy import proxy_server
@@ -896,10 +887,7 @@ async def _try_team_member_model_budget_fallback(
     if router_fallbacks is None:
         return False
 
-    fallback_models, _ = get_fallback_model_group_for_lookup_groups(
-        fallbacks=list(router_fallbacks),
-        lookup_groups=fallback_lookup_groups(kwargs=request_data, model_group=model_name),
-    )
+    fallback_models, _ = request_fallback_chain(list(router_fallbacks), request_data, model_name)
     fallback_targets: Final[Sequence[object]] = fallback_models or ()
     fallback_candidates: Final[tuple[str, ...]] = tuple(
         model for target in fallback_targets if (model := _budget_fallback_target_model(target)) is not None
@@ -1158,6 +1146,24 @@ def _matches_routing_override(token_claims: dict, override: "JWTRoutingOverride"
         )
         and _routing_selector_matches_claim(override.aud, token_claims.get("aud"))
     )
+
+
+def oauth2_introspection_applies(
+    api_key: str, route: str, *, enable_oauth2_auth: bool, enable_jwt_auth: bool, jwt_handler: JWTHandler
+) -> bool:
+    """Whether LiteLLM validates ``api_key`` on ``route`` by OAuth2 token introspection, on LLM API, info and
+    lens routes only: a non-JWT token when OAuth2 auth is on globally, or a JWT matched by a routing override."""
+    is_jwt: Final = enable_jwt_auth and jwt_handler.is_jwt(token=api_key)
+    # Routing uses unverified JWT claims only to choose auth path.
+    # Final authentication is enforced by the selected validator.
+    route_jwt_to_oauth2: Final = is_jwt and _should_route_jwt_to_oauth2_override(token=api_key, jwt_handler=jwt_handler)
+    covered_route: Final = (
+        RouteChecks.is_llm_api_route(route=route)
+        or RouteChecks.is_info_route(route=route)
+        or route == "/lens"
+        or route.startswith("/lens/")
+    )
+    return covered_route and ((enable_oauth2_auth and not is_jwt) or route_jwt_to_oauth2)
 
 
 def _should_route_jwt_to_oauth2_override(token: str, jwt_handler: JWTHandler) -> bool:
@@ -2278,23 +2284,13 @@ async def user_api_key_auth_builder(
 
         enable_oauth2_auth: Final = general_settings.get("enable_oauth2_auth", False) is True
         enable_jwt_auth: Final = general_settings.get("enable_jwt_auth", False) is True
-        is_jwt = jwt_handler.is_jwt(token=api_key) if enable_jwt_auth else False
-
-        # Routing uses unverified JWT claims only to choose auth path.
-        # Final authentication is enforced by the selected validator.
-        route_jwt_to_oauth2 = is_jwt and _should_route_jwt_to_oauth2_override(token=api_key, jwt_handler=jwt_handler)
-
-        # OAuth2 applies for:
-        # 1) when global OAuth2 auth is enabled on LLM + info routes
-        # 2) JWT tokens that explicitly match routing_overrides on LLM + info routes
-        route_is_lens: Final = route == "/lens" or route.startswith("/lens/")
-        should_apply_override_oauth2: Final = route_jwt_to_oauth2 and (
-            RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(route=route) or route_is_lens
-        )
-        should_apply_global_oauth2: Final = enable_oauth2_auth and (
-            RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(route=route) or route_is_lens
-        )
-        if (should_apply_global_oauth2 and not is_jwt) or should_apply_override_oauth2:
+        if oauth2_introspection_applies(
+            api_key,
+            route,
+            enable_oauth2_auth=enable_oauth2_auth,
+            enable_jwt_auth=enable_jwt_auth,
+            jwt_handler=jwt_handler,
+        ):
             from litellm.proxy.proxy_server import premium_user
 
             if premium_user is not True:
@@ -2501,15 +2497,9 @@ async def user_api_key_auth_builder(
                             llm_router=llm_router,
                             team_id=valid_token.team_id,
                         )
-                        skip_budget_checks = is_mcp_discovery_request(route=route, request_body=request_data)
-                        if not skip_budget_checks and model is not None and llm_router is not None:
-                            from litellm.proxy.auth.auth_checks import is_model_cost_zero
-
-                            skip_budget_checks = (  # rebind-ok: pre-existing rebinding on a rename-only line
-                                is_model_cost_zero(model=model, llm_router=llm_router)
-                            )
-                            if skip_budget_checks:
-                                verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
+                        skip_budget_checks = request_skips_budget_checks(
+                            route=route, model=model, llm_router=llm_router, request_body=request_data
+                        )
 
                         # Fetch project object for JWT path if project_id is set
                         _jwt_project_obj = None
@@ -2578,7 +2568,7 @@ async def user_api_key_auth_builder(
             raise ProxyException(
                 message="Authentication Error, No api key passed in.",
                 type=ProxyErrorTypes.auth_error,
-                param="None",
+                param=None,
                 code=status.HTTP_401_UNAUTHORIZED,
             )
         elif api_key == "":
@@ -2586,7 +2576,7 @@ async def user_api_key_auth_builder(
             raise ProxyException(
                 message="Authentication Error, Malformed API Key passed in. Ensure Key has `Bearer ` prefix.",
                 type=ProxyErrorTypes.auth_error,
-                param="None",
+                param=None,
                 code=status.HTTP_401_UNAUTHORIZED,
             )
 
@@ -2827,7 +2817,7 @@ async def user_api_key_auth_builder(
             raise ProxyException(
                 message=f"Authentication Error, Tried to access route={route}, which is only for MASTER KEY",
                 type=ProxyErrorTypes.auth_error,
-                param="None",
+                param=None,
                 code=status.HTTP_401_UNAUTHORIZED,
             )
 
@@ -2960,7 +2950,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             raise ProxyException(
                 message="Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.",
                 type=ProxyErrorTypes.auth_error,
-                param="None",
+                param=None,
                 code=status.HTTP_401_UNAUTHORIZED,
             )
         await enforce_key_and_fallback_model_access(
@@ -3011,7 +3001,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                         "Keys owned by this user cannot be used."
                     ),
                     type=ProxyErrorTypes.auth_error,
-                    param="None",
+                    param=None,
                     code=status.HTTP_401_UNAUTHORIZED,
                 )
 
@@ -3023,15 +3013,9 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             llm_router=llm_router,
             team_id=valid_token.team_id,
         )
-        skip_budget_checks = is_mcp_discovery_request(route=route, request_body=request_data)
-        if not skip_budget_checks and model is not None and llm_router is not None:
-            from litellm.proxy.auth.auth_checks import is_model_cost_zero
-
-            skip_budget_checks = is_model_cost_zero(  # rebind-ok: pre-existing rebinding on a rename-only line
-                model=model, llm_router=llm_router
-            )
-            if skip_budget_checks:
-                verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
+        skip_budget_checks: Final = request_skips_budget_checks(
+            route=route, model=model, llm_router=llm_router, request_body=request_data
+        )
 
         # Check 3. Check if user is in their team budget
         if not skip_budget_checks and valid_token.team_member_spend is not None:
@@ -3317,7 +3301,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
         raise ProxyException(
             message="Authentication Error, Invalid proxy server token passed",
             type=ProxyErrorTypes.auth_error,
-            param="None",
+            param=None,
             code=status.HTTP_401_UNAUTHORIZED,
         )
     if valid_token_dict is not None:
@@ -4092,11 +4076,7 @@ def _should_skip_budget_checks(
         llm_router=llm_router,
         team_id=team_id,
     )
-    if is_mcp_discovery_request(route=route, request_body=request_data):
-        return True
-    if model is not None and llm_router is not None:
-        return is_model_cost_zero(model=model, llm_router=llm_router)
-    return False
+    return request_skips_budget_checks(route=route, model=model, llm_router=llm_router, request_body=request_data)
 
 
 def _resolve_request_principal(request: Request, valid_token: UserAPIKeyAuth) -> Principal:

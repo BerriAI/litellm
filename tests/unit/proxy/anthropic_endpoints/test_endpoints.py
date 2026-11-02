@@ -6,6 +6,7 @@ import json
 import logging
 import unittest
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -587,6 +588,48 @@ class TestErrorLogCarriesCallId:
         assert call_id in record.getMessage()
 
 
+
+class TestCountTokensCompactedHistory:
+    """A history carrying Anthropic's signed compaction block used to fail /v1/messages/count_tokens once the count
+    ran on the local tokenizer, which rejected the block type."""
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_counts_a_compaction_block_like_its_summary_text(self):
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        summary = "The user is building a recipe app and asked for one-sentence class descriptions."
+        follow_up = {"role": "user", "content": "Now do the same for Ingredient."}
+        compacted = {
+            "model": "claude-sonnet-5-5",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "compaction", "content": summary, "signature": "EqQBCkYIBRgCKkBjZ2xhc3M" * 40}],
+                },
+                follow_up,
+            ],
+        }
+        as_text = {
+            "model": "claude-sonnet-5-5",
+            "messages": [{"role": "assistant", "content": [{"type": "text", "text": summary}]}, follow_up],
+        }
+        request = MagicMock()
+        request.headers = {}
+
+        async def count(body):
+            with (
+                patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+                patch.object(proxy_server, "llm_router", None),  # test-quality-ok: module global; with no router the count runs on the local tokenizer, the path that raised
+            ):
+                return await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+        counted = await count(compacted)
+
+        assert counted["input_tokens"] > 0
+        assert counted == await count(as_text)
+
 def _claude_router() -> Router:
     return Router(
         model_list=[
@@ -696,6 +739,32 @@ async def test_count_tokens_drops_malformed_tools_when_drop_params_is_set(
 
 
 @pytest.mark.asyncio
+async def test_count_tokens_keeps_claude_code_malformed_tools_when_operator_sets_drop_params_false() -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    operator_config: Final = proxy_server.ProxyConfig()
+    operator_config.update_config_state(config={"litellm_settings": {"drop_params": False}})
+    request: Final = MagicMock()
+    request.headers = {"user-agent": "claude-cli/2.1.0 (external, cli)"}
+    counter: Final = AsyncMock(return_value=_SEVEN_TOKENS)
+    body: Final = {"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
+
+    with (
+        patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts it is never reached
+        patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
+        patch.object(proxy_server, "proxy_config", new=operator_config),  # test-quality-ok: module global imported at call time; no injection seam on this route
+    ):
+        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"]["type"] == "invalid_request_error"
+    counter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_even_with_fallbacks() -> None:
     import litellm.proxy.anthropic_endpoints.endpoints as ep
     import litellm.proxy.proxy_server as proxy_server
@@ -733,7 +802,10 @@ async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_e
 
 
 def _count_on_claude(
-    monkeypatch: pytest.MonkeyPatch, peer: Callable[[httpx.Request], httpx.Response], headers: Mapping[str, str]
+    monkeypatch: pytest.MonkeyPatch,
+    peer: Callable[[httpx.Request], httpx.Response],
+    headers: Mapping[str, str],
+    extra_body: Mapping[str, object] = MappingProxyType({}),
 ) -> httpx.Response:
     from fastapi import FastAPI
 
@@ -773,7 +845,7 @@ def _count_on_claude(
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
     return TestClient(app).post(
         "/v1/messages/count_tokens",
-        json={"model": "count-log-claude", "messages": [{"role": "user", "content": "Hello"}]},
+        json={"model": "count-log-claude", "messages": [{"role": "user", "content": "Hello"}], **extra_body},
         headers=dict(headers),
     )
 
@@ -799,6 +871,24 @@ def test_count_tokens_logs_one_line_with_the_callers_call_id_model_and_count(
             "status_code": 200,
         },
     )
+
+
+def test_count_tokens_returns_the_context_management_the_provider_applied(monkeypatch: pytest.MonkeyPatch) -> None:
+    applied: Final = {"original_input_tokens": 640}
+    response: Final = _count_on_claude(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, json={"input_tokens": 576, "context_management": applied}, request=request
+        ),
+        {},
+        {"context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}},
+    )
+
+    assert response.json() == {
+        "input_tokens": 576,
+        "context_management": applied,
+        "litellm_count_source": "provider",
+    }, response.text
 
 
 def test_count_tokens_provider_rejection_logs_its_status_and_answers_the_same_error(
