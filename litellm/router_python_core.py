@@ -544,6 +544,7 @@ if TYPE_CHECKING:
         ResponseAPIUsage,
         ResponseIncompleteEvent,
         ResponsesAPIResponse,
+        ResponsesAPIStreamingResponse,
     )
 
     Span = _Span
@@ -4385,12 +4386,13 @@ class PythonCore(DeprecatedRouterMembers):
 
             fallback_headers_adopted: bool = False
 
-            def __init__(self, async_generator: AsyncGenerator):
+            def __init__(self, async_generator: "AsyncGenerator[ResponsesAPIStreamingResponse, None]"):
                 import time
                 from datetime import datetime
 
                 self._async_generator = async_generator
                 self._billing_source: object = source_iterator
+                self._last_sequence_number = -1
                 # Mirror every attribute BaseResponsesAPIStreamingIterator.__init__
                 # would have set. The wrapper bypasses super().__init__ (it has no
                 # httpx.Response of its own and no provider config to drive), so
@@ -4497,7 +4499,16 @@ class PythonCore(DeprecatedRouterMembers):
                 if self.completed_response is None and getattr(chunk, "type", None) in _RESPONSES_TERMINAL_EVENT_TYPES:
                     self.completed_response = chunk
                 self._yielded_first_chunk = True
-                return chunk
+                sequence_number: Final = getattr(chunk, "sequence_number", None)
+                if not isinstance(sequence_number, int):
+                    return chunk
+                if not self.fallback_headers_adopted:
+                    self._last_sequence_number = max(self._last_sequence_number, sequence_number)
+                    return chunk
+                self._last_sequence_number = max(self._last_sequence_number + 1, sequence_number)
+                if self._last_sequence_number == sequence_number:
+                    return chunk
+                return chunk.model_copy(update={"sequence_number": self._last_sequence_number})
 
             async def aclose(self):
                 # async generators always expose aclose — no defensive check needed.
@@ -4559,7 +4570,9 @@ class PythonCore(DeprecatedRouterMembers):
                                 exc,
                             )
 
-        wrapper: Final = FallbackResponsesStreamWrapper(stream_with_fallbacks())
+        wrapper: Final = FallbackResponsesStreamWrapper(
+            stream_with_fallbacks()  # pyright: ignore[reportArgumentType]  # relays response events typed as object
+        )
         return wrapper
 
     def _aresponses_background_stream_can_release(
