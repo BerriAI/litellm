@@ -14430,6 +14430,34 @@ async def test_a_late_request_after_a_key_update_charges_windows_the_key_did_not
 
 
 @pytest.mark.asyncio
+async def test_a_key_update_that_lands_during_the_row_read_does_not_hide_the_windows_it_adds():
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.auth.auth_checks import delete_cache_key_object
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    prisma_client: Final = _prisma_with_rows()
+    updated_row: Final = _StoredRow([_window("7d", 5.0)])
+
+    async def read_the_row_from_before_the_update(where: Mapping[str, str]) -> _StoredRow:
+        prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=updated_row)
+        await delete_cache_key_object(
+            hashed_token=where["token"], user_api_key_cache=ps.user_api_key_cache, proxy_logging_obj=None
+        )
+        return _StoredRow(budget_limits=None)
+
+    prisma_client.db.litellm_verificationtoken.find_unique = read_the_row_from_before_the_update
+
+    with _window_spend_enqueue_env({}, prisma_client=prisma_client) as queue:
+        ps.spend_counter_cache.set_cache(key="spend:key:hashed-token", value=0.0)
+        await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
+        _ = await _drain(queue)
+        await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.5)
+        after_the_update: Final = await _drain(queue)
+
+    assert _charged_windows(after_the_update) == [("hashed-token", "7d", pytest.approx(0.5))]
+
+
+@pytest.mark.asyncio
 async def test_a_late_request_that_misses_the_updated_team_charges_windows_the_team_did_not_have_before():
     """Another worker's /team/update only evicts this worker's cached team, so its next late cost reads the row."""
     import litellm.proxy.proxy_server as ps
