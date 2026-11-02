@@ -38,6 +38,7 @@ tower-sessions-moka-store = "0.15.0"
 
 [dev-dependencies]
 litellm-redis-testing.workspace = true
+litellm-http = { workspace = true, features = ["test-support"] }
 base64.workspace = true
 rstest.workspace = true
 tempfile.workspace = true

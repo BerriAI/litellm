@@ -1,14 +1,16 @@
 #![allow(dead_code)] // each test binary compiles this module on its own and uses a different subset
 
-use std::time::Duration;
+use std::{pin::Pin, time::Duration};
 
+use futures_util::Stream;
 use litellm_circuit_breaker::Breaker;
 use litellm_redis_client::{
-    ClusterEndpoint, ClusterNode, Credentials, Endpoint, Expiry, Namespace, RedisClient,
-    RedisConfig, Timeouts, TlsOptions,
+    BasicAuth, ClusterEndpoint, ClusterNode, Credentials, Endpoint, Expiry, Namespace, RedisClient,
+    RedisConfig, RedisError, StreamingCredentialsProvider, Timeouts, TlsOptions,
 };
 use litellm_redis_testing::{ClientConnection, RedisDeployment};
 use litellm_secret_value::SecretValue;
+use tokio::sync::watch;
 
 pub const KEEP: Expiry = Expiry::KeepExisting(Duration::from_secs(60));
 
@@ -66,4 +68,38 @@ pub fn connect_as(deployment: &RedisDeployment, credentials: Credentials) -> Red
 
 pub async fn connections(deployment: &RedisDeployment) -> Vec<ClientConnection> {
     deployment.clients().await.unwrap()
+}
+
+pub struct Rotating(watch::Sender<BasicAuth>);
+
+impl Rotating {
+    pub fn new(username: &str, password: &str) -> Self {
+        Self(watch::Sender::new(BasicAuth::new(
+            username.to_owned(),
+            password.to_owned(),
+        )))
+    }
+
+    pub fn rotate(&self, username: &str, password: &str) {
+        self.0
+            .send_replace(BasicAuth::new(username.to_owned(), password.to_owned()));
+    }
+}
+
+impl StreamingCredentialsProvider for Rotating {
+    fn subscribe(
+        &self,
+    ) -> Pin<Box<dyn Stream<Item = Result<BasicAuth, RedisError>> + Send + 'static>> {
+        let receiver = self.0.subscribe();
+        Box::pin(futures_util::stream::unfold(
+            (receiver, true),
+            |(mut receiver, first)| async move {
+                if !first {
+                    receiver.changed().await.ok()?;
+                }
+                let credentials = receiver.borrow_and_update().clone();
+                Some((Ok(credentials), (receiver, false)))
+            },
+        ))
+    }
 }

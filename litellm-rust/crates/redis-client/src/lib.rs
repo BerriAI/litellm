@@ -10,7 +10,7 @@ mod script;
 
 pub use client::{RedisClient, Ttl};
 pub use commands::Expiry;
-pub use config::{Credentials, DEFAULT_TIMEOUT, RedisConfig, Timeouts};
+pub use config::{Credentials, CredentialsProvider, DEFAULT_TIMEOUT, RedisConfig, Timeouts};
 pub use error::{ConnectError, Error};
 pub use events::{CallEvent, FailureKind, Operation, Outcome, RedisEvents};
 pub use litellm_redis_types::{
@@ -18,5 +18,7 @@ pub use litellm_redis_types::{
 };
 pub use namespace::Namespace;
 pub use pipeline::Pipeline;
-pub use redis::{ErrorKind as RedisErrorKind, RedisError, Value};
+pub use redis::{
+    BasicAuth, ErrorKind as RedisErrorKind, RedisError, StreamingCredentialsProvider, Value,
+};
 pub use script::Script;

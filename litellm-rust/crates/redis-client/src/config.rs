@@ -1,8 +1,11 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{fmt, path::PathBuf, pin::Pin, sync::Arc, time::Duration};
+
+use futures_util::Stream;
 
 use redis::{
-    ClientTlsConfig, ConnectionAddr, ConnectionInfo, IntoConnectionInfo, RedisConnectionInfo,
-    TlsCertificates, TlsMode, io::tcp::TcpSettings,
+    BasicAuth, ClientTlsConfig, ConnectionAddr, ConnectionInfo, IntoConnectionInfo,
+    RedisConnectionInfo, RedisResult, StreamingCredentialsProvider, TlsCertificates, TlsMode,
+    io::tcp::TcpSettings,
 };
 
 use litellm_circuit_breaker::Breaker;
@@ -45,13 +48,33 @@ impl Default for Timeouts {
 }
 
 #[derive(Clone, Debug)]
-pub struct Credentials {
-    pub username: Option<SecretValue>,
-    pub password: Option<SecretValue>,
+pub enum Credentials {
+    Static {
+        username: Option<SecretValue>,
+        password: Option<SecretValue>,
+    },
+    Provider(CredentialsProvider),
+}
+
+#[derive(Clone)]
+pub struct CredentialsProvider(pub Arc<dyn StreamingCredentialsProvider>);
+
+impl fmt::Debug for CredentialsProvider {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CredentialsProvider")
+            .finish_non_exhaustive()
+    }
+}
+
+impl StreamingCredentialsProvider for CredentialsProvider {
+    fn subscribe(&self) -> Pin<Box<dyn Stream<Item = RedisResult<BasicAuth>> + Send + 'static>> {
+        self.0.subscribe()
+    }
 }
 
 impl Credentials {
-    pub const NONE: Self = Self {
+    pub const NONE: Self = Self::Static {
         username: None,
         password: None,
     };
@@ -173,7 +196,9 @@ pub(crate) fn connection_info(
 }
 
 fn with_static_credentials(info: ConnectionInfo, credentials: &Credentials) -> ConnectionInfo {
-    let Credentials { username, password } = credentials;
+    let Credentials::Static { username, password } = credentials else {
+        return info;
+    };
     let settings = info.redis_settings().clone();
     let settings = match (username, settings.username()) {
         (Some(username), None) => settings.set_username(username.expose()),

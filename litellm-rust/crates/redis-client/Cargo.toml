@@ -15,6 +15,7 @@ redis = { workspace = true, features = [
     "connection-manager",
     "sentinel",
     "tls-rustls-insecure",
+    "token-based-authentication",
     "tokio-rustls-comp",
 ] }
 pem = "4.0.0"

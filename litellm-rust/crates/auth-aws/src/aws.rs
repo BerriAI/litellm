@@ -268,16 +268,35 @@ impl AwsAuthService {
     ) -> Result<Credentials, Error> {
         let resolved = config.clone().with_environment(env_lookup);
         let flow = classify_auth(config, env_lookup);
-        let cached = self.cached_credentials(&resolved, &flow).await?;
+        self.fresh_credentials(&resolved, &flow).await
+    }
+
+    /// The credentials botocore's default chain finds in `region`, without LiteLLM's Bedrock settings
+    /// (`AWS_ROLE_NAME`, `AWS_PROFILE_NAME`, `AWS_SESSION_NAME`) that `resolve_credentials` also reads.
+    pub async fn default_chain_credentials(&self, region: &str) -> Result<Credentials, Error> {
+        let config = AwsAuthConfig {
+            region_name: Some(region.to_owned()),
+            ..Default::default()
+        };
+        self.fresh_credentials(&config, &AwsAuthFlow::DefaultChain)
+            .await
+    }
+
+    async fn fresh_credentials(
+        &self,
+        resolved: &AwsAuthConfig,
+        flow: &AwsAuthFlow,
+    ) -> Result<Credentials, Error> {
+        let cached = self.cached_credentials(resolved, flow).await?;
         if fresh(&cached) {
             return Ok(cached);
         }
-        self.credentials.invalidate(&resolved).await;
-        let refetched = self.cached_credentials(&resolved, &flow).await?;
+        self.credentials.invalidate(resolved).await;
+        let refetched = self.cached_credentials(resolved, flow).await?;
         if fresh(&refetched) {
             return Ok(refetched);
         }
-        self.credentials.invalidate(&resolved).await;
+        self.credentials.invalidate(resolved).await;
         Err(Error::ExpiredCredentials)
     }
 

@@ -49,7 +49,8 @@
 ## TLS, credentials and Sentinel
 - `TlsOptions` follows redis-py 5.3.1. It verifies the certificate by default, skips the hostname check by default (`ssl_check_hostname=False`), and trusts the system roots plus `ca_certs`
 - redis-rs loads the system trust store for every TLS connection and fails if that fails, even with `ca_certs` set. Where the macOS keychain is blocked (agent sandboxes), run the TLS tests with `SSL_CERT_FILE=/etc/ssl/cert.pem`
-- `Credentials` are static and sent at connect. URL userinfo wins over them, like redis-py's `from_url`
+- `Credentials::Static` are sent at connect, and URL userinfo wins over them, like redis-py's `from_url`
+- `Credentials::Provider` wraps a redis-rs `StreamingCredentialsProvider`. redis-rs takes the first item at connect and re-`AUTH`s live connections on every later item, on each cluster node. Providers push, redis-rs never polls. With a provider, redis-rs overwrites URL userinfo at connect, which matches Python stripping `user:pass@` from the URL
 - Sentinel discovers the master on each new connection and drops it on a transport failure or READONLY, like redis-py's `SentinelConnectionPool`
 - Sentinel monitors get `sentinel_password`, the data username when that password is set, and the TLS mode and certificates. Python's `_sentinel_auth_kwargs` forwards every other connection kwarg too, and it sends the username even without a sentinel password
 - A `Debug` impl never shows a secret. Follow `.agents/skills/rust-redaction`
