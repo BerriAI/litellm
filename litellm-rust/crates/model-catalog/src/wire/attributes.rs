@@ -103,8 +103,9 @@ attributes! {
     supported_output_modalities: Vec<OutputModality>,
     /// Cloud regions the model is available in ('global' or region ids).
     supported_regions: Vec<String>,
-    thinking_on_by_default: bool,
     thinking_always_on: bool,
+    /// Whether the model thinks when the request carries no thinking param.
+    thinking_on_by_default: bool,
     token_count_framing: u64 as NumericCount,
     token_count_model: TokenCountModel,
     token_count_responses_framing: u64 as NumericCount,
