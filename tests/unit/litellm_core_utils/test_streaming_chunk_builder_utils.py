@@ -2789,6 +2789,21 @@ def test_stream_chunk_builder_keeps_the_vllm_stop_reason_and_every_token_id_of_e
     ]
 
 
+def test_stream_chunk_builder_keeps_the_vllm_fields_of_a_sole_choice_streamed_on_a_nonzero_index() -> None:
+    built: Final = stream_chunk_builder(
+        chunks=[
+            _vllm_chat_chunk(1, "7,", stop_reason=None, token_ids=[22, 11]),
+            _vllm_chat_chunk(1, "8", "stop", stop_reason=",9", token_ids=[23]),
+        ]
+    )
+
+    assert built is not None
+    assert {field: built.model_dump()["choices"][0].get(field) for field in ("stop_reason", "token_ids")} == {
+        "stop_reason": ",9",
+        "token_ids": [22, 11, 23],
+    }
+
+
 def test_stream_chunk_builder_keeps_null_vllm_fields_and_adds_none_for_other_providers() -> None:
     vllm_built: Final = stream_chunk_builder(
         chunks=[

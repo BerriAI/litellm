@@ -508,7 +508,7 @@ class ChunkProcessor:
                             "index": 0,
                             "message": {"role": role, "content": ""},
                             "finish_reason": finish_reason,
-                            **_streamed_vllm_choice_fields(_first_choices_of_index_zero(chunks)),
+                            **_streamed_vllm_choice_fields(_first_choices(chunks)),
                         }
                     ]
                 ),
@@ -1510,9 +1510,8 @@ def _field_of(value: object, name: str) -> object:
     return getattr(value, name, None)
 
 
-def _first_choices_of_index_zero(chunks: Iterable[object]) -> tuple[object, ...]:
-    first_choices: Final = (next(iter(object_items(_field_of(chunk, "choices"))), None) for chunk in chunks)
-    return tuple(choice for choice in first_choices if _field_of(choice, "index") in (0, None))
+def _first_choices(chunks: Iterable[object]) -> tuple[object, ...]:
+    return tuple(next(iter(object_items(_field_of(chunk, "choices"))), None) for chunk in chunks)
 
 
 def _choice_extras(choice: object) -> Mapping[str, object]:
