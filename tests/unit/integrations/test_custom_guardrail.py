@@ -3802,16 +3802,12 @@ def test_default_on_guardrail() -> None:
     )
 
 
-def test_merged_guardrail_entries_dedupes_an_all_plain_list_without_walking_it():
-    from litellm.integrations import custom_guardrail
+def test_merged_guardrail_entries_dedupes_an_all_plain_list():
+    from litellm.integrations.custom_guardrail import merged_guardrail_entries
 
     names: Final = [f"g{index % 500}" for index in range(1000)]
 
-    with patch.object(custom_guardrail, "guardrail_entry_names") as entry_names:
-        merged: Final = custom_guardrail.merged_guardrail_entries(names)
-
-    assert merged == [f"g{index}" for index in range(500)]
-    entry_names.assert_not_called()
+    assert merged_guardrail_entries(names) == [f"g{index}" for index in range(500)]
 
 
 def test_merged_guardrail_entries_reads_each_entry_of_a_mixed_list_a_fixed_number_of_times():

@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 
 # The fields of a provider's JSON reply that name or encode something rather than carry its text, by the field they sit
-# under. Anything outside these positions, such as a tool call's arguments, is the model's own output and is read whole.
+# under, and the fields that hold what the model wrote, which are read whole.
 _REPLY_TOP_LEVEL_FIELDS: Final = frozenset(
     (
         "id",
@@ -57,13 +57,27 @@ _REPLY_NESTED_FIELDS: Final = MappingProxyType(
         "tool_calls": frozenset(("id", "type")),
     }
 )
-_REPLY_BODY_FIELDS: Final = frozenset(("candidates", "choices", "content", "data", "output", "predictions"))
+_REPLY_MODEL_OUTPUT_FIELDS: Final = frozenset(("args", "arguments", "input", "parameters"))
+_REPLY_MARKER_FIELDS: Final = frozenset(("candidates", "choices", "object", "output", "predictions"))
+_IMAGE_REPLY_FIELDS: Final = frozenset(("created", "data"))
+_NO_FIELDS: Final[frozenset[str]] = frozenset()
+
+
+def _is_provider_reply(response: Mapping[str, object]) -> bool:
+    return bool(_REPLY_MARKER_FIELDS & response.keys()) or _IMAGE_REPLY_FIELDS.issubset(response)
+
+
+def _reply_field_position(name: str, skipped: frozenset[str] | None) -> frozenset[str] | None:
+    if skipped is None or name in _REPLY_MODEL_OUTPUT_FIELDS:
+        return None
+    return _REPLY_NESTED_FIELDS.get(name, _NO_FIELDS)
 
 
 def _response_text(response: Mapping[str, object]) -> str:
-    """The strings a JSON response carries, without the numbers around them or a provider reply's ids and encoded data,
-    which a guardrail would otherwise read as phone or card numbers."""
-    top_level: Final = _REPLY_TOP_LEVEL_FIELDS if _REPLY_BODY_FIELDS & response.keys() else None
+    """The text a guardrail reads from a JSON response. In a provider's reply that is its strings without the ids and
+    encoded data around them, so a timestamp or a usage count doesn't read as a phone or card number. What the model
+    wrote into a tool call, and any other API's JSON, is read whole, integers included. Floats are scores and vectors."""
+    top_level: Final = _REPLY_TOP_LEVEL_FIELDS if _is_provider_reply(response) else None
     pending: Final[list[tuple[object, frozenset[str] | None]]] = [(response, top_level)]  # mutable-ok: stack
     texts: Final[list[str]] = []  # mutable-ok: local to this walk
     while pending:
@@ -72,11 +86,13 @@ def _response_text(response: Mapping[str, object]) -> str:
         items = as_object_list(value)
         if isinstance(value, str):
             texts.append(value)
+        elif skipped is None and isinstance(value, int) and not isinstance(value, bool):
+            texts.append(str(value))
         elif fields is not None:
             pending.extend(
                 reversed(
                     [
-                        (item, None if skipped is None else _REPLY_NESTED_FIELDS.get(name))
+                        (item, _reply_field_position(name, skipped))
                         for name, item in fields.items()
                         if skipped is None or name not in skipped
                     ]

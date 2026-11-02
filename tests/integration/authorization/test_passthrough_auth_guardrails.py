@@ -44,6 +44,9 @@ ANTHROPIC_ROUTE: Final = "/anthropic/v1/messages"
 GEMINI_ROUTE: Final = "/gemini/v1beta/models/gemini-2.5-flash:generateContent"
 CUSTOM_ROUTE: Final = "/passthrough-auth-custom"
 PHONE_POST_CALL: Final = "passthrough-auth-phone-post-call"
+PIPELINE_BLOCKS: Final = "passthrough-pipeline-blocks-the-response"
+PIPELINE_ALLOWS: Final = "passthrough-pipeline-allows-the-response"
+PIPELINE_BEFORE_THE_CALL: Final = "passthrough-pipeline-before-the-call"
 _CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 _JSON: Final = TypeAdapter(dict[str, JsonValue])
 _JSON_LIST: Final = TypeAdapter(list[JsonValue])
@@ -59,6 +62,13 @@ def _route_body(route: str, prompt: str) -> dict[str, JsonValue]:
             return {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
         case _:
             return {"model": "gpt-5.6", "messages": [{"role": "user", "content": prompt}]}
+
+
+def _pipeline_policy(mode: str, guardrail: str, on_fail: str) -> dict[str, JsonValue]:
+    return {
+        "guardrails": {"add": [guardrail]},
+        "pipeline": {"mode": mode, "steps": [{"guardrail": guardrail, "on_pass": "allow", "on_fail": on_fail}]},
+    }
 
 
 def _verdict(request: Request) -> Reply:
@@ -167,6 +177,15 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                             }
                         ],
                     },
+                    "policies": {
+                        PIPELINE_BLOCKS: _pipeline_policy("post_call", KEY_POST_CALL, "block"),
+                        PIPELINE_ALLOWS: _pipeline_policy("post_call", KEY_POST_CALL, "allow"),
+                        PIPELINE_BEFORE_THE_CALL: _pipeline_policy("pre_call", GUARDRAIL, "block"),
+                    },
+                    "policy_attachments": [
+                        {"policy": policy, "tags": [policy]}
+                        for policy in (PIPELINE_BLOCKS, PIPELINE_ALLOWS, PIPELINE_BEFORE_THE_CALL)
+                    ],
                     "model_list": [
                         *_JSON_LIST.validate_python(config.get("model_list") or []),
                         {
@@ -565,6 +584,50 @@ def _charged_rows(gateway: Gateway, key: str) -> tuple[Mapping[str, object], ...
             bool,
         )
     )
+
+
+def _tagged_body(route: str, tag: str) -> dict[str, JsonValue]:
+    return {**_route_body(route, "What is the capital of France?"), "metadata": {"tags": [tag]}}
+
+
+@pytest.mark.parametrize("route", [OPENAI_ROUTE, ANTHROPIC_ROUTE, GEMINI_ROUTE])
+def test_post_call_policy_pipeline_blocks_a_flagged_pass_through_response(rig: AuthGuardrailRig, route: str) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        _drain(rig)
+
+        response: Final = _send(gateway, route, _tagged_body(route, PIPELINE_BLOCKS), key)
+
+        assert response.status_code == 400, response.text
+        assert len(rig.key_post_call_vendor.drain()) == 1
+        assert len(rig.upstreams[route].drain()) == 1
+        assert [row["status"] for row in _charged_rows(gateway, key)] == ["failure"]
+
+
+def test_post_call_policy_pipeline_decides_what_a_flagged_step_does(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        _drain(rig)
+
+        response: Final = _send(gateway, OPENAI_ROUTE, _tagged_body(OPENAI_ROUTE, PIPELINE_ALLOWS), key)
+
+        assert response.status_code == 200, response.text
+        assert len(rig.key_post_call_vendor.drain()) == 1
+
+
+def test_pre_call_policy_pipeline_relays_the_provider_bytes(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        _drain(rig)
+
+        response: Final = _send(gateway, OPENAI_ROUTE, _tagged_body(OPENAI_ROUTE, PIPELINE_BEFORE_THE_CALL), key)
+
+        assert response.status_code == 200, response.text
+        assert response.content == _OPENAI_BODY
+        assert len(rig.vendor.drain()) == 1
 
 
 @pytest.mark.parametrize("route", [ANTHROPIC_ROUTE, GEMINI_ROUTE])
