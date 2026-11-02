@@ -19,7 +19,10 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.codex_model_catalog import bundled_codex_models
-from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import codex_shared_cache
+from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import (
+    _ACCOUNT_SLUGS_FETCHES_PER_CALLER,
+    codex_shared_cache,
+)
 from litellm.proxy.utils import hash_token
 from litellm.responses.litellm_completion_transformation.reasoning_items import (
     encode_thinking_blocks,
@@ -979,6 +982,37 @@ def test_a_failed_account_catalog_read_with_another_login_leaves_the_accounts_ow
         "Bearer test-someone-elses-login",
         own_login,
     ]
+
+
+def test_rotating_chatgpt_logins_on_one_key_reads_the_account_catalog_a_bounded_number_of_times_per_key(
+    client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router, restricted_key: Callable[..., str]
+) -> None:
+    catalog: Final = respx_mock.get(f"{_BASE}/models").respond(401)
+    provider: Final = _open_weights_provider(respx_mock)
+    chatgpt: Final = _chatgpt_responses(respx_mock)
+    turn: Final = {"model": "open-weights", "input": "Hello", "stream": True}
+    rotated: Final = tuple(
+        client.post(
+            "/backend-api/codex/responses",
+            json=turn,
+            headers={**_ACCOUNT_HEADERS, "authorization": f"Bearer test-rotated-login-{attempt}"},
+        )
+        for attempt in range(_ACCOUNT_SLUGS_FETCHES_PER_CALLER + 2)
+    )
+    teammate: Final = client.post(
+        "/backend-api/codex/responses",
+        json=turn,
+        headers={
+            **_ACCOUNT_HEADERS,
+            "authorization": "Bearer test-teammate-login",
+            "x-litellm-api-key": restricted_key(["open-weights"]),
+        },
+    )
+    assert {response.status_code for response in (*rotated, teammate)} == {200}
+    assert chatgpt.call_count == len(rotated) + 1
+    assert not provider.called
+    assert [call.request.headers["authorization"] for call in catalog.calls][-1] == "Bearer test-teammate-login"
+    assert catalog.call_count == _ACCOUNT_SLUGS_FETCHES_PER_CALLER + 1
 
 
 def test_account_catalog_lookup_sends_the_callers_chatgpt_login_and_codex_version(

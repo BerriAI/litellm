@@ -77,6 +77,9 @@ _ACCOUNT_SLUGS_UNAVAILABLE: Final = "unavailable"
 _ACCOUNT_SLUGS_UNAVAILABLE_TTL_SECONDS: Final = 60
 _ACCOUNT_SLUGS_CACHE_PREFIX: Final = "codex_account_slugs:"
 _ACCOUNT_SLUGS_TARGET: Final = "codex_account_slugs"
+_ACCOUNT_SLUGS_FETCHES_CACHE_PREFIX: Final = "codex_account_slugs_fetches:"
+_ACCOUNT_SLUGS_FETCHES_PER_CALLER: Final = 5
+_ACCOUNT_SLUGS_FETCHES_WINDOW_SECONDS: Final = 60
 _MODELS_ETAG_CACHE_PREFIX: Final = "codex_models_etag:"
 _MODELS_ETAG_TTL_SECONDS: Final = 300
 _OPENAI_API_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value, LlmProviders.AZURE.value})
@@ -163,6 +166,8 @@ class _SharedCache(Protocol):
 
     async def async_set_cache(self, key: str, value: object, *, ttl: int) -> None: ...
 
+    async def async_increment_cache(self, key: str, value: float, *, ttl: int) -> float | None: ...
+
 
 def codex_shared_cache() -> _SharedCache:
     from litellm.proxy.proxy_server import proxy_logging_obj
@@ -229,8 +234,15 @@ async def _fetched_account_slugs(headers: Mapping[str, str], client_version: str
     return upstream_codex_slugs(response.content) if response.status_code == 200 else None
 
 
+async def _admits_account_slugs_fetch(caller: str, cache: _SharedCache) -> bool:
+    fetches: Final = await cache.async_increment_cache(
+        f"{_ACCOUNT_SLUGS_FETCHES_CACHE_PREFIX}{caller}", 1, ttl=_ACCOUNT_SLUGS_FETCHES_WINDOW_SECONDS
+    )
+    return fetches is not None and fetches <= _ACCOUNT_SLUGS_FETCHES_PER_CALLER
+
+
 @with_service_target(_ACCOUNT_SLUGS_TARGET)
-async def _account_slugs(headers: Mapping[str, str], cache: _SharedCache) -> frozenset[str] | None:
+async def _account_slugs(headers: Mapping[str, str], caller: str, cache: _SharedCache) -> frozenset[str] | None:
     cache_key: Final = _account_slugs_cache_key(headers)
     if cache_key is None:
         return None
@@ -241,7 +253,7 @@ async def _account_slugs(headers: Mapping[str, str], cache: _SharedCache) -> fro
     if cached is not None:
         return cached
     client_version: Final = _codex_client_version(headers)
-    if client_version is None:
+    if client_version is None or not await _admits_account_slugs_fetch(caller, cache):
         return None
     fetched: Final = await _fetched_account_slugs(headers, client_version)
     await _remember_account_slugs(cache_key, fetched, cache)
@@ -252,6 +264,7 @@ async def _serves_through_litellm(
     model: object,
     llm_router: "Router | None",
     user_api_key_dict: UserAPIKeyAuth,
+    caller: str,
     headers: Mapping[str, str],
     cache: _SharedCache,
 ) -> bool:
@@ -259,7 +272,7 @@ async def _serves_through_litellm(
         user_api_key_dict
     ):
         return False
-    account_slugs: Final = await _account_slugs(headers, cache)
+    account_slugs: Final = await _account_slugs(headers, caller, cache)
     return account_slugs is not None and model not in account_slugs
 
 
@@ -592,7 +605,7 @@ async def _responses(
     from litellm.proxy.proxy_server import llm_router
 
     body: Final = _JSON_OBJECT.validate_python(await read_request_body(request))
-    if await _serves_through_litellm(body.get("model"), llm_router, user_api_key_dict, headers, cache):
+    if await _serves_through_litellm(body.get("model"), llm_router, user_api_key_dict, caller, headers, cache):
         litellm_body: Final = _litellm_body(body, llm_router, user_api_key_dict.team_id, headers)
         await check_tools_allowlist(
             request_body=dict(litellm_body),
