@@ -75,7 +75,8 @@ impl RequestSigner for SigV4Signer {
         )
         .map_err(|error| match error {
             Error::NonAsciiHeader { .. } => litellm_http::Error::unsignable_header(error),
-            Error::Credentials { .. }
+            Error::ExpiredCredentials
+            | Error::Credentials { .. }
             | Error::MissingWebIdentityCredentials
             | Error::WebIdentityExpiration(_)
             | Error::Signing { .. } => litellm_http::Error::signature(error),

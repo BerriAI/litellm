@@ -23,8 +23,8 @@ pub fn config(endpoint: &str) -> S3CacheConfig {
             url: endpoint.to_string(),
         }),
         auth: AwsAuthConfig {
-            access_key_id: Some("key".to_string()),
-            secret_access_key: Some("secret".to_string()),
+            access_key_id: Some("key".into()),
+            secret_access_key: Some("secret".into()),
             region_name: Some("us-east-1".to_string()),
             ..Default::default()
         },

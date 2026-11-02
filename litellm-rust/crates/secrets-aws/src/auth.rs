@@ -39,30 +39,15 @@ impl Credentials {
         Self {
             auth,
             config: AwsAuthConfig {
-                access_key_id: context
-                    .access_key_id
-                    .as_ref()
-                    .map(|value| value.expose().to_owned()),
-                secret_access_key: context
-                    .secret_access_key
-                    .as_ref()
-                    .map(|value| value.expose().to_owned()),
-                session_token: context
-                    .session_token
-                    .as_ref()
-                    .map(|value| value.expose().to_owned()),
+                access_key_id: context.access_key_id.as_ref().cloned(),
+                secret_access_key: context.secret_access_key.as_ref().cloned(),
+                session_token: context.session_token.as_ref().cloned(),
                 region_name: region(settings, environment.as_ref()).ok(),
                 role_name: settings.aws_role_name.clone(),
                 session_name: settings.aws_session_name.clone(),
-                external_id: settings
-                    .aws_external_id
-                    .as_ref()
-                    .map(|v| v.expose().to_owned()),
+                external_id: settings.aws_external_id.as_ref().cloned(),
                 profile_name: settings.aws_profile_name.clone(),
-                web_identity_token: settings
-                    .aws_web_identity_token
-                    .as_ref()
-                    .map(|v| v.expose().to_owned()),
+                web_identity_token: settings.aws_web_identity_token.as_ref().cloned(),
                 sts_endpoint: settings.aws_sts_endpoint.clone(),
             },
             environment,

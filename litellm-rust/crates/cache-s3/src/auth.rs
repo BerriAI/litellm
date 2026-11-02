@@ -36,9 +36,12 @@ impl ProvideCredentials for S3Credentials {
                 self.config.secret_access_key.clone(),
             ) {
                 return Ok(AwsCredentials::new(
-                    access_key_id,
-                    secret_access_key,
-                    self.config.session_token.clone(),
+                    access_key_id.expose(),
+                    secret_access_key.expose(),
+                    self.config
+                        .session_token
+                        .as_ref()
+                        .map(|value| value.expose().to_owned()),
                     None,
                     "litellm-s3-cache",
                 ));
