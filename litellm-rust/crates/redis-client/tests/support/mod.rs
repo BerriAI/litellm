@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use litellm_circuit_breaker::Breaker;
 use litellm_redis_client::{
-    ClusterEndpoint, ClusterNode, Endpoint, Expiry, Namespace, RedisClient, RedisConfig, Timeouts,
+    ClusterEndpoint, ClusterNode, Credentials, Endpoint, Expiry, Namespace, RedisClient,
+    RedisConfig, Timeouts, TlsOptions,
 };
 use litellm_redis_testing::{ClientConnection, RedisDeployment};
 use litellm_secret_value::SecretValue;
@@ -13,7 +14,10 @@ pub const KEEP: Expiry = Expiry::KeepExisting(Duration::from_secs(60));
 
 pub fn endpoint(deployment: &RedisDeployment) -> Endpoint {
     match deployment {
-        RedisDeployment::Standalone(server) => Endpoint::Url(SecretValue::new(server.url())),
+        RedisDeployment::Standalone(server) => Endpoint::Url {
+            url: SecretValue::new(server.url()),
+            tls: TlsOptions::verified(),
+        },
         RedisDeployment::Cluster(cluster) => Endpoint::Cluster(ClusterEndpoint {
             nodes: cluster
                 .nodes()
@@ -22,9 +26,7 @@ pub fn endpoint(deployment: &RedisDeployment) -> Endpoint {
                     port,
                 })
                 .collect(),
-            username: None,
-            password: None,
-            tls: false,
+            tls: None,
         }),
     }
 }
@@ -39,20 +41,24 @@ pub fn connect_guarded(
     timeout: Duration,
     breaker: Option<Breaker>,
 ) -> RedisClient {
-    connect_to(endpoint(deployment), namespace, timeout, breaker)
-}
-
-pub fn connect_to(
-    endpoint: Endpoint,
-    namespace: &str,
-    timeout: Duration,
-    breaker: Option<Breaker>,
-) -> RedisClient {
     RedisClient::new(RedisConfig {
-        endpoint,
+        endpoint: endpoint(deployment),
+        credentials: Credentials::NONE,
         namespace: Namespace::new(namespace),
         timeouts: Timeouts::new(timeout, None),
         breaker,
+        events: None,
+    })
+    .unwrap()
+}
+
+pub fn connect_as(deployment: &RedisDeployment, credentials: Credentials) -> RedisClient {
+    RedisClient::new(RedisConfig {
+        endpoint: endpoint(deployment),
+        credentials,
+        namespace: Namespace::default(),
+        timeouts: Timeouts::new(Duration::from_secs(2), None),
+        breaker: None,
         events: None,
     })
     .unwrap()
