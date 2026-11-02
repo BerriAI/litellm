@@ -9,7 +9,7 @@ use litellm_redis_client::{
 use litellm_redis_types::{Auth, HealthCheck, Resolution, StaticAuth};
 
 use crate::{
-    Error, RefreshingCredentials,
+    CredentialSource, Error, RefreshingCredentials,
     sources::{AzureAd, ElastiCacheIam, GcpIam},
 };
 
@@ -19,6 +19,7 @@ pub struct HostServices {
     pub events: Option<Arc<dyn RedisEvents>>,
     pub http: litellm_http::Client,
     pub environment: SharedEnvironment,
+    pub credential_provider: Option<Arc<dyn CredentialSource>>,
 }
 
 // litellm/constants.py REDIS_CLUSTER_HEALTH_CHECK_INTERVAL, the default _redis.py sets for cluster clients only
@@ -78,7 +79,10 @@ fn credentials(auth: Auth, host: &HostServices) -> Result<Credentials, Error> {
         Auth::Static(StaticAuth { username, password }) => {
             Credentials::Static { username, password }
         }
-        Auth::Provider(_) => return Err(Error::NoHostCredentialProvider),
+        Auth::Provider(_) => match &host.credential_provider {
+            Some(source) => refreshing(RefreshingCredentials::new(Arc::clone(source))),
+            None => return Err(Error::NoHostCredentialProvider),
+        },
         Auth::AzureAd(auth) => refreshing(RefreshingCredentials::new(AzureAd::new(
             auth,
             host.environment.clone(),

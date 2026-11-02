@@ -11,7 +11,7 @@ mod pubsub;
 mod script;
 
 pub use batch::{Declared, RedisBatch};
-pub use client::{RedisClient, Ttl};
+pub use client::{RedisClient, Ttl, WeakRedisClient};
 pub use commands::{Amount, Expiry};
 pub use config::{Credentials, CredentialsProvider, DEFAULT_TIMEOUT, RedisConfig, Timeouts};
 pub use error::{ConnectError, Error, KeyError};

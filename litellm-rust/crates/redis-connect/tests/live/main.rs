@@ -45,6 +45,7 @@ async fn roundtrip(config: LiveConfig) {
         events: None,
         http: http.clone(),
         environment: Arc::new(|name: &str| std::env::var(name).ok()),
+        credential_provider: None,
     };
     let client = connect(resolved.clone(), services(), None).expect("build live Redis client");
     let marker = std::time::SystemTime::now()

@@ -40,10 +40,12 @@ pub enum CredentialStage {
     Exchange,
     #[strum(serialize = "Redis token response")]
     Response,
+    #[strum(serialize = "Redis credential_provider")]
+    Provider,
 }
 
 impl Error {
-    pub(crate) fn credential<E: std::error::Error + Send + Sync + 'static>(
+    pub fn credential<E: std::error::Error + Send + Sync + 'static>(
         stage: CredentialStage,
     ) -> impl FnOnce(E) -> Self {
         move |cause| Self::Credential {
@@ -86,6 +88,7 @@ impl Error {
                 CredentialStage::Signing => "token-signing",
                 CredentialStage::Exchange => "token-exchange",
                 CredentialStage::Response => "token-response",
+                CredentialStage::Provider => "credential-provider",
             },
             Self::CredentialTimeout { .. } => "acquisition-timeout",
             Self::ExpiredCredential => "expired-credential",

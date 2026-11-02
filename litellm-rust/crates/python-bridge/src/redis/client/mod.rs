@@ -1,3 +1,5 @@
+mod credentials;
+
 use std::{
     collections::BTreeMap,
     sync::{Arc, LazyLock, Mutex, PoisonError},
@@ -6,22 +8,28 @@ use std::{
 
 use litellm_circuit_breaker::Config as BreakerConfig;
 use litellm_core_utils::settings::ProcessEnvironment;
-use litellm_redis_client::{RedisClient, RedisEvents};
-use litellm_redis_connect::{HostServices, SharedEnvironment};
+use litellm_host_python::PythonContext;
+use litellm_redis_client::{RedisClient, RedisEvents, WeakRedisClient};
+use litellm_redis_connect::{CredentialSource, HostServices, SharedEnvironment};
 use litellm_redis_resolve::Kwargs;
-use litellm_redis_types::Resolution;
+use litellm_redis_types::{ProviderHandle, Resolution};
 use pyo3::{
     prelude::*,
     sync::MutexExt,
     types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple},
 };
 
+use self::credentials::PythonCredentialSource;
 use crate::redis::events::{ServiceLoggingEvents, state_label};
 
 /// The kwargs `_merge_redis_kwargs` returns for a `RedisCache`, which the resolver reads the way
 /// redis-py's constructors do. A key whose value is a Python object, such as `retry`, reaches the
-/// resolver by name only, so it can name the setting it cannot honor.
-pub(crate) struct RedisSpec(Kwargs);
+/// resolver by name only, so it can name the setting it cannot honor. A `credential_provider` object
+/// is also kept, so the connector can ask it for credentials, and reaches the resolver as a handle.
+pub(crate) struct RedisSpec {
+    kwargs: Kwargs,
+    credential_provider: Option<Py<PyAny>>,
+}
 
 impl<'a, 'py> FromPyObject<'a, 'py> for RedisSpec {
     type Error = PyErr;
@@ -36,12 +44,20 @@ impl<'a, 'py> FromPyObject<'a, 'py> for RedisSpec {
                 false => host_objects.push(name.extract::<String>()?),
             }
         }
+        let credential_provider = kwargs
+            .cast::<PyDict>()?
+            .get_item("credential_provider")?
+            .filter(|provider| !provider.is_none() && !is_plain(provider))
+            .map(Bound::unbind);
         let fields: BTreeMap<String, serde_json::Value> =
             litellm_host_python::from_py_argument(plain.as_any())?;
         let objects = host_objects
             .into_iter()
             .map(|name| (name, serde_json::Value::Bool(true)));
-        Ok(Self(litellm_redis_resolve::kwargs(fields.into_iter().chain(objects))))
+        Ok(Self {
+            kwargs: litellm_redis_resolve::kwargs(fields.into_iter().chain(objects)),
+            credential_provider,
+        })
     }
 }
 
@@ -76,14 +92,23 @@ fn is_plain(value: &Bound<'_, PyAny>) -> bool {
         || value.is_instance_of::<PyDict>()
 }
 
+/// A client the process built, held weakly so a discarded `Router` drops its client and provider.
 struct Shared {
     resolved: Resolution,
-    client: RedisClient,
+    client: WeakRedisClient,
 }
 
 static CLIENTS: LazyLock<Mutex<Vec<Shared>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
-/// The one client for a resolved Redis config, so every family in this process shares its pool
+fn live_clients(py: Python<'_>) -> std::sync::MutexGuard<'static, Vec<Shared>> {
+    let mut clients = CLIENTS
+        .lock_py_attached(py)
+        .unwrap_or_else(PoisonError::into_inner);
+    clients.retain(|shared| shared.client.upgrade().is_some());
+    clients
+}
+
+/// The one client for a resolved Redis config and credential provider, so every family in this process shares its pool
 /// and its breaker. Like redis-py, which never connects at construction, a config the resolver or
 /// the connector cannot honor leaves the family on memory with a warning rather than failing the
 /// `Router`.
@@ -94,8 +119,16 @@ fn shared_client(
     breaker: Option<RedisBreaker>,
 ) -> PyResult<Option<RedisClient>> {
     let environment: SharedEnvironment = Arc::new(ProcessEnvironment);
+    let RedisSpec {
+        kwargs,
+        credential_provider,
+    } = spec;
+    // The registry entry's client keeps the provider alive, so no live entry shares its address
+    let handle = credential_provider
+        .as_ref()
+        .map(|provider| ProviderHandle::new(provider.as_ptr() as usize as u64));
     let logger = crate::logger::capture(py);
-    let resolved = match logger.scope(|| litellm_redis_resolve::interpret(&spec.0, None)) {
+    let resolved = match logger.scope(|| litellm_redis_resolve::interpret(&kwargs, handle)) {
         Ok(resolution) => {
             logger.scope(|| {
                 for ignored in &resolution.ignored {
@@ -119,12 +152,23 @@ fn shared_client(
         events: Some(events),
         http: crate::http::host_client(py, litellm_http::ClientVariant::Provider)?,
         environment,
+        credential_provider: credential_provider
+            .as_ref()
+            .map(|provider| -> PyResult<Arc<dyn CredentialSource>> {
+                Ok(Arc::new(PythonCredentialSource::new(
+                    provider.clone_ref(py),
+                    PythonContext::capture(py)?,
+                )))
+            })
+            .transpose()?,
     };
-    let mut clients = CLIENTS
-        .lock_py_attached(py)
-        .unwrap_or_else(PoisonError::into_inner);
-    if let Some(shared) = clients.iter().find(|shared| shared.resolved == resolved) {
-        return Ok(Some(shared.client.clone()));
+    let mut clients = live_clients(py);
+    if let Some(client) = clients
+        .iter()
+        .filter(|shared| shared.resolved == resolved)
+        .find_map(|shared| shared.client.upgrade())
+    {
+        return Ok(Some(client));
     }
     let connected = {
         let _runtime = runtime.enter();
@@ -143,7 +187,7 @@ fn shared_client(
     };
     clients.push(Shared {
         resolved,
-        client: client.clone(),
+        client: client.downgrade(),
     });
     Ok(Some(client))
 }
@@ -178,12 +222,10 @@ impl NativeRedisClient {
 /// gauge counts them next to the Python `RedisCache` breakers.
 #[pyfunction]
 pub(crate) fn native_redis_breaker_states(py: Python<'_>) -> Vec<&'static str> {
-    let clients = CLIENTS
-        .lock_py_attached(py)
-        .unwrap_or_else(PoisonError::into_inner);
-    clients
+    live_clients(py)
         .iter()
-        .filter_map(|shared| shared.client.breaker_state())
+        .filter_map(|shared| shared.client.upgrade())
+        .filter_map(|client| client.breaker_state())
         .map(|state| state_label(&state))
         .collect()
 }

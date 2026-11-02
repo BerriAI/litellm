@@ -1,6 +1,6 @@
 use std::{
     future::Future,
-    sync::{Arc, Mutex, PoisonError},
+    sync::{Arc, Mutex, PoisonError, Weak},
     time::{Duration, Instant},
 };
 
@@ -14,15 +14,28 @@ use crate::{
     pubsub::Subscriber,
 };
 
+/// One Redis client. Clones share the connection, the breaker and the subscriber.
 #[derive(Clone)]
-pub struct RedisClient {
-    pub(crate) connection: Connection,
+pub struct RedisClient(Arc<Shared>);
+
+/// A handle that does not keep the client alive, for a registry that must not outlive its users.
+#[derive(Clone)]
+pub struct WeakRedisClient(Weak<Shared>);
+
+impl WeakRedisClient {
+    pub fn upgrade(&self) -> Option<RedisClient> {
+        self.0.upgrade().map(RedisClient)
+    }
+}
+
+struct Shared {
+    connection: Connection,
     subscriber: Subscriber,
     namespace: Namespace,
     breaker: Option<Breaker>,
     events: Option<Arc<dyn RedisEvents>>,
     health_check: Option<Duration>,
-    last_used: Arc<Mutex<Instant>>,
+    last_used: Mutex<Instant>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -35,7 +48,7 @@ pub enum Ttl {
 impl RedisClient {
     pub fn new(config: RedisConfig) -> Result<Self, ConnectError> {
         let connection = Connection::new(&config.target, &config.credentials, config.timeouts)?;
-        Ok(Self {
+        Ok(Self(Arc::new(Shared {
             subscriber: Subscriber::new(
                 &config.target,
                 &config.credentials,
@@ -47,13 +60,17 @@ impl RedisClient {
             breaker: config.breaker,
             events: config.events,
             health_check: config.health_check,
-            last_used: Arc::new(Mutex::new(Instant::now())),
-        })
+            last_used: Mutex::new(Instant::now()),
+        })))
+    }
+
+    pub fn downgrade(&self) -> WeakRedisClient {
+        WeakRedisClient(Arc::downgrade(&self.0))
     }
 
     /// The breaker's current state, or none when the breaker is disabled.
     pub fn breaker_state(&self) -> Option<State> {
-        self.breaker.as_ref().map(Breaker::state)
+        self.0.breaker.as_ref().map(Breaker::state)
     }
 
     pub async fn ping(&self) -> Result<(), Error> {
@@ -119,7 +136,7 @@ impl RedisClient {
     pub async fn incr_by(&self, key: &str, delta: i64, ttl: Duration) -> Result<i64, Error> {
         let key = self.key(key);
         self.guarded(Operation::Command("INCRBY"), async {
-            let mut connection = self.connection.clone();
+            let mut connection = self.0.connection.clone();
             let value: i64 = commands::incr_by(key.clone(), delta)
                 .query_async(&mut connection)
                 .await?;
@@ -159,7 +176,7 @@ impl RedisClient {
     ) -> Result<f64, Error> {
         let key = self.key(key);
         self.guarded(Operation::Command("INCRBYFLOAT"), async {
-            let mut connection = self.connection.clone();
+            let mut connection = self.0.connection.clone();
             let mut pipeline = redis::pipe();
             pipeline.add_command(commands::incr_by_float(key.clone(), amount));
             match expiry {
@@ -198,7 +215,7 @@ impl RedisClient {
         self.guarded(Operation::Script, async {
             script
                 .invocation(&keys, &args)
-                .invoke_async(&mut self.connection.clone())
+                .invoke_async(&mut self.0.connection.clone())
                 .await
         })
         .await
@@ -213,19 +230,19 @@ impl RedisClient {
     /// Messages published on `channel`, on a connection of its own. After the connection is lost
     /// it reconnects and resubscribes, and messages published meanwhile are not delivered.
     pub fn subscribe(&self, channel: &str) -> BoxStream<'static, Vec<u8>> {
-        self.subscriber.clone().messages(channel.to_owned())
+        self.0.subscriber.clone().messages(channel.to_owned())
     }
 
     pub fn pipeline(&self) -> Pipeline {
-        Pipeline::new(self.namespace.clone())
+        Pipeline::new(self.0.namespace.clone())
     }
 
     pub fn same_client(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.last_used, &other.last_used)
+        Arc::ptr_eq(&self.0, &other.0)
     }
 
     pub fn is_cluster(&self) -> bool {
-        matches!(self.connection, Connection::Cluster(_))
+        matches!(self.0.connection, Connection::Cluster(_))
     }
 
     pub fn batch(&self) -> RedisBatch {
@@ -251,7 +268,7 @@ impl RedisClient {
             }
         };
         self.check_health().await;
-        let results = pipeline.run(&self.connection).await;
+        let results = pipeline.run(&self.0.connection).await;
         let transport = results.iter().find_map(|result| {
             result
                 .as_ref()
@@ -268,7 +285,7 @@ impl RedisClient {
     }
 
     fn key(&self, key: &str) -> String {
-        self.namespace.apply(key)
+        self.0.namespace.apply(key)
     }
 
     fn keys(&self, keys: &[&str]) -> Vec<String> {
@@ -281,7 +298,7 @@ impl RedisClient {
         command: &Cmd,
     ) -> Result<T, Error> {
         self.guarded(Operation::Command(name), async {
-            command.query_async(&mut self.connection.clone()).await
+            command.query_async(&mut self.0.connection.clone()).await
         })
         .await
     }
@@ -297,7 +314,7 @@ impl RedisClient {
                 self.check_health().await;
                 let result = call
                     .await
-                    .map_err(|error| Error::classify(error, self.connection.deployment()));
+                    .map_err(|error| Error::classify(error, self.0.connection.deployment()));
                 settle(admission, result.as_ref().err());
                 result
             }
@@ -309,10 +326,11 @@ impl RedisClient {
 
     fn observe(&self, operation: Operation, started: Instant, outcome: Outcome) {
         *self
+            .0
             .last_used
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Instant::now();
-        if let Some(events) = &self.events {
+        if let Some(events) = &self.0.events {
             events.call(&CallEvent {
                 operation,
                 duration: started.elapsed(),
@@ -325,10 +343,11 @@ impl RedisClient {
     /// sending the next command on it, and reconnects when the ping fails. The ping is not a
     /// call of the caller's and never reaches the breaker or the events.
     async fn check_health(&self) {
-        let Some(interval) = self.health_check else {
+        let Some(interval) = self.0.health_check else {
             return;
         };
         let idle = self
+            .0
             .last_used
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -336,13 +355,14 @@ impl RedisClient {
         if idle < interval {
             return;
         }
-        if let Err(error) = self.connection.ping_every_node().await {
+        if let Err(error) = self.0.connection.ping_every_node().await {
             tracing::debug!(%error, "idle Redis connection failed its health check, the next command reconnects");
         }
     }
 
     fn admit(&self) -> Result<Option<Admission>, Error> {
-        self.breaker
+        self.0
+            .breaker
             .as_ref()
             .map(|breaker| {
                 breaker
