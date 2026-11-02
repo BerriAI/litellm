@@ -4,7 +4,7 @@
  */
 
 import { useState } from "react";
-import { toast } from "@/lib/toast";
+import { copyToClipboard } from "@/utils/dataUtils";
 import { ParsedMessage } from "./prettyMessagesTypes";
 import { SectionHeader } from "./SectionHeader";
 import { CollapsibleMessage } from "./CollapsibleMessage";
@@ -32,8 +32,7 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
 
   const handleCopy = () => {
     const content = lastMessage?.content || "";
-    navigator.clipboard.writeText(content);
-    toast.success("Input copied");
+    void copyToClipboard(content, "Input copied");
   };
 
   return (

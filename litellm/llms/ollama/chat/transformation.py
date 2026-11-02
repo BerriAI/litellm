@@ -14,6 +14,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_images_from_message,
     extract_reasoning_content,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.ollama import (
@@ -28,7 +30,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
-from ..common_utils import OllamaError
+from ..common_utils import OllamaError, ollama_think
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -171,10 +173,7 @@ class OllamaChatConfig(BaseConfig):
                 if value.get("json_schema") and value["json_schema"].get("schema"):
                     optional_params["format"] = value["json_schema"]["schema"]
             if param == "reasoning_effort" and value is not None:
-                if model.startswith("gpt-oss"):
-                    optional_params["think"] = value
-                else:
-                    optional_params["think"] = value in {"low", "medium", "high"}
+                optional_params["think"] = ollama_think(model, OPAQUE_VALUE.validate_python(value))
             ### FUNCTION CALLING LOGIC ###
             # Ollama 0.4+ supports native tool calling - pass tools directly
             # and let Ollama handle model capability detection
@@ -218,10 +217,7 @@ class OllamaChatConfig(BaseConfig):
 
         Some providers need `model` in `api_base`
         """
-        clean_api_base: Final = (api_base or "http://localhost:11434").rstrip("/")
-        if clean_api_base.endswith("/api/chat"):
-            return clean_api_base
-        return f"{clean_api_base}/api/chat"
+        return ensure_api_route(api_base or "http://localhost:11434", "api/chat")
 
     def transform_request(
         self,
@@ -239,6 +235,19 @@ class OllamaChatConfig(BaseConfig):
         litellm_params["function_name"] = function_name
         tools: Final = optional_params.pop("tools", None)
 
+        def transform_tool_call(typed_tool: ChatCompletionAssistantToolCall) -> OllamaToolCall:
+            function: Final = OllamaToolCallFunction(
+                name=typed_tool["function"].get("name") or "",
+                arguments=json.loads(typed_tool["function"]["arguments"])
+                if "arguments" in typed_tool["function"]
+                else {},
+            )
+            tool_id: Final = typed_tool.get("id")
+            ollama_tool_call: Final = (
+                OllamaToolCall(function=function) if tool_id is None else OllamaToolCall(id=tool_id, function=function)
+            )
+            return ollama_tool_call
+
         new_messages: Final = []
         for m in messages:
             if isinstance(
@@ -252,16 +261,7 @@ class OllamaChatConfig(BaseConfig):
                 for tool in tool_calls:
                     typed_tool = ChatCompletionAssistantToolCall(**tool)
                     if typed_tool["type"] == "function":
-                        arguments = {}
-                        if "arguments" in typed_tool["function"]:
-                            arguments = json.loads(typed_tool["function"]["arguments"])
-                        ollama_tool_call = OllamaToolCall(
-                            function=OllamaToolCallFunction(
-                                name=typed_tool["function"].get("name") or "",
-                                arguments=arguments,
-                            )
-                        )
-                        new_tools.append(ollama_tool_call)
+                        new_tools.append(transform_tool_call(typed_tool))
             reasoning_content, parsed_content = extract_reasoning_content(cast(dict, m))
             content_str = convert_content_list_to_str(cast(AllMessageValues, m))
             images = extract_images_from_message(cast(AllMessageValues, m))

@@ -15,7 +15,7 @@ import litellm
 from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
-from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call
+from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call, make_sync_call
 from litellm.llms.base_llm.base_utils import response_format_schema, unwrap_response_format_envelope
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
@@ -27,24 +27,34 @@ from litellm.types.utils import ChatCompletionDeltaToolCall, ModelResponseStream
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
+def _text_delta_stream(text: str) -> bytes:
+    events: Final = (
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}),
+    )
+    return "".join(
+        f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n" for name, payload in events
+    ).encode()
+
+
+def _streamed_text(chunks: list[object]) -> str:
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks if isinstance(chunk, ModelResponseStream))
+
+
 @pytest.mark.asyncio
 async def test_make_call_passes_logging_obj_to_client_post():
     """make_call must pass logging_obj to client.post so track_llm_api_timing can set llm_api_duration_ms for litellm_overhead_time_ms."""
     mock_client = AsyncMock()
-    mock_response = MagicMock()
-    mock_response.aiter_lines = MagicMock(
-        return_value=iter([b'data: {"type":"message_start"}\n', b'data: {"type":"message_delta"}\n'])
-    )
-    mock_client.post.return_value = mock_response
+    mock_client.post.return_value = httpx.Response(200, stream=httpx.ByteStream(_text_delta_stream("Hi there")))
 
     logging_obj = MagicMock()
 
-    await make_call(
+    completion_stream, _ = await make_call(
         client=mock_client,
         api_base="https://api.anthropic.com/v1/messages",
         headers={},
         data="{}",
-        model="claude-3-5-haiku",
+        model="claude-haiku-5-5",
         messages=[{"role": "user", "content": "Hi"}],
         logging_obj=logging_obj,
         timeout=60.0,
@@ -54,6 +64,39 @@ async def test_make_call_passes_logging_obj_to_client_post():
     mock_client.post.assert_called_once()
     call_kwargs = mock_client.post.call_args[1]
     assert call_kwargs.get("logging_obj") is logging_obj
+    assert _streamed_text([chunk async for chunk in completion_stream]) == "Hi there"
+
+
+_LINE_SEPARATED_TEXT: Final = "before\u2028between\u2029after"
+
+
+async def _streamed_chunks(sync_stream: bool, text: str) -> list[object]:
+    transport: Final = httpx.MockTransport(
+        lambda request: httpx.Response(200, stream=httpx.ByteStream(_text_delta_stream(text)))
+    )
+    call_args: Final = {
+        "api_base": "https://api.anthropic.com/v1/messages",
+        "headers": {},
+        "data": "{}",
+        "model": "claude-haiku-5-5",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "logging_obj": MagicMock(),
+        "timeout": 60.0,
+        "json_mode": False,
+    }
+    if sync_stream:
+        sync_iterator, _ = make_sync_call(client=HTTPHandler(client=httpx.Client(transport=transport)), **call_args)
+        return list(sync_iterator)
+    async_iterator, _ = await make_call(client=AsyncHTTPHandler(transport=transport), **call_args)
+    return [chunk async for chunk in async_iterator]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_stream", [True, False])
+async def test_streamed_text_keeps_unicode_line_separators(sync_stream: bool) -> None:
+    chunks: Final = await _streamed_chunks(sync_stream, _LINE_SEPARATED_TEXT)
+
+    assert _streamed_text(chunks) == _LINE_SEPARATED_TEXT
 
 
 def test_anthropic_completion_does_not_send_deployment_default_limits():
@@ -494,7 +537,11 @@ def test_streamed_thinking_blocks_accumulate_in_the_openai_sdk_and_replay_withou
         {"type": "content_block_delta", "index": 2, "delta": {"type": "thinking_delta", "thinking": "Step 3."}},
         {"type": "content_block_delta", "index": 2, "delta": {"type": "signature_delta", "signature": "sig-b"}},
         {"type": "content_block_stop", "index": 2},
-        {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 9}},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 9},
+        },
         {"type": "message_stop"},
     )
 
@@ -515,7 +562,11 @@ def test_streamed_thinking_blocks_accumulate_in_the_openai_sdk_and_replay_withou
         "thinking_blocks": message["thinking_blocks"],
     }
     replayed: Final = anthropic_messages_pt(
-        messages=[{"role": "user", "content": "Capital of France?"}, next_turn, {"role": "user", "content": "And Spain?"}],
+        messages=[
+            {"role": "user", "content": "Capital of France?"},
+            next_turn,
+            {"role": "user", "content": "And Spain?"},
+        ],
         model="claude-haiku-4-5",
         llm_provider="anthropic",
     )
@@ -3108,6 +3159,92 @@ def test_streamed_json_mode_answer_with_a_foreign_name_matches_the_non_streamed_
     assert unwrap_response_format_envelope(answer, schema, RESPONSE_FORMAT_TOOL_NAME) == answer
 
 
+def test_streamed_json_mode_tool_name_envelope_around_an_input_wrapper_is_unwrapped_to_the_answer():
+    envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": {"input": _STREAMED_RISK_OBJECT}})
+
+    contents = _streamed_json_mode_contents((envelope[:9], envelope[9:40], envelope[40:]))
+
+    assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
+
+
+def test_streamed_json_mode_unwrapped_answer_keeps_non_ascii_text():
+    answer = {"tier": 3, "summary": "Hôtel Lutetia, 東京"}
+    envelope = json.dumps({"input": answer}, ensure_ascii=False)
+
+    contents = _streamed_json_mode_contents((envelope[:9], envelope[9:30], envelope[30:]))
+
+    assert "Hôtel Lutetia, 東京" in "".join(contents)
+    assert json.loads("".join(contents)) == answer
+
+
+def test_streamed_json_mode_unwrapped_answer_with_a_lone_surrogate_stays_utf8_encodable():
+    answer = {"tier": 3, "summary": "smile \ud83d end"}
+    envelope = json.dumps({"input": answer})
+
+    contents = _streamed_json_mode_contents((envelope[:9], envelope[9:30], envelope[30:]))
+
+    assert json.loads("".join(contents).encode("utf-8")) == answer
+
+
+_CUT_STREAM_FRAGMENTS: Final = (
+    pytest.param(
+        json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_RISK_OBJECT})[:-1],
+        id="held_envelope",
+    ),
+    pytest.param(json.dumps(_STREAMED_RISK_OBJECT), id="streamed_answer"),
+)
+
+
+def _cut_stream_lines(sent: str) -> tuple[bytes, ...]:
+    events: Final = _json_tool_events((sent[:9], sent[9:30], sent[30:]))
+    return tuple(f"data: {json.dumps(event)}\n".encode() for event in events[:-2])
+
+
+def _cut_stream_iterator(sync_stream: bool, streaming_response: object) -> ModelResponseIterator:
+    return ModelResponseIterator(
+        streaming_response=streaming_response,
+        sync_stream=sync_stream,
+        json_mode=True,
+        response_format_schema=response_format_schema(_STREAMED_RISK_SCHEMA),
+    )
+
+
+@pytest.mark.parametrize("sent", _CUT_STREAM_FRAGMENTS)
+def test_streamed_json_mode_text_is_delivered_when_the_stream_ends_before_the_block_stops(sent: str):
+    iterator = _cut_stream_iterator(True, iter(_cut_stream_lines(sent)))
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in iterator) == sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sent", _CUT_STREAM_FRAGMENTS)
+async def test_async_streamed_json_mode_text_is_delivered_when_the_stream_ends_before_the_block_stops(sent: str):
+    async def lines():
+        for line in _cut_stream_lines(sent):
+            yield line
+
+    iterator = _cut_stream_iterator(False, lines())
+
+    assert "".join([chunk.choices[0].delta.content or "" async for chunk in iterator]) == sent
+
+
+def test_streamed_json_mode_complete_envelope_is_unwrapped_when_the_stream_ends_before_the_block_stops():
+    envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_RISK_OBJECT})
+
+    iterator = _cut_stream_iterator(True, iter(_cut_stream_lines(envelope)))
+
+    assert json.loads("".join(chunk.choices[0].delta.content or "" for chunk in iterator)) == _STREAMED_RISK_OBJECT
+
+
+def test_streamed_json_mode_answer_keyed_by_a_required_only_name_is_kept_whole():
+    required_only_schema = {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["payload"]}
+    encoded = json.dumps({"payload": {"id": "abc", "rows": 3}})
+
+    contents = _streamed_json_mode_contents((encoded[:12], encoded[12:24], encoded[24:]), required_only_schema)
+
+    assert "".join(contents) == encoded
+
+
 def _json_tool_block_events(index: int, encoded: str) -> tuple[dict[str, object], ...]:
     return (
         {
@@ -3200,6 +3337,30 @@ def test_streamed_json_mode_answer_split_into_one_partial_object_per_field_arriv
 
     assert json.loads("".join(contents)) == answer
     assert contents[3] == blocks[0][:-1]
+
+
+@pytest.mark.parametrize(
+    "blocks",
+    [
+        pytest.param((_STREAMED_TIER_FIELD, _STREAMED_SUMMARY_FIELD), id="one_block_per_field"),
+        pytest.param(
+            tuple(json.dumps({name: value}) for name, value in _STREAMED_RISK_OBJECT.items()),
+            id="one_partial_object_per_field",
+        ),
+    ],
+)
+def test_streamed_json_mode_split_answer_arrives_as_one_object_when_the_stream_ends_in_its_last_block(
+    blocks: tuple[str, ...],
+):
+    message_start, *_ = _json_tool_events(())
+    events = (
+        message_start,
+        *chain.from_iterable(_json_tool_block_events(index, encoded) for index, encoded in enumerate(blocks)),
+    )[:-1]
+
+    iterator = _cut_stream_iterator(True, iter(tuple(f"data: {json.dumps(event)}\n".encode() for event in events)))
+
+    assert json.loads("".join(chunk.choices[0].delta.content or "" for chunk in iterator)) == _STREAMED_RISK_OBJECT
 
 
 def test_streamed_json_mode_empty_object_then_field_blocks_arrives_as_one_object():
@@ -3490,6 +3651,51 @@ def test_streamed_refusal_stop_details_reach_the_assembled_message():
     assert provider_fields["stop_details"] == stop_details
 
 
+def test_streamed_refusal_explanation_reaches_the_client_as_the_message_refusal():
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    assembled: Final = _assemble_stream(_message_stream_events("refusal", stop_details))
+
+    assert assembled.choices[0].message.refusal == stop_details["explanation"]
+
+
+def test_streamed_refusal_without_an_explanation_sets_no_message_refusal():
+    assembled: Final = _assemble_stream(
+        _message_stream_events("refusal", {"type": "refusal", "category": "cyber", "explanation": None})
+    )
+
+    assert assembled.choices[0].message.get("refusal") is None
+
+
+def _paused_search_stream_events() -> tuple[dict, ...]:
+    message_start, message_delta, message_stop = _message_stream_events("pause_turn", None)
+    return (
+        message_start,
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "server_tool_use", "id": "srvtoolu_pending", "name": "web_search", "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"query": "next city"}'},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {**message_delta, "delta": {"stop_reason": "pause_turn", "stop_sequence": None}},
+        message_stop,
+    )
+
+
+def test_streamed_pause_turn_is_an_unfinished_turn_listing_the_query_it_will_run():
+    assembled: Final = _assemble_stream(_paused_search_stream_events())
+
+    assert assembled.choices[0].finish_reason == "length"
+    provider_fields: Final = assembled.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "pause_turn"
+    pending: Final = provider_fields["web_search_calls"]["srvtoolu_pending"]
+    assert (pending.status, pending.action.query) == ("in_progress", "next city")
+
+
 def test_streamed_end_turn_carries_no_stop_details():
     assembled: Final = _assemble_stream(_message_stream_events("end_turn", None))
 
@@ -3497,3 +3703,79 @@ def test_streamed_end_turn_carries_no_stop_details():
     provider_fields: Final = assembled.choices[0].message.provider_specific_fields or {}
     assert "stop_details" not in provider_fields
     assert "stop_reason" not in provider_fields
+
+
+def _anthropic_chat_request_for_bound_thinking(
+    extra_headers: dict[str, str] | None, drop_params: bool | None = None
+) -> httpx.Request:
+    captured_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_bound",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-4-8",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    thinking: Final = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            thinking=thinking,
+            extra_headers=extra_headers,
+            drop_params=drop_params,
+        )
+    finally:
+        client.close()
+    assert thinking == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+    return captured_requests[0]
+
+
+def _anthropic_chat_body_for_bound_thinking(
+    extra_headers: dict[str, str] | None, drop_params: bool | None = None
+) -> dict[str, object]:
+    return json.loads(_anthropic_chat_request_for_bound_thinking(extra_headers, drop_params).content)
+
+
+def test_anthropic_chat_keeps_block_binding_when_the_final_header_carries_the_binding_beta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    body: Final = _anthropic_chat_body_for_bound_thinking(
+        {"anthropic-beta": "thinking-binding-controls-2026-08-01"}, drop_params=True
+    )
+    assert body["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+
+
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_anthropic_chat_adds_the_binding_beta_so_block_binding_is_kept(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _anthropic_chat_request_for_bound_thinking(None, drop_params=drop_params)
+    assert json.loads(request.content)["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+    }
+    assert "thinking-binding-controls-2026-08-01" in request.headers["anthropic-beta"].split(",")
+
+
+def test_anthropic_chat_sends_block_binding_as_is_without_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    body: Final = _anthropic_chat_body_for_bound_thinking(None)
+    assert body["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}

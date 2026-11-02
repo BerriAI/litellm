@@ -1,4 +1,4 @@
-"""Behavior pins for ``litellm/router_utils/pattern_match_deployments.py``."""
+"""Behavior pins for ``litellm/litellm_core_utils/pattern_match_deployments.py``."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import litellm
 from litellm import Router
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.router import Deployment, LiteLLM_Params
-from litellm.router_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
+from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
 from litellm.types.router import ModelInfo
 import json
 from unittest.mock import MagicMock
@@ -210,6 +210,30 @@ def test_route_with_none():
     assert router.route(None) is None
 
 
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        pytest.param("openai/gpt-4o", None, id="most-specific-pattern-wins"),
+        pytest.param("o3", "openai", id="provider-qualified-retry"),
+        pytest.param("openai/o3", None, id="every-deployment-on-the-pattern"),
+        pytest.param("mistral/large", "mistral", id="no-pattern-matches"),
+    ],
+)
+def test_get_models_by_pattern_names_the_models_get_deployments_by_pattern_routes_to(
+    model: str, custom_llm_provider: str | None
+):
+    router: Final = PatternMatchRouter()
+    router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
+    router.add_pattern("openai/*", {"model_name": "openai/*", "litellm_params": {"model": "azure/*"}})
+    router.add_pattern("openai/gpt-*", {"model_name": "openai/gpt-*", "litellm_params": {"model": "azure/gpt-*-prod"}})
+
+    routed: Final = router.get_deployments_by_pattern(model, custom_llm_provider=custom_llm_provider)
+
+    assert router.get_models_by_pattern(model, custom_llm_provider=custom_llm_provider) == frozenset(
+        _matched_models(routed)
+    )
+
+
 def test_route_with_multiple_matching_patterns():
     """
     Tests that the router returns the first matching pattern when there are multiple matching patterns
@@ -382,7 +406,7 @@ def test_sorted_patterns():
     """
     Tests that the pattern specificity is calculated correctly
     """
-    from litellm.router_utils.pattern_match_deployments import PatternUtils
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternUtils
 
     sorted_patterns = PatternUtils.sorted_patterns(
         {
@@ -394,7 +418,7 @@ def test_sorted_patterns():
 
 
 def test_calculate_pattern_specificity():
-    from litellm.router_utils.pattern_match_deployments import PatternUtils
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternUtils
 
     assert PatternUtils.calculate_pattern_specificity("llmengine/*") == (11, 1)
     assert PatternUtils.calculate_pattern_specificity("*") == (1, 1)

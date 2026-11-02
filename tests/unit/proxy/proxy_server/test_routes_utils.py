@@ -54,6 +54,7 @@ def test_token_counter_happy_path(client, auth_as, patched_token_counter):
         "request_model": "gpt-4",
         "model_used": "gpt-4",
         "tokenizer_type": "openai_tokenizer",
+        "count_source": "local_estimate",
         "original_response": None,
         "error": False,
         "error_message": None,

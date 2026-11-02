@@ -26,6 +26,8 @@ from integration._support.ports import allocate_port
 from openai import APIStatusError, AsyncOpenAI, OpenAI
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 MANAGED_PREFIX: Final = "litellm_proxy:"
 CARRIED_PROVIDER_FILE_ID: Final = re.compile(r"(?:^|;)llm_output_file_id,([^;]+)")
 UPLOAD_FILENAME: Final = re.compile(rb'filename="([^"]+)"')

@@ -2,6 +2,8 @@ import asyncio
 import base64
 import importlib
 import os
+import shutil
+import tempfile
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,7 +95,15 @@ CALLBACK_LISTS: Final = (
     "_async_failure_callback",
     "_async_input_callback",
 )
-RESET_TO_NONE_GLOBALS: Final = ("model_fallbacks", "cache")
+RESET_TO_NONE_GLOBALS: Final = (
+    "model_fallbacks",
+    "cache",
+    "max_fallbacks",
+    "default_fallbacks",
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+)
 RESTORED_GLOBALS: Final = (
     "disable_aiohttp_transport",
     "force_ipv4",
@@ -209,6 +219,38 @@ def _flush_client_caches() -> None:
     _reset_aws_auth_caches()
 
 
+_MACOS_LONGEST_SOCKET_PATH: Final = 103
+_LONGEST_SOCKET_SUFFIX: Final = len("/sock12345678/d/litellm-pgbouncer-12345678/.s.PGSQL.65535")
+
+
+def _socket_root() -> str:
+    default: Final = tempfile.gettempdir()
+    fits: Final = len(os.fsencode(default)) + _LONGEST_SOCKET_SUFFIX <= _MACOS_LONGEST_SOCKET_PATH
+    return default if fits else "/tmp"
+
+
+@pytest.fixture
+def socket_dir(tmp_path: Path) -> Iterator[Path]:
+    """``tmp_path`` behind a short link, so unix socket paths fit the sun_path limit that it exceeds on macOS."""
+    link_dir: Final = Path(tempfile.mkdtemp(prefix="sock", dir=_socket_root()))
+    link: Final = link_dir / "d"
+    link.symlink_to(tmp_path, target_is_directory=True)
+    yield link
+    shutil.rmtree(link_dir, ignore_errors=True)
+
+
+@pytest.fixture
+def socket_path(socket_dir: Path) -> Path:
+    return socket_dir / "spend.sock"
+
+
+@pytest.fixture
+def socket_tempdir(socket_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point ``tempfile``'s default directory at ``socket_dir``, for code that picks its own socket directory."""
+    monkeypatch.setattr(tempfile, "tempdir", str(socket_dir))
+    return socket_dir
+
+
 @pytest.fixture(autouse=True, scope="session")
 def bundled_tiktoken_cache() -> None:
     importlib.import_module("litellm.litellm_core_utils.default_encoding")
@@ -244,6 +286,7 @@ def isolate_host_environment(isolated_aws_config_files: tuple[Path, Path]) -> It
 @pytest.fixture(autouse=True)
 def isolate_litellm_globals() -> Iterator[None]:
     original_callbacks: Final = {name: list(getattr(litellm, name) or []) for name in CALLBACK_LISTS}
+    original_callback_holders: Final = frozenset(litellm_router_module._routers_holding_global_callbacks)
     original_reset: Final = {name: getattr(litellm, name) for name in RESET_TO_NONE_GLOBALS}
     original_restored: Final = {name: getattr(litellm, name) for name in RESTORED_GLOBALS if hasattr(litellm, name)}
     original_clients: Final = {name: litellm.__dict__[name] for name in MODULE_LEVEL_CLIENTS if name in litellm.__dict__}
@@ -255,6 +298,7 @@ def isolate_litellm_globals() -> Iterator[None]:
     _flush_client_caches()
     for name in CALLBACK_LISTS:
         setattr(litellm, name, [])
+    litellm_router_module._routers_holding_global_callbacks.clear()
     for name in RESET_TO_NONE_GLOBALS:
         setattr(litellm, name, None)
     for name in MODULE_LEVEL_CLIENTS:
@@ -269,6 +313,8 @@ def isolate_litellm_globals() -> Iterator[None]:
     litellm.__dict__.update(original_clients)
     for name, value in (original_callbacks | original_reset | original_restored).items():
         setattr(litellm, name, value)
+    litellm_router_module._routers_holding_global_callbacks.clear()
+    litellm_router_module._routers_holding_global_callbacks.update(original_callback_holders)
     for logger, (level, disabled, propagate, handlers, filters) in original_loggers.items():
         logger.setLevel(level)
         logger.disabled = disabled
@@ -299,6 +345,30 @@ def isolate_router_model_cost_state() -> Iterator[None]:
     litellm.get_model_info.cache_clear()
 
 
+def _provider_model_sets() -> tuple[set[str], ...]:
+    module_globals: Final = tuple(vars(litellm).items())
+    return tuple(models for name, models in module_globals if name.endswith("_models") and isinstance(models, set))
+
+
+@pytest.fixture(autouse=True)
+def isolate_model_catalog() -> Iterator[None]:
+    model_cost: Final = litellm.model_cost
+    model_cost_entries: Final = dict(model_cost)
+    models_by_provider: Final = litellm.models_by_provider
+    models_by_provider_entries: Final = dict(models_by_provider)
+    provider_model_sets: Final = tuple((models, frozenset(models)) for models in _provider_model_sets())
+    yield
+    model_cost.clear()
+    model_cost.update(model_cost_entries)
+    models_by_provider.clear()
+    models_by_provider.update(models_by_provider_entries)
+    for models, entries in provider_model_sets:
+        models.clear()
+        models.update(entries)
+    litellm_utils_module._invalidate_model_cost_lowercase_map()
+    litellm.get_model_info.cache_clear()
+
+
 @pytest.fixture
 def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -306,6 +376,20 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def declare_mid_conversation_system(monkeypatch: pytest.MonkeyPatch) -> Callable[[str, bool], None]:
+    def declare(model_cost_key: str, supported: bool) -> None:
+        entry: Final = {
+            "litellm_provider": model_cost_key.split("/", 1)[0],
+            "mode": "chat",
+            "supports_mid_conversation_system": supported,
+        }
+        monkeypatch.setitem(litellm.model_cost, model_cost_key, entry)
+        litellm.get_model_info.cache_clear()
+
+    return declare
 
 
 NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock"] | None

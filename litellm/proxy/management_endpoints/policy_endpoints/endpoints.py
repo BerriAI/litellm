@@ -28,6 +28,7 @@ from litellm.constants import (
     MAX_COMPETITOR_NAMES,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
 )
@@ -657,7 +658,7 @@ async def get_policy_templates(
     Fetches from GitHub with automatic fallback to local backup on failure.
     Set LITELLM_LOCAL_POLICY_TEMPLATES=true to skip GitHub and use local backup only.
     """
-    use_local: Final = os.getenv("LITELLM_LOCAL_POLICY_TEMPLATES", "").strip().lower() in (
+    use_local: Final = is_offline_mode() or os.getenv("LITELLM_LOCAL_POLICY_TEMPLATES", "").strip().lower() in (
         "true",
         "1",
         "yes",

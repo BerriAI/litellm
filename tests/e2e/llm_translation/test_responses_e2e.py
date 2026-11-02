@@ -183,6 +183,48 @@ class TestResponses:
         )
         assert response.output_text.strip(), f"/responses returned no output text: {response.output!r}"
 
+    @pytest.mark.covers("llm.responses.openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_RESPONSES_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_responses_forwards_moderation(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model: Final = _register(proxy, resources, _openai_responses_params())
+        client: Final = sdk.openai(resources.key())
+
+        response: Final = client.responses.create(
+            model=model,
+            input="hi",
+            extra_body={**NO_PROXY_CACHE, "moderation": {"model": "omni-moderation-latest"}},
+        )
+        response_body: Final = TypeAdapter(dict[str, object]).validate_python(cast(object, response.model_dump()))
+        moderation_value: Final = response_body.get("moderation")
+        assert moderation_value is not None, f"response had no moderation results: {response_body!r}"
+        moderation: Final = TypeAdapter(dict[str, object]).validate_python(moderation_value)
+        moderation_input: Final = TypeAdapter(dict[str, object]).validate_python(moderation["input"])
+        moderation_output: Final = TypeAdapter(dict[str, object]).validate_python(moderation["output"])
+        assert moderation_input.get("type") == "moderation_result", (
+            f"unexpected input moderation: {moderation_input!r}"
+        )
+        assert (
+            moderation_output.get("type") == "moderation_result"
+        ), f"unexpected output moderation: {moderation_output!r}"
+
+        with pytest.raises(openai.BadRequestError) as exc_info:
+            client.responses.create(
+                model=model,
+                input="hi",
+                extra_body={**NO_PROXY_CACHE, "moderation": {"model": "does-not-exist"}},
+            )
+        assert exc_info.value.status_code == 400
+
     @pytest.mark.covers("llm.responses.openai.basic.stream.works")
     @meta(
         Subject(

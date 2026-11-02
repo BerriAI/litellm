@@ -36,7 +36,7 @@ from integration.routing._prompt_cache_pin_support import (
 from pydantic import JsonValue
 from redis import Redis
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 600)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 600), pytest.mark.shares_worker_state]
 
 _GROUP: Final = "pin-chaos"
 _LEFT: Final = "pin-chaos-left"

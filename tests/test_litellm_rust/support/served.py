@@ -1,6 +1,6 @@
 from typing import Final
 
-from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from tests.test_litellm_rust.support.recording_server import RecordingServer
 
 

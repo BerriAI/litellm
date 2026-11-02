@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Copy, Info } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
@@ -165,9 +166,7 @@ export function GuardrailTestPanel({
             />
             <div className="mt-1 flex items-center justify-between">
               <span className="text-xs text-muted-foreground">
-                Press <kbd className="rounded-sm border border-border bg-muted px-1 py-0.5 text-xs">Enter</kbd> to
-                submit • <kbd className="rounded-sm border border-border bg-muted px-1 py-0.5 text-xs">Shift+Enter</kbd>{" "}
-                for new line
+                Press <Kbd>Enter</Kbd> to submit • <Kbd>Shift+Enter</Kbd> for new line
               </span>
               <span className="text-xs text-muted-foreground">Characters: {inputText.length}</span>
             </div>

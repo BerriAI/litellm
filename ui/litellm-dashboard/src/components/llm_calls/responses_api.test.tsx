@@ -3,6 +3,7 @@ import openai from "openai";
 import { makeOpenAIResponsesRequest } from "./responses_api";
 import { MessageType } from "../chat_ui/types";
 import type { TokenUsage } from "../chat_ui/ResponseMetrics";
+import type { MCPEvent } from "../mcp_tools/types";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "https://backend.example.com"),
@@ -77,6 +78,74 @@ describe("responses_api", () => {
       { signal: undefined },
     );
     expect(mockUpdateTextUI).toHaveBeenCalledWith("assistant", "Hi", "gpt-4");
+  });
+
+  it("replays completed MCP calls and results in conversation order without partial or discovery events", async () => {
+    const item = {
+      type: "mcp_call",
+      id: "mcp-inventory",
+      name: "lookup_inventory",
+      arguments: '{"location":"warehouse"}',
+      output: '{"quantity":17}',
+    };
+    const events: MCPEvent[] = [
+      { type: "response.output_item.done", item: { type: "mcp_list_tools", tools: [] } },
+      { type: "response.output_item.added", item },
+      { type: "response.mcp_call.in_progress", item_id: item.id },
+      { type: "response.output_item.done", item },
+      {
+        type: "response.output_item.done",
+        item_id: "mcp-empty",
+        item: { ...item, id: undefined, output: "" },
+      },
+      { type: "response.output_item.done", item: { ...item, id: undefined } },
+      { type: "response.output_item.done", item: { ...item, name: undefined } },
+      { type: "response.output_item.done", item: { ...item, arguments: undefined } },
+      { type: "response.output_item.done", item: { ...item, output: undefined } },
+    ];
+    const originalEvents = structuredClone(events);
+    const history = [
+      { role: "user", content: "Check inventory", mcpEvents: events },
+      { role: "assistant", content: "Lookup completed", mcpEvents: events },
+      { role: "user", content: "What was the quantity?" },
+    ];
+
+    await makeOpenAIResponsesRequest(history, mockUpdateTextUI, "model", "test-token");
+
+    expect(mockResponsesCreate.mock.calls[0][0].input).toEqual([
+      { role: "user", content: "Check inventory", type: "message" },
+      { type: "function_call", call_id: item.id, name: item.name, arguments: item.arguments },
+      { type: "function_call_output", call_id: item.id, output: item.output },
+      { type: "function_call", call_id: "mcp-empty", name: item.name, arguments: item.arguments },
+      { type: "function_call_output", call_id: "mcp-empty", output: "" },
+      { role: "assistant", content: "Lookup completed", type: "message" },
+      { role: "user", content: "What was the quantity?", type: "message" },
+    ]);
+    expect(events).toEqual(originalEvents);
+  });
+
+  it("replays an MCP-only assistant turn without an empty message", async () => {
+    const history = [
+      {
+        role: "assistant",
+        content: "",
+        mcpEvents: [
+          {
+            type: "response.output_item.done",
+            item: { type: "mcp_call", id: "mcp-only", name: "lookup", arguments: "{}", output: "17" },
+          },
+        ],
+      },
+      { role: "user", content: "What was the quantity?" },
+    ];
+
+    await makeOpenAIResponsesRequest(history, mockUpdateTextUI, "model", "test-token");
+
+    expect(mockResponsesCreate.mock.calls[0][0].input).toEqual([
+      { type: "function_call", call_id: "mcp-only", name: "lookup", arguments: "{}" },
+      { type: "function_call_output", call_id: "mcp-only", output: "17" },
+      { role: "user", content: "What was the quantity?", type: "message" },
+    ]);
   });
 
   it("should send a non-streaming request and render the whole output at once when streaming is disabled", async () => {
@@ -418,6 +487,137 @@ describe("responses_api", () => {
         allowed_tools: ["toolB", "toolC"],
       },
     ]);
+  });
+});
+
+describe("responses_api reasoning", () => {
+  type Run = { reasoning: string; answer: string; timeToFirstToken: number[]; reasoningBeforeFirstToken: string };
+
+  const run = async (streamingEnabled: boolean): Promise<Run> => {
+    const reasoningChunks: string[] = [];
+    const answerChunks: string[] = [];
+    const timeToFirstToken: number[] = [];
+    const reasoningAtFirstToken: string[] = [];
+    await makeOpenAIResponsesRequest(
+      [{ role: "user", content: "What is 3+4?" }],
+      (_role, delta) => answerChunks.push(delta),
+      "qwen3",
+      "test-token",
+      undefined,
+      undefined,
+      (content) => reasoningChunks.push(content),
+      (ttft) => {
+        timeToFirstToken.push(ttft);
+        reasoningAtFirstToken.push(reasoningChunks.join("") + "|" + answerChunks.join(""));
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      streamingEnabled,
+    );
+    return {
+      reasoning: reasoningChunks.join(""),
+      answer: answerChunks.join(""),
+      timeToFirstToken,
+      reasoningBeforeFirstToken: reasoningAtFirstToken[0] ?? "",
+    };
+  };
+
+  const streamOf = (events: Record<string, unknown>[]) => {
+    async function* mockStream() {
+      for (const event of events) {
+        yield event;
+      }
+      yield { type: "response.completed", response: { id: "resp_reasoning" } };
+    }
+    mockResponsesCreate.mockResolvedValue(mockStream());
+  };
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("shows streamed reasoning_text deltas and starts the first-token timer on them", async () => {
+    streamOf([
+      { type: "response.reasoning_text.delta", item_id: "rs_1", content_index: 0, delta: "Add " },
+      { type: "response.reasoning_text.delta", item_id: "rs_1", content_index: 0, delta: "them" },
+      { type: "response.output_text.delta", delta: "7" },
+    ]);
+
+    const result = await run(true);
+
+    expect(result.reasoning).toBe("Add them");
+    expect(result.answer).toBe("7");
+    expect(result.timeToFirstToken).toHaveLength(1);
+    expect(result.reasoningBeforeFirstToken).toBe("Add |");
+  });
+
+  it("separates streamed reasoning summary parts and items with a blank line", async () => {
+    streamOf([
+      { type: "response.reasoning_summary_text.delta", item_id: "rs_1", summary_index: 0, delta: "First" },
+      { type: "response.reasoning_summary_text.delta", item_id: "rs_1", summary_index: 0, delta: " part" },
+      { type: "response.reasoning_summary_text.delta", item_id: "rs_1", summary_index: 1, delta: "Second" },
+      { type: "response.reasoning_summary_text.delta", item_id: "rs_2", summary_index: 0, delta: "Third" },
+    ]);
+
+    await expect(run(true)).resolves.toMatchObject({ reasoning: "First part\n\nSecond\n\nThird" });
+  });
+
+  it("still shows the legacy reasoning.delta event", async () => {
+    streamOf([{ type: "response.reasoning.delta", delta: "Legacy thought" }]);
+
+    await expect(run(true)).resolves.toMatchObject({ reasoning: "Legacy thought" });
+  });
+
+  it("shows non-streamed reasoning content when the summary is empty", async () => {
+    mockResponsesCreate.mockReturnValueOnce(
+      nonStreamingResponse({
+        id: "resp_content",
+        output: [
+          {
+            type: "reasoning",
+            summary: [],
+            content: [
+              { type: "reasoning_text", text: "Add" },
+              { type: "reasoning_text", text: "them" },
+            ],
+          },
+          { type: "message", content: [{ type: "output_text", text: "7" }] },
+        ],
+      }),
+    );
+
+    await expect(run(false)).resolves.toMatchObject({ reasoning: "Add\n\nthem", answer: "7" });
+  });
+
+  it("prefers the non-streamed reasoning summary over its content", async () => {
+    mockResponsesCreate.mockReturnValueOnce(
+      nonStreamingResponse({
+        id: "resp_summary",
+        output: [
+          {
+            type: "reasoning",
+            summary: [{ type: "summary_text", text: "Short summary" }],
+            content: [{ type: "reasoning_text", text: "Raw chain" }],
+          },
+          { type: "reasoning", content: [{ type: "output_text", text: "Second item" }] },
+        ],
+      }),
+    );
+
+    await expect(run(false)).resolves.toMatchObject({ reasoning: "Short summary\n\nSecond item" });
   });
 });
 

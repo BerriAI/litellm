@@ -7,6 +7,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
     add_policy_sources_to_metadata,
@@ -18,7 +19,6 @@ from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.proxy.policy_engine import PolicyMatchContext
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
 
@@ -44,10 +44,11 @@ def _model_group_for_response_id(response_id: object, llm_router: "Router | None
     )
     if model_id is None:
         return UngovernedRetrieval("response id names no deployment")
-    deployment: Final = llm_router.get_deployment(model_id)
+    registry: Final = llm_router.registry()
+    deployment: Final = registry.deployment(model_id)
     if deployment is None:
         return UngovernedRetrieval("deployment no longer in the router")
-    hidden_by: Final = _submit_model_hidden_by(deployment.model_name, llm_router.model_group_alias)
+    hidden_by: Final = _submit_model_hidden_by(deployment.model_name, registry.aliases())
     if hidden_by is not None:
         verbose_proxy_logger.warning(
             "Policy engine: background response %s re-matches policies on retrieval as model group %s (%s), "

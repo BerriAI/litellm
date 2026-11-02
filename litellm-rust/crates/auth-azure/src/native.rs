@@ -12,8 +12,9 @@ use azure_identity::{
 };
 use sha2::{Digest, Sha256};
 
-use litellm_auth_types::Error;
-use litellm_auth_types::{InputSource, ResolvedCredential, SecretValue, Sourced};
+use litellm_auth_types::{Error, ErrorDetail};
+use litellm_auth_types::{InputSource, ResolvedCredential, Sourced};
+use litellm_secret_value::SecretValue;
 
 use super::credential_provider_cache::{
     AzureCredentialProviderCache, AzureCredentialProviderCacheKey,
@@ -133,7 +134,9 @@ impl NativeAzureTokenAcquirer {
         let token = credential
             .get_token(&[scope.as_str()], None)
             .await
-            .map_err(|error| Error::CredentialAcquisition(error.to_string().into()))?;
+            .map_err(|error| {
+                Error::CredentialAcquisition(ErrorDetail::failed("Azure token request", error))
+            })?;
         let expires_on = u64::try_from(token.expires_on.unix_timestamp())
             .ok()
             .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds));
@@ -250,11 +253,8 @@ fn validate_authority(request: &NativeAzureRequest) -> Result<(), Error> {
     let Some(authority) = authority else {
         return Ok(());
     };
-    let url = url::Url::parse(authority.value()).map_err(|_| {
-        Error::InvalidConfiguration(
-            "Azure authority must be an HTTPS origin without credentials, query, or fragment"
-                .into(),
-        )
+    let url = url::Url::parse(authority.value()).map_err(|error| {
+        Error::InvalidConfiguration(ErrorDetail::failed("Azure authority parsing", error))
     })?;
     if url.scheme() != "https"
         || url.host_str().is_none()
@@ -264,10 +264,10 @@ fn validate_authority(request: &NativeAzureRequest) -> Result<(), Error> {
         || url.fragment().is_some()
         || !matches!(url.path(), "" | "/")
     {
-        return Err(Error::InvalidConfiguration(
-            "Azure authority must be an HTTPS origin without credentials, query, or fragment"
-                .into(),
-        ));
+        return Err(Error::InvalidConfiguration(ErrorDetail::InvalidType {
+            field: "Azure authority".into(),
+            expected: "an HTTPS origin without credentials, query, or fragment",
+        }));
     }
     Ok(())
 }
@@ -377,7 +377,7 @@ fn trusted_source(sources: &[InputSource]) -> InputSource {
 
 fn mixed_sources<T>() -> Result<T, Error> {
     Err(Error::InvalidConfiguration(
-        "request-controlled Azure auth inputs cannot be combined with host credentials".into(),
+        ErrorDetail::MixedInputSources { provider: "Azure" },
     ))
 }
 
@@ -444,7 +444,7 @@ fn build_credential(
             .map(|credential| credential as Arc<dyn TokenCredential>),
     }
     .map_err(|error| {
-        Error::InvalidConfiguration(litellm_auth_types::ErrorDetail::failed(
+        Error::InvalidConfiguration(ErrorDetail::failed(
             "Azure credential initialization",
             error,
         ))
@@ -499,7 +499,8 @@ mod tests {
     use azure_core::{Bytes, Result};
 
     use super::{NativeAzureRequest, NativeAzureTokenAcquirer, ValidatedAzureRequest};
-    use litellm_auth_types::{InputSource, SecretValue, Sourced};
+    use litellm_auth_types::{InputSource, Sourced};
+    use litellm_secret_value::SecretValue;
 
     fn deployment<T>(value: T) -> Sourced<T> {
         Sourced::new(value, InputSource::Deployment)
@@ -662,12 +663,11 @@ mod tests {
         ))
         .unwrap_err();
 
-        assert_eq!(
-            error,
-            litellm_auth_types::Error::InvalidConfiguration(
+        assert!(
+            litellm_error::Report::new(&error).to_string().contains(
                 "request-controlled Azure auth inputs cannot be combined with host credentials"
-                    .into()
-            )
+            ),
+            "{error:?}"
         );
     }
 
@@ -695,12 +695,11 @@ mod tests {
             authority,
         ))
         .unwrap_err();
-        assert_eq!(
-            error,
-            litellm_auth_types::Error::InvalidConfiguration(
+        assert!(
+            litellm_error::Report::new(&error).to_string().contains(
                 "Azure authority must be an HTTPS origin without credentials, query, or fragment"
-                    .into()
-            )
+            ),
+            "{error:?}"
         );
     }
 }

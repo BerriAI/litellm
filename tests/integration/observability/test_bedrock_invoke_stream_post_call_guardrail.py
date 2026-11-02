@@ -38,6 +38,8 @@ from integration._support.process import owned_proxy_process
 from integration._support.upstream import aws_event_stream_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 CLAUDE_ID: Final = "anthropic.claude-sonnet-5-v1:0"
 LLAMA_ID: Final = "meta.llama4-maverick-17b-instruct-v1:0"
 PROFILE_ID: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/relayprofile"

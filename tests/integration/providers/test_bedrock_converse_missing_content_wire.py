@@ -34,6 +34,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _MODEL_ID: Final = "anthropic.claude-3-haiku-20240307-v1:0"
 _CONVERSE_MODEL: Final = f"bedrock/converse/{_MODEL_ID}"
 _INVOKE_MODEL: Final = f"bedrock/invoke/{_MODEL_ID}"

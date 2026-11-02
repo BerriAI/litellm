@@ -32,6 +32,7 @@ _MANAGED_MODEL_ROUTES: Final = frozenset(
             "rerank",
             "decisions",
             "systemone",
+            "extraction",
             "ocr",
         ),
     )
@@ -77,6 +78,7 @@ _MODEL_ROUTE_KINDS: Final[
         "/rerank": "body",
         "/decisions": "body",
         "/systemone": "body",
+        "/extraction": "body",
         "/messages/count_tokens": "body",
         ":countTokens": "path",
     }

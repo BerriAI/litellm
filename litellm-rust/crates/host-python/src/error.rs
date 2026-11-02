@@ -1,3 +1,4 @@
+use litellm_error::Report;
 use pyo3::{
     PyErr,
     exceptions::{PyRuntimeError, PyTypeError},
@@ -24,16 +25,19 @@ pub enum Error {
     SyncInsideTokio,
     #[error("the context body produced no value")]
     ContextBodyProducedNothing,
+    #[error("the context body ran more than once")]
+    ContextBodyRanTwice,
+    #[error("the blocking pool dropped a Python call")]
+    BlockingCallCancelled(#[source] tokio::task::JoinError),
     #[error("file read must return bytes or str, got {got}")]
     FileContentType { got: String },
 }
 
 impl From<Error> for PyErr {
     fn from(error: Error) -> Self {
+        let message = Report::new(&error).to_string();
         match error {
-            Error::SendBeforeStart | Error::FileContentType { .. } => {
-                PyTypeError::new_err(error.to_string())
-            }
+            Error::SendBeforeStart | Error::FileContentType { .. } => PyTypeError::new_err(message),
             Error::MissingState
             | Error::ExecutionRunning
             | Error::ExecutionClosed
@@ -41,7 +45,9 @@ impl From<Error> for PyErr {
             | Error::ExecutionClosedWhileRunning
             | Error::NativeExecutionClosed
             | Error::SyncInsideTokio
-            | Error::ContextBodyProducedNothing => PyRuntimeError::new_err(error.to_string()),
+            | Error::ContextBodyProducedNothing
+            | Error::ContextBodyRanTwice
+            | Error::BlockingCallCancelled(_) => PyRuntimeError::new_err(message),
         }
     }
 }
@@ -51,7 +57,7 @@ impl From<Error> for PyErr {
 /// raised, which reaches the caller as it was raised.
 #[derive(Debug, thiserror::Error)]
 pub enum InvokeError<E> {
-    #[error("{0}")]
+    #[error(transparent)]
     Native(E),
     #[error(transparent)]
     Python(#[from] PyErr),

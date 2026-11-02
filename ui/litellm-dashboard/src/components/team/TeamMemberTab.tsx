@@ -10,8 +10,9 @@ import MemberTable from "@/components/common_components/MemberTable";
 import type { StoredModelMaxBudget } from "@/components/key_team_helpers/modelMaxBudgetPayload";
 import { Member } from "@/components/networking";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { DateCell, MoneyCell } from "@/components/shared/table_cells";
+import { MoneyCell } from "@/components/shared/table_cells";
 import { toast } from "@/lib/toast";
+import { describeBudgetResetSchedule } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { CircleHelp } from "lucide-react";
@@ -101,7 +102,7 @@ export default function TeamMemberTab({
     return "0";
   };
 
-  const getUserCurrentCycleSpend = (userId: string | null): number => {
+  const getUserCurrentPeriodSpend = (userId: string | null): number => {
     if (!userId) return 0;
     return findMembership(userId)?.spend ?? 0;
   };
@@ -152,6 +153,20 @@ export default function TeamMemberTab({
     return findMembership(userId)?.litellm_budget_table?.budget_reset_at ?? null;
   };
 
+  const getUserBudgetSchedule = (userId: string | null) => {
+    const budget = findMembership(userId)?.litellm_budget_table;
+    return describeBudgetResetSchedule(budget?.budget_duration ?? null, budget?.budget_reset_at ?? null);
+  };
+
+  const renderBudgetPeriod = (userId: string | null) => {
+    const schedule = getUserBudgetSchedule(userId);
+    return (
+      <SimpleTooltip content={schedule.tooltip}>
+        <span>{schedule.period ?? schedule.label}</span>
+      </SimpleTooltip>
+    );
+  };
+
   const extraColumns: NonNullable<ComponentProps<typeof MemberTable>["extraColumns"]> = [
     {
       title: (
@@ -189,22 +204,22 @@ export default function TeamMemberTab({
     {
       title: (
         <span className="flex items-center gap-1">
-          Current Cycle Spend (USD)
-          <SimpleTooltip content="Spend for the current budget cycle. Resets to $0 when the member's budget window rolls over. This is the value checked against the member's budget.">
-            <CircleHelp className="size-4" aria-label="Current cycle spend information" />
+          Current Period Spend (USD)
+          <SimpleTooltip content="Spend in this member's current budget period, the value checked against their budget. The Budget Period column shows the dates that period covers, or Never resets. Spend above a rollover cap at reset carries into the next period.">
+            <CircleHelp className="size-4" aria-label="Current period spend information" />
           </SimpleTooltip>
         </span>
       ),
       key: "spend",
       numeric: true,
-      sortValue: (record: Member) => getUserCurrentCycleSpend(record.user_id),
-      render: (record: Member) => <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={2} />,
+      sortValue: (record: Member) => getUserCurrentPeriodSpend(record.user_id),
+      render: (record: Member) => <MoneyCell value={getUserCurrentPeriodSpend(record.user_id)} decimals={2} />,
     },
     {
       title: (
         <span className="flex items-center gap-1">
           Total Spend (USD)
-          <SimpleTooltip content="Cumulative spend by this member within this team, across all budget cycles. Tracking began 2026-04-21; spend from before that date is not included.">
+          <SimpleTooltip content="Cumulative spend by this member within this team, across budget periods. This is a lower bound: lifetime tracking began 2026-04-21, so periods that reset before then are not included. It is never less than Current Period Spend.">
             <CircleHelp className="size-4" aria-label="Total spend information" />
           </SimpleTooltip>
         </span>
@@ -252,10 +267,10 @@ export default function TeamMemberTab({
       },
     },
     {
-      title: "Budget Reset",
+      title: "Budget Period",
       key: "budget_reset",
       sortValue: (record: Member) => getUserBudgetReset(record.user_id),
-      render: (record: Member) => <DateCell value={getUserBudgetReset(record.user_id)} precision="date" />,
+      render: (record: Member) => renderBudgetPeriod(record.user_id),
     },
     {
       title: (
@@ -303,9 +318,11 @@ export default function TeamMemberTab({
 
   const resetSpendDisabledReason = (member: Member): string | null => {
     if (!isProxyAdmin && member.user_id === userId) return "Ask a proxy admin to reset your own spend";
-    if (getUserCurrentCycleSpend(member.user_id) <= 0) return "No current cycle spend to reset";
+    if (getUserCurrentPeriodSpend(member.user_id) <= 0) return "No current period spend to reset";
     return null;
   };
+
+  const resetSpendPeriod = getUserBudgetSchedule(memberToResetSpend?.user_id ?? null).period;
 
   return (
     <>
@@ -341,13 +358,16 @@ export default function TeamMemberTab({
             <DialogTitle>Reset Team Member Spend</DialogTitle>
           </DialogHeader>
           <p>
-            Reset current cycle spend for{" "}
+            Reset current period spend for{" "}
             <strong>{memberToResetSpend?.user_email || memberToResetSpend?.user_id}</strong> in this team to{" "}
             <strong>$0</strong>?
           </p>
           <p className="text-sm text-muted-foreground">
-            Current cycle spend:{" "}
-            <strong>${formatNumberWithCommas(getUserCurrentCycleSpend(memberToResetSpend?.user_id ?? null), 4)}</strong>
+            Current period spend
+            {resetSpendPeriod ? ` (${resetSpendPeriod})` : ""}:{" "}
+            <strong>
+              ${formatNumberWithCommas(getUserCurrentPeriodSpend(memberToResetSpend?.user_id ?? null), 4)}
+            </strong>
             . This is the value checked against the member&apos;s budget. Total spend and logs are preserved.
           </p>
           <DialogFooter>

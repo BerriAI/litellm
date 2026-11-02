@@ -80,6 +80,42 @@ describe("GeneralSettings General tab", () => {
     vi.mocked(deleteConfigFieldSetting).mockClear();
   });
 
+  it.each([
+    ["maximum_spend_logs_retention_period", null, "7d"],
+    ["maximum_health_check_retention_period", "30d", "14d"],
+    ["maximum_daily_tag_spend_retention_period", undefined, "90d"],
+    ["maximum_spend_logs_cleanup_run_budget", "5m", "10m"],
+    ["maximum_spend_logs_cleanup_batch_timeout", "", "45s"],
+    ["mcp_client_id_header", "x-client-id", "X-MCP-Client.ID"],
+  ])("displays, updates and resets the String setting %s", async (fieldName, initialValue, updatedValue) => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      ...SETTINGS_FIXTURE,
+      {
+        field_name: fieldName,
+        field_type: "String",
+        field_value: initialValue,
+        field_description: "string setting",
+        stored_in_db: initialValue != null,
+        field_default_value: null,
+      },
+    ]);
+    const user = userEvent.setup();
+    renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+    await user.click(screen.getByRole("tab", { name: "General" }));
+    const input = await screen.findByRole("textbox", { name: fieldName });
+    expect(input).toHaveValue(initialValue ?? "");
+    fireEvent.change(input, { target: { value: updatedValue } });
+    const row = screen.getByRole("row", { name: new RegExp(fieldName) });
+    await user.click(within(row).getByRole("button", { name: "Update" }));
+    expect(vi.mocked(updateConfigFieldSetting).mock.calls).toEqual([["token", fieldName, updatedValue]]);
+    expect(within(row).getByText("In DB")).toBeInTheDocument();
+    const resetIcon = row.querySelectorAll("td")[3].querySelector("svg");
+    expect(resetIcon).not.toBeNull();
+    await user.click(resetIcon as unknown as Element);
+    expect(vi.mocked(deleteConfigFieldSetting).mock.calls).toEqual([["token", fieldName]]);
+    expect(input).toHaveValue("");
+  });
+
   it("updates max_ui_session_budget with its own value, not the value at its filtered index", async () => {
     const user = userEvent.setup();
     renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
@@ -251,5 +287,35 @@ it("should delete only the Default setting and retain explicit false and zero", 
   expect(vi.mocked(updateConfigFieldSetting).mock.calls).toEqual([
     ["token", "synthetic_flag", false],
     ["token", "synthetic_count", 0],
+  ]);
+});
+
+it("keeps a new baggage mapping unsaved until every field the backend requires is filled in", async () => {
+  vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+    {
+      field_name: "request_tag_mappings",
+      field_type: "List",
+      field_value: [],
+      field_description: "baggage mappings",
+      stored_in_db: true,
+      editable: true,
+    },
+  ]);
+  vi.mocked(updateConfigFieldSetting).mockClear();
+  const user = userEvent.setup();
+  renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+  await user.click(screen.getByRole("tab", { name: "General" }));
+  await user.click(await screen.findByRole("button", { name: "Add mapping" }));
+  const update = within(screen.getByRole("row", { name: /request_tag_mappings/ })).getByRole("button", {
+    name: "Update",
+  });
+  expect(update).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Mapping 1 baggage key"), { target: { value: "entrypoint" } });
+  fireEvent.change(screen.getByLabelText("Mapping 1 match value"), { target: { value: "a" } });
+  expect(update).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Mapping 1 tag"), { target: { value: "usecase:support" } });
+  await user.click(update);
+  expect(vi.mocked(updateConfigFieldSetting).mock.calls).toEqual([
+    ["token", "request_tag_mappings", [{ header: "baggage", key: "entrypoint", value: "a", tag: "usecase:support" }]],
   ]);
 });

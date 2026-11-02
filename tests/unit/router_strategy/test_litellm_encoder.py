@@ -8,6 +8,7 @@ import pytest
 
 import litellm
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
+from litellm.router_api import RoutingContext
 if sys.version_info >= (3, 14):
     pytest.skip("The semantic-router extra excludes Python 3.14", allow_module_level=True)
 
@@ -39,7 +40,7 @@ class RecordingRouter:
 
 def _encoder(router: RecordingRouter, **kwargs: Any) -> LiteLLMRouterEncoder:
     return LiteLLMRouterEncoder(
-        litellm_router_instance=router,  # pyright: ignore[reportArgumentType]  # test double stands in for Router
+        ctx=RoutingContext(router),  # pyright: ignore[reportArgumentType]  # test double stands in for Router
         model_name="text-embedding-3-small",
         **kwargs,
     )
@@ -133,3 +134,19 @@ class TestEmbeddingInputCap:
         _encoder(router, max_input_chars=20).encode_queries(["route me please, then a huge pasted file"])
 
         assert router.embedded_inputs == [["route me please, the"]]
+
+
+@pytest.mark.parametrize(
+    "embeds",
+    [
+        {"data": [{"embedding": [0.1]}]},
+        [{"embedding": [0.1]}],
+        type("HasData", (), {"data": [{"embedding": [0.1]}]})(),
+    ],
+    ids=["dict", "list", "object-with-data"],
+)
+def test_litellm_to_list_rejects_anything_but_an_embedding_response(embeds: object) -> None:
+    from litellm.router_strategy.auto_router.litellm_encoder import litellm_to_list
+
+    with pytest.raises(ValueError, match="No embeddings found"):
+        litellm_to_list(embeds)
