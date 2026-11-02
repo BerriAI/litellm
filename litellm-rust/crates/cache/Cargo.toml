@@ -7,10 +7,12 @@ repository.workspace = true
 
 [dependencies]
 litellm-error.workspace = true
+litellm-redis-client.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 strum.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

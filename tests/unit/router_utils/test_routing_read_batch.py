@@ -1,8 +1,6 @@
 """
-One Redis round trip per request for the router's pre-call reads.
-
-Before `RoutingReadBatch`, `async_get_available_deployment` issued one MGET for the cooldown keys
-(`CooldownCache`) and a second one for the tpm/rpm counters (`LowestTPMLoggingHandler_v2`).
+The router's pre-call reads. Cooldowns go through the native store, and the tpm/rpm selector
+counters (`LowestTPMLoggingHandler_v2`) ride one MGET on the Python Redis.
 """
 
 import time
@@ -15,6 +13,7 @@ import litellm
 from litellm import Router
 from litellm.caching.redis_cache import RedisCache
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+from tests.unit.conftest import redis_cache_double
 
 _MODEL_GROUP = "claude"
 _MESSAGES = [{"role": "user", "content": "ping"}]
@@ -34,7 +33,7 @@ def _redis_answering(values_by_key_prefix: dict[str, object]) -> MagicMock:
     def _mget(key_list, parent_otel_span=None):
         return {key: values_by_key_prefix.get(key.rsplit(":", 1)[0], values_by_key_prefix.get(key)) for key in key_list}
 
-    redis = MagicMock(spec=RedisCache)
+    redis = redis_cache_double()
     redis.async_batch_get_cache = AsyncMock(side_effect=_mget)
     return redis
 
@@ -55,12 +54,14 @@ def _redis_key_families(redis: MagicMock) -> list[list[str]]:
     ]
 
 
-def _cooldown(seconds: float) -> dict:
-    return {"exception_received": "429", "status_code": "429", "timestamp": time.time(), "cooldown_time": seconds}
+def _cool_down(router: Router, model_id: str, started: float) -> None:
+    router.cooldown_cache.cooldown_store.put(
+        model_id, {"exception_received": "429", "status_code": "429", "timestamp": started, "cooldown_time": 60}, 60
+    )
 
 
 @pytest.mark.asyncio
-async def test_usage_based_routing_reads_cooldowns_and_counters_in_one_redis_round_trip():
+async def test_usage_based_routing_reads_the_counters_in_one_python_redis_round_trip():
     redis = _redis_answering({})
     router = _router(redis, "usage-based-routing-v2")
 
@@ -73,10 +74,8 @@ async def test_usage_based_routing_reads_cooldowns_and_counters_in_one_redis_rou
             "dep-a:anthropic/claude-x:tpm",
             "dep-b:anthropic/claude-x:rpm",
             "dep-b:anthropic/claude-x:tpm",
-            "deployment:dep-a:cooldown",
-            "deployment:dep-b:cooldown",
         ]
-    ], "cooldown state and usage counters must arrive in one MGET"
+    ], "the usage counters must arrive in one MGET, without cooldown keys"
 
 
 @pytest.mark.asyncio
@@ -112,21 +111,19 @@ async def test_usage_based_routing_still_batches_when_the_strategy_is_a_fixed_si
             "dep-a:anthropic/claude-x:tpm",
             "dep-b:anthropic/claude-x:rpm",
             "dep-b:anthropic/claude-x:tpm",
-            "deployment:dep-a:cooldown",
-            "deployment:dep-b:cooldown",
         ]
     ], "the subclassed strategy must still get the batched read, not a second MGET"
     router.cache.async_batch_get_cache.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_simple_shuffle_still_reads_only_cooldowns():
+async def test_simple_shuffle_reads_nothing_from_the_python_redis():
     redis = _redis_answering({})
     router = _router(redis, "simple-shuffle")
 
     await router.async_get_available_deployment(model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES)
 
-    assert _redis_key_families(redis) == [["deployment:dep-a:cooldown", "deployment:dep-b:cooldown"]]
+    assert _redis_key_families(redis) == []
 
 
 @pytest.mark.asyncio
@@ -151,14 +148,9 @@ async def test_batched_counters_pick_the_deployment_the_strategy_picks_reading_a
 
 @pytest.mark.asyncio
 async def test_batched_read_still_excludes_a_cooled_down_deployment():
-    redis = _redis_answering(
-        {
-            "dep-a:anthropic/claude-x:tpm": 100,
-            "dep-b:anthropic/claude-x:tpm": 10,
-            "deployment:dep-b:cooldown": _cooldown(seconds=60),
-        }
-    )
+    redis = _redis_answering({"dep-a:anthropic/claude-x:tpm": 100, "dep-b:anthropic/claude-x:tpm": 10})
     router = _router(redis, "usage-based-routing-v2")
+    _cool_down(router, "dep-b", started=time.time())
 
     deployment = await router.async_get_available_deployment(model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES)
 
@@ -168,14 +160,9 @@ async def test_batched_read_still_excludes_a_cooled_down_deployment():
 
 @pytest.mark.asyncio
 async def test_batched_read_ignores_an_expired_cooldown():
-    redis = _redis_answering(
-        {
-            "dep-a:anthropic/claude-x:tpm": 100,
-            "dep-b:anthropic/claude-x:tpm": 10,
-            "deployment:dep-b:cooldown": _cooldown(seconds=-1),
-        }
-    )
+    redis = _redis_answering({"dep-a:anthropic/claude-x:tpm": 100, "dep-b:anthropic/claude-x:tpm": 10})
     router = _router(redis, "usage-based-routing-v2")
+    _cool_down(router, "dep-b", started=time.time() - 61)
 
     deployment = await router.async_get_available_deployment(model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES)
 
@@ -184,7 +171,7 @@ async def test_batched_read_ignores_an_expired_cooldown():
 
 @pytest.mark.asyncio
 async def test_a_failed_batched_read_degrades_like_the_two_failed_reads_did():
-    redis = MagicMock(spec=RedisCache)
+    redis = redis_cache_double()
     redis.async_batch_get_cache = AsyncMock(side_effect=ConnectionError("redis unavailable"))
     routed = _router(redis, "usage-based-routing-v2")
     alone = _router(redis, "usage-based-routing-v2")
@@ -198,16 +185,11 @@ async def test_a_failed_batched_read_degrades_like_the_two_failed_reads_did():
 
     assert str(routed_error.value) == str(alone_error.value)
     assert len(routed.cache.last_redis_batch_access_time) == 0, "a failed read must not throttle the next one"
-    before: Final = redis.async_batch_get_cache.await_count
-    redis.async_batch_get_cache.side_effect = None
-    redis.async_batch_get_cache.return_value = {}
-    assert await routed.cooldown_cache.async_get_active_cooldowns(["dep-a"], None) == []
-    assert redis.async_batch_get_cache.await_count == before + 1
 
 
 @pytest.mark.asyncio
 async def test_a_failed_batched_read_leaves_simple_shuffle_routing():
-    redis = MagicMock(spec=RedisCache)
+    redis = redis_cache_double()
     redis.async_batch_get_cache = AsyncMock(side_effect=ConnectionError("redis unavailable"))
     router = _router(redis, "simple-shuffle")
 

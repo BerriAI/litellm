@@ -32,6 +32,15 @@ class ProviderDefaults:
 
 
 @dataclass(frozen=True, slots=True)
+class RouterTierSettings:
+    """The memory-over-Redis tier values `main`'s router reads from the environment and `litellm` globals."""
+
+    cooldown_redis_read_interval: float
+    usage_redis_read_interval: float
+    max_redis_batch_cache_size: int
+
+
+@dataclass(frozen=True, slots=True)
 class SecretManager:
     readable: bool
     native: bool
@@ -105,6 +114,17 @@ def secret_manager_binding() -> SecretManagerBinding:
         replica_regions=settings.replica_regions,
         client=litellm.secret_manager_client,
         settings_object=configured_settings,
+    )
+
+
+def router_tiers() -> RouterTierSettings:
+    import litellm
+    from litellm.constants import DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS, DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
+
+    return RouterTierSettings(
+        cooldown_redis_read_interval=DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS,
+        usage_redis_read_interval=litellm.default_redis_batch_cache_expiry or 10,
+        max_redis_batch_cache_size=DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE,
     )
 
 

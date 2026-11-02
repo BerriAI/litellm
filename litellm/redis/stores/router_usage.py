@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
@@ -8,27 +8,11 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
 from litellm._internal_context import with_service_target
-from litellm.caching.dual_cache import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
-from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
-from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.rust_bridge._native import NativeRouterUsage
 
-from ._keys import ROUTER_RPM_KEY, ROUTER_TPM_KEY
+from ._connection import redis_kwargs
 
-
-@dataclass(frozen=True, slots=True)
-class UsagePolicy:
-    redis_read_interval: float | None = None
-    memory_ttl: float | None = None
-    redis_ttl: float | None = None
-    backfill_ttl: int = 600
-    max_memory_entries: int = 200
-    max_batch_entries: int = DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
-    counter_ttl: int = 60
-
-
-POLICY: Final = UsagePolicy()
 ROUTER_USAGE_TARGET: Final = "router_usage"
 CounterKind: TypeAlias = Literal["tpm", "rpm"]
 
@@ -39,11 +23,6 @@ class UsageCounter:
     model: str | None
     minute: str
     kind: CounterKind
-
-
-def _key(counter: UsageCounter) -> str:
-    template: Final = ROUTER_TPM_KEY if counter.kind == "tpm" else ROUTER_RPM_KEY
-    return template.format(id=counter.deployment_id, model=counter.model, current_minute=counter.minute)
 
 
 class RouterUsage(Protocol):
@@ -62,34 +41,55 @@ class RouterUsage(Protocol):
         parent_otel_span: Span | None,
     ) -> None: ...
     async def async_batch_get(self, counters: Sequence[UsageCounter]) -> Sequence[object] | None: ...
+    def snapshot(self) -> Mapping[str, float]: ...
+
+
+NativeCounter: TypeAlias = tuple[str, str | None, str, CounterKind]
+
+
+class UsageHandle(Protocol):
+    def increment(self, counter: NativeCounter, value: float, ttl_seconds: int) -> Awaitable[float]: ...
+    def increment_deployment(
+        self, deployment_id: str, model: str | None, minute: str, tokens: float, requests: int
+    ) -> Awaitable[None]: ...
+    def get_many(self, counters: Sequence[NativeCounter]) -> Awaitable[Sequence[float | None]]: ...
+    def flush_local_counters(self) -> None: ...
+    def snapshot(self) -> Mapping[str, float]: ...
+
+
+HandleFactory: TypeAlias = Callable[[RedisCache | None], UsageHandle]
+
+
+def native_handle(connection: RedisCache | None) -> UsageHandle:
+    if connection is None:
+        return NativeRouterUsage(None)
+    return NativeRouterUsage(redis_kwargs(connection), namespace=connection.namespace)
+
+
+def _native(counter: UsageCounter) -> NativeCounter:
+    return (counter.deployment_id, counter.model, counter.minute, counter.kind)
 
 
 class RouterUsageStore:
-    def __init__(self, connection: RedisCache | None) -> None:
-        self._cache: Final = DualCache(
-            redis_cache=connection,
-            in_memory_cache=InMemoryCache(
-                max_size_in_memory=POLICY.max_memory_entries, default_ttl=POLICY.backfill_ttl
-            ),
-            default_in_memory_ttl=POLICY.memory_ttl,
-            default_redis_ttl=POLICY.redis_ttl,
-            default_redis_batch_cache_expiry=POLICY.redis_read_interval,
-            default_max_redis_batch_cache_size=POLICY.max_batch_entries,
-        )
+    def __init__(self, connection: RedisCache | None, *, handle: HandleFactory = native_handle) -> None:
+        self._connected = connection is not None
+        self._build: Final = handle
+        self._handle = handle(connection)
 
     def attach_redis(self, connection: RedisCache | None) -> None:
-        self._cache.attach_redis_cache(connection)
+        if connection is None or self._connected:
+            return
+        self._connected = True
+        self._handle = self._build(connection)
 
     def flush_local_counters(self) -> None:
-        self._cache.in_memory_cache.flush_cache()
+        self._handle.flush_local_counters()
 
     @with_service_target(ROUTER_USAGE_TARGET)
     async def async_increment(
         self, counter: UsageCounter, value: float, ttl: int, parent_otel_span: Span | None = None
     ) -> float | None:
-        return await self._cache.async_increment_cache(
-            key=_key(counter), value=value, ttl=ttl, parent_otel_span=parent_otel_span
-        )
+        return await self._handle.increment(_native(counter), value, ttl)
 
     @with_service_target(ROUTER_USAGE_TARGET)
     async def increment_deployment(
@@ -101,18 +101,10 @@ class RouterUsageStore:
         requests: int,
         parent_otel_span: Span | None,
     ) -> None:
-        tpm: Final = UsageCounter(deployment_id, model, minute, "tpm")
-        rpm: Final = UsageCounter(deployment_id, model, minute, "rpm")
-        operations: Final = [
-            RedisPipelineIncrementOperation(key=_key(counter), increment_value=value, ttl=POLICY.counter_ttl)
-            for counter, value in ((tpm, tokens), (rpm, requests))
-        ]
-        values: Final = await self._cache.async_increment_cache_pipeline(
-            increment_list=operations, parent_otel_span=parent_otel_span
-        )
-        if values is not None and self._cache.redis_cache is not None:
-            for operation, value in zip(operations, values):
-                await self._cache.async_set_cache(operation["key"], int(value), local_only=True, ttl=POLICY.counter_ttl)
+        await self._handle.increment_deployment(deployment_id, model, minute, tokens, requests)
 
     async def async_batch_get(self, counters: Sequence[UsageCounter]) -> Sequence[object] | None:
-        return await self._cache.async_batch_get_cache(keys=[_key(counter) for counter in counters])
+        return await self._handle.get_many(tuple(map(_native, counters)))
+
+    def snapshot(self) -> Mapping[str, float]:
+        return self._handle.snapshot()

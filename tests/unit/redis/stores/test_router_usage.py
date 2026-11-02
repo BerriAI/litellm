@@ -1,12 +1,85 @@
-from typing import Final
-from unittest.mock import AsyncMock, MagicMock
+import asyncio
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import Final, TypeVar
 
 import pytest
 
 from litellm import Router
 from litellm._internal_context import current_service_target
 from litellm.caching.redis_cache import RedisCache
-from litellm.redis.stores.router_usage import RouterUsageStore, UsageCounter
+from litellm.redis.stores.router_usage import NativeCounter, RouterUsageStore, UsageCounter
+
+T = TypeVar("T")
+
+
+def _done(value: T) -> "asyncio.Future[T]":
+    future: Final[asyncio.Future[T]] = asyncio.get_running_loop().create_future()
+    future.set_result(value)
+    return future
+
+
+@dataclass
+class FakeUsage:
+    connected: bool
+    counts: dict[NativeCounter, float] = field(default_factory=dict)
+    calls: list[tuple[str, object, str | None]] = field(default_factory=list)
+
+    def increment(self, counter: NativeCounter, value: float, ttl_seconds: int) -> "asyncio.Future[float]":
+        self.calls.append(("increment", (counter, value, ttl_seconds), current_service_target()))
+        self.counts[counter] = self.counts.get(counter, 0) + value
+        return _done(self.counts[counter])
+
+    def increment_deployment(
+        self, deployment_id: str, model: str | None, minute: str, tokens: float, requests: int
+    ) -> "asyncio.Future[None]":
+        self.calls.append(("deployment", (deployment_id, model, minute, tokens, requests), current_service_target()))
+        for kind, value in (("tpm", tokens), ("rpm", requests)):
+            counter: NativeCounter = (deployment_id, model, minute, kind)  # pyright: ignore[reportAssignmentType]  # literal kinds
+            self.counts[counter] = self.counts.get(counter, 0) + value
+        return _done(None)
+
+    def get_many(self, counters: Sequence[NativeCounter]) -> "asyncio.Future[list[float | None]]":
+        return _done([self.counts.get(counter) for counter in counters])
+
+    def flush_local_counters(self) -> None:
+        self.counts.clear()
+
+    def snapshot(self) -> dict[str, float]:
+        return {}
+
+
+@dataclass
+class Handles:
+    built: list[FakeUsage] = field(default_factory=list)
+
+    def __call__(self, connection: RedisCache | None) -> FakeUsage:
+        self.built.append(FakeUsage(connection is not None))
+        return self.built[-1]
+
+
+@pytest.mark.asyncio
+async def test_counters_cross_the_bridge_as_domain_tuples_under_the_router_usage_target() -> None:
+    handles: Final = Handles()
+    store: Final = RouterUsageStore(None, handle=handles)
+    counter: Final = UsageCounter("dep", None, "12-34", "rpm")
+
+    await store.async_increment(counter, 1, 60)
+    await store.increment_deployment("dep", "model", "12-34", 7.5, 1, None)
+
+    assert handles.built[0].calls == [
+        ("increment", (("dep", None, "12-34", "rpm"), 1, 60), "router_usage"),
+        ("deployment", ("dep", "model", "12-34", 7.5, 1), "router_usage"),
+    ]
+    assert await store.async_batch_get((counter, UsageCounter("dep", "model", "12-34", "tpm"))) == [1, 7.5]
+
+
+def test_late_attach_rebuilds_the_handle_once() -> None:
+    handles: Final = Handles()
+    store: Final = RouterUsageStore(None, handle=handles)
+    store.attach_redis(RedisCache(host="redis.internal"))
+    store.attach_redis(RedisCache(host="other"))
+    assert [handle.connected for handle in handles.built] == [False, True]
 
 
 @pytest.mark.asyncio
@@ -22,66 +95,3 @@ async def test_router_reset_clears_usage_and_failure_counters(operation: str) ->
     getattr(router, operation)()
     assert await usage.async_batch_get(counters) == [None, None]
     assert cooldowns.increment_allowed_fails("dep", None, 30.0) == 1
-
-
-@pytest.mark.asyncio
-async def test_deployment_increment_preserves_pipeline_ttl_and_integer_mirror() -> None:
-    redis: Final = MagicMock(spec=RedisCache)
-    redis.async_increment_pipeline = AsyncMock(return_value=[7.75, 2.0])
-    store: Final = RouterUsageStore(redis)
-    await store.increment_deployment("dep", "anthropic/model", "12-34", 7.75, 2, None)
-    redis.async_increment_pipeline.assert_awaited_once_with(
-        increment_list=[
-            {"key": "global_router:dep:anthropic/model:tpm:12-34", "increment_value": 7.75, "ttl": 60},
-            {"key": "global_router:dep:anthropic/model:rpm:12-34", "increment_value": 2, "ttl": 60},
-        ],
-        parent_otel_span=None,
-    )
-    values: Final = await store.async_batch_get(
-        (UsageCounter("dep", "anthropic/model", "12-34", "tpm"), UsageCounter("dep", "anthropic/model", "12-34", "rpm"))
-    )
-    assert values == [7, 2]
-    assert all(type(value) is int for value in values)
-    redis.async_batch_get_cache.assert_not_called()
-    assert current_service_target() is None
-
-
-@pytest.mark.asyncio
-async def test_memory_only_usage_increments_accumulate_without_redis() -> None:
-    store: Final = RouterUsageStore(None)
-    await store.increment_deployment("dep", "model", "12-34", 2, 1, None)
-    await store.increment_deployment("dep", "model", "12-34", 5, 1, None)
-    assert await store.async_batch_get(
-        (UsageCounter("dep", "model", "12-34", "tpm"), UsageCounter("dep", "model", "12-34", "rpm"))
-    ) == [7, 2]
-
-
-@pytest.mark.asyncio
-async def test_pre_call_rpm_increment_uses_same_namespace_and_service_target() -> None:
-    redis: Final = MagicMock(spec=RedisCache)
-    seen: Final[list[str | None]] = []
-
-    async def increment(*args: object, **kwargs: object) -> float:
-        seen.append(current_service_target())
-        return 4.0
-
-    redis.async_increment = AsyncMock(side_effect=increment)
-    store: Final = RouterUsageStore(None)
-    store.attach_redis(redis)
-    counter: Final = UsageCounter("dep", "model", "12-34", "rpm")
-    assert await store.async_increment(counter, value=1, ttl=60) == 4.0
-    assert seen == ["router_usage"]
-    redis.async_increment.assert_awaited_once_with(
-        "global_router:dep:model:rpm:12-34", 1, parent_otel_span=None, ttl=60, refresh_ttl=False
-    )
-
-
-@pytest.mark.asyncio
-async def test_failed_usage_pipeline_keeps_the_memory_increment_and_is_readable() -> None:
-    redis: Final = MagicMock(spec=RedisCache)
-    redis.async_increment_pipeline = AsyncMock(side_effect=ConnectionError("offline"))
-    store: Final = RouterUsageStore(redis)
-    await store.increment_deployment("dep", "model", "12-34", 5, 1, None)
-    assert await store.async_batch_get(
-        (UsageCounter("dep", "model", "12-34", "tpm"), UsageCounter("dep", "model", "12-34", "rpm"))
-    ) == [5, 1]

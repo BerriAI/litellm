@@ -258,6 +258,25 @@ CASES: Final[tuple[tuple[str, Mapping[str, object], Mapping[str, str]], ...]] = 
     ("protocol_3", {"host": "redis", "protocol": 3}, {}),
     ("retry_on_error_from_the_environment", {"host": "redis"}, {"REDIS_RETRY_ON_ERROR": "true"}),
     ("unix_socket_path", {"host": "redis", "unix_socket_path": "/tmp/redis.sock"}, {}),
+    (
+        "unix_socket_path_keeps_tls_settings_out_of_the_target",
+        {"host": "redis", "ssl": True, "ssl_ca_certs": "/ca.pem", "unix_socket_path": "/tmp/redis.sock"},
+        {},
+    ),
+    (
+        "ssl_ca_data",
+        {"host": "redis", "ssl": True, "ssl_ca_data": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"},
+        {},
+    ),
+    (
+        "ssl_ca_path_from_the_environment",
+        {"host": "redis"},
+        {"REDIS_SSL": "true", "REDIS_SSL_CA_PATH": "/etc/ssl/private-cas"},
+    ),
+    ("health_check_interval_is_whole_seconds", {"health_check_interval": "7", "host": "redis"}, {}),
+    ("health_check_interval_zero_is_off", {"health_check_interval": 0, "host": "redis"}, {}),
+    ("a_cluster_rejects_a_nonzero_db", {"startup_nodes": [{"host": "node-a", "port": 7000}], "db": 3}, {}),
+    ("unix_socket_path_without_a_host_fails_like_python", {"unix_socket_path": "/tmp/redis.sock"}, {}),
 )
 
 
@@ -280,6 +299,8 @@ def _tls(connection: AbstractConnection) -> dict[str, object] | None:
     context: Final = connection.ssl_context
     return {
         "ca_certs": context.ca_certs,
+        "ca_data": context.ca_data,
+        "ca_path": None,
         "certfile": context.certfile,
         "keyfile": context.keyfile,
         "verify_certificate": context.cert_reqs != ssl.CERT_NONE,
@@ -318,6 +339,7 @@ def _cluster(client: async_redis.RedisCluster[bytes]) -> dict[str, object]:
         "auth": _auth(kwargs),
         "socket_timeout": connection.socket_timeout,
         "socket_connect_timeout": connection.socket_connect_timeout,
+        "health_check_interval": float(connection.health_check_interval) or None,
     }
 
 
@@ -338,6 +360,7 @@ def _sentinel(pool: async_redis.SentinelConnectionPool[async_redis.Connection]) 
         "auth": _auth(kwargs),
         "socket_timeout": connection.socket_timeout,
         "socket_connect_timeout": connection.socket_connect_timeout,
+        "health_check_interval": float(connection.health_check_interval) or None,
     }
 
 
@@ -359,6 +382,7 @@ def _single(pool: async_redis.ConnectionPool[AbstractConnection], url: object) -
         "auth": _auth(kwargs),
         "socket_timeout": connection.socket_timeout,
         "socket_connect_timeout": connection.socket_connect_timeout,
+        "health_check_interval": float(connection.health_check_interval) or None,
     }
 
 

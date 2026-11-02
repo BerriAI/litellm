@@ -91,12 +91,14 @@ async fn an_out_of_range_database_is_a_server_rejection() {
             port,
             tls: None,
             db: 999,
+            unix_socket_path: None,
         }),
         credentials: Credentials::NONE,
         namespace: Namespace::default(),
         timeouts: Timeouts::new(Duration::from_secs(2), None),
         breaker: None,
         events: None,
+        health_check: None,
     })
     .unwrap();
     let result = client.ping().await;
@@ -145,6 +147,7 @@ fn sentinel_client(sentinel: &RedisSentinel) -> RedisClient {
         timeouts: Timeouts::new(Duration::from_secs(1), None),
         breaker: None,
         events: None,
+        health_check: None,
     })
     .unwrap()
 }

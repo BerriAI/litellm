@@ -93,6 +93,7 @@ class FakeRedisCache(RedisCache):
     def __init__(self, client: FakeClient, namespace: str | None = None) -> None:  # super().__init__ needs a server
         self.client = client
         self.namespace = namespace
+        self.redis_kwargs = {"host": "127.0.0.1", "port": 1, "socket_timeout": 0.2, "db": id(self) % 1_000_000}
         self._circuit_breaker = RedisCircuitBreaker(failure_threshold=5, recovery_timeout=30)
         self.service_logger_obj = ServiceLogging()
         self.default_ttl = None

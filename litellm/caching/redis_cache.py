@@ -472,8 +472,14 @@ _LIVE_BREAKERS: Final[weakref.WeakSet[RedisCircuitBreaker]] = weakref.WeakSet()
 
 
 def redis_breaker_state_counts() -> Mapping[str, int]:
-    """How many live Redis circuit breakers sit in each state, for the Prometheus services logger."""
-    return MappingProxyType(dict(Counter(breaker.state for breaker in _LIVE_BREAKERS)))
+    """How many live Redis circuit breakers sit in each state, for the Prometheus services logger.
+
+    Counts the Python breakers of every live ``RedisCache`` and the breaker of every native Redis
+    client the router stores built, since each opens and closes on its own."""
+    from litellm.rust_bridge._native import native_redis_breaker_states
+
+    python_states: Final = Counter(breaker.state for breaker in _LIVE_BREAKERS)
+    return MappingProxyType(dict(python_states + Counter(native_redis_breaker_states())))
 
 
 class RedisCircuitBreakerOpenError(Exception):

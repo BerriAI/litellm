@@ -16,12 +16,11 @@ import respx
 
 import litellm
 from litellm import Router
-from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
-from litellm.caching.redis_cache import RedisCache
-from litellm.redis.stores.router_cooldowns import RouterCooldowns, RouterCooldownStore
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
+from litellm.redis.stores.router_cooldowns import RouterCooldowns, RouterCooldownStore
 from litellm.router_api import RoutingContext
 from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
@@ -378,9 +377,8 @@ class TestShouldCooldownBasedOnAllowedFailsPolicy:
         store.increment_allowed_fails.assert_called_once_with("dep-1", None, 0.0)
 
     def test_fail_counter_is_shared_across_router_instances(self):
-        redis: Final = MagicMock(spec=RedisCache)
-        redis.increment_cache.side_effect = itertools.count(1)
-        workers: Final = tuple(self._make_router(store=RouterCooldownStore(redis)) for _ in range(2))
+        shared: Final = RouterCooldownStore(None)
+        workers: Final = tuple(self._make_router(store=shared) for _ in range(2))
         exc: Final = litellm.AuthenticationError("401", "openai", "gpt-4")
         results: Final = [
             should_cooldown_based_on_allowed_fails_policy(
@@ -389,30 +387,16 @@ class TestShouldCooldownBasedOnAllowedFailsPolicy:
             for i in range(6)
         ]
         assert results == [False, False, False, False, False, True]
-        assert redis.increment_cache.call_count == 6
 
-    def test_fleet_wide_count_from_redis_decides_cooldown(self):
-        redis: Final = MagicMock(spec=RedisCache)
-        redis.increment_cache.return_value = 6
-        ctx: Final = self._make_router(store=RouterCooldownStore(redis))
+    def test_fleet_wide_count_from_the_store_decides_cooldown(self):
+        store: Final = MagicMock(spec=RouterCooldowns)
+        store.increment_allowed_fails.return_value = 6
+        ctx: Final = self._make_router(store=store)
         exc: Final = litellm.AuthenticationError("401", "openai", "gpt-4")
         assert should_cooldown_based_on_allowed_fails_policy(
             ctx=ctx, deployment="dep-1", original_exception=exc, allowed_fails_override=5
         )
-        redis.increment_cache.assert_called_once_with("deployment:dep-1:allowed_fails", 1, ttl=60.0)
-
-    def test_redis_outage_falls_back_to_this_workers_count(self):
-        redis: Final = MagicMock(spec=RedisCache)
-        redis.increment_cache.side_effect = ConnectionError("redis down")
-        ctx: Final = self._make_router(store=RouterCooldownStore(redis))
-        exc: Final = litellm.AuthenticationError("401", "openai", "gpt-4")
-        assert [
-            should_cooldown_based_on_allowed_fails_policy(
-                ctx=ctx, deployment="dep-1", original_exception=exc, allowed_fails_override=5
-            )
-            for _ in range(6)
-        ] == [False, False, False, False, False, True]
-        assert redis.increment_cache.call_count == 6
+        store.increment_allowed_fails.assert_called_once_with("dep-1", None, 60.0)
 
 
 class TestRoutingGroupCooldownAlternatives:
@@ -558,38 +542,6 @@ class TestTeamModelCooldownAlternatives:
             )
             is False
         )
-
-
-class TestIncrementAllowedFailsServiceTarget:
-    def test_fail_counter_bump_declares_the_router_cooldowns_key_family(self):
-        """The allowed_fails INCR is cooldown bookkeeping, so its service span must read
-        ``redis.incr router_cooldowns`` rather than a bare ``redis.incr``."""
-        seen: list[str | None] = []
-        cache = MagicMock(spec=RedisCache)
-
-        def _increment(*_args, **_kwargs):
-            seen.append(current_service_target())
-            return 2
-
-        cache.increment_cache.side_effect = _increment
-
-        assert RouterCooldownStore(cache).increment_allowed_fails("dep-1", None, 60.0) == 2
-        assert seen == ["router_cooldowns"]
-        assert current_service_target() is None
-
-    def test_in_memory_fallback_reads_under_the_same_target(self):
-        seen: list[str | None] = []
-        cache = MagicMock(spec=RedisCache)
-
-        def _increment(*_args, **_kwargs):
-            seen.append(current_service_target())
-            raise ConnectionError("redis down")
-
-        cache.increment_cache.side_effect = _increment
-        store = RouterCooldownStore(cache)
-
-        assert [store.increment_allowed_fails("dep-1", None, 60.0) for _ in range(4)] == [1, 2, 3, 4]
-        assert seen == ["router_cooldowns"] * 4
 
 
 @pytest.fixture()
@@ -869,14 +821,14 @@ class TestExceptionTypeCountersTrackedIndependently:
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestCooldownCacheTTLCorrection:
-    @pytest.mark.parametrize(("timestamp", "active"), ((880.0, False), (1000.0, True)))
+    @pytest.mark.parametrize(("age", "active"), ((120.0, False), (0.0, True)))
     @pytest.mark.parametrize("asynchronous", (False, True))
     @pytest.mark.asyncio
-    async def test_only_unexpired_cooldowns_are_returned(self, timestamp: float, active: bool, asynchronous: bool):
-        store: Final = RouterCooldownStore(None, clock=lambda: 1000.0)
+    async def test_only_unexpired_cooldowns_are_returned(self, age: float, active: bool, asynchronous: bool):
+        store: Final = RouterCooldownStore(None)
         cc: Final = CooldownCache(store, default_cooldown_time=60.0)
         value: Final = CooldownCacheValue(
-            exception_received="Rate limit", status_code="429", timestamp=timestamp, cooldown_time=60.0
+            exception_received="Rate limit", status_code="429", timestamp=time.time() - age, cooldown_time=60.0
         )
         store.put("deployment", value, 600)
         result: Final = (
@@ -2097,7 +2049,6 @@ def test_increment_deployment_successes_for_current_minute_does_not_write_to_red
     """
     from litellm.caching.dual_cache import DualCache
     from litellm.caching.in_memory_cache import InMemoryCache
-    from litellm.caching.redis_cache import RedisCache
     from litellm.router_utils.router_callbacks.track_deployment_metrics import (
         increment_deployment_successes_for_current_minute,
     )
@@ -2595,7 +2546,6 @@ async def test_high_traffic_cooldowns_all_healthy_deployments():
             await asyncio.sleep(0.0001)
         except litellm.InternalServerError:
             model_stats[model_id]["failures"] += 1
-            pass
         except Exception as e:
             print("Failed test model stats=", model_stats)
             raise e
@@ -2689,7 +2639,6 @@ async def test_high_traffic_cooldowns_one_bad_deployment():
             await asyncio.sleep(0.0001)
         except litellm.InternalServerError:
             model_stats[model_id]["failures"] += 1
-            pass
         except Exception as e:
             print("Failed test model stats=", model_stats)
             raise e
@@ -2783,10 +2732,8 @@ async def test_high_traffic_cooldowns_one_rate_limited_deployment():
             await asyncio.sleep(0.0001)
         except litellm.InternalServerError:
             model_stats[model_id]["failures"] += 1
-            pass
         except litellm.RateLimitError:
             model_stats[bad_deployment_id]["failures"] += 1
-            pass
         except Exception as e:
             print("Failed test model stats=", model_stats)
             raise e

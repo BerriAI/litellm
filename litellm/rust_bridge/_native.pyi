@@ -1,6 +1,6 @@
 from asyncio import Future
 from collections.abc import Mapping, Sequence
-from typing import Never, final
+from typing import Literal, Never, TypedDict, final
 
 import httpx
 from pydantic import JsonValue
@@ -15,6 +15,7 @@ class ProcessReservedForForking(RuntimeError): ...
 
 def trace_encode_error(message: str) -> bytes: ...
 def bundled_model_cost_map() -> bytes: ...
+def native_redis_breaker_states() -> list[str]: ...
 
 @final
 class NativeClickHouseSpendConfig:
@@ -25,6 +26,43 @@ class NativeClickHouseSpendStorage:
     def __new__(cls, config: NativeClickHouseSpendConfig) -> NativeClickHouseSpendStorage: ...
     def ensure_schema(self) -> Future[None]: ...
     def insert_rows(self, rows: Sequence[Mapping[str, object]]) -> Future[None]: ...
+
+class _NativeCooldown(TypedDict):
+    exception_received: str
+    status_code: str
+    timestamp: float
+    cooldown_time: float
+
+@final
+class NativeRouterCooldowns:
+    def __new__(
+        cls, redis_kwargs: Mapping[str, object] | None, *, namespace: str | None = None
+    ) -> NativeRouterCooldowns: ...
+    def put(self, model_id: str, cooldown: Mapping[str, object], ttl_seconds: float) -> None: ...
+    def increment_allowed_fails(self, model_id: str, suffix: str | None, ttl_seconds: float) -> int: ...
+    def active(self, model_ids: Sequence[str]) -> list[tuple[str, _NativeCooldown]]: ...
+    def aactive(self, model_ids: Sequence[str]) -> Future[list[tuple[str, _NativeCooldown]]]: ...
+    def minimum(self, model_ids: Sequence[str]) -> float | None: ...
+    def evict_local(self, model_id: str) -> None: ...
+    def flush_local_counters(self) -> None: ...
+    def snapshot(self) -> dict[str, _NativeCooldown]: ...
+
+@final
+class NativeRouterUsage:
+    def __new__(
+        cls, redis_kwargs: Mapping[str, object] | None, *, namespace: str | None = None
+    ) -> NativeRouterUsage: ...
+    def increment(
+        self, counter: tuple[str, str | None, str, Literal["tpm", "rpm"]], value: float, ttl_seconds: int
+    ) -> Future[float]: ...
+    def increment_deployment(
+        self, deployment_id: str, model: str | None, minute: str, tokens: float, requests: int
+    ) -> Future[None]: ...
+    def get_many(
+        self, counters: Sequence[tuple[str, str | None, str, Literal["tpm", "rpm"]]]
+    ) -> Future[list[float | None]]: ...
+    def flush_local_counters(self) -> None: ...
+    def snapshot(self) -> dict[str, float]: ...
 
 @final
 class NativeDatabase:
@@ -216,6 +254,8 @@ __all__ = [
     "NativeClickHouseSpendStorage",
     "NativeDatabase",
     "NativeDiagnosticProcessor",
+    "NativeRouterCooldowns",
+    "NativeRouterUsage",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",
@@ -233,6 +273,7 @@ __all__ = [
     "embedding",
     "gil_stats",
     "messages",
+    "native_redis_breaker_states",
     "ocr",
     "ocr_health_check_document",
     "ocr_passthrough_response",

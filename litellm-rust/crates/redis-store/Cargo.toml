@@ -1,0 +1,22 @@
+[package]
+name = "litellm-redis-store"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+litellm-cache.workspace = true
+litellm-cache-memory.workspace = true
+litellm-python-compat.workspace = true
+litellm-redis-client.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+litellm-circuit-breaker.workspace = true
+litellm-redis-testing.workspace = true
+litellm-secret-value.workspace = true
+rstest.workspace = true
+tokio.workspace = true

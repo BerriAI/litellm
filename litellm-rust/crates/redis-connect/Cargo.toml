@@ -17,6 +17,7 @@ litellm-circuit-breaker.workspace = true
 litellm-config.workspace = true
 litellm-core-utils.workspace = true
 litellm-http.workspace = true
+rustls.workspace = true
 litellm-redis-client.workspace = true
 futures-util.workspace = true
 serde.workspace = true

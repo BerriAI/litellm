@@ -20,7 +20,5 @@ pub use capabilities::{
     RefreshTtlCache, ScanCache, ScriptCache, SetCache, TtlCache, TtlPipelineCache,
 };
 pub use codec::{CacheCodec, JsonCodec};
-pub use dual::{
-    DEFAULT_DELETE_BATCH_SIZE, DualCache, ReadPolicy, RemoteFailurePolicy, WritePolicy,
-};
+pub use dual::{Clock, DualCache, OnBreakerOpen, TierPolicy, system_clock};
 pub use error::{Error, ShortBatch};

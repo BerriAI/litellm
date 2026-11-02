@@ -12,6 +12,7 @@ use redis::{
     aio::{ConnectionLike, ConnectionManager, ConnectionManagerConfig, MultiplexedConnection},
     cluster::{ClusterClientBuilder, ClusterConfig},
     cluster_async::ClusterConnection,
+    cluster_routing::{MultipleNodeRoutingInfo, ResponsePolicy, RoutingInfo},
     io::tcp::TcpSettings,
     sentinel::{SentinelClient, SentinelClientBuilder, SentinelServerType},
 };
@@ -128,6 +129,30 @@ impl Connection {
                 .build()?
                 .get_pending_async_connection_with_config(config),
         ))
+    }
+}
+
+impl Connection {
+    /// `PING` on the one multiplexed connection, or on every cluster node, so a dead socket is
+    /// found and replaced by redis-rs before a real command uses it.
+    pub(crate) async fn ping_every_node(&self) -> RedisResult<()> {
+        let ping = redis::cmd("PING");
+        match self {
+            Self::Cluster(connection) => connection
+                .clone()
+                .route_command(
+                    ping,
+                    RoutingInfo::MultiNode((
+                        MultipleNodeRoutingInfo::AllNodes,
+                        Some(ResponsePolicy::AllSucceeded),
+                    )),
+                )
+                .await
+                .map(drop),
+            Self::Standalone(_) | Self::Sentinel(_) => {
+                ping.query_async::<Value>(&mut self.clone()).await.map(drop)
+            }
+        }
     }
 }
 
@@ -277,6 +302,7 @@ impl SentinelConnection {
             port,
             tls: self.0.endpoint.tls.clone(),
             db: self.0.endpoint.db,
+            unix_socket_path: None,
         });
         let info =
             config::connection_info(&endpoint, &self.0.credentials).map_err(

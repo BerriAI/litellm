@@ -13,6 +13,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -35,6 +36,7 @@
           "password": null,
           "username": null
         },
+        "health_check_interval": 25.0,
         "mode": "cluster",
         "nodes": [
           "node-a:7000"
@@ -60,6 +62,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "mode": "sentinel",
         "nodes": [
           "sentinel-a:26379"
@@ -92,6 +95,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "mode": "sentinel",
         "nodes": [
           "sentinel-a:26379"
@@ -117,6 +121,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -159,6 +164,7 @@
           "username": "user"
         },
         "db": 2,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6380,
@@ -166,6 +172,8 @@
         "socket_timeout": 1.5,
         "tls": {
           "ca_certs": null,
+          "ca_data": null,
+          "ca_path": null,
           "certfile": null,
           "check_hostname": false,
           "keyfile": null,
@@ -189,6 +197,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "environment",
         "mode": "host",
         "port": 6390,
@@ -196,6 +205,8 @@
         "socket_timeout": 5.0,
         "tls": {
           "ca_certs": null,
+          "ca_data": null,
+          "ca_path": null,
           "certfile": null,
           "check_hostname": false,
           "keyfile": null,
@@ -219,6 +230,7 @@
           "username": null
         },
         "db": 3,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6380,
@@ -242,6 +254,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -262,6 +275,7 @@
           "password": null,
           "username": null
         },
+        "health_check_interval": null,
         "mode": "url",
         "socket_connect_timeout": 5.0,
         "socket_timeout": 5.0,
@@ -282,6 +296,7 @@
           "password": null,
           "username": null
         },
+        "health_check_interval": null,
         "mode": "url",
         "socket_connect_timeout": 5.0,
         "socket_timeout": 5.0,
@@ -304,6 +319,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "configured",
         "mode": "host",
         "port": 6379,
@@ -328,11 +344,14 @@
           "password": null,
           "username": "user"
         },
+        "health_check_interval": null,
         "mode": "url",
         "socket_connect_timeout": 5.0,
         "socket_timeout": 5.0,
         "tls": {
           "ca_certs": null,
+          "ca_data": null,
+          "ca_path": null,
           "certfile": null,
           "check_hostname": false,
           "keyfile": null,
@@ -356,11 +375,14 @@
           "password": null,
           "username": null
         },
+        "health_check_interval": null,
         "mode": "url",
         "socket_connect_timeout": 5.0,
         "socket_timeout": 5.0,
         "tls": {
           "ca_certs": null,
+          "ca_data": null,
+          "ca_path": null,
           "certfile": null,
           "check_hostname": false,
           "keyfile": null,
@@ -388,6 +410,7 @@
           "password": "cluster-secret",
           "username": null
         },
+        "health_check_interval": 25.0,
         "mode": "cluster",
         "nodes": [
           "node-a:7000"
@@ -409,6 +432,7 @@
           "password": null,
           "username": null
         },
+        "health_check_interval": 25.0,
         "mode": "cluster",
         "nodes": [
           "node-a:7000",
@@ -439,6 +463,7 @@
           "password": null,
           "username": null
         },
+        "health_check_interval": 25.0,
         "mode": "cluster",
         "nodes": [
           "node-a:7000"
@@ -447,6 +472,8 @@
         "socket_timeout": 5.0,
         "tls": {
           "ca_certs": "/ca.pem",
+          "ca_data": null,
+          "ca_path": null,
           "certfile": null,
           "check_hostname": true,
           "keyfile": null,
@@ -479,6 +506,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "mode": "sentinel",
         "nodes": [
           "sentinel-a:26379",
@@ -506,6 +534,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "mode": "sentinel",
         "nodes": [
           "sentinel-a:26379"
@@ -556,6 +585,7 @@
           "password": null,
           "username": null
         },
+        "health_check_interval": null,
         "mode": "url",
         "socket_connect_timeout": 5.0,
         "socket_timeout": 5.0,
@@ -580,6 +610,7 @@
           "kind": "host"
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -605,6 +636,7 @@
           "service_account": "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com"
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -629,6 +661,7 @@
           "service_account": "account"
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -636,6 +669,8 @@
         "socket_timeout": 5.0,
         "tls": {
           "ca_certs": "/gcp-ca.pem",
+          "ca_data": null,
+          "ca_path": null,
           "certfile": null,
           "check_hostname": false,
           "keyfile": null,
@@ -663,6 +698,7 @@
           "username": "environment-user"
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -687,6 +723,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -712,6 +749,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -742,6 +780,7 @@
           "user_name": "iam-user"
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "cache-1",
         "mode": "host",
         "port": 6379,
@@ -749,6 +788,8 @@
         "socket_timeout": 5.0,
         "tls": {
           "ca_certs": null,
+          "ca_data": null,
+          "ca_path": null,
           "certfile": null,
           "check_hostname": false,
           "keyfile": null,
@@ -778,6 +819,7 @@
           "user_name": "iam-user"
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "cache-1",
         "mode": "host",
         "port": 6379,
@@ -785,6 +827,8 @@
         "socket_timeout": 5.0,
         "tls": {
           "ca_certs": null,
+          "ca_data": null,
+          "ca_path": null,
           "certfile": null,
           "check_hostname": false,
           "keyfile": null,
@@ -811,11 +855,14 @@
           "serverless": true,
           "user_name": "iam-user"
         },
+        "health_check_interval": null,
         "mode": "url",
         "socket_connect_timeout": 5.0,
         "socket_timeout": 5.0,
         "tls": {
           "ca_certs": null,
+          "ca_data": null,
+          "ca_path": null,
           "certfile": null,
           "check_hostname": false,
           "keyfile": null,
@@ -875,6 +922,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -882,6 +930,8 @@
         "socket_timeout": 5.0,
         "tls": {
           "ca_certs": "/ca.pem",
+          "ca_data": null,
+          "ca_path": null,
           "certfile": null,
           "check_hostname": true,
           "keyfile": null,
@@ -906,6 +956,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -913,6 +964,8 @@
         "socket_timeout": 5.0,
         "tls": {
           "ca_certs": "/env-ca.pem",
+          "ca_data": null,
+          "ca_path": null,
           "certfile": null,
           "check_hostname": false,
           "keyfile": null,
@@ -935,6 +988,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -960,6 +1014,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "referenced",
         "mode": "host",
         "port": 6379,
@@ -997,6 +1052,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -1004,6 +1060,8 @@
         "socket_timeout": 5.0,
         "tls": {
           "ca_certs": null,
+          "ca_data": null,
+          "ca_path": null,
           "certfile": "/client.pem",
           "check_hostname": false,
           "keyfile": "/client.key",
@@ -1023,11 +1081,14 @@
           "password": null,
           "username": null
         },
+        "health_check_interval": null,
         "mode": "url",
         "socket_connect_timeout": 5.0,
         "socket_timeout": 5.0,
         "tls": {
           "ca_certs": "/ca.pem",
+          "ca_data": null,
+          "ca_path": null,
           "certfile": null,
           "check_hostname": true,
           "keyfile": null,
@@ -1048,6 +1109,7 @@
           "password": null,
           "username": null
         },
+        "health_check_interval": null,
         "mode": "url",
         "socket_connect_timeout": 2.0,
         "socket_timeout": 2.0,
@@ -1069,11 +1131,14 @@
           "password": null,
           "username": null
         },
+        "health_check_interval": null,
         "mode": "url",
         "socket_connect_timeout": 5.0,
         "socket_timeout": 5.0,
         "tls": {
           "ca_certs": null,
+          "ca_data": null,
+          "ca_path": null,
           "certfile": null,
           "check_hostname": false,
           "keyfile": null,
@@ -1138,6 +1203,7 @@
           "password": null,
           "username": null
         },
+        "health_check_interval": 25.0,
         "mode": "cluster",
         "nodes": [
           "node-a:7000"
@@ -1184,6 +1250,7 @@
           "password": null,
           "username": null
         },
+        "health_check_interval": 25.0,
         "mode": "cluster",
         "nodes": [
           "node-a:7000"
@@ -1232,6 +1299,7 @@
           "password": null,
           "username": null
         },
+        "health_check_interval": 25.0,
         "mode": "cluster",
         "nodes": [
           "node-a:7000"
@@ -1256,6 +1324,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -1263,6 +1332,8 @@
         "socket_timeout": 5.0,
         "tls": {
           "ca_certs": null,
+          "ca_data": null,
+          "ca_path": null,
           "certfile": null,
           "check_hostname": false,
           "keyfile": null,
@@ -1284,6 +1355,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -1306,6 +1378,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -1328,6 +1401,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -1350,6 +1424,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -1372,6 +1447,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -1394,6 +1470,7 @@
           "username": null
         },
         "db": 0,
+        "health_check_interval": null,
         "host": "redis",
         "mode": "host",
         "port": 6379,
@@ -1430,11 +1507,161 @@
           "password": null,
           "username": null
         },
+        "health_check_interval": null,
         "mode": "unix",
         "path": "/tmp/redis.sock",
         "socket_connect_timeout": 5.0,
         "socket_timeout": 5.0,
         "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "host": "redis",
+        "ssl": true,
+        "ssl_ca_certs": "/ca.pem",
+        "unix_socket_path": "/tmp/redis.sock"
+      },
+      "name": "unix_socket_path_keeps_tls_settings_out_of_the_target",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "health_check_interval": null,
+        "mode": "unix",
+        "path": "/tmp/redis.sock",
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "host": "redis",
+        "ssl": true,
+        "ssl_ca_data": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+      },
+      "name": "ssl_ca_data",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "health_check_interval": null,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": {
+          "ca_certs": null,
+          "ca_data": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+          "ca_path": null,
+          "certfile": null,
+          "check_hostname": false,
+          "keyfile": null,
+          "verify_certificate": true
+        }
+      }
+    },
+    {
+      "environment": {
+        "REDIS_SSL": "true",
+        "REDIS_SSL_CA_PATH": "/etc/ssl/private-cas"
+      },
+      "kwargs": {
+        "host": "redis"
+      },
+      "name": "ssl_ca_path_from_the_environment",
+      "python": {
+        "rejected": {
+          "message": "Redis.__init__() got an unexpected keyword argument 'ssl_ca_path'",
+          "type": "TypeError"
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "health_check_interval": "7",
+        "host": "redis"
+      },
+      "name": "health_check_interval_is_whole_seconds",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "health_check_interval": 7.0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "health_check_interval": 0,
+        "host": "redis"
+      },
+      "name": "health_check_interval_zero_is_off",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "health_check_interval": null,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "db": 3,
+        "startup_nodes": [
+          {
+            "host": "node-a",
+            "port": 7000
+          }
+        ]
+      },
+      "name": "a_cluster_rejects_a_nonzero_db",
+      "python": {
+        "rejected": {
+          "message": "Argument 'db' must be 0 or None in cluster mode",
+          "type": "RedisClusterException"
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "unix_socket_path": "/tmp/redis.sock"
+      },
+      "name": "unix_socket_path_without_a_host_fails_like_python",
+      "python": {
+        "rejected": {
+          "message": "Either 'host' or 'url' must be specified for redis.",
+          "type": "ValueError"
+        }
       }
     }
   ]

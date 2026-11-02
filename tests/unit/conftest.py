@@ -16,10 +16,25 @@ import pytest
 from pytest_socket import enable_socket, socket_allow_hosts
 
 if TYPE_CHECKING:
+    from unittest.mock import MagicMock
+
     from litellm.caching.redis_cache import RedisCache
 
 RouterRedis: TypeAlias = tuple["RedisCache", asyncio.Queue[tuple[tuple[object, ...], str | None, str | None]]]
 RedisWriteGate: TypeAlias = tuple[asyncio.Event, asyncio.Event, asyncio.Event]
+
+
+def redis_cache_double() -> "MagicMock":
+    """A `RedisCache` double for router tests. The native router stores connect from its settings, which name
+    a closed local port, so they serve their memory tier while the double answers the Python Redis calls."""
+    from unittest.mock import MagicMock
+
+    from litellm.caching.redis_cache import RedisCache
+
+    redis: Final = MagicMock(spec=RedisCache)
+    redis.redis_kwargs = {"host": "127.0.0.1", "port": 1, "socket_timeout": 0.2}
+    redis.namespace = None
+    return redis
 
 
 @pytest.fixture

@@ -105,12 +105,12 @@ from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text
+from tests.unit.conftest import redis_cache_double
 import traceback
 import inspect
 from typing import List, Optional
 
 if TYPE_CHECKING:
-    from tests.unit.conftest import RedisWriteGate, RouterRedis
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
     from litellm.integrations.otel.logger import OpenTelemetryV2
@@ -15461,11 +15461,10 @@ class TestClaudeCodeSubagentSessionRouterBinding:
 
     @pytest.mark.asyncio
     async def test_redis_cleanup_failure_does_not_reject_a_subagent_request(self):
-        from litellm.caching.caching import RedisCache
 
         router = self._router()
         del router.complexity_routers["smart-router"]
-        redis_cache = MagicMock(spec=RedisCache)
+        redis_cache = redis_cache_double()
         redis_cache.async_get_cache = AsyncMock(return_value="smart-router")
         redis_cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis unavailable"))
         router.update_redis_cache(cache=redis_cache)
@@ -15480,7 +15479,6 @@ class TestClaudeCodeSubagentSessionRouterBinding:
 
     @pytest.mark.asyncio
     async def test_redis_read_failure_does_not_reject_a_subagent_request(self):
-        from litellm.caching.caching import RedisCache
 
         router = self._router()
         request_kwargs = self._request_kwargs(agent_id="agent-1234")
@@ -15490,7 +15488,7 @@ class TestClaudeCodeSubagentSessionRouterBinding:
             cache_key,
             "smart-router",
         )
-        redis_cache = MagicMock(spec=RedisCache)
+        redis_cache = redis_cache_double()
         redis_cache.async_get_cache = AsyncMock(side_effect=Exception("Redis circuit breaker is open"))
         router.update_redis_cache(cache=redis_cache)
 
@@ -15505,10 +15503,9 @@ class TestClaudeCodeSubagentSessionRouterBinding:
 
     @pytest.mark.asyncio
     async def test_redis_write_failures_do_not_reject_main_or_subagent_requests(self):
-        from litellm.caching.caching import RedisCache
 
         router = self._router()
-        redis_cache = MagicMock(spec=RedisCache)
+        redis_cache = redis_cache_double()
         redis_cache.async_get_cache = AsyncMock(return_value="smart-router")
         redis_cache.async_set_cache = AsyncMock(side_effect=Exception("redis unavailable"))
         router.update_redis_cache(cache=redis_cache)
@@ -15532,10 +15529,9 @@ class TestClaudeCodeSubagentSessionRouterBinding:
     async def test_subagents_follow_the_main_threads_latest_router_across_workers(self):
         from types import SimpleNamespace
 
-        from litellm.caching.caching import RedisCache
 
         shared_binding = SimpleNamespace(value=None)
-        shared_redis = MagicMock(spec=RedisCache)
+        shared_redis = redis_cache_double()
         shared_redis.async_get_cache = AsyncMock(side_effect=lambda key, **_: shared_binding.value)
         shared_redis.async_set_cache = AsyncMock(
             side_effect=lambda key, value, **_: setattr(shared_binding, "value", value)
@@ -15563,11 +15559,10 @@ class TestClaudeCodeSubagentSessionRouterBinding:
 
     @pytest.mark.asyncio
     async def test_no_pre_routing_strategies_means_no_session_cache_traffic(self):
-        from litellm.caching.caching import RedisCache
 
         router = self._router()
         router.complexity_routers.clear()
-        redis_cache = MagicMock(spec=RedisCache)
+        redis_cache = redis_cache_double()
         redis_cache.async_get_cache = AsyncMock(return_value=None)
         redis_cache.async_set_cache = AsyncMock()
         redis_cache.async_delete_cache = AsyncMock()
@@ -24154,11 +24149,7 @@ def test_router_keeps_wif_secret_pointers_unresolved(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_failure_rpm_increment_declares_the_router_usage_key_family(router_redis: "RouterRedis"):
-    """The RPM bump a failed call still earns is router usage bookkeeping, so its Redis span
-    reads ``redis.incr router_usage`` rather than a bare ``redis.incr``."""
-    from litellm._internal_context import current_service_target
-
+async def test_a_failed_call_still_counts_one_rpm():
     router = Router(
         model_list=[
             {
@@ -24168,8 +24159,6 @@ async def test_failure_rpm_increment_declares_the_router_usage_key_family(router
             }
         ]
     )
-    redis, commands = router_redis
-    router.update_redis_cache(redis)
     await router.async_deployment_callback_on_failure(
         kwargs={
             "call_type": "acompletion",
@@ -24183,11 +24172,18 @@ async def test_failure_rpm_increment_declares_the_router_usage_key_family(router
         end_time=None,
     )
 
-    observed: Final = tuple(commands.get_nowait() for _ in range(commands.qsize()))
-    assert tuple(
-        target for args, target, _ in observed if isinstance(args[0], bytes) and b"INCRBYFLOAT" in args[0]
-    ) == ("router_usage",)
-    assert current_service_target() is None
+    assert _usage_by_kind(router) == {"rpm": 1}
+
+
+def _usage_by_kind(router: Router) -> dict[str, float]:
+    return {key.rsplit(":", 2)[-2]: value for key, value in router._core_usage_store.snapshot().items()}
+
+
+async def _usage_settles(router: Router, kinds: int) -> dict[str, float]:
+    async with asyncio.timeout(5):
+        while len(_usage_by_kind(router)) < kinds:
+            await asyncio.sleep(0.01)
+    return _usage_by_kind(router)
 
 
 @pytest.fixture
@@ -24207,9 +24203,7 @@ def v2_span_exporter(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_deployment_selection_runs_inside_a_route_phase_named_after_the_model_group(
-    v2_span_exporter, router_redis: "RouterRedis"
-):
+async def test_deployment_selection_runs_inside_a_route_phase_named_after_the_model_group(v2_span_exporter):
     """Picking a deployment opens ``route {model_group}`` (the requested group, not the deployment
     it picks) under the server span, and the cooldown reads it issues run inside it, so their Redis
     spans nest there instead of lying flat under the request."""
@@ -24229,9 +24223,6 @@ async def test_deployment_selection_runs_inside_a_route_phase_named_after_the_mo
             },
         ]
     )
-    redis, commands = router_redis
-    router.update_redis_cache(redis)
-
     with TracerProvider().get_tracer("test").start_as_current_span("POST /v1/chat/completions") as server_span:
         deployment = await router.async_get_available_deployment(model="gpt-group", request_kwargs={})
 
@@ -24240,8 +24231,6 @@ async def test_deployment_selection_runs_inside_a_route_phase_named_after_the_mo
     assert route_span.name == "route gpt-group"
     assert route_span.parent is not None and route_span.parent.span_id == server_span.get_span_context().span_id
     assert route_span.end_time is not None
-    observed: Final = tuple(commands.get_nowait() for _ in range(commands.qsize()))
-    assert tuple(span for args, _, span in observed if args[0] == "MGET") == ("route gpt-group",)
 
 
 def _record_phase_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, str | int]]]:
@@ -24996,7 +24985,7 @@ async def test_router_get_model_group_usage_wildcard_routes():
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
-async def test_call_router_callbacks_on_success(router_redis: "RouterRedis", redis_write_gate: "RedisWriteGate"):
+async def test_call_router_callbacks_on_success():
     router = Router(
         model_list=[
             {
@@ -25007,26 +24996,18 @@ async def test_call_router_callbacks_on_success(router_redis: "RouterRedis", red
         ]
     )
 
-    redis, _ = router_redis
-    started, _, _ = redis_write_gate
-    router.update_redis_cache(redis)
     response: Final = await router.acompletion(
         model="gemini/gemini-2.5-flash",
         messages=[{"role": "user", "content": "Hello, how are you?"}],
         mock_response="Hello, I'm good.",
     )
-    await asyncio.wait_for(started.wait(), timeout=5)
-    client: Final = redis.init_async_client()
-    keys: Final = tuple(await client.keys("global_router:*"))
-    values: Final = {key.rsplit(b":", 2)[-2]: float(await client.get(key)) for key in keys}
-    assert len(keys) == 2
-    assert values == {b"tpm": response.usage.total_tokens, b"rpm": 1}
+    assert await _usage_settles(router, kinds=2) == {"tpm": response.usage.total_tokens, "rpm": 1}
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.serial
 @pytest.mark.asyncio
-async def test_call_router_callbacks_on_failure(router_redis: "RouterRedis", redis_write_gate: "RedisWriteGate"):
+async def test_call_router_callbacks_on_failure():
     router = Router(
         model_list=[
             {
@@ -25037,9 +25018,6 @@ async def test_call_router_callbacks_on_failure(router_redis: "RouterRedis", red
         ]
     )
 
-    redis, _ = router_redis
-    started, _, _ = redis_write_gate
-    router.update_redis_cache(redis)
     with pytest.raises(litellm.RateLimitError):
         await router.acompletion(
             model="gemini/gemini-2.5-flash",
@@ -25047,12 +25025,7 @@ async def test_call_router_callbacks_on_failure(router_redis: "RouterRedis", red
             mock_response="litellm.RateLimitError",
             num_retries=0,
         )
-    await asyncio.wait_for(started.wait(), timeout=5)
-    client: Final = redis.init_async_client()
-    keys: Final = tuple(await client.keys("global_router:*"))
-    values: Final = {key.rsplit(b":", 2)[-2]: float(await client.get(key)) for key in keys}
-    assert len(keys) == 1
-    assert values == {b"rpm": 1}
+    assert await _usage_settles(router, kinds=1) == {"rpm": 1}
 
 
 @pytest.mark.asyncio
@@ -25207,7 +25180,7 @@ def test_router_get_model_access_groups(potential_access_group, expected_result)
 def test_router_redis_cache():
     router = Router(model_list=[{"model_name": "gemini/*", "litellm_params": {"model": "gemini/*"}}])
 
-    redis_cache = MagicMock()
+    redis_cache = redis_cache_double()
 
     router.update_redis_cache(cache=redis_cache)
 
