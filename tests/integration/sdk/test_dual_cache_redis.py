@@ -9,6 +9,7 @@ import pytest
 from litellm.caching.affinity_cache import claim_affinity_pin, read_affinity_pin
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.caching.redis_cache import RedisCache
 
 
@@ -190,7 +191,9 @@ async def test_tier_pin_reads_shared_state_refreshes_ttl_and_forgets_deleted_pin
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["joined", "separate", "script_error"])
-async def test_tier_pin_joins_pending_reads_without_reusing_request_state(mode: str) -> None:
+async def test_tier_pin_joins_pending_reads_without_reusing_request_state(
+    mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import json
     from collections.abc import Iterable
 
@@ -221,8 +224,8 @@ async def test_tier_pin_joins_pending_reads_without_reusing_request_state(mode: 
         connection_class=RecordingConnection,
     )
     client: Final = Redis(connection_pool=pool)
-    client_key: Final = redis._get_async_client_cache_key()
-    litellm.in_memory_llm_clients_cache.set_cache(key=client_key, value=client)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    litellm.in_memory_llm_clients_cache.set_cache(key=redis._get_async_client_cache_key(), value=client)
     cache: Final = DualCache(redis_cache=redis)
     key: Final = redis.check_and_fix_namespace("pin")
     other_key: Final = redis.check_and_fix_namespace("other")
@@ -267,9 +270,6 @@ async def test_tier_pin_joins_pending_reads_without_reusing_request_state(mode: 
             assert redis.redis_client.exists(key) == 0
     finally:
         redis.redis_client.delete(key, other_key)
-        for cached_key in tuple(litellm.in_memory_llm_clients_cache.cache_dict):
-            if client_key in cached_key:
-                litellm.in_memory_llm_clients_cache.delete_cache(cached_key)
         await client.aclose()
         await pool.aclose()
         await redis.disconnect()
