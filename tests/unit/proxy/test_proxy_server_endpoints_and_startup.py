@@ -14458,6 +14458,34 @@ async def test_a_key_update_that_lands_during_the_row_read_does_not_hide_the_win
 
 
 @pytest.mark.asyncio
+async def test_late_requests_from_many_keys_with_windows_do_not_push_out_a_known_no_window_key():
+    import litellm.proxy.proxy_server as ps
+    from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    windowed_tokens: Final = tuple(f"windowed-{index}" for index in range(DEFAULT_MAX_SIZE_IN_MEMORY))
+    rows: Final = {
+        "no-windows": _StoredRow(budget_limits=None),
+        **{token: _StoredRow([_window("7d", 5.0)]) for token in windowed_tokens},
+    }
+    prisma_client: Final = _prisma_with_rows(keys=rows)
+    find_unique: Final = prisma_client.db.litellm_verificationtoken.find_unique
+
+    def no_window_key_reads() -> int:
+        return sum(1 for call in find_unique.await_args_list if call.kwargs["where"]["token"] == "no-windows")
+
+    with _window_spend_enqueue_env({}, prisma_client=prisma_client):
+        await increment_spend_counters(token="no-windows", team_id=None, user_id=None, response_cost=0.1)
+        reads_after_the_first_request: Final = no_window_key_reads()
+        for token in windowed_tokens:
+            await increment_spend_counters(token=token, team_id=None, user_id=None, response_cost=0.1)
+        ps.spend_counter_cache.set_cache(key="spend:key:no-windows", value=0.1)
+        await increment_spend_counters(token="no-windows", team_id=None, user_id=None, response_cost=0.1)
+
+    assert no_window_key_reads() == reads_after_the_first_request
+
+
+@pytest.mark.asyncio
 async def test_a_late_request_that_misses_the_updated_team_charges_windows_the_team_did_not_have_before():
     """Another worker's /team/update only evicts this worker's cached team, so its next late cost reads the row."""
     import litellm.proxy.proxy_server as ps

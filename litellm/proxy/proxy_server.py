@@ -3633,16 +3633,24 @@ def _budget_windows_absent_marker(absent_key: str) -> object:
     return _UNTYPED_VALUE.validate_python(user_api_key_cache.budget_windows_absent_cache.get_cache(key=absent_key))
 
 
+def _finish_pending_read(absent_key: str, pending_read: str, remember_absent: bool) -> None:
+    if _budget_windows_absent_marker(absent_key) != pending_read:
+        return
+    if remember_absent:
+        user_api_key_cache.budget_windows_absent_cache.set_cache(key=absent_key, value=True)
+        return
+    user_api_key_cache.budget_windows_absent_cache.delete_cache(absent_key)
+
+
 async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str) -> object:
     """Read only: caching the row here could race a delete and put a just-deleted key back into the auth cache."""
     if prisma_client is None:
         return None
-    absent_cache: Final = user_api_key_cache.budget_windows_absent_cache
     absent_key: Final = budget_windows_absent_cache_key(entity_type.value, entity_id)
     if _budget_windows_absent_marker(absent_key) is True:
         return None
     pending_read: Final = f"reading:{secrets.token_hex(8)}"
-    absent_cache.set_cache(key=absent_key, value=pending_read)
+    user_api_key_cache.budget_windows_absent_cache.set_cache(key=absent_key, value=pending_read)
     try:
         row: Final[SupportsModelDump | None] = (
             await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": entity_id})
@@ -3656,11 +3664,10 @@ async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str)
             entity_id,
             e,
         )
+        _finish_pending_read(absent_key, pending_read, remember_absent=False)
         return None
     budget_limits: Final[object] = None if row is None else _cached_budget_limits(row)
-    read_still_pending: Final = _budget_windows_absent_marker(absent_key) == pending_read
-    if read_still_pending and not _has_budget_windows(budget_limits):
-        absent_cache.set_cache(key=absent_key, value=True)
+    _finish_pending_read(absent_key, pending_read, remember_absent=not _has_budget_windows(budget_limits))
     return budget_limits
 
 

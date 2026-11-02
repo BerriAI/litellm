@@ -89,9 +89,12 @@ class UserApiKeyCache(DualCache):
         )
 
     def in_memory_cache_for(self, key: str) -> InMemoryCache:
-        if key.startswith(_BUDGET_WINDOWS_ABSENT_PREFIX):
-            return self.budget_windows_absent_cache
         return self.key_object_cache.in_memory_cache if is_user_key_cache_key(key) else self.in_memory_cache
+
+    def delete_from_memory(self, key: str) -> None:
+        self.in_memory_cache_for(key).delete_cache(key)
+        if key.startswith(_BUDGET_WINDOWS_ABSENT_PREFIX):
+            self.budget_windows_absent_cache.delete_cache(key)
 
     def update_cache_ttl(self, default_in_memory_ttl: float | None, default_redis_ttl: float | None) -> None:
         super().update_cache_ttl(default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=default_redis_ttl)
