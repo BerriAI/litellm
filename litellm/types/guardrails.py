@@ -119,6 +119,7 @@ class SupportedGuardrailIntegrations(Enum):
     CISCO_AI_DEFENSE = "cisco_ai_defense"
     AZURE_PROMPT_SHIELD = "azure/prompt_shield"
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
+    AZURE_IMAGE_MODERATIONS = "azure/image_moderations"
     MODEL_ARMOR = "model_armor"
     OPENAI_MODERATION = "openai_moderation"
     NOMA = "noma"
