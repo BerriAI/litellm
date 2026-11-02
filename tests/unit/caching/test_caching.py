@@ -1608,3 +1608,51 @@ def test_cache_key_separates_model_ids_unless_a_model_group_owns_the_key() -> No
     assert key_a != bare
     assert key_a == key_a_again
     assert grouped_a == grouped_b
+
+
+_TENANT_A_IDENTITY: Final = {"user_api_key": "hashed-key-a", "user_api_key_team_id": "team-a"}
+_TENANT_B_IDENTITY: Final = {"user_api_key": "hashed-key-b", "user_api_key_team_id": "team-b"}
+
+
+@pytest.mark.parametrize(
+    "client_cache_options",
+    [
+        pytest.param({}, id="no-client-options"),
+        pytest.param({"cache_key": "client-chosen-key"}, id="same-client-cache-key"),
+        pytest.param({"cache": {"namespace": "shared"}}, id="same-client-namespace"),
+    ],
+)
+def test_exact_cache_is_not_shared_across_tenants(monkeypatch, client_cache_options):
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+
+    def answer(tenant: dict[str, str], content: str) -> str:
+        response = completion(
+            model="gpt-4o-mini",
+            messages=_CACHING_TEST_MESSAGES,
+            caching=True,
+            mock_response=content,
+            metadata=dict(tenant),
+            **client_cache_options,
+        )
+        return response.choices[0].message.content
+
+    assert answer(_TENANT_A_IDENTITY, "tenant a") == "tenant a"
+    assert answer(_TENANT_B_IDENTITY, "tenant b") == "tenant b"
+    assert answer(_TENANT_A_IDENTITY, "tenant a, uncached") == "tenant a"
+
+
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("forged_key_param", ["cache_key", "preset_cache_key"])
+def test_exact_cache_rejects_another_tenants_cache_key(metadata_field, forged_key_param):
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    tenant_a_request = {"model": "gpt-4o-mini", "messages": messages, metadata_field: dict(_TENANT_A_IDENTITY)}
+    cache.add_cache('{"answer": "tenant a"}', **tenant_a_request)
+    tenant_a_key = cache.get_cache_key(**tenant_a_request)
+    forged_key = (
+        {"cache_key": tenant_a_key}
+        if forged_key_param == "cache_key"
+        else {"litellm_params": {"preset_cache_key": tenant_a_key}}
+    )
+
+    assert cache.get_cache(**tenant_a_request) is not None
+    assert cache.get_cache(**forged_key, **{metadata_field: dict(_TENANT_B_IDENTITY)}) is None
