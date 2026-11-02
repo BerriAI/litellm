@@ -1,15 +1,20 @@
-use std::time::Duration;
-
 use redis::{
     Cmd, ConnectionInfo, Pipeline, RedisFuture, RedisResult, Value,
     aio::{ConnectionLike, ConnectionManager, ConnectionManagerConfig},
     cluster::{ClusterClientBuilder, ClusterConfig},
     cluster_async::ClusterConnection,
+    io::tcp::TcpSettings,
 };
 
-use crate::ClusterEndpoint;
+use crate::{ClusterEndpoint, Timeouts, error::Deployment};
 
-const RETRIES: u32 = 3;
+// redis-py 5.3.1 redis/asyncio/connection.py: without retry options a connection gets Retry(NoBackoff(), 0)
+const RECONNECT_RETRIES: usize = 0;
+// redis-py 5.3.1 redis/asyncio/cluster.py: cluster_error_retry_attempts=3
+const CLUSTER_RETRIES: u32 = 3;
+// redis-py 5.3.1 redis/asyncio/cluster.py sleeps a flat 0.25s before retrying after CLUSTERDOWN.
+// redis-rs draws the wait from [min, max), so a 1ms window pins it to 250ms
+const CLUSTER_RETRY_WAIT_MS: u64 = 250;
 
 #[derive(Clone)]
 pub(crate) enum Connection {
@@ -18,20 +23,36 @@ pub(crate) enum Connection {
 }
 
 impl Connection {
-    pub(crate) fn standalone(info: ConnectionInfo, timeout: Duration) -> RedisResult<Self> {
+    pub(crate) fn deployment(&self) -> Deployment {
+        match self {
+            Self::Standalone(_) => Deployment::Standalone,
+            Self::Cluster(_) => Deployment::Cluster,
+        }
+    }
+
+    pub(crate) fn standalone(info: ConnectionInfo, timeouts: Timeouts) -> RedisResult<Self> {
         let config = ConnectionManagerConfig::new()
-            .set_connection_timeout(Some(timeout))
-            .set_response_timeout(Some(timeout))
-            .set_number_of_retries(RETRIES as usize);
+            .set_connection_timeout(Some(timeouts.connect))
+            .set_response_timeout(Some(timeouts.response))
+            .set_number_of_retries(RECONNECT_RETRIES);
+        let info = info.set_tcp_settings(TcpSettings::default().set_nodelay(true));
         let manager = ConnectionManager::new_lazy_with_config(redis::Client::open(info)?, config)?;
         Ok(Self::Standalone(manager))
     }
 
-    pub(crate) fn cluster(endpoint: &ClusterEndpoint, timeout: Duration) -> RedisResult<Self> {
+    pub(crate) fn cluster(endpoint: &ClusterEndpoint, timeouts: Timeouts) -> RedisResult<Self> {
         let builder = ClusterClientBuilder::new(endpoint.addrs())
-            .connection_timeout(timeout)
-            .response_timeout(timeout)
-            .retries(RETRIES);
+            .tcp_settings(
+                TcpSettings::default()
+                    .set_nodelay(true)
+                    .set_keepalive(socket2::TcpKeepalive::new()),
+            )
+            .connection_timeout(timeouts.connect)
+            .response_timeout(timeouts.response)
+            .retries(CLUSTER_RETRIES)
+            .retry_wait_formula(0, 2)
+            .min_retry_wait(CLUSTER_RETRY_WAIT_MS)
+            .max_retry_wait(CLUSTER_RETRY_WAIT_MS + 1);
         let builder = match &endpoint.username {
             Some(username) => builder.username(username.expose()),
             None => builder,
@@ -40,9 +61,9 @@ impl Connection {
             Some(password) => builder.password(password.expose()),
             None => builder,
         };
-        let config = ClusterConfig::new()
-            .set_connection_timeout(timeout)
-            .set_response_timeout(timeout);
+        // The builder's response timeout bounds the whole request, but with_config overwrites each node's
+        // response timeout with this one even when unset, so it has to be repeated here
+        let config = ClusterConfig::new().set_response_timeout(timeouts.response);
         Ok(Self::Cluster(
             builder
                 .build()?
