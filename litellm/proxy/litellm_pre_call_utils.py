@@ -3741,7 +3741,7 @@ def _apply_credential_overrides_from_model_config(
         return
 
     # Apply credential overrides only for keys not already in the request
-    for key in ("api_base", "api_key", "api_version"):
+    for key in ("api_base", "api_key", "api_version", "vertex_project", "vertex_location", "vertex_credentials"):
         if key in credential_values and key not in data:
             data[key] = credential_values[key]
 
