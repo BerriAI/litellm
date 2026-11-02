@@ -20,18 +20,21 @@ Member uses are found the same way the boundary survey found them: attribute
 access on a receiver whose name looks like a router (llm_router,
 litellm_router_instance, router, ...) or on the Router class, plus
 getattr/setattr/hasattr with a constant name on such a receiver. Members
-include the container file endpoints Router.__init__ registers by name.
+include the container file endpoints Router.__init__ registers by name and the
+endpoints of litellm/router_endpoint_table.py, which the cores bind by name.
 
 Run: python tests/code_coverage_tests/router_surface_check.py [--write]
 --write regenerates the allowlist from the current tree (for shrinking it).
 """
 
 import ast
+import importlib.util
 import json
 import os
 import re
 import sys
-from typing import Dict, List, Set
+from collections.abc import Mapping
+from typing import Dict, List, Set, cast
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 ALLOWLIST = os.path.join(os.path.dirname(__file__), "router_surface_allowlist.json")
@@ -72,6 +75,8 @@ RECEIVER = re.compile(
 )
 # Router.__init__ registers these with setattr(self, name, ...), so they never appear as self.<name>.
 CONTAINER_FILE_ENDPOINTS = "litellm/containers/endpoints.json"
+# Both cores bind the factory-built endpoints from this table with setattr, so they never appear as self.<name>.
+ENDPOINT_TABLE = "litellm/router_endpoint_table.py"
 DYNAMIC_FUNCS = {"getattr", "setattr", "hasattr"}
 
 
@@ -84,6 +89,17 @@ def _area(rel: str) -> str:
 def _is_test(rel: str) -> bool:
     name = os.path.basename(rel)
     return "/tests/" in rel or name.startswith("test_") or name.endswith("_test.py")
+
+
+def _endpoint_table_names() -> set[str]:
+    """The factory-built endpoints both cores bind with setattr from litellm/router_endpoint_table.py
+    (a stdlib-only module, loaded from its file without importing litellm)."""
+    spec = importlib.util.spec_from_file_location("_router_endpoint_table", os.path.join(ROOT, ENDPOINT_TABLE))
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    endpoints = cast("Mapping[str, object]", module.ENDPOINTS)  # cast-ok: the table maps endpoint names to rows
+    return set(endpoints)
 
 
 def router_members() -> Set[str]:
@@ -112,6 +128,7 @@ def router_members() -> Set[str]:
     with open(os.path.join(ROOT, CONTAINER_FILE_ENDPOINTS), encoding="utf-8") as f:
         for endpoint in json.load(f)["endpoints"]:
             members.update((endpoint["name"], endpoint["async_name"]))
+    members.update(_endpoint_table_names())
     return {m for m in members if not (m.startswith("__") and m.endswith("__"))}
 
 

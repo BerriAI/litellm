@@ -5,8 +5,8 @@ agents, realtime, fine-tuning, files, image edit, LLM pass-through, vector store
 guardrails): which host op each reaches, the kwargs the core builds, and how an id in the request
 pins the deployment.
 
-The Python core binds litellm's own functions for some of these endpoints instead of going through
-``host.invoke``; the ``host`` fixture replaces those functions with recording stand-ins (see
+Some of these endpoints are served by host ops named by a dotted path under ``litellm``; the
+``host`` fixture replaces those litellm functions with recording stand-ins (see
 ``endpoints_helpers.py``), so every call shows up in ``host.calls``.
 """
 
@@ -208,39 +208,58 @@ async def test_async_generic_endpoint_is_retried_with_the_router_num_retries(mak
 
 
 @pytest.mark.parametrize(
-    "endpoint",
+    ("endpoint", "op"),
     [
-        "aadapter_generate_content",
-        "video_create_character",
-        "video_get_character",
-        "video_edit",
-        "video_extension",
-        "upload_container_file",
-        "list_container_files",
-        "retrieve_container_file",
-        "delete_container_file",
-        "retrieve_container_file_content",
-        "get_interaction",
-        "delete_interaction",
-        "cancel_interaction",
+        ("aadapter_generate_content", "aadapter_generate_content"),
+        ("video_create_character", "video_create_character"),
+        ("video_get_character", "video_get_character"),
+        ("video_edit", "video_edit"),
+        ("video_extension", "video_extension"),
+        ("upload_container_file", "upload_container_file"),
+        ("list_container_files", "list_container_files"),
+        ("retrieve_container_file", "retrieve_container_file"),
+        ("delete_container_file", "delete_container_file"),
+        ("retrieve_container_file_content", "retrieve_container_file_content"),
+        ("get_interaction", "interactions.get"),
+        ("delete_interaction", "interactions.delete"),
+        ("cancel_interaction", "interactions.cancel"),
     ],
 )
-async def test_endpoints_without_a_dispatch_branch_resolve_to_none_without_calling_anything(
-    make_core: MakeCore, host: EndpointHost, endpoint: str
+async def test_endpoints_that_had_no_dispatch_branch_route_like_their_siblings(
+    make_core: MakeCore, host: EndpointHost, endpoint: str, op: str
 ):
-    """These are wrapped by factory_function's async wrapper, which has no branch for them."""
+    """The async one routes as the other async generic endpoints do; the sync ones answer
+    synchronously, routed as the other sync generic endpoints are."""
     core: Final = make_core(model_list=[deployment("g", "d1")])
     result: Final = getattr(core, endpoint)(model="g", container_id="c", video_id="v", interaction_id="i")
-    assert inspect.isawaitable(result)
-    assert await result is None
-    assert host.calls == []
+    assert inspect.isawaitable(result) is endpoint.startswith("a")
+    response: Final = await result if inspect.isawaitable(result) else result
+    assert response is not None
+    assert [(call.op, call.deployment_id) for call in host.calls] == [(op, "d1")]
 
 
-async def test_sync_create_interaction_is_awaited_and_fails_with_type_error(make_core: MakeCore, host: EndpointHost):
+async def test_sync_create_interaction_answers_synchronously_with_the_routed_response(
+    make_core: MakeCore, host: EndpointHost
+):
     core: Final = make_core(model_list=[deployment("g", "d1")], num_retries=0)
-    with pytest.raises(TypeError, match="can't be used in 'await' expression"):
-        await core.create_interaction(model="g", input="x")
-    assert [call.op for call in host.calls] == ["interactions.create"]
+    response: Final[object] = getattr(core, "create_interaction")(model="g", input="x")
+    assert not inspect.isawaitable(response)
+    assert response is not None
+    assert [(call.op, call.deployment_id) for call in host.calls] == [("interactions.create", "d1")]
+
+
+async def test_sync_create_interaction_with_an_agent_calls_the_handler_directly_with_gemini(
+    make_core: MakeCore, host: EndpointHost
+):
+    core: Final = make_core(model_list=[deployment("ag", "d1")])
+    getattr(core, "create_interaction")(agent="ag", model="ag", input="x")
+    call: Final = host.calls[0]
+    assert (call.op, call.deployment_id, call.kwargs["model"], call.kwargs["custom_llm_provider"]) == (
+        "interactions.create",
+        None,
+        None,
+        "gemini",
+    )
 
 
 # --- request params, provider and timeouts ------------------------------------------------------
@@ -288,15 +307,25 @@ async def test_generic_timeout_takes_the_router_timeout(make_core: MakeCore, hos
 
 
 @pytest.mark.parametrize(
-    ("endpoint", "request_body"), [("aresponses", {"input": "hi"}), ("agenerate_content", {"contents": []})]
+    ("endpoint", "request_body", "expected"),
+    [
+        # A stream-timeout-aware handler (by its endpoint, whatever the host function is named)
+        # gets the request timeout and the stream timeout apart.
+        ("aresponses", {"input": "hi"}, (11.0, 3.0)),
+        ("agenerate_content", {"contents": []}, (3.0, 3.0)),
+    ],
 )
-async def test_streaming_generic_call_sends_the_deployment_stream_timeout_as_timeout(
-    make_core: MakeCore, host: EndpointHost, endpoint: str, request_body: dict[str, object]
+async def test_streaming_generic_call_sends_the_deployment_stream_timeout(
+    make_core: MakeCore,
+    host: EndpointHost,
+    endpoint: str,
+    request_body: dict[str, object],
+    expected: tuple[float, float],
 ):
     core: Final = make_core(model_list=[deployment("g", "d1", timeout=11, stream_timeout=3)])
     await _call(core, endpoint, {"model": "g", "stream": True, **request_body})
     sent: Final = host.calls[0].kwargs
-    assert (sent["timeout"], sent["stream_timeout"]) == (3.0, 3.0)
+    assert (sent["timeout"], sent["stream_timeout"]) == expected
 
 
 async def test_non_streaming_aresponses_sends_the_deployment_timeout(make_core: MakeCore, host: EndpointHost):
@@ -354,11 +383,19 @@ async def test_the_response_id_reaches_the_host_still_encoded(make_core: MakeCor
     assert host.calls[0].kwargs["response_id"] == ENCODED_RESPONSE_ID
 
 
-async def test_a_plain_response_id_without_a_model_fails_with_type_error(make_core: MakeCore, host: EndpointHost):
+async def test_a_plain_response_id_without_a_model_calls_the_handler_directly(make_core: MakeCore, host: EndpointHost):
+    """As litellm's own function does without a router: no deployment, the given provider."""
     core: Final = make_core(model_list=TWO_DEPLOYMENTS)
-    with pytest.raises(TypeError, match="missing 1 required positional argument: 'model'"):
-        await core.aget_responses(response_id="resp_plain")
-    assert host.calls == []
+    await _call(core, "aget_responses", {"response_id": "resp_plain", "custom_llm_provider": "azure"})
+    call: Final = host.calls[0]
+    assert (call.op, call.deployment_id, call.kwargs["response_id"], call.kwargs["custom_llm_provider"]) == (
+        "aget_responses",
+        None,
+        "resp_plain",
+        "azure",
+    )
+    assert "model" not in call.kwargs
+    assert "litellm_metadata" not in call.kwargs
 
 
 # --- container ids ------------------------------------------------------------------------
@@ -728,6 +765,28 @@ async def test_asearch_calls_the_named_search_tool_with_its_litellm_params(make_
     )
     assert _bucket(call.kwargs, "litellm_metadata")["model_group"] == "s"
     assert response._hidden_params["additional_headers"]["x-litellm-model-group"] == "s"  # pyright: ignore[reportAttributeAccessIssue]  # the scripted response
+
+
+async def test_sync_search_calls_the_named_search_tool_like_asearch(make_core: MakeCore, host: EndpointHost):
+    core: Final = make_core(model_list=[deployment("g", "d1")], search_tools=SEARCH_TOOLS)
+    response: Final[object] = getattr(core, "search")(model="s", query="q")
+    assert not inspect.isawaitable(response)
+    call: Final = host.calls[0]
+    assert (call.op, call.kwargs["search_provider"], call.kwargs["api_key"], call.kwargs["query"]) == (
+        "search",
+        "tavily",
+        "tk",
+        "q",
+    )
+    assert _bucket(call.kwargs, "litellm_metadata")["model_group"] == "s"
+    assert "model" not in call.kwargs
+
+
+async def test_sync_search_with_an_unknown_tool_raises_value_error(make_core: MakeCore, host: EndpointHost):
+    core: Final = make_core(model_list=[deployment("g", "d1")], search_tools=SEARCH_TOOLS)
+    with pytest.raises(ValueError, match=re.escape("Search tool 'g' not found in router.search_tools")):
+        getattr(core, "search")(search_tool_name="g", query="q")
+    assert host.calls == []
 
 
 async def test_asearch_with_an_unknown_tool_raises_value_error(make_core: MakeCore, host: EndpointHost):

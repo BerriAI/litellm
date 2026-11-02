@@ -464,20 +464,31 @@ async def test_prompt_management_group_with_non_dict_prompt_variables_raises_val
         await core.acompletion(model="pm", messages=MESSAGES, litellm_call_id="c1")
 
 
-async def test_prompt_management_group_without_a_call_id_or_logging_object_raises_key_error(
+async def test_prompt_management_group_without_a_call_id_or_logging_object_builds_its_own(
     make_core: MakeCore, host: EndpointHost
 ):
+    """With neither, the core builds the logging object under a fresh call id and goes on to
+    validate the prompt, as it does when the caller sends a call id."""
     core: Final = make_core(model_list=[deployment("pm", "p1", model="langfuse/gpt-4o")])
-    with pytest.raises(KeyError, match="litellm_call_id"):
+    with pytest.raises(ValueError, match=re.escape("Prompt ID is not set or not a string. Got=None")):
         await core.acompletion(model="pm", messages=MESSAGES)
-
-
-async def test_litellm_agent_group_without_a_logging_object_raises_key_error(make_core: MakeCore, host: EndpointHost):
-    """function_setup consumes original_function, so the direct-call path cannot pop it."""
-    core: Final = make_core(model_list=[deployment("pm", "p1", model="litellm_agent/openai/gpt-4o")])
-    with pytest.raises(KeyError, match="original_function"):
-        await core.acompletion(model="pm", messages=MESSAGES, litellm_call_id="c1")
     assert host.calls == []
+
+
+async def test_litellm_agent_group_without_a_call_id_or_logging_object_calls_the_stripped_model_directly(
+    make_core: MakeCore, host: EndpointHost
+):
+    core: Final = make_core(model_list=[deployment("pm", "p1", model="litellm_agent/openai/gpt-4o")])
+    await core.acompletion(model="pm", messages=MESSAGES)
+    call: Final = host.calls[0]
+    assert (call.op, call.model, call.deployment_id, "original_function" in call.kwargs) == (
+        "acompletion",
+        "openai/gpt-4o",
+        "p1",
+        False,
+    )
+    sent_call_id: Final = call.kwargs["litellm_call_id"]
+    assert isinstance(sent_call_id, str) and sent_call_id
 
 
 async def test_litellm_agent_group_calls_the_stripped_model_directly_with_the_deployment_params(

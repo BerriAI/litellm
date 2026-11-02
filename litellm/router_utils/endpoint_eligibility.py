@@ -23,6 +23,7 @@ CHAT_ENDPOINT_BY_CALL: Final[Mapping[str, str]] = MappingProxyType(
         "agenerate_content": "generateContent",
         "agenerate_content_stream": "streamGenerateContent",
         "acreate_interaction": "/v1beta/interactions",
+        "create_interaction": "/v1beta/interactions",
         "litellm.interactions.main.acreate": "/v1beta/interactions",
         "litellm.interactions.main.create": "/v1beta/interactions",
         "_aresponses_websocket": "/v1/responses",
