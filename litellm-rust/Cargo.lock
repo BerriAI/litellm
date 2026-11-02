@@ -4331,6 +4331,7 @@ dependencies = [
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "aws-sdk-secretsmanager",
  "bytes",
  "criterion",
@@ -4357,6 +4358,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-model-catalog",
+ "litellm-router-core",
  "litellm-router-types",
  "litellm-secret-value",
  "litellm-secrets",
@@ -4439,6 +4441,24 @@ dependencies = [
 [[package]]
 name = "litellm-router-core"
 version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "async-trait",
+ "jiff",
+ "litellm-cache",
+ "litellm-router-types",
+ "parking_lot",
+ "rand 0.8.7",
+ "rstest",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "sha2 0.10.9",
+ "strum",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "litellm-router-types"

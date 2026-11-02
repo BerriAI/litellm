@@ -5,8 +5,10 @@ DeprecatedRouterMembers: the Router members that outside code used before the en
 entry points (``registry()``, ``settings()``, ``health()``, ``select()``, ``apply()``,
 ``observe()``, ``register_plugin()``, ``retire()``; see litellm/router_api.py). Every member here
 returns what it returned before, with the type it had before, and names its replacement in a
-``DeprecationWarning``. Reads go to the same Router implementation (``Router._core_<name>``) the
-entry point uses; writes go through ``apply`` / ``aapply`` so the registry version moves.
+``DeprecationWarning``. Reads go through that entry point, so they work on either router core
+(Python or Rust) and, on the Python core, return the same ``_core_<name>`` object as before.
+Settings writes go through ``apply`` / ``aapply`` so the registry version moves; any other old
+attribute write sets the core's ``_core_<name>``, which each core keeps where its reads find it.
 
 Access from the router itself and from its own modules (``litellm.router*``) is not counted:
 those are the router's internals and move behind the core interface separately. Every other access
@@ -17,7 +19,7 @@ deleted (planned about a month after the core swap).
 # pyright: reportPrivateUsage=false, reportMissingTypeArgument=false, reportUnknownParameterType=false
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
 # pyright: reportUnknownLambdaType=false
-# This shim is part of the router (it reads Router's ``_core_*`` members, as Router's own methods do)
+# This shim is part of the router (it writes Router's ``_core_*`` members, as Router's own methods do)
 # and repeats each old member's signature exactly, untyped parts included (``dict``, ``list``), so
 # callers keep the types they had. Typing those parts is the core's job, not the shim's.
 
@@ -27,11 +29,11 @@ import inspect
 import sys
 import warnings
 from collections import Counter
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Generic, TypeVar, overload
 
-from litellm.router_api import ASSIGNABLE_ALIASES, SETTING_FIELDS, ChangeSet
+from litellm.router_api import ASSIGNABLE_ALIASES, SETTING_FIELDS, ChangeSet, RoutingContext
 
 if TYPE_CHECKING:
     from typing import Any  # noqa: TID251  # only to repeat two old signatures that had Any, unchanged
@@ -39,6 +41,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
     from litellm.caching.caching import RedisCache
+    from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
     from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -129,6 +132,9 @@ class _DeprecatedAttribute(Generic[_T]):
         _note(self.name, self.replacement)
         router: Final = _as_router(obj)
         try:
+            if obj.__dict__.get("_core") is None:
+                # No core yet (a Router made without __init__): the value written through this name.
+                return getattr(obj, "_core_" + self.name)  # pyright: ignore[reportAny]  # the pending write, as given
             return self.read(router)
         except AttributeError as e:
             raise _public_attribute_error(router, "_core_" + self.name, self.name, e) from None
@@ -162,6 +168,55 @@ def _setting(name: str, read: Callable[["Router"], _T]) -> _DeprecatedAttribute[
 
 def _attr(replacement: str, read: Callable[["Router"], _T]) -> _DeprecatedAttribute[_T]:
     return _DeprecatedAttribute(replacement, read)
+
+
+def _async_picker(router: "Router") -> Callable[..., Awaitable[object]]:
+    """
+    The router's async pick (the old ``async_get_available_deployment`` attribute). A core that
+    keeps its pick as a member (the Python core's, or one assigned through this attribute) returns
+    that member, so a patched pick reads back as patched; any other core picks through ``select``.
+    """
+    member: Final[object] = getattr(router, "_core_async_get_available_deployment", None)
+    if callable(member):
+        return member  # pyright: ignore[reportReturnType]  # the core's own async pick
+
+    async def async_get_available_deployment(
+        model: str,
+        request_kwargs: dict,  # mutable-ok: the old parameter type, unchanged
+        messages: list[dict[str, str]] | None = None,  # mutable-ok: the old parameter type, unchanged
+        input: str | list | None = None,  # mutable-ok: the old parameter type, unchanged
+        specific_deployment: bool | None = False,
+    ) -> object:
+        return await router.select(
+            model, request_kwargs, messages=messages, input=input, specific_deployment=specific_deployment
+        )
+
+    return async_get_available_deployment
+
+
+def _slack_alerting_logger(router: "Router") -> "SlackAlerting":
+    """``observe().slack_alerting_logger``; a router without one has no such attribute, as before."""
+    logger: Final = router.observe().slack_alerting_logger
+    if logger is None:
+        raise AttributeError(
+            f"'{type(router).__name__}' object has no attribute 'slack_alerting_logger'",
+            name="slack_alerting_logger",
+            obj=router,
+        )
+    return logger
+
+
+def _run_ready(step: Coroutine[object, object, _T]) -> _T:
+    """
+    The result of a coroutine that finishes without suspending: ``select(kind='pass_through')``
+    picks synchronously on every core, so the old synchronous member can return its result.
+    """
+    try:
+        step.send(None)
+    except StopIteration as done:
+        return done.value  # pyright: ignore[reportAny]  # the coroutine's own result
+    step.close()
+    raise RuntimeError("select(kind='pass_through') suspended; it must pick without awaiting")
 
 
 # (id(router), member name) pairs whose subclass override is running in this context.
@@ -298,109 +353,112 @@ class DeprecatedRouterMembers:
                 setattr(cls, name, _enter_override(name, value))
 
     # -- registry: attributes --------------------------------------------------------------------
-    model_list = _attr("registry().all()", lambda r: r._core_model_list)
-    model_names = _attr("registry().names(kind='group_set')", lambda r: r._core_model_names)
-    deployment_names = _attr("registry().names(kind='deployment_names')", lambda r: r._core_deployment_names)
-    team_public_model_names = _attr("registry().names(kind='team_public')", lambda r: r._core_team_public_model_names)
+    model_list = _attr("registry().all()", lambda r: r.registry().all())
+    model_names = _attr("registry().names(kind='group_set')", lambda r: r.registry().names(kind="group_set"))
+    deployment_names = _attr(
+        "registry().names(kind='deployment_names')", lambda r: r.registry().names(kind="deployment_names")
+    )
+    team_public_model_names = _attr(
+        "registry().names(kind='team_public')", lambda r: r.registry().names(kind="team_public")
+    )
     model_name_to_deployment_indices = _attr(
-        "registry().index('model_name')", lambda r: r._core_model_name_to_deployment_indices
+        "registry().index('model_name')", lambda r: r.registry().index("model_name")
     )
     team_model_to_deployment_indices = _attr(
-        "registry().index('team_model')", lambda r: r._core_team_model_to_deployment_indices
+        "registry().index('team_model')", lambda r: r.registry().index("team_model")
     )
     cached_deployment_model_info = _attr(
         "registry().deployment_model_info(id, model_name, cached=True)",
-        lambda r: r._core_cached_deployment_model_info,
+        lambda r: r.registry().deployment_model_info_cache(),
     )
-    model_group_alias = _attr("registry().aliases()", lambda r: r._core_model_group_alias)
-    pattern_router = _attr("registry().patterns()", lambda r: r._core_pattern_router)
-    team_pattern_routers = _attr("registry().patterns(team=True)", lambda r: r._core_team_pattern_routers)
-    routing_groups = _attr("registry().routing_groups()", lambda r: r._core_routing_groups)
+    model_group_alias = _attr("registry().aliases()", lambda r: r.registry().aliases())
+    pattern_router = _attr("registry().patterns()", lambda r: r.registry().patterns())
+    team_pattern_routers = _attr("registry().patterns(team=True)", lambda r: r.registry().patterns(team=True))
+    routing_groups = _attr("registry().routing_groups()", lambda r: r.registry().routing_groups())
     _routing_groups = routing_groups
-    auto_routers = _attr("registry().plugins('auto')", lambda r: r._core_auto_routers)
-    complexity_routers = _attr("registry().plugins('complexity')", lambda r: r._core_complexity_routers)
-    quality_routers = _attr("registry().plugins('quality')", lambda r: r._core_quality_routers)
-    adaptive_routers = _attr("registry().plugins('adaptive')", lambda r: r._core_adaptive_routers)
-    routing_plugins = _attr("registry().plugins('routing')", lambda r: r._core_routing_plugins)
+    auto_routers = _attr("registry().plugins('auto')", lambda r: r.registry().plugins("auto"))
+    complexity_routers = _attr("registry().plugins('complexity')", lambda r: r.registry().plugins("complexity"))
+    quality_routers = _attr("registry().plugins('quality')", lambda r: r.registry().plugins("quality"))
+    adaptive_routers = _attr("registry().plugins('adaptive')", lambda r: r.registry().plugins("adaptive"))
+    routing_plugins = _attr("registry().plugins('routing')", lambda r: r.registry().plugins("routing"))
     prompt_caching_pin_cache = _attr(
-        "registry().plugins('prompt_caching_pins')", lambda r: r._core_prompt_caching_pin_cache
+        "registry().plugins('prompt_caching_pins')", lambda r: r.registry().plugins("prompt_caching_pins")
     )
 
     # -- health and selection: attributes --------------------------------------------------------
-    cache = _attr("health().store", lambda r: r._core_cache)
-    cooldown_cache = _attr("health().cooldowns", lambda r: r._core_cooldown_cache)
-    health_state_cache = _attr("health().health_checks", lambda r: r._core_health_state_cache)
-    deployment_latency_map = _attr("health().latency", lambda r: r._core_deployment_latency_map)
-    async_get_available_deployment = _attr(
-        "select(model, request_kwargs)",
-        lambda r: r._core_async_get_available_deployment,
-    )
+    cache = _attr("health().store", lambda r: r.health().store)
+    cooldown_cache = _attr("health().cooldowns", lambda r: r.health().cooldowns)
+    health_state_cache = _attr("health().health_checks", lambda r: r.health().health_checks)
+    deployment_latency_map = _attr("health().latency", lambda r: r.health().latency)
+    async_get_available_deployment = _attr("select(model, request_kwargs)", _async_picker)
 
     # -- observers ------------------------------------------------------------------------------
-    slack_alerting_logger = _attr("observe().slack_alerting_logger", lambda r: r._core_slack_alerting_logger)
+    slack_alerting_logger = _attr("observe().slack_alerting_logger", _slack_alerting_logger)
 
     # -- settings -------------------------------------------------------------------------------
-    routing_strategy = _setting("routing_strategy", lambda r: r._core_routing_strategy)
-    context_window_fallbacks = _setting("context_window_fallbacks", lambda r: r._core_context_window_fallbacks)
-    content_policy_fallbacks = _setting("content_policy_fallbacks", lambda r: r._core_content_policy_fallbacks)
-    default_deployment = _setting("default_deployment", lambda r: r._core_default_deployment)
-    default_litellm_params = _setting("default_litellm_params", lambda r: r._core_default_litellm_params)
+    routing_strategy = _setting("routing_strategy", lambda r: r.settings().routing_strategy)
+    context_window_fallbacks = _setting("context_window_fallbacks", lambda r: r.settings().context_window_fallbacks)
+    content_policy_fallbacks = _setting("content_policy_fallbacks", lambda r: r.settings().content_policy_fallbacks)
+    default_deployment = _setting("default_deployment", lambda r: r.settings().default_deployment)
+    default_litellm_params = _setting("default_litellm_params", lambda r: r.settings().default_litellm_params)
     default_max_parallel_requests = _setting(
-        "default_max_parallel_requests", lambda r: r._core_default_max_parallel_requests
+        "default_max_parallel_requests", lambda r: r.settings().default_max_parallel_requests
     )
-    cooldown_time = _setting("cooldown_time", lambda r: r._core_cooldown_time)
-    allowed_fails = _setting("allowed_fails", lambda r: r._core_allowed_fails)
-    allowed_fails_policy = _setting("allowed_fails_policy", lambda r: r._core_allowed_fails_policy)
-    disable_cooldowns = _setting("disable_cooldowns", lambda r: r._core_disable_cooldowns)
-    enable_pre_call_checks = _setting("enable_pre_call_checks", lambda r: r._core_enable_pre_call_checks)
-    enable_health_check_routing = _setting("enable_health_check_routing", lambda r: r._core_enable_health_check_routing)
+    cooldown_time = _setting("cooldown_time", lambda r: r.settings().cooldown_time)
+    allowed_fails = _setting("allowed_fails", lambda r: r.settings().allowed_fails)
+    allowed_fails_policy = _setting("allowed_fails_policy", lambda r: r.settings().allowed_fails_policy)
+    disable_cooldowns = _setting("disable_cooldowns", lambda r: r.settings().disable_cooldowns)
+    enable_pre_call_checks = _setting("enable_pre_call_checks", lambda r: r.settings().enable_pre_call_checks)
+    enable_health_check_routing = _setting(
+        "enable_health_check_routing", lambda r: r.settings().enable_health_check_routing
+    )
     health_check_ignore_transient_errors = _setting(
-        "health_check_ignore_transient_errors", lambda r: r._core_health_check_ignore_transient_errors
+        "health_check_ignore_transient_errors", lambda r: r.settings().health_check_ignore_transient_errors
     )
     background_health_check_model_groups = _setting(
-        "background_health_check_model_groups", lambda r: r._core_background_health_check_model_groups
+        "background_health_check_model_groups", lambda r: r.settings().background_health_check_model_groups
     )
-    enable_tag_filtering = _setting("enable_tag_filtering", lambda r: r._core_enable_tag_filtering)
-    tag_filtering_match_any = _setting("tag_filtering_match_any", lambda r: r._core_tag_filtering_match_any)
-    tag_routing_prefix = _setting("tag_routing_prefix", lambda r: r._core_tag_routing_prefix)
-    router_general_settings = _setting("router_general_settings", lambda r: r._core_router_general_settings)
-    provider_budget_config = _setting("provider_budget_config", lambda r: r._core_provider_budget_config)
+    enable_tag_filtering = _setting("enable_tag_filtering", lambda r: r.settings().enable_tag_filtering)
+    tag_filtering_match_any = _setting("tag_filtering_match_any", lambda r: r.settings().tag_filtering_match_any)
+    tag_routing_prefix = _setting("tag_routing_prefix", lambda r: r.settings().tag_routing_prefix)
+    router_general_settings = _setting("router_general_settings", lambda r: r.settings().router_general_settings)
+    provider_budget_config = _setting("provider_budget_config", lambda r: r.settings().provider_budget_config)
     provider_default_deployment_ids = _setting(
-        "provider_default_deployment_ids", lambda r: r._core_provider_default_deployment_ids
+        "provider_default_deployment_ids", lambda r: r.settings().provider_default_deployment_ids
     )
-    fallback_access_check = _setting("fallback_access_check", lambda r: r._core_fallback_access_check)
-    fallback_budget_check = _setting("fallback_budget_check", lambda r: r._core_fallback_budget_check)
+    fallback_access_check = _setting("fallback_access_check", lambda r: r.settings().fallback_access_check)
+    fallback_budget_check = _setting("fallback_budget_check", lambda r: r.settings().fallback_budget_check)
     # These three are declared with the attribute type Router gave them rather than the descriptor's:
     # protocols in router_utils and the proxy match Router on them, and protocol matching does not
     # see through a descriptor. Reads and writes still go through _setting at runtime.
     fallbacks: list | list[dict[str, list[str] | list | None]] | None = _setting(  # pyright: ignore[reportAssignmentType]  # see above  # mutable-ok: the old type
-        "fallbacks", lambda r: r._core_fallbacks
+        "fallbacks", lambda r: r.settings().fallbacks
     )
     kubernetes_pod_discovery: "KubernetesPodDiscovery" = _setting(  # pyright: ignore[reportAssignmentType]  # see above
-        "kubernetes_pod_discovery", lambda r: r._core_kubernetes_pod_discovery
+        "kubernetes_pod_discovery", lambda r: r.settings().kubernetes_pod_discovery
     )
     search_tools: "list[SearchToolTypedDict]" = _setting(  # pyright: ignore[reportAssignmentType]  # see above  # mutable-ok: the old type
-        "search_tools", lambda r: r._core_search_tools
+        "search_tools", lambda r: r.settings().search_tools
     )
-    guardrail_list = _setting("guardrail_list", lambda r: r._core_guardrail_list)
-    cache_responses = _setting("cache_responses", lambda r: r._core_cache_responses)
+    guardrail_list = _setting("guardrail_list", lambda r: r.settings().guardrail_list)
+    cache_responses = _setting("cache_responses", lambda r: r.settings().cache_responses)
 
     # -- registry: one deployment ---------------------------------------------------------------
     def get_deployment(self, model_id: str) -> "Deployment | None":
         _note("get_deployment", "registry().deployment(id)")
-        return _as_router(self)._core_get_deployment(model_id=model_id)
+        return _as_router(self).registry().deployment(model_id)
 
     def has_model_id(self, candidate_id: str) -> bool:
         _note("has_model_id", "registry().has_deployment(id)")
-        return _as_router(self)._core_has_model_id(candidate_id)
+        return _as_router(self).registry().has_deployment(candidate_id)
 
     def get_model_info(self, id: str) -> dict | None:  # mutable-ok: the old return type, unchanged
         _note("get_model_info", "registry().deployment_dict(id)")
-        return _as_router(self)._core_get_model_info(id=id)
+        return _as_router(self).registry().deployment_dict(id)
 
     def get_deployment_model_info(self, model_id: str, model_name: str) -> "ModelMapInfo | None":
         _note("get_deployment_model_info", "registry().deployment_model_info(id, model_name)")
-        return _as_router(self)._core_get_deployment_model_info(model_id=model_id, model_name=model_name)
+        return _as_router(self).registry().deployment_model_info(model_id, model_name)
 
     @overload
     def get_router_model_info(
@@ -420,62 +478,56 @@ class DeprecatedRouterMembers:
         id: str | None = None,
     ) -> "ModelMapInfo":
         _note("get_router_model_info", "registry().router_model_info(...)")
-        router: Final = _as_router(self)
-        # The core's overloads split (deployment, id) by which one is None; this forwards either form unchanged.
-        return router._core_get_router_model_info(  # pyright: ignore[reportCallIssue]  # see above
-            deployment=deployment,  # pyright: ignore[reportArgumentType]  # see above
-            received_model_name=received_model_name,
-            id=id,  # pyright: ignore[reportArgumentType]  # see above
-        )
+        return _as_router(self).registry().router_model_info(deployment, received_model_name, id)
 
     def get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]:
         _note("get_discovered_model_info", "registry().discovered_model_info(id)")
-        return _as_router(self)._core_get_discovered_model_info(model_id)
+        return _as_router(self).registry().discovered_model_info(model_id)
 
     # -- registry: many deployments -------------------------------------------------------------
     def get_model_list(
         self, model_name: str | None = None, team_id: str | None = None
     ) -> "list[DeploymentTypedDict] | None":  # mutable-ok: the old return type, unchanged
         _note("get_model_list", "registry().deployments(model_name, team_id=...)")
-        return _as_router(self)._core_get_model_list(model_name=model_name, team_id=team_id)
+        return _as_router(self).registry().deployments(model_name, team_id=team_id)
 
     def get_all_deployments(
         self, model_name: str, model_alias: str | None = None, team_id: str | None = None
     ) -> "list[DeploymentTypedDict]":  # mutable-ok: the old return type, unchanged
         _note("get_all_deployments", "registry().deployments(model_name, source='all')")
-        return _as_router(self)._core_get_all_deployments(
-            model_name=model_name, model_alias=model_alias, team_id=team_id
+        return (
+            _as_router(self).registry().deployments(model_name, source="all", model_alias=model_alias, team_id=team_id)
         )
 
     _get_all_deployments = _private_alias("get_all_deployments", get_all_deployments)
 
     def config_deployments(self) -> Iterator[Mapping[str, object]]:
         _note("config_deployments", "registry().deployments(source='config')")
-        return _as_router(self)._core_config_deployments()
+        return _as_router(self).registry().deployments(source="config")
 
     def deployments_named(self, model_name: str) -> "tuple[DeploymentTypedDict, ...] | None":
         _note("deployments_named", "registry().deployments(model_name, source='named')")
-        return _as_router(self)._core_deployments_named(model_name)
+        return _as_router(self).registry().deployments(model_name, source="named")
 
     def get_model_list_from_model_alias(
         self, model_name: str | None = None
     ) -> "list[DeploymentTypedDict]":  # mutable-ok: the old return type, unchanged
         _note("get_model_list_from_model_alias", "registry().deployments(model_name, source='alias')")
-        return _as_router(self)._core_get_model_list_from_model_alias(model_name=model_name)
+        return _as_router(self).registry().deployments(model_name, source="alias")
 
     def get_model_list_from_routing_groups(self, model_name: str | None = None) -> "Sequence[DeploymentTypedDict]":
         _note("get_model_list_from_routing_groups", "registry().deployments(model_name, source='routing_groups')")
-        return _as_router(self)._core_get_model_list_from_routing_groups(model_name=model_name)
+        return _as_router(self).registry().deployments(model_name, source="routing_groups")
 
     def get_model_list_of_routed_group(
         self, model_group: str
     ) -> "list[DeploymentTypedDict]":  # mutable-ok: the old return type, unchanged
         _note("get_model_list_of_routed_group", "registry().deployments(model_group, source='routed_group')")
-        return _as_router(self)._core_get_model_list_of_routed_group(model_group)
+        return _as_router(self).registry().deployments(model_group, source="routed_group")
 
     def wildcard_route_deployments(self, model: str, team_id: str | None) -> Sequence[Mapping[str, object]]:
         _note("wildcard_route_deployments", "registry().deployments(model, source='wildcard')")
-        return _as_router(self)._core_wildcard_route_deployments(model, team_id)
+        return _as_router(self).registry().deployments(model, source="wildcard", team_id=team_id)
 
     def get_routable_deployments(
         self,
@@ -486,17 +538,21 @@ class DeprecatedRouterMembers:
         _note(
             "get_routable_deployments", "registry().deployments(model, source='routable', request=..., call_type=...)"
         )
-        return _as_router(self)._core_get_routable_deployments(model, request_kwargs, call_type)
+        return (
+            _as_router(self)
+            .registry()
+            .deployments(model, source="routable", request=request_kwargs, call_type=call_type)
+        )
 
     def get_deployment_by_model_group_name(self, model_group_name: str) -> "Deployment | None":
         _note("get_deployment_by_model_group_name", "registry().deployments(name, source='first_in_group')")
-        return _as_router(self)._core_get_deployment_by_model_group_name(model_group_name=model_group_name)
+        return _as_router(self).registry().deployments(model_group_name, source="first_in_group")
 
     def deployments_for_request(
         self, model: str, request_kwargs: Mapping[str, object]
     ) -> "Sequence[DeploymentTypedDict]":
         _note("deployments_for_request", "registry().deployments(model, source='for_request', request=...)")
-        return _as_router(self)._core_deployments_for_request(model, request_kwargs)
+        return _as_router(self).registry().deployments(model, source="for_request", request=request_kwargs)
 
     def should_include_deployment(
         self,
@@ -505,92 +561,96 @@ class DeprecatedRouterMembers:
         team_id: str | None = None,
     ) -> bool:
         _note("should_include_deployment", "registry().includes(deployment, model_name=..., team_id=...)")
-        return _as_router(self)._core_should_include_deployment(model_name=model_name, model=model, team_id=team_id)
+        return _as_router(self).registry().includes(model, model_name=model_name, team_id=team_id)
 
     @staticmethod
     def deployment_usable_by_team(model: "Mapping[str, object] | Deployment", team_id: str | None) -> bool:
         _note("deployment_usable_by_team", "registry().includes(deployment, team_id=...)")
-        from litellm.router_python_core import PythonCore
+        from litellm.router_api import deployment_usable_by_team as usable_by_team
 
-        return PythonCore._core_deployment_usable_by_team(model, team_id)
+        return usable_by_team(model, team_id)
 
     _deployment_usable_by_team = deployment_usable_by_team
 
     # -- registry: names -------------------------------------------------------------------------
     def get_model_names(self, team_id: str | None = None) -> list[str]:  # mutable-ok: the old return type, unchanged
         _note("get_model_names", "registry().names(team_id=...)")
-        return _as_router(self)._core_get_model_names(team_id=team_id)
+        return _as_router(self).registry().names(team_id=team_id)
 
     def get_model_ids(
         self, model_name: str | None = None, exclude_team_models: bool = False
     ) -> list[str]:  # mutable-ok: the old return type, unchanged
         _note("get_model_ids", "registry().names(model_name, kind='ids')")
-        return _as_router(self)._core_get_model_ids(model_name=model_name, exclude_team_models=exclude_team_models)
+        return _as_router(self).registry().names(model_name, kind="ids", exclude_team_models=exclude_team_models)
 
     def resolved_litellm_models(
         self, model_name: str, team_id: str | None = None, *, use_base_model: bool = False
     ) -> tuple[str, ...]:
         _note("resolved_litellm_models", "registry().names(model_name, kind='litellm_models' or 'litellm_base_models')")
-        return _as_router(self)._core_resolved_litellm_models(
-            model_name, team_id=team_id, use_base_model=use_base_model
+        return (
+            _as_router(self)
+            .registry()
+            .names(model_name, kind="litellm_base_models" if use_base_model else "litellm_models", team_id=team_id)
         )
 
     def wildcard_routed_models(self, model: str, team_id: str | None) -> frozenset[str]:
         _note("wildcard_routed_models", "registry().names(model, kind='wildcard')")
-        return _as_router(self)._core_wildcard_routed_models(model, team_id)
+        return _as_router(self).registry().names(model, kind="wildcard", team_id=team_id)
 
     def get_candidate_model_ids_for_route(self, model: str, team_id: str | None = None) -> frozenset[str]:
         _note("get_candidate_model_ids_for_route", "registry().names(model, kind='route_candidates')")
-        return _as_router(self)._core_get_candidate_model_ids_for_route(model, team_id=team_id)
+        return _as_router(self).registry().names(model, kind="route_candidates", team_id=team_id)
 
     # -- registry: resolving names ---------------------------------------------------------------
     def routable_model_group(self, model_name: str) -> str:
         _note("routable_model_group", "registry().resolve(name)")
-        return _as_router(self)._core_routable_model_group(model_name)
+        return _as_router(self).registry().resolve(model_name)
 
     def get_model_from_alias(self, model: str) -> str | None:
         _note("get_model_from_alias", "registry().resolve(name, kind='alias')")
-        return _as_router(self)._core_get_model_from_alias(model=model)
+        return _as_router(self).registry().resolve(model, kind="alias")
 
     _get_model_from_alias = _private_alias("get_model_from_alias", get_model_from_alias)
 
     def resolve_served_model_name(self, model_name: str, served_model: str) -> str:
         _note("resolve_served_model_name", "registry().resolve(name, kind='served', served_model=...)")
-        return _as_router(self)._core_resolve_served_model_name(model_name, served_model)
+        return _as_router(self).registry().resolve(model_name, kind="served", served_model=served_model)
 
     def resolve_model_name_from_model_id(
         self, model_id: str | None, custom_llm_provider: str | None = None
     ) -> str | None:
         _note("resolve_model_name_from_model_id", "registry().resolve(id, kind='from_id')")
-        return _as_router(self)._core_resolve_model_name_from_model_id(
-            model_id, custom_llm_provider=custom_llm_provider
-        )
+        return _as_router(self).registry().resolve(model_id, kind="from_id", custom_llm_provider=custom_llm_provider)
 
     def map_team_model(
         self, team_model_name: str | None, team_id: str, custom_llm_provider: str | None = None
     ) -> str | None:
         _note("map_team_model", "registry().resolve(name, kind='team_model', team_id=...)")
-        return _as_router(self)._core_map_team_model(team_model_name, team_id, custom_llm_provider=custom_llm_provider)
+        return (
+            _as_router(self)
+            .registry()
+            .resolve(team_model_name, kind="team_model", team_id=team_id, custom_llm_provider=custom_llm_provider)
+        )
 
     def is_recognized_model(self, model: str) -> bool:
         _note("is_recognized_model", "registry().resolve(name, kind='recognized')")
-        return _as_router(self)._core_is_recognized_model(model)
+        return _as_router(self).registry().resolve(model, kind="recognized")
 
     def get_routable_upstream_model(self, model_name: str, team_id: str | None = None) -> str | None:
         _note("get_routable_upstream_model", "registry().resolve(name, kind='upstream')")
-        return _as_router(self)._core_get_routable_upstream_model(model_name, team_id=team_id)
+        return _as_router(self).registry().resolve(model_name, kind="upstream", team_id=team_id)
 
     def get_search_tool_support(self, model_name: str, team_id: str | None = None) -> tuple[bool | None, ...]:
         _note("get_search_tool_support", "registry().resolve(name, kind='search_tool_support')")
-        return _as_router(self)._core_get_search_tool_support(model_name, team_id=team_id)
+        return _as_router(self).registry().resolve(model_name, kind="search_tool_support", team_id=team_id)
 
     def get_model_group(self, id: str) -> list | None:  # mutable-ok: the old return type, unchanged
         _note("get_model_group", "registry().resolve(id, kind='group_of_id')")
-        return _as_router(self)._core_get_model_group(id=id)
+        return _as_router(self).registry().resolve(id, kind="group_of_id")
 
     def is_model_access_group_for_wildcard_route(self, model_access_group: str) -> bool:
         _note("is_model_access_group_for_wildcard_route", "registry().resolve(group, kind='wildcard_access_group')")
-        return _as_router(self)._core_is_model_access_group_for_wildcard_route(model_access_group=model_access_group)
+        return _as_router(self).registry().resolve(model_access_group, kind="wildcard_access_group")
 
     _is_model_access_group_for_wildcard_route = _private_alias(
         "is_model_access_group_for_wildcard_route", is_model_access_group_for_wildcard_route
@@ -598,42 +658,42 @@ class DeprecatedRouterMembers:
 
     def team_model_has_alternatives(self, deployment_id: str) -> bool:
         _note("team_model_has_alternatives", "registry().resolve(id, kind='team_model_alternatives')")
-        return _as_router(self)._core_team_model_has_alternatives(deployment_id)
+        return _as_router(self).registry().resolve(deployment_id, kind="team_model_alternatives")
 
     def routing_group_has_alternatives(self, model_group: str | None) -> bool:
         _note("routing_group_has_alternatives", "registry().resolve(group, kind='routing_group_alternatives')")
-        return _as_router(self)._core_routing_group_has_alternatives(model_group)
+        return _as_router(self).registry().resolve(model_group, kind="routing_group_alternatives")
 
     # -- registry: groups, access groups, credentials, plugins -----------------------------------
     def get_model_group_info(
         self, model_group: str, *, include_hidden: bool = False, team_id: str | None = None
     ) -> "ModelGroupInfo | None":
         _note("get_model_group_info", "registry().group(name)")
-        return _as_router(self)._core_get_model_group_info(model_group, include_hidden=include_hidden, team_id=team_id)
+        return _as_router(self).registry().group(model_group, include_hidden=include_hidden, team_id=team_id)
 
     def cached_model_group_info(self, model_group: str) -> "ModelGroupInfo | None":
         _note("cached_model_group_info", "registry().group(name, field='cached_info')")
-        return _as_router(self)._core_cached_model_group_info(model_group)
+        return _as_router(self).registry().group(model_group, field="cached_info")
 
     def get_configured_display_name(self, model_name: str) -> str | None:
         _note("get_configured_display_name", "registry().group(name, field='display_name')")
-        return _as_router(self)._core_get_configured_display_name(model_name)
+        return _as_router(self).registry().group(model_name, field="display_name")
 
     def get_configured_mode(self, model_name: str) -> str | None:
         _note("get_configured_mode", "registry().group(name, field='mode')")
-        return _as_router(self)._core_get_configured_mode(model_name)
+        return _as_router(self).registry().group(model_name, field="mode")
 
     def get_configured_service_tiers(self, model_name: str, team_id: str | None = None) -> tuple[object, ...]:
         _note("get_configured_service_tiers", "registry().group(name, field='service_tiers')")
-        return _as_router(self)._core_get_configured_service_tiers(model_name, team_id=team_id)
+        return _as_router(self).registry().group(model_name, field="service_tiers", team_id=team_id)
 
     def get_configured_token_limits(self, model_name: str) -> tuple[int | None, int | None]:
         _note("get_configured_token_limits", "registry().group(name, field='token_limits')")
-        return _as_router(self)._core_get_configured_token_limits(model_name)
+        return _as_router(self).registry().group(model_name, field="token_limits")
 
     def get_model_listing_info(self, model_name: str) -> "DeploymentModelListingInfo | None":
         _note("get_model_listing_info", "registry().group(name, field='listing_info')")
-        return _as_router(self)._core_get_model_listing_info(model_name)
+        return _as_router(self).registry().group(model_name, field="listing_info")
 
     def get_model_access_groups(
         self,
@@ -642,27 +702,29 @@ class DeprecatedRouterMembers:
         team_id: str | None = None,
     ) -> dict[str, list[str]]:  # mutable-ok: the old return type, unchanged
         _note("get_model_access_groups", "registry().access_groups(...)")
-        return _as_router(self)._core_get_model_access_groups(
-            model_name=model_name, model_access_group=model_access_group, team_id=team_id
+        return (
+            _as_router(self)
+            .registry()
+            .access_groups(model_name=model_name, model_access_group=model_access_group, team_id=team_id)
         )
 
     def get_deployment_credentials(self, model_id: str) -> dict | None:  # mutable-ok: the old return type, unchanged
         _note("get_deployment_credentials", "registry().credentials(id)")
-        return _as_router(self)._core_get_deployment_credentials(model_id=model_id)
+        return _as_router(self).registry().credentials(model_id)
 
     def get_deployment_credentials_with_provider(
         self, model_id: str, team_id: str | None = None
     ) -> "dict[str, Any] | None":  # pyright: ignore[reportExplicitAny]  # the old return type, unchanged  # mutable-ok: same
         _note("get_deployment_credentials_with_provider", "registry().credentials(id, form='with_provider')")
-        return _as_router(self)._core_get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
+        return _as_router(self).registry().credentials(model_id, form="with_provider", team_id=team_id)
 
     def get_credential_deployment(self, model_id: str, team_id: str | None = None) -> "Deployment | None":
         _note("get_credential_deployment", "registry().credentials(id, form='deployment')")
-        return _as_router(self)._core_get_credential_deployment(model_id=model_id, team_id=team_id)
+        return _as_router(self).registry().credentials(model_id, form="deployment", team_id=team_id)
 
     def get_router_deployment_budget_limiter(self) -> "RouterBudgetLimiting | None":
         _note("get_router_deployment_budget_limiter", "registry().plugins('budget_limiter')")
-        return _as_router(self)._core_get_router_deployment_budget_limiter()
+        return _as_router(self).registry().plugins("budget_limiter")
 
     _get_router_deployment_budget_limiter = _private_alias(
         "get_router_deployment_budget_limiter", get_router_deployment_budget_limiter
@@ -678,15 +740,15 @@ class DeprecatedRouterMembers:
     # -- settings: methods -----------------------------------------------------------------------
     def get_settings(self) -> dict[str, object]:  # mutable-ok: Router._core_get_settings's type, a fresh dict
         _note("get_settings", "settings().as_dict()")
-        return _as_router(self)._core_get_settings()
+        return dict(_as_router(self).settings().as_dict())
 
     def get_allowed_fails_from_policy(self, exception: Exception) -> int | None:
         _note("get_allowed_fails_from_policy", "settings().allowed_fails_for(exception)")
-        return _as_router(self)._core_get_allowed_fails_from_policy(exception=exception)
+        return _as_router(self).settings().allowed_fails_for(exception)
 
     def get_available_guardrail(self, guardrail_name: str) -> "GuardrailTypedDict":
         _note("get_available_guardrail", "settings().guardrail(name)")
-        return _as_router(self)._core_get_available_guardrail(guardrail_name)
+        return _as_router(self).settings().guardrail(guardrail_name)
 
     # -- health ----------------------------------------------------------------------------------
     @staticmethod
@@ -709,31 +771,31 @@ class DeprecatedRouterMembers:
 
     def get_fully_blocked_model_names(self) -> set[str]:  # mutable-ok: the old return type, unchanged
         _note("get_fully_blocked_model_names", "health().fully_blocked_model_names()")
-        return _as_router(self)._core_get_fully_blocked_model_names()
+        return _as_router(self).health().fully_blocked_model_names()
 
     async def async_get_fully_unhealthy_model_names(self) -> set[str]:  # mutable-ok: the old return type, unchanged
         _note("async_get_fully_unhealthy_model_names", "health().fully_unhealthy_model_names()")
-        return await _as_router(self)._core_async_get_fully_unhealthy_model_names()
+        return await _as_router(self).health().fully_unhealthy_model_names()
 
     async def get_model_group_usage(self, model_group: str) -> tuple[int | None, int | None]:
         _note("get_model_group_usage", "health().usage(group)")
-        return await _as_router(self)._core_get_model_group_usage(model_group=model_group)
+        return await _as_router(self).health().usage(model_group)
 
     async def get_remaining_model_group_usage(
         self, model_group: str
     ) -> dict[str, int]:  # mutable-ok: the old return type, unchanged
         _note("get_remaining_model_group_usage", "health().usage(group, kind='remaining')")
-        return await _as_router(self)._core_get_remaining_model_group_usage(model_group=model_group)
+        return await _as_router(self).health().usage(model_group, kind="remaining")
 
     def team_ptu_ceiling(self, team_id: str, model_group: str) -> "PTUTeamCeiling | None":
         _note("team_ptu_ceiling", "health().team_ptu_ceiling(team_id, group)")
-        return _as_router(self)._core_team_ptu_ceiling(team_id, model_group)
+        return _as_router(self).health().team_ptu_ceiling(team_id, model_group)
 
     def split_request_priority(
         self, model: str, kwargs: Mapping[str, object]
     ) -> tuple[int | None, Mapping[str, object]]:
         _note("split_request_priority", "health().split_priority(model, kwargs)")
-        return _as_router(self)._core_split_request_priority(model, kwargs)
+        return _as_router(self).health().split_priority(model, kwargs)
 
     # -- selection -------------------------------------------------------------------------------
     async def async_get_healthy_deployments(
@@ -747,9 +809,10 @@ class DeprecatedRouterMembers:
         health_check_probe: bool = False,
     ) -> list[dict] | dict:  # mutable-ok: the old return type, unchanged
         _note("async_get_healthy_deployments", "select(model, request_kwargs, kind='healthy')")
-        return await _as_router(self)._core_async_get_healthy_deployments(
-            model=model,
-            request_kwargs=request_kwargs,
+        return await _as_router(self).select(
+            model,
+            request_kwargs,
+            kind="healthy",
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
@@ -757,7 +820,7 @@ class DeprecatedRouterMembers:
             health_check_probe=health_check_probe,
         )
 
-    def get_available_deployment_for_pass_through(  # noqa: ANN201  # the old member had no return annotation; its inferred type is kept by inferring it from the core
+    def get_available_deployment_for_pass_through(  # noqa: ANN201  # the old member had no return annotation; its inferred type is kept by inferring it from select
         self,
         model: str,
         messages: list[dict[str, str]] | None = None,  # mutable-ok: the old parameter type, unchanged
@@ -766,12 +829,15 @@ class DeprecatedRouterMembers:
         request_kwargs: dict | None = None,  # mutable-ok: the old parameter type, unchanged
     ):
         _note("get_available_deployment_for_pass_through", "select(model, kind='pass_through')")
-        return _as_router(self)._core_get_available_deployment_for_pass_through(
-            model=model,
-            messages=messages,
-            input=input,
-            specific_deployment=specific_deployment,
-            request_kwargs=request_kwargs,
+        return _run_ready(
+            _as_router(self).select(
+                model,
+                request_kwargs,
+                kind="pass_through",
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+            )
         )
 
     # -- writes ----------------------------------------------------------------------------------
@@ -808,8 +874,15 @@ class DeprecatedRouterMembers:
 
     def bind_to_request_logging(self, logging_obj: "LiteLLMLogging") -> None:
         _note("bind_to_request_logging", "observe(logging_obj)")
-        # Straight to the core, as before: observe() skips binding when logging_obj is None, the old member did not.
-        _as_router(self)._core_bind_to_request_logging(logging_obj)
+        router: Final = _as_router(self)
+        if logging_obj is None:  # pyright: ignore[reportUnnecessaryComparison]  # callers pass None despite the type
+            # observe() skips binding when logging_obj is None; the old member bound it, and failed on None.
+            raise AttributeError(
+                "'NoneType' object has no attribute 'add_dynamic_function_callbacks'",
+                name="add_dynamic_function_callbacks",
+                obj=None,
+            )
+        router.observe(logging_obj)
 
     def discard(self) -> None:
         _note("discard", "retire()")
@@ -822,7 +895,7 @@ class DeprecatedRouterMembers:
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: the old parameter type, unchanged
     ) -> None:
         _note("arm_routing_read_prefetch", "RoutingContext.arm_read_prefetch")
-        _as_router(self)._core_arm_routing_read_prefetch(model, request_kwargs)
+        RoutingContext(_as_router(self)).arm_read_prefetch(model, request_kwargs)
 
     async def async_pre_routing_hook(
         self,
@@ -833,7 +906,7 @@ class DeprecatedRouterMembers:
         specific_deployment: bool | None = False,
     ) -> "PreRoutingHookResponse | None":
         _note("async_pre_routing_hook", "RoutingContext.pre_routing_hook")
-        return await _as_router(self)._core_async_pre_routing_hook(
+        return await RoutingContext(_as_router(self)).pre_routing_hook(
             model=model,
             request_kwargs=request_kwargs,
             messages=messages,
@@ -843,7 +916,7 @@ class DeprecatedRouterMembers:
 
     def log_retry(self, kwargs: dict, e: Exception) -> dict:  # mutable-ok: the old signature, unchanged
         _note("log_retry", "RoutingContext.log_retry")
-        return _as_router(self)._core_log_retry(kwargs=kwargs, e=e)
+        return RoutingContext(_as_router(self)).log_retry(kwargs=kwargs, e=e)
 
 
 # Router-family functions and classes that took the Router (``litellm_router_instance=``,
