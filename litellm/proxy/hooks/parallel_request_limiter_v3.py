@@ -709,7 +709,7 @@ class RequestRateLimiterStash:
     A single mutable instance is shared by every context forked from the
     request task (the SDK call, streaming generators, and the logging worker's
     captured context all see the same object), which is what makes the
-    ``reservation_released`` flag and ``parallel_slot`` clearing effective
+    released flags and ``parallel_slot`` clearing effective
     across sibling callbacks: the first release wins, later callbacks observe
     the cleared state.
 
@@ -746,6 +746,7 @@ class RequestRateLimiterStash:
     batch_enqueued_reservation: BatchEnqueuedTokenReservation | None = None
     batch_tpd_refund_ops: tuple[ReservationAwareIncrementOperation, ...] = ()
     reservation_released: bool = False
+    io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
     socket_agent_windows: tuple[RateLimitDescriptor, ...] = ()
 
@@ -755,10 +756,21 @@ class RequestRateLimiterStash:
         self.itpm_reserved_tokens = 0
         self.otpm_reserved_tokens = 0
 
-    def discard_released_reservation(self) -> None:
+    def mark_reservation_released(self) -> None:
+        self.reservation_released = True
+        self.io_reservation_released = True
+
+    def discard_released_tpm_reservation(self) -> None:
         if self.reservation_released:
-            self.clear_reserved_tokens()
+            self.reserved_tokens = 0
+            self.ptu_reserved_tokens = 0
             self.reservation_released = False
+
+    def discard_released_io_reservation(self) -> None:
+        if self.io_reservation_released:
+            self.itpm_reserved_tokens = 0
+            self.otpm_reserved_tokens = 0
+            self.io_reservation_released = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -4249,7 +4261,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 requested_model=requested_model,
             )
 
-        stash.discard_released_reservation()
+        stash.discard_released_io_reservation()
         if itpm_reserved > 0:
             itpm_scopes: Final = tuple(
                 (d["key"], d["value"]) for d in io_token_descriptors if d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY
@@ -4609,7 +4621,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     # incremented so post-call reconciliation only applies
                     # the (actual - reserved) delta to those — unreserved
                     # scopes get charged the full actual usage instead.
-                    stash.discard_released_reservation()
+                    stash.discard_released_tpm_reservation()
                     stash.reserved_tokens = estimated_tokens
                     stash.ptu_reserved_tokens = ptu_estimated_tokens
                     stash.ptu_reserved_window_identities = frozenset(
@@ -5153,7 +5165,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self._response_usage(response_obj)
         ) or self._aggregate_only_total_tokens(self._response_usage(kwargs.get("combined_usage_object")))
 
-        if not response_usage[2] and not combined_usage[2] and aggregate_total <= 0 and not stash.reservation_released:
+        if (
+            not response_usage[2]
+            and not combined_usage[2]
+            and aggregate_total <= 0
+            and not stash.io_reservation_released
+        ):
             return ()
         resolved_usage: Final = (
             response_usage
@@ -5166,25 +5183,25 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         billable_input, completion_tokens, _ = resolved_usage
 
-        if stash.reservation_released or (
+        if stash.io_reservation_released or (
             not stash.itpm_reserved_window_identities and not stash.otpm_reserved_window_identities
         ):
             return self._build_reservation_aware_tpm_ops(
                 targets=tuple(stash.itpm_reserved_scopes),
-                reserved_scopes=frozenset() if stash.reservation_released else stash.itpm_reserved_scopes,
+                reserved_scopes=frozenset() if stash.io_reservation_released else stash.itpm_reserved_scopes,
                 actual_tokens=billable_input,
-                reserved_tokens=0 if stash.reservation_released else itpm_reserved,
+                reserved_tokens=0 if stash.io_reservation_released else itpm_reserved,
             ) + self._build_reservation_aware_tpm_ops(
                 targets=tuple(stash.otpm_reserved_scopes),
-                reserved_scopes=frozenset() if stash.reservation_released else stash.otpm_reserved_scopes,
+                reserved_scopes=frozenset() if stash.io_reservation_released else stash.otpm_reserved_scopes,
                 actual_tokens=completion_tokens,
-                reserved_tokens=0 if stash.reservation_released else otpm_reserved,
+                reserved_tokens=0 if stash.io_reservation_released else otpm_reserved,
             )
 
         itpm_ops: Final[Sequence[ReservationAwareIncrementOperation]] = (
             self._build_project_reservation_ops(
                 targets=tuple(stash.itpm_reserved_scopes),
-                reserved_scopes=frozenset() if stash.reservation_released else stash.itpm_reserved_scopes,
+                reserved_scopes=frozenset() if stash.io_reservation_released else stash.itpm_reserved_scopes,
                 actual_tokens=billable_input,
                 reserved_tokens=itpm_reserved,
                 reservation_window_identities=stash.itpm_reserved_window_identities,
@@ -5195,7 +5212,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         otpm_ops: Final[Sequence[ReservationAwareIncrementOperation]] = (
             self._build_project_reservation_ops(
                 targets=tuple(stash.otpm_reserved_scopes),
-                reserved_scopes=frozenset() if stash.reservation_released else stash.otpm_reserved_scopes,
+                reserved_scopes=frozenset() if stash.io_reservation_released else stash.otpm_reserved_scopes,
                 actual_tokens=completion_tokens,
                 reserved_tokens=otpm_reserved,
                 reservation_window_identities=stash.otpm_reserved_window_identities,
@@ -5747,10 +5764,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # already released it (proxy-level rejection that also bubbles up
             # here as an LLM-error callback). max_parallel_requests is its
             # own counter and is always decremented per call.
-            reserved_tokens, itpm_reserved, otpm_reserved = (
-                (0, 0, 0)
-                if stash is None or stash.reservation_released
-                else (stash.reserved_tokens, stash.itpm_reserved_tokens, stash.otpm_reserved_tokens)
+            reserved_tokens: Final = 0 if stash is None or stash.reservation_released else stash.reserved_tokens
+            itpm_reserved, otpm_reserved = (
+                (0, 0)
+                if stash is None or stash.io_reservation_released
+                else (stash.itpm_reserved_tokens, stash.otpm_reserved_tokens)
             )
             tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(failed_call)
 
@@ -5821,7 +5839,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
             if stash is not None and (reserved_tokens > 0 or itpm_reserved > 0 or otpm_reserved > 0):
-                stash.reservation_released = True
+                stash.mark_reservation_released()
             if pipeline_operations:
                 await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline_post_call(
                     pipeline_operations, parent_otel_span=litellm_parent_otel_span
@@ -5941,7 +5959,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         Idempotent: the slot release clears the stashed acquisition (and slot
         removal is a no-op ZREM on a second run), and the TPM/ITPM/OTPM
-        refund is guarded by the stash's ``reservation_released`` flag — if
+        refund is guarded by the stash's two released flags — if
         both this hook and async_log_failure_event end up running in the same
         flow, only the first release/refund applies. A mid-stream failure
         relayed here with recovered partial usage settles the reservation at
@@ -5967,11 +5985,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 stash.batch_tpd_refund_ops = ()
 
-            if stash.reservation_released:
-                return
-            reserved_tokens: Final = stash.reserved_tokens
-            itpm_reserved: Final = stash.itpm_reserved_tokens
-            otpm_reserved: Final = stash.otpm_reserved_tokens
+            reserved_tokens: Final = 0 if stash.reservation_released else stash.reserved_tokens
+            itpm_reserved: Final = 0 if stash.io_reservation_released else stash.itpm_reserved_tokens
+            otpm_reserved: Final = 0 if stash.io_reservation_released else stash.otpm_reserved_tokens
             if reserved_tokens <= 0 and itpm_reserved <= 0 and otpm_reserved <= 0:
                 return
             tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(request_data)
@@ -6038,7 +6054,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     itpm_reserved,
                     otpm_reserved,
                 )
-            stash.reservation_released = True
+            stash.mark_reservation_released()
             if combined_ops:
                 await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                     increment_list=list(combined_ops),
