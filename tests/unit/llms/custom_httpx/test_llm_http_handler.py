@@ -1668,7 +1668,7 @@ _BOTH_FOUNDRY_BETAS: Final = ("context-1m-2025-08-07,context-management-2025-06-
         pytest.param(
             None,
             {"anthropic-beta": "context-1m-2025-08-07"},
-            "claude-code-20250219",
+            "mcp-servers-2025-12-04",
             ("context-1m-2025-08-07",),
             id="unsupported-client-beta-is-dropped-and-deployment-beta-kept",
         ),
