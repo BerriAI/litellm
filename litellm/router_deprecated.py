@@ -141,7 +141,10 @@ class _DeprecatedAttribute(Generic[_T]):
 
     def __set__(self, obj: "DeprecatedRouterMembers", value: _T) -> None:
         _note(self.name, self.replacement)
-        if self.name in SETTING_FIELDS or self.name in ASSIGNABLE_ALIASES:
+        if self.name == "model_list":
+            # A whole new list is reindexed, so a replaced id never finds the new list's entries.
+            _as_router(obj)._assign_model_list(value)  # pyright: ignore[reportArgumentType]  # the assigned list
+        elif self.name in SETTING_FIELDS or self.name in ASSIGNABLE_ALIASES:
             _as_router(obj).apply(ChangeSet(assign={self.name: value}))
         else:
             setattr(obj, "_core_" + self.name, value)
@@ -170,6 +173,15 @@ def _attr(replacement: str, read: Callable[["Router"], _T]) -> _DeprecatedAttrib
     return _DeprecatedAttribute(replacement, read)
 
 
+def _select_in_place(router: "Router") -> Callable[..., Coroutine[object, object, object]]:
+    """
+    The core's selection on the caller's own ``request_kwargs``: the old members changed them in
+    place (for example taking ``_retry_skipped_deployment_ids`` off), where ``select`` works on a copy.
+    """
+    core: Final[object] = router.__dict__.get("_core", router)  # pyright: ignore[reportAny]  # the facade keeps its core in __dict__
+    return core._select_in_place  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]  # every core has one
+
+
 def _async_picker(router: "Router") -> Callable[..., Awaitable[object]]:
     """
     The router's async pick (the old ``async_get_available_deployment`` attribute). A core that
@@ -187,7 +199,7 @@ def _async_picker(router: "Router") -> Callable[..., Awaitable[object]]:
         input: str | list | None = None,  # mutable-ok: the old parameter type, unchanged
         specific_deployment: bool | None = False,
     ) -> object:
-        return await router.select(
+        return await _select_in_place(router)(
             model, request_kwargs, messages=messages, input=input, specific_deployment=specific_deployment
         )
 
@@ -809,7 +821,7 @@ class DeprecatedRouterMembers:
         health_check_probe: bool = False,
     ) -> list[dict] | dict:  # mutable-ok: the old return type, unchanged
         _note("async_get_healthy_deployments", "select(model, request_kwargs, kind='healthy')")
-        return await _as_router(self).select(
+        return await _select_in_place(_as_router(self))(  # pyright: ignore[reportReturnType]  # the core's untyped deployment dicts
             model,
             request_kwargs,
             kind="healthy",
@@ -830,7 +842,7 @@ class DeprecatedRouterMembers:
     ):
         _note("get_available_deployment_for_pass_through", "select(model, kind='pass_through')")
         return _run_ready(
-            _as_router(self).select(
+            _select_in_place(_as_router(self))(
                 model,
                 request_kwargs,
                 kind="pass_through",

@@ -71,7 +71,7 @@ async def prompt_management_acompletion(
     caller_timeout: Final = kwargs.get("timeout") or kwargs.get("request_timeout")
     caller_stream_timeout: Final = kwargs.get("stream_timeout")
     specific_deployment: Final = kwargs.pop("specific_deployment", None)
-    picked: Final = await core.select(
+    picked: Final = await core._select_in_place(  # pyright: ignore[reportPrivateUsage]  # the core's own selection, which pins onto the request
         model,
         kwargs,  # pyright: ignore[reportUnknownArgumentType]  # the request kwargs
         kind="pick",

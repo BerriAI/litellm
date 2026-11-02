@@ -392,6 +392,17 @@ async def test_unknown_model_group_raises_without_calling_the_host(
     assert host.calls == []
 
 
+@pytest.mark.parametrize("endpoint", ["acompletion", "completion"])
+async def test_an_entry_assigned_without_an_id_is_never_called(make_core: MakeCore, host: ScriptedHost, endpoint: str):
+    """``model_list = [...]`` keeps an entry without ``model_info.id`` as given, but never routes to it."""
+    core: Final = _one_group(make_core)
+    with pytest.warns(DeprecationWarning, match=r"Router\.model_list is deprecated"):  # pyright: ignore[reportUnknownMemberType]  # untyped in the checker's view
+        core.model_list = [{"model_name": "b", "litellm_params": {"model": "openai/b"}}]  # pyright: ignore[reportAttributeAccessIssue]  # deprecated attribute, still assignable
+    with pytest.raises(litellm.BadRequestError, match="model=b"):
+        await core.call(endpoint, {"model": "b", "messages": MESSAGES})
+    assert host.calls == []
+
+
 @pytest.mark.parametrize("op", ["no_such_endpoint", "acompletions", ""])
 async def test_call_with_an_unknown_op_raises_attribute_error_without_calling_the_host(
     make_core: MakeCore, host: ScriptedHost, op: str

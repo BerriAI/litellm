@@ -78,6 +78,19 @@ def _metadata(request: Mapping[str, object]) -> Mapping[str, object]:
     return metadata
 
 
+async def _routed_metadata(
+    core: RouterCore,
+    host: ScriptedHost,
+    model: str,
+    messages: list[dict[str, str]],
+    **request: object,  # kwargs-ok: the request's own keyword payload
+) -> Mapping[str, object]:
+    """The metadata the routed call carried: ``select`` leaves its caller's request alone, so the
+    routing stamps are read where they land, on the request the router sends."""
+    await core.acompletion(model=model, messages=messages, **request)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    return _metadata(host.calls[-1].kwargs)
+
+
 # --- the complexity router ------------------------------------------------------------------------
 
 
@@ -92,11 +105,11 @@ async def test_a_complexity_router_picks_the_tier_deployment_for_the_prompt(
 
 
 @pytest.mark.asyncio
-async def test_a_complexity_router_pick_stamps_the_routing_decision_on_the_request(make_core: MakeCore) -> None:
+async def test_a_complexity_router_pick_stamps_the_routing_decision_on_the_routed_request(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
     core: Final = make_core(model_list=_tiered())
-    request: Final[dict[str, object]] = {}
-    await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
-    metadata: Final = _metadata(request)
+    metadata: Final = await _routed_metadata(core, host, "smart", MESSAGES)
     decision: Final = metadata["routing_decision"]
     assert isinstance(decision, Mapping)
     assert decision["router_model_name"] == "smart"
@@ -121,11 +134,11 @@ async def test_completion_through_a_complexity_router_reports_the_router_name_as
 @pytest.mark.asyncio
 async def test_an_alias_to_a_complexity_router_routes_through_it(make_core: MakeCore, host: ScriptedHost) -> None:
     core: Final = make_core(model_list=_tiered(), model_group_alias={"al": "smart"})
-    request: Final[dict[str, object]] = {}
-    chosen: Final = await core.select("al", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
+    chosen: Final = await core.select("al", {}, messages=MESSAGES)  # pyright: ignore[reportCallIssue, reportUnknownVariableType]
     assert chosen["model_info"]["id"] == "s"  # pyright: ignore[reportIndexIssue]
-    assert _metadata(request)["routing_decision"]["router_model_name"] == "smart"  # pyright: ignore[reportIndexIssue]
-    await core.acompletion(model="al", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]
+    metadata: Final = await _routed_metadata(core, host, "al", MESSAGES)
+    assert metadata["routing_decision"]["router_model_name"] == "smart"  # pyright: ignore[reportIndexIssue]
+    assert host.calls[-1].deployment_id == "s"
     assert host.calls[-1].model_group == "al"
 
 
@@ -137,15 +150,14 @@ async def test_a_complexity_router_takes_precedence_over_plain_deployments_of_it
 
 @pytest.mark.asyncio
 async def test_a_complexity_router_tier_naming_an_unknown_model_falls_back_to_the_default_model(
-    make_core: MakeCore,
+    make_core: MakeCore, host: ScriptedHost
 ) -> None:
     core: Final = make_core(
         model_list=[deployment("big", "b"), _complexity_router(tiers={**TIERS, "SIMPLE": "missing"})]
     )
-    request: Final[dict[str, object]] = {}
-    chosen: Final = await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
+    chosen: Final = await core.select("smart", {}, messages=MESSAGES)  # pyright: ignore[reportCallIssue, reportUnknownVariableType]
     assert chosen["model_info"]["id"] == "b"  # pyright: ignore[reportIndexIssue]
-    decision: Final = _metadata(request)["routing_decision"]
+    decision: Final = (await _routed_metadata(core, host, "smart", MESSAGES))["routing_decision"]
     assert isinstance(decision, Mapping)
     assert decision["cause"] == "health_default_fallback"
     assert decision["routed_model"] == "big"
@@ -282,13 +294,25 @@ async def test_tier_litellm_params_override_the_callers_params_on_the_call(
 
 
 @pytest.mark.asyncio
-async def test_tier_litellm_params_are_pinned_onto_the_request_by_select(make_core: MakeCore) -> None:
+async def test_select_leaves_the_callers_request_without_the_tier_pins(make_core: MakeCore) -> None:
     core: Final = make_core(model_list=_tiered(tiers=PINNED_TIERS))
     request: Final[dict[str, object]] = {"temperature": 0.9, "max_completion_tokens": 100}
-    await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
-    assert request["temperature"] == 0.1
-    assert request["max_tokens"] == 7
-    assert "max_completion_tokens" not in request
+    picked: Final = await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue, reportUnknownVariableType]
+    assert picked["model_info"]["id"] == "s"  # pyright: ignore[reportIndexIssue]  # a deployment dict
+    assert request == {"temperature": 0.9, "max_completion_tokens": 100}
+
+
+@pytest.mark.asyncio  # pyright: ignore[reportUnknownMemberType, reportUntypedFunctionDecorator]  # untyped in the checker's view
+async def test_select_leaves_the_callers_request_and_metadata_without_marker_params_or_stamps(
+    make_core: MakeCore,
+) -> None:
+    core: Final = make_core(model_list=_tiered(temperature=0.3))
+    metadata: Final[dict[str, object]] = {"tags": ["t"]}
+    request: Final[dict[str, object]] = {"metadata": metadata, "specific_deployment": False}
+    await core.select("smart", request, messages=HARD_MESSAGES)  # pyright: ignore[reportCallIssue]
+    assert request == {"metadata": {"tags": ["t"]}, "specific_deployment": False}
+    assert request["metadata"] is metadata
+    assert metadata == {"tags": ["t"]}
 
 
 @pytest.mark.asyncio
@@ -351,13 +375,16 @@ def _session_request(
 
 
 @pytest.mark.asyncio
-async def test_a_subagent_request_follows_the_router_its_session_started_on(make_core: MakeCore) -> None:
+async def test_a_subagent_request_follows_the_router_its_session_started_on(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
     core: Final = make_core(model_list=_tiered())
     await core.select("smart", _session_request(), messages=MESSAGES)  # pyright: ignore[reportCallIssue]
-    subagent: Final = _session_request(agent_id="agent-1")
-    chosen: Final = await core.select("big", subagent, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
+    chosen: Final = await core.select("big", _session_request(agent_id="agent-1"), messages=MESSAGES)  # pyright: ignore[reportCallIssue, reportUnknownVariableType]
     assert chosen["model_info"]["id"] == "s"  # pyright: ignore[reportIndexIssue]
-    assert _metadata(subagent)["model_group"] == "smart"
+    metadata: Final = await _routed_metadata(core, host, "big", MESSAGES, **_session_request(agent_id="agent-1"))
+    assert host.calls[-1].deployment_id == "s"
+    assert metadata["model_group"] == "smart"
 
 
 @pytest.mark.asyncio
@@ -428,24 +455,31 @@ async def test_a_routing_plugin_narrows_the_candidates_to_the_models_it_keeps(ma
 
 
 @pytest.mark.asyncio
-async def test_routing_plugin_signals_and_narrowed_candidates_are_stamped_on_the_request(make_core: MakeCore) -> None:
+async def test_routing_plugin_signals_and_narrowed_candidates_are_stamped_on_the_routed_request(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
     core: Final = make_core(model_list=list(TWO), plugins=[Narrowing(frozenset({"openai/b"}))])
-    request: Final[dict[str, object]] = {}
-    await core.select("g", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
-    assert request == {
-        "metadata": {
-            "routing_plugin_signals": {"narrowing": {"kept": ["openai/b"]}},
-            "_routing_plugin_candidate_models": ["openai/b"],
-        }
-    }
+    metadata: Final = await _routed_metadata(core, host, "g", MESSAGES)
+    assert metadata["routing_plugin_signals"] == {"narrowing": {"kept": ["openai/b"]}}
+    assert metadata["_routing_plugin_candidate_models"] == ["openai/b"]
 
 
 @pytest.mark.asyncio
-async def test_a_routing_plugin_that_keeps_every_candidate_stamps_only_its_signals(make_core: MakeCore) -> None:
+async def test_a_routing_plugin_that_keeps_every_candidate_stamps_only_its_signals(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
     core: Final = make_core(model_list=list(TWO), plugins=[Narrowing(frozenset({"openai/a", "openai/b"}))])
+    metadata: Final = await _routed_metadata(core, host, "g", MESSAGES)
+    assert metadata["routing_plugin_signals"] == {"narrowing": {"kept": ["openai/a", "openai/b"]}}
+    assert "_routing_plugin_candidate_models" not in metadata
+
+
+@pytest.mark.asyncio  # pyright: ignore[reportUnknownMemberType, reportUntypedFunctionDecorator]  # untyped in the checker's view
+async def test_select_leaves_the_callers_request_without_routing_plugin_stamps(make_core: MakeCore) -> None:
+    core: Final = make_core(model_list=list(TWO), plugins=[Narrowing(frozenset({"openai/b"}))])
     request: Final[dict[str, object]] = {}
     await core.select("g", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
-    assert request == {"metadata": {"routing_plugin_signals": {"narrowing": {"kept": ["openai/a", "openai/b"]}}}}
+    assert request == {}
 
 
 @pytest.mark.asyncio

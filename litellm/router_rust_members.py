@@ -37,7 +37,7 @@ class RustRegistryMembers:
         return self._registry_state.add_deployment(deployment)
 
     def set_model_list(self, model_list: Sequence[object]) -> None:
-        """Replace every deployment (``set_model_list``); aliases and wildcard routes stay."""
+        """Replace every deployment (``set_model_list``) with its wildcard routes and names; aliases stay."""
         self._registry_state.set_model_list(model_list)
 
     @property
@@ -46,11 +46,9 @@ class RustRegistryMembers:
         return self._registry_state._core_model_list  # pyright: ignore[reportPrivateUsage]  # the core reads its own host registry
 
     def _assign_model_list(self, model_list: Sequence[object]) -> None:
-        """``router.model_list = [...]``: the list is swapped as given, without reindexing, and the
+        """``router.model_list = [...]``: the list is swapped as given and reindexed, and the
         registry version moves once."""
-        self._registry_state._core_model_list = model_list  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # the list as assigned, as the core keeps it
-        self._registry_state._registry_version += 1  # pyright: ignore[reportPrivateUsage]  # see above
-        self._registry_state._on_change()  # pyright: ignore[reportPrivateUsage]  # see above
+        self._registry_state.assign_model_list(model_list)
 
     @staticmethod
     def deployment_is_active_for_environment(deployment: Deployment) -> bool:
