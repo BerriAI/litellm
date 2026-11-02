@@ -1,7 +1,12 @@
 from litellm.llms.vertex_ai.gemini.grounding_requests import (
     GroundingRequests,
     calculate_grounding_requests,
+    server_side_search_queries,
 )
+
+
+def _search_candidate(queries, tool_type="GOOGLE_SEARCH_WEB"):
+    return {"content": {"parts": [{"toolCall": {"toolType": tool_type, "args": {"queries": list(queries)}}}]}}
 
 
 def test_search_only_counts_non_empty_queries_as_web_requests():
@@ -100,3 +105,40 @@ def test_has_billable_grounding():
     assert GroundingRequests(web_search_requests=None, google_maps_grounding_requests=1).has_billable_grounding()
     assert GroundingRequests(web_search_requests=1, google_maps_grounding_requests=None).has_billable_grounding()
     assert not GroundingRequests(web_search_requests=None, google_maps_grounding_requests=None).has_billable_grounding()
+
+
+def test_server_side_search_queries_extracts_distinct_google_search_queries():
+    candidates = [
+        _search_candidate(["weather Buenos Aires", "weather Montevideo"]),
+        _search_candidate(["weather Buenos Aires"]),
+    ]
+    assert server_side_search_queries(candidates) == frozenset({"weather Buenos Aires", "weather Montevideo"})
+
+
+def test_server_side_search_queries_ignores_non_search_tool_calls_and_empty_strings():
+    candidates = [
+        _search_candidate(["", "real query"]),
+        _search_candidate(["ignored"], tool_type="CODE_EXECUTION"),
+    ]
+    assert server_side_search_queries(candidates) == frozenset({"real query"})
+
+
+def test_server_side_search_queries_tolerates_missing_and_malformed_shapes():
+    assert server_side_search_queries(None) == frozenset()
+    assert server_side_search_queries([]) == frozenset()
+    assert server_side_search_queries([{"content": {}}, {"content": {"parts": "nope"}}, "not a dict"]) == frozenset()
+    malformed = [{"content": {"parts": [{"toolCall": {"toolType": "GOOGLE_SEARCH_WEB", "args": {"queries": "x"}}}]}}]
+    assert server_side_search_queries(malformed) == frozenset()
+
+
+def test_extra_web_queries_are_counted_when_grounding_metadata_has_none():
+    result = calculate_grounding_requests([], extra_web_queries=frozenset({"q1", "q2"}))
+    assert result == GroundingRequests(web_search_requests=2, google_maps_grounding_requests=None)
+
+
+def test_extra_web_queries_union_with_grounding_metadata_dedupes_shared_query():
+    result = calculate_grounding_requests(
+        [{"webSearchQueries": ["shared", "grounding only"], "groundingChunks": [{"web": {"uri": "https://e.com"}}]}],
+        extra_web_queries=frozenset({"shared", "invocation only"}),
+    )
+    assert result == GroundingRequests(web_search_requests=3, google_maps_grounding_requests=None)

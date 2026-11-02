@@ -17,10 +17,12 @@ import pytest
 from litellm.llms.vertex_ai.gemini.transformation import (
     gemini_convert_messages_with_history,
 )
+from litellm.llms.vertex_ai.gemini.grounding_requests import server_side_search_queries
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
 from litellm.types.llms.vertex_ai import HttpxPartType
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 # --- Response extraction tests ---
 
@@ -367,3 +369,50 @@ class TestIncludeServerSideToolInvocationsConfig:
         config = VertexGeminiConfig()
         supported = config.get_supported_openai_params(model="gemini-3-flash-preview")
         assert "include_server_side_tool_invocations" in supported
+
+
+# --- Usage counting for server-side search invocations (#49012) ---
+
+
+def _search_candidates(*query_groups):
+    """Gemini candidates carrying GOOGLE_SEARCH_WEB toolCall parts, one per query group."""
+    return [
+        {"content": {"parts": [{"toolCall": {"toolType": "GOOGLE_SEARCH_WEB", "args": {"queries": list(queries)}}}]}}
+        for queries in query_groups
+    ]
+
+
+class TestServerSideSearchUsageCounting:
+    """Searches reported only as server-side tool invocations are still billed (#49012)."""
+
+    def _web_search_requests(self, usage):
+        return getattr(usage.prompt_tokens_details, "web_search_requests", None)
+
+    def test_invocation_only_searches_counted_when_grounding_metadata_absent(self):
+        candidates = _search_candidates(["weather Buenos Aires", "weather Montevideo"], ["weather Buenos Aires"])
+        usage = Usage(prompt_tokens_details=PromptTokensDetailsWrapper())
+
+        VertexGeminiConfig._set_grounding_usage_counters(
+            usage, grounding_metadata=[], extra_web_search_queries=server_side_search_queries(candidates)
+        )
+
+        assert self._web_search_requests(usage) == 2
+
+    def test_query_reported_in_both_grounding_and_invocation_is_counted_once(self):
+        candidates = _search_candidates(["shared", "invocation only"])
+        grounding_metadata = [{"webSearchQueries": ["shared", "grounding only"], "groundingChunks": [{"web": {}}]}]
+        usage = Usage(prompt_tokens_details=PromptTokensDetailsWrapper())
+
+        VertexGeminiConfig._set_grounding_usage_counters(
+            usage, grounding_metadata, extra_web_search_queries=server_side_search_queries(candidates)
+        )
+
+        assert self._web_search_requests(usage) == 3
+
+    def test_grounding_only_path_is_unchanged_without_invocations(self):
+        grounding_metadata = [{"webSearchQueries": ["q1", "q2"], "groundingChunks": [{"web": {}}]}]
+        usage = Usage(prompt_tokens_details=PromptTokensDetailsWrapper())
+
+        VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
+
+        assert self._web_search_requests(usage) == 2

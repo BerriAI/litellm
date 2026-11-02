@@ -108,7 +108,7 @@ from ..context_caching.rejected_cache_retry import (
     post_with_fresh_cache_sync,
 )
 from ..vertex_llm_base import VertexBase
-from .grounding_requests import calculate_grounding_requests
+from .grounding_requests import calculate_grounding_requests, server_side_search_queries
 from .long_decode import (
     HOP_FAILURES,
     AsyncStreamResume,
@@ -2567,8 +2567,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return cls._calculate_web_search_requests(grounding_metadata)
 
     @staticmethod
-    def _set_grounding_usage_counters(usage: Usage, grounding_metadata: Sequence[Mapping[str, object]]) -> None:
-        grounding_requests: Final = calculate_grounding_requests(grounding_metadata)
+    def _set_grounding_usage_counters(
+        usage: Usage,
+        grounding_metadata: Sequence[Mapping[str, object]],
+        extra_web_search_queries: frozenset[str] = frozenset(),
+    ) -> None:
+        grounding_requests: Final = calculate_grounding_requests(grounding_metadata, extra_web_search_queries)
         details: Final = cast(PromptTokensDetailsWrapper, usage.prompt_tokens_details)
         if grounding_requests.web_search_requests is not None:
             details.web_search_requests = grounding_requests.web_search_requests
@@ -2580,8 +2584,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         cls,
         usage: Usage,
         grounding_metadata: Sequence[Mapping[str, object]],
+        extra_web_search_queries: frozenset[str] = frozenset(),
     ) -> None:
-        return cls._set_grounding_usage_counters(usage, grounding_metadata)
+        return cls._set_grounding_usage_counters(usage, grounding_metadata, extra_web_search_queries)
 
     @staticmethod
     def _create_streaming_choice(
@@ -3090,7 +3095,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 cache_creation_tokens=_cache_creation_tokens(logging_obj),
             )
 
-            VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
+            VertexGeminiConfig._set_grounding_usage_counters(
+                usage, grounding_metadata, server_side_search_queries(_candidates)
+            )
 
             setattr(model_response, "usage", usage)
 
@@ -3934,6 +3941,7 @@ class ModelResponseIterator:
         self._initial_prompt_tokens: int | None = None
         self._grounding_offset: tuple[Mapping[str, object], ...] = ()
         self._hop_grounding: tuple[Mapping[str, object], ...] = ()
+        self._search_queries: frozenset[str] = frozenset()
         self._answer_offset: int = 0
         self._hop_answer_bytes: int = 0
 
@@ -4076,7 +4084,9 @@ class ModelResponseIterator:
             cache_creation_tokens=_cache_creation_tokens(self.logging_obj),
         )
 
-        VertexGeminiConfig.set_grounding_usage_counters(usage, self._grounding_through_this_hop(grounding_metadata))
+        VertexGeminiConfig.set_grounding_usage_counters(
+            usage, self._grounding_through_this_hop(grounding_metadata), self._search_queries
+        )
 
         traffic_type: Final = processed_chunk.get("usageMetadata", {}).get("trafficType")
         if traffic_type:
@@ -4129,6 +4139,7 @@ class ModelResponseIterator:
 
             _candidates: Final[list[Candidates] | None] = processed_chunk.get("candidates")
             if _candidates:
+                self._search_queries |= server_side_search_queries(_candidates)
                 (
                     grounding_metadata,
                     url_context_metadata,
