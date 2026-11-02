@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from litellm.proxy._lazy_features import (
+    LAZY_FEATURES,
     LazyFeature,
     LazyFeatureMiddleware,
     attach_lazy_features,
@@ -66,6 +67,11 @@ def _has_lazy_middleware(app: FastAPI) -> bool:
     return any(middleware.cls is LazyFeatureMiddleware for middleware in app.user_middleware)
 
 
+def test_a2a_feature_matches_v1_message_stream() -> None:
+    feature: Final = next(feature for feature in LAZY_FEATURES if feature.name == "a2a")
+    assert feature.matches("/v1/a2a/x/message/stream")
+
+
 @pytest.mark.parametrize("disable_lazy_routes", ("false", "true"))
 def test_retired_roi_calculator_cannot_be_loaded_or_called(
     monkeypatch: pytest.MonkeyPatch, disable_lazy_routes: str
@@ -91,6 +97,20 @@ def test_retired_roi_calculator_cannot_be_loaded_or_called(
         ):
             response: Final = client.request(method, path)
             assert response.status_code == 404, f"{method} {path}: {response.text}"
+
+
+@pytest.mark.parametrize("disable_lazy_routes", ("false", "true"))
+@pytest.mark.parametrize("path", ("/lazy/warm/usage_ai", "/usage/ai/chat"))
+def test_retired_usage_chat_cannot_be_loaded_or_called(
+    monkeypatch: pytest.MonkeyPatch, disable_lazy_routes: str, path: str
+) -> None:
+    monkeypatch.setenv(FLAG, disable_lazy_routes)
+    app: Final = FastAPI()
+    attach_lazy_features(app)
+
+    with TestClient(app) as client:
+        response: Final = client.post(path)
+        assert response.status_code == 404, f"{path}: {response.text}"
 
 
 @pytest.mark.parametrize("value", ("1", "true", "TRUE", "yes", "on"))

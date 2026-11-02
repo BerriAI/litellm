@@ -3228,7 +3228,7 @@ class TestGetBedrockModelIdArnHandling:
     def test_arn_url_matches_expected(self):
         """Full URL built from messages config must match expected encoded form."""
         import urllib.parse
-        from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
             AmazonAnthropicClaudeMessagesConfig,
         )
 

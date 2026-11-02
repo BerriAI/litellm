@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.llm_cost_calc.zero_cost_diagnostic import (
     used_pricing_keys,
     zero_cost_warning,
 )
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import CompletionTokensDetailsWrapper, PromptTokensDetailsWrapper, Usage
 
 PER_SECOND_ENTRY: Final = {"cost_per_second": 0.00042}
@@ -133,6 +134,36 @@ def test_audio_tokens_need_the_audio_rates() -> None:
     )
     assert diagnostic is not None
     assert diagnostic["missing_pricing_keys"] == ("input_cost_per_audio_token", "output_cost_per_audio_token")
+
+
+def test_cached_audio_uses_its_cache_rate_in_zero_cost_diagnostic() -> None:
+    usage: Final = Usage(
+        prompt_tokens=20,
+        completion_tokens=0,
+        total_tokens=20,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=0,
+            audio_tokens=20,
+            cached_tokens=20,
+            cached_tokens_details=CachedTokensDetails(audio_tokens=20),
+        ),
+    )
+    pricing_entry: Final = {
+        "input_cost_per_token": 1e-6,
+        "input_cost_per_audio_token": 2e-6,
+        "cache_read_input_audio_token_cost": 0,
+    }
+
+    assert used_pricing_keys(usage) == ("cache_read_input_audio_token_cost",)
+    assert (
+        diagnose_zero_cost(
+            usage=usage,
+            pricing_model="gemini-audio",
+            pricing_entry=pricing_entry,
+            calculation_failed=False,
+        )
+        is None
+    )
 
 
 def test_warning_names_the_request_the_entry_the_missing_keys_and_the_counter() -> None:

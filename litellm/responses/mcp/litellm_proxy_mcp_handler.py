@@ -11,8 +11,8 @@ from typing_extensions import Unpack
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
-from litellm.proxy._experimental.mcp_server.utils import (
+from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
+from litellm.proxy.mcp_server.utils import (
     iter_known_server_prefixes,
     logging_safe_mcp_headers,
     split_server_prefix_from_name,
@@ -23,6 +23,7 @@ from litellm.responses.mcp.tool_precheck import (
     LITELLM_PROXY_MCP_SERVER_URL_PREFIX,
     may_name_litellm_mcp_gateway,
     names_gateway_explicitly,
+    names_whole_gateway,
     proxy_path_mcp_name,
 )
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -35,10 +36,7 @@ from litellm.types.llms.openai import ToolParam as ResponsesToolParam
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.utils import (
     CallTypes,
-    ChatCompletionMessageCustomToolCall,
-    ChatCompletionMessageToolCall,
     Choices,
-    Message,
     ModelResponse,
     StandardLoggingMCPToolCall,
 )
@@ -48,7 +46,7 @@ if TYPE_CHECKING:
     from mcp.types import CallToolResult
     from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._experimental.mcp_server.ui_session_utils import GrantedToolsetIds
+    from litellm.proxy.mcp_server.ui_session_utils import GrantedToolsetIds
     from litellm.proxy.utils import ProxyLogging
     from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -71,7 +69,7 @@ class _AresponsesOptions(ExtraItemsTypedDict, total=False, extra_items=object):
 
 
 def _registered_mcp_servers() -> Collection[MCPServer]:
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    from litellm.proxy.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
 
@@ -89,7 +87,7 @@ def _registry_serves(name: str, servers: Collection[MCPServer]) -> bool:
 
 async def _toolset_exists(name: str) -> bool:
     try:
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
         from litellm.proxy.proxy_server import prisma_client
@@ -185,20 +183,20 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     async def _apply_toolset_permissions(
-        resolved_toolset_ids: list[str],
-        resolved_mcp_servers: list[str],
+        resolved_toolset_ids: Sequence[str],
+        resolved_mcp_servers: Sequence[str],
         user_api_key_auth: "UserAPIKeyAuth",
     ) -> "UserAPIKeyAuth":
         """Apply resolved toolset permissions to user_api_key_auth and return updated auth."""
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 
         try:
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            from litellm.proxy.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
 
             tool_permissions: Final = await global_mcp_server_manager.resolve_toolset_tool_permissions(
-                toolset_ids=resolved_toolset_ids
+                toolset_ids=list(resolved_toolset_ids)
             )
             all_server_ids: Final = list(set(tool_permissions.keys()) | set(resolved_mcp_servers))
             existing_op: Final = user_api_key_auth.object_permission
@@ -228,6 +226,62 @@ class LiteLLM_Proxy_MCP_Handler:
             return user_api_key_auth
 
     @staticmethod
+    async def _resolve_proxy_mcp_name(
+        name: str,
+        user_api_key_auth: "UserAPIKeyAuth | None",
+        granted_toolsets: "GrantedToolsetIds | None",
+    ) -> tuple[Literal["server", "toolset", "denied_toolset"], str]:
+        from litellm.proxy.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        if global_mcp_server_manager.get_mcp_server_by_name(name):
+            return ("server", name)
+        try:
+            from litellm.proxy.proxy_server import prisma_client
+
+            if prisma_client is None:
+                return ("server", name)
+            toolset: Final = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, name)
+            if toolset is None:
+                return ("server", name)
+            from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
+                has_team_unbound_mcp_admin_view,
+            )
+            from litellm.proxy.mcp_server.ui_session_utils import (
+                granted_toolset_ids,
+            )
+
+            denied: Final = (
+                user_api_key_auth is not None
+                and not has_team_unbound_mcp_admin_view(user_api_key_auth)
+                and toolset.toolset_id not in await (granted_toolsets or granted_toolset_ids)(user_api_key_auth)
+            )
+        except Exception as _e:
+            verbose_logger.debug("Could not resolve '%s' as toolset: %s", name, _e)
+            return ("server", name)
+        if not denied:
+            return ("toolset", toolset.toolset_id)
+        if await LiteLLM_Proxy_MCP_Handler._holds_access_group_named(name, user_api_key_auth):
+            return ("server", name)
+        verbose_logger.debug("Key does not have access to toolset '%s', denying it.", name)
+        return ("denied_toolset", name)
+
+    @staticmethod
+    async def _holds_access_group_named(name: str, user_api_key_auth: "UserAPIKeyAuth | None") -> bool:
+        from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        group_server_ids: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups([name])
+        return bool(group_server_ids) and not frozenset(group_server_ids).isdisjoint(
+            await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
+        )
+
+    @staticmethod
     @catalog_operation(global_manager)
     async def _get_mcp_tools_from_manager(
         user_api_key_auth: "UserAPIKeyAuth | None",
@@ -253,12 +307,13 @@ class LiteLLM_Proxy_MCP_Handler:
             List of MCP tools
             List names of allowed MCP servers
         """
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from litellm.proxy._experimental.mcp_server.server import (
+        from litellm.proxy.mcp_server.server import (
             _get_allowed_mcp_servers_from_mcp_server_names,
             _get_tools_from_mcp_servers,
+            raise_generic_mcp_access_denial,
         )
 
         mcp_servers: Final = [
@@ -271,36 +326,15 @@ class LiteLLM_Proxy_MCP_Handler:
         # Resolve toolset names: collect all toolset IDs first, then apply their
         # combined permissions in a single pass so multiple toolsets are unioned
         # rather than the last one overwriting the others.
-        resolved_mcp_servers: Final[list[str]] = []
-        resolved_toolset_ids: Final[list[str]] = []
-        for name in mcp_servers:
-            if not global_mcp_server_manager.get_mcp_server_by_name(name):
-                try:
-                    from litellm.proxy.proxy_server import prisma_client
-
-                    if prisma_client is not None:
-                        toolset = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, name)
-                        if toolset is not None:
-                            if user_api_key_auth is not None:
-                                from litellm.proxy._experimental.mcp_server.ui_session_utils import (
-                                    granted_toolset_ids,
-                                )
-                                from litellm.proxy.management_endpoints.common_utils import (
-                                    user_api_key_has_admin_view,
-                                )
-
-                                if not user_api_key_has_admin_view(user_api_key_auth) and toolset.toolset_id not in (
-                                    await (granted_toolsets or granted_toolset_ids)(user_api_key_auth)
-                                ):
-                                    verbose_logger.debug("Key does not have access to toolset '%s', skipping.", name)
-                                    continue
-                            resolved_toolset_ids.append(toolset.toolset_id)
-                            # Don't add to resolved_mcp_servers — toolset scope
-                            # restricts via object_permission, not server name filter.
-                            continue
-                except Exception as _e:
-                    verbose_logger.debug("Could not resolve '%s' as toolset: %s", name, _e)
-            resolved_mcp_servers.append(name)
+        resolutions: Final = tuple(
+            [
+                await LiteLLM_Proxy_MCP_Handler._resolve_proxy_mcp_name(name, user_api_key_auth, granted_toolsets)
+                for name in mcp_servers
+            ]
+        )
+        resolved_mcp_servers: Final = tuple(value for kind, value in resolutions if kind == "server")
+        resolved_toolset_ids: Final = tuple(value for kind, value in resolutions if kind == "toolset")
+        denied_toolset_names: Final = tuple(value for kind, value in resolutions if kind == "denied_toolset")
 
         # Apply all resolved toolsets at once (union), avoiding permission overwrite.
         if resolved_toolset_ids and user_api_key_auth is not None:
@@ -314,7 +348,10 @@ class LiteLLM_Proxy_MCP_Handler:
         # full union (toolset server IDs + direct server names).  Passing a name-based
         # filter here would exclude those toolset server IDs (which are UUIDs, not
         # names), so use None and let the auth object's mcp_servers do the filtering.
-        effective_server_filter: Final = None if resolved_toolset_ids else (resolved_mcp_servers or None)
+        asks_whole_gateway: Final = any(map(names_whole_gateway, mcp_tools_with_litellm_proxy or ()))
+        if denied_toolset_names and not (asks_whole_gateway or resolved_mcp_servers or resolved_toolset_ids):
+            raise_generic_mcp_access_denial(denied_toolset_names)
+        effective_server_filter: Final = None if resolved_toolset_ids else (list(resolved_mcp_servers) or None)
 
         listing: Final = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
@@ -527,7 +564,7 @@ class LiteLLM_Proxy_MCP_Handler:
         target_format: Literal["responses", "chat"] = "responses",
     ) -> Sequence[FunctionToolParam | ChatCompletionToolParam]:
         """Transform MCP tools to OpenAI-compatible format."""
-        from litellm.experimental_mcp_client.tools import (
+        from litellm.mcp_client.tools import (
             transform_mcp_tool_to_openai_responses_api_tool,
             transform_mcp_tool_to_openai_tool,
         )
@@ -588,28 +625,17 @@ class LiteLLM_Proxy_MCP_Handler:
     _extract_tool_calls_from_response = extract_tool_calls_from_response
 
     @staticmethod
+    def _continued_choice(response: ModelResponse) -> Choices | None:
+        choices: Final = tuple(choice for choice in response.choices if isinstance(choice, Choices))
+        return next((choice for choice in choices if choice.message.tool_calls), next(iter(choices), None))
+
+    @staticmethod
     def extract_tool_calls_from_chat_response(response: ModelResponse) -> list[object]:
-        """Extract tool calls from a chat completion response."""
-        tool_calls: Final[list[object]] = []
-
-        try:
-            for choice in response.choices:
-                message: Message | None = getattr(choice, "message", None)
-                if message is None:
-                    continue
-                tool_call_entries: (
-                    Sequence[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
-                ) = getattr(message, "tool_calls", None)
-                if tool_call_entries:
-                    for tool_call in tool_call_entries:
-                        if hasattr(tool_call, "model_dump"):
-                            tool_calls.append(tool_call.model_dump())
-                        else:
-                            tool_calls.append(tool_call)
-        except Exception:
-            verbose_logger.exception("Failed to extract tool calls from chat completion response")
-
-        return tool_calls
+        """Extract the tool calls of the first choice that made any, since the follow-up turn continues it alone."""
+        continued_choice: Final = LiteLLM_Proxy_MCP_Handler._continued_choice(response)
+        if continued_choice is None:
+            return []
+        return [tool_call.model_dump() for tool_call in continued_choice.message.tool_calls or ()]
 
     _extract_tool_calls_from_chat_response = extract_tool_calls_from_chat_response
 
@@ -720,10 +746,10 @@ class LiteLLM_Proxy_MCP_Handler:
 
         from litellm._uuid import uuid
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from litellm.proxy._experimental.mcp_server.server import (
+        from litellm.proxy.mcp_server.server import (
             _resolve_display_name_to_original,
         )
         from litellm.proxy.proxy_server import proxy_logging_obj
@@ -1018,9 +1044,9 @@ class LiteLLM_Proxy_MCP_Handler:
 
         message_to_append: dict | None = None
         try:
-            first_choice: Final = response.choices[0]
-            if isinstance(first_choice, Choices) and getattr(first_choice, "message", None):
-                message_to_append = first_choice.message.model_dump(exclude_none=True)
+            continued_choice: Final = LiteLLM_Proxy_MCP_Handler._continued_choice(response)
+            if continued_choice is not None:
+                message_to_append = continued_choice.message.model_dump(exclude_none=True)
                 # Ensure tool_calls have arguments field (required by OpenAI API)
                 if message_to_append.get("tool_calls"):
                     for tool_call in message_to_append["tool_calls"]:

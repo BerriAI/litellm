@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # tool lists stay
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.llms.opencode.common_utils import is_opencode_api_base
 from litellm.rust_bridge.detectors import api_base, call_callbacks, overridden, present
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
 
@@ -25,7 +26,7 @@ def client_headers(request: NativeCall) -> bool:
 
 def provider_affinity(request: NativeCall) -> bool:
     """Python validates and fills the affinity header from the session ID."""
-    return present(request, "provider_affinity_header")
+    return present(request, "provider_affinity_header") or is_opencode_api_base(api_base(request))
 
 
 def text_format(request: NativeCall) -> bool:

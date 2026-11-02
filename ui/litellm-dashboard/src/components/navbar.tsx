@@ -39,7 +39,7 @@ const Navbar: React.FC<NavbarProps> = ({
   deploymentHealth,
 }) => {
   const baseUrl = getProxyBaseUrl();
-  const { logoUrl } = useTheme();
+  const { logoUrl, logoUrlDark } = useTheme();
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const version = healthData?.litellm_version;
   const disableBouncingIcon = useDisableBouncingIcon();
@@ -48,7 +48,7 @@ const Navbar: React.FC<NavbarProps> = ({
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
 
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
-  const darkImageUrl = logoUrl || `${baseUrl}/get_image?theme=dark`;
+  const darkImageUrl = logoUrlDark || logoUrl || `${baseUrl}/get_image?theme=dark`;
 
   const handleLogout = useLogout(accessToken);
 

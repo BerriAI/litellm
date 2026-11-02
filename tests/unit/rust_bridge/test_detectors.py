@@ -33,6 +33,7 @@ MAPPED_FILE_INPUT: Final = [{"role": "user", "content": [{"type": "input_file", 
 CACHED_TEXT: Final = {"type": "input_text", "text": "hi", "cache_control": {"type": "ephemeral"}}
 THINKING_TURN: Final = {"role": "assistant", "content": [{"type": "thinking", "thinking": "x", "signature": "s"}]}
 REDACTED: Final = {"type": "redacted_thinking", "data": "x"}
+STRICT_TOOL: Final = {"name": "b", "input_schema": {"type": "object"}, "strict": True}
 TOOL_SEARCH_TYPE: Final = sorted(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES)[0]
 
 
@@ -116,6 +117,9 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (responses_detectors.provider_affinity, {"provider_affinity_header": ""}, True),
         (responses_detectors.provider_affinity, {"provider_affinity_header": None, "session_id": "session-1"}, False),
         (responses_detectors.provider_affinity, {}, False),
+        (responses_detectors.provider_affinity, {"api_base": "https://opencode.ai/inference/go/openai/v1"}, True),
+        (messages_detectors.provider_affinity, {"api_base": "https://opencode.ai/inference/go/anthropic/v1"}, True),
+        (messages_detectors.provider_affinity, {"api_base": "https://other.example/v1"}, False),
         (detectors.streaming, {"stream": True}, True),
         (detectors.streaming, {"stream": False}, False),
         (detectors.timeout_variants, {"request_timeout": 5}, True),
@@ -186,6 +190,24 @@ def _wrap_nested_level(value: object, depth: int) -> object:
             {"messages": [{"role": "user", "content": [{"type": "text"}]}]},
             False,
         ),
+        (messages_detectors.tool_custom_field, {"tools": [{"name": "a"}, {"name": "b", "custom": {}}]}, True),
+        (messages_detectors.tool_custom_field, {"tools": [{"name": "a", "defer_loading": True}]}, False),
+        (messages_detectors.tool_custom_field, {}, False),
+        (messages_detectors.strict_tools_retry, {"drop_params": True, "tools": [{"name": "a"}, STRICT_TOOL]}, True),
+        (
+            messages_detectors.strict_tools_retry,
+            {"drop_params": True, "tools": [{**STRICT_TOOL, "strict": False}]},
+            False,
+        ),
+        (
+            messages_detectors.strict_tools_retry,
+            {"additional_drop_params": ["metadata.user_id"], "tools": [STRICT_TOOL]},
+            False,
+        ),
+        (messages_detectors.strict_tools_retry, {"tools": [STRICT_TOOL]}, False),
+        (messages_detectors.strict_tools_retry, {"drop_params": False, "tools": [STRICT_TOOL]}, False),
+        (messages_detectors.strict_tools_retry, {"drop_params": True, "tools": [{"name": "a"}]}, False),
+        (messages_detectors.strict_tools_retry, {"drop_params": True}, False),
         (detectors.drop_params, {"drop_params": True}, True),
         (detectors.drop_params, {"drop_params": False}, False),
         (detectors.drop_params, {"drop_params": " True "}, True),

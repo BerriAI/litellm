@@ -28,7 +28,11 @@ impl Session {
     ) -> Result<Self, Error> {
         let home = home.into();
         let spec = agent.configure(&installed.version, &settings, &home)?;
-        spec.write_files(&home)?;
+        spec.write_files(&home)
+            .map_err(|source| Error::WriteFiles {
+                home: home.clone(),
+                source,
+            })?;
         Ok(Self {
             binary: installed.binary.clone(),
             home,
@@ -55,7 +59,11 @@ impl Session {
             .output();
         let output = timeout(limit, child)
             .await
-            .map_err(|_| Error::Timeout(limit))??;
+            .map_err(|_| Error::Timeout(limit))?
+            .map_err(|source| Error::Spawn {
+                binary: self.binary.clone(),
+                source,
+            })?;
         let parsed = agent.parse(&self.version, &String::from_utf8_lossy(&output.stdout));
         let failed_silently = !output.status.success() && parsed.errors.is_empty();
         Ok(Outcome {

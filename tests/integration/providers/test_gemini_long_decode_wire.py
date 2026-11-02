@@ -1163,6 +1163,23 @@ def test_request_for_two_candidates_is_never_continued_and_each_choice_keeps_its
         assert at(only, "generationConfig", "candidate_count") == 2, only
 
 
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_request_for_two_candidates_in_camel_case_is_never_continued(gateway: Gateway, provider: Provider) -> None:
+    with wire_server(_two_drafts) as wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, provider, wire)
+        two_candidates: Final = {"extra_body": {"generationConfig": {"candidateCount": 2}}}
+        body: Final = request_body("chat", model, False, {**NO_CACHE, **two_candidates})
+        response: Final = post(gateway, "chat", body)
+        assert response.status_code == 200, response.text
+        choices: Final = items_of(JSON_OBJECT.validate_json(response.content).get("choices"))
+        assert [
+            (at(choice, "message", "content"), at(choice, "message", "provider_specific_fields", "continuation_token"))
+            for choice in choices
+        ] == list(_DRAFTS), response.text
+        (only,) = received(wire, provider, False, (False,))
+        assert at(only, "generationConfig", "candidateCount") == 2, only
+
+
 def _uncapped_cells() -> tuple[ParameterSet, ...]:
     reached: Final = (("gemini", "chat"), ("vertex_ai", "chat"), ("gemini", "responses"))
     return tuple(

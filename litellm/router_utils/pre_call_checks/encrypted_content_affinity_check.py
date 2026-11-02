@@ -50,13 +50,15 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_content_of_block,
     strip_encrypted_reasoning_from_messages,
 )
+from litellm.litellm_core_utils.routing_common_utils import as_excluded_deployment_ids, as_retry_skipped_deployment_ids
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import Deployment
 from litellm.utils import get_order_filtered_deployments
 
 if TYPE_CHECKING:
-    from litellm.router import Router
+    from litellm.router_api import RoutingContext
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
@@ -73,14 +75,17 @@ class EncryptedContentAffinityCheck(CustomLogger):
     per-model group ``model_group_affinity_config``.
     """
 
+    router: Final = RenamedRouterAttribute()  # deprecated: the router attribute before ``ctx``
+
+    @renamed_router_param("router")
     def __init__(
         self,
-        router: Optional["Router"] = None,
+        ctx: Optional["RoutingContext"] = None,
         enable_global_affinity: bool = True,
         model_group_affinity_config: dict[str, list[str]] | None = None,
     ) -> None:
         super().__init__()
-        self.router = router
+        self.ctx = ctx
         self.enable_global_affinity = enable_global_affinity
         self.model_group_affinity_config: dict[str, list[str]] = model_group_affinity_config or {}
 
@@ -183,6 +188,14 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
 
     @staticmethod
+    def _deployment_model_id(deployment: Mapping[str, object]) -> str | None:
+        model_info: Final = deployment.get("model_info")
+        if not isinstance(model_info, Mapping):
+            return None
+        deployment_id: Final = cast(Mapping[str, object], model_info).get("id")  # cast-ok: narrowed by isinstance
+        return None if deployment_id is None else str(deployment_id)
+
+    @staticmethod
     def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
         for deployment in healthy_deployments:
             model_info = deployment.get("model_info")
@@ -245,9 +258,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
         deployment's ``(api_base, api_key)``, alongside the originating
         deployment object (or ``None`` if it was removed / router unavailable).
         """
-        if self.router is None:
+        if self.ctx is None:
             return [], None
-        originating: Final = self.router.get_deployment(model_id=model_id)
+        originating: Final = self.ctx.registry().deployment(model_id)
         if originating is None:
             return [], None
         boundary: Final = self._encryption_boundary_key(originating.litellm_params.model_dump(exclude_none=True))
@@ -259,8 +272,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
         return matches, originating
 
     @staticmethod
+    @renamed_router_param("router")
     def strip_reasoning_the_targets_cannot_decrypt(
-        router: "Router | None",
+        ctx: "RoutingContext | None",
         request_input: object,
         anthropic_messages: object,
         target_deployments: Sequence[Mapping[str, object]],
@@ -293,9 +307,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 return False
             if origin_model_id in target_ids:
                 return True
-            if router is None:
+            if ctx is None:
                 return False
-            origin: Final = router.get_deployment(model_id=origin_model_id)
+            origin: Final = ctx.registry().deployment(origin_model_id)
             origin_boundary: Final = (
                 EncryptedContentAffinityCheck._encryption_boundary_key(
                     origin.litellm_params.model_dump(exclude_none=True)
@@ -345,7 +359,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
         typed_healthy_deployments: Final = cast(list[dict[str, object]], healthy_deployments)
         if not self._is_enabled_for_model_group(model):
             return typed_healthy_deployments
-        target_order: Final = _REQUEST_KWARGS_ADAPTER.validate_python(request_kwargs).get("_target_order")
+        typed_request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(request_kwargs)
+        target_order: Final = typed_request_kwargs.get("_target_order")
         candidates: Final = (
             get_order_filtered_deployments(typed_healthy_deployments, target_order=target_order)
             if isinstance(target_order, int)
@@ -375,8 +390,31 @@ class EncryptedContentAffinityCheck(CustomLogger):
             model_id,
         )
 
+        previous_response_id: Final = typed_request_kwargs.get("previous_response_id")
+        previous_response_origin: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(
+            None if previous_response_id is None else str(previous_response_id)
+        )
+        previous_response_binds_origin: Final = previous_response_origin == model_id
+        excluded_ids: Final[frozenset[str]] = (
+            frozenset()
+            if previous_response_binds_origin
+            else frozenset(as_excluded_deployment_ids(typed_request_kwargs.get("_excluded_deployment_ids")))
+        )
+        retry_skipped_ids: Final[frozenset[str]] = (
+            frozenset()
+            if previous_response_binds_origin
+            else frozenset(as_retry_skipped_deployment_ids(typed_request_kwargs.get("_retry_skipped_deployment_ids")))
+        )
+        not_excluded_candidates: Final = [
+            candidate for candidate in candidates if self._deployment_model_id(candidate) not in excluded_ids
+        ]
+        untried_candidates: Final = [
+            candidate
+            for candidate in not_excluded_candidates
+            if self._deployment_model_id(candidate) not in retry_skipped_ids
+        ] or not_excluded_candidates
         deployment: Final = self._find_deployment_by_model_id(
-            healthy_deployments=candidates,
+            healthy_deployments=untried_candidates,
             model_id=model_id,
         )
         if deployment is not None:
@@ -386,13 +424,13 @@ class EncryptedContentAffinityCheck(CustomLogger):
             )
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             self.strip_reasoning_the_targets_cannot_decrypt(
-                self.router, request_input, anthropic_messages, (deployment,), unmarked_origin=model_id
+                self.ctx, request_input, anthropic_messages, (deployment,), unmarked_origin=model_id
             )
             return [deployment]
 
         # Follow-up switched model_name (LIT-2531): pin by Azure resource instead.
         boundary_matches, _originating = self._find_deployments_on_same_encryption_boundary(
-            healthy_deployments=candidates,
+            healthy_deployments=untried_candidates,
             model_id=model_id,
         )
         if boundary_matches:
@@ -404,7 +442,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             )
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             self.strip_reasoning_the_targets_cannot_decrypt(
-                self.router, request_input, anthropic_messages, boundary_matches, unmarked_origin=model_id
+                self.ctx, request_input, anthropic_messages, boundary_matches, unmarked_origin=model_id
             )
             return boundary_matches
 
