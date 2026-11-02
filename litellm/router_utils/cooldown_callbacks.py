@@ -29,6 +29,19 @@ async def router_cooldown_event_callback(
     - Updates deployment state on Prometheus
     - Increments cooldown metric for deployment on Prometheus
     """
+    emit_router_cooldown_event(
+        ctx=ctx, deployment_id=deployment_id, exception_status=exception_status, cooldown_time=cooldown_time
+    )
+
+
+def emit_router_cooldown_event(
+    ctx: "RoutingContext",
+    deployment_id: str,
+    exception_status: str | int,
+    cooldown_time: float | None,
+) -> None:
+    """``router_cooldown_event_callback``'s work, run inline: nothing in it awaits, so a cooldown
+    recorded outside a running event loop still reaches Prometheus."""
     verbose_logger.debug("In router_cooldown_event_callback - updating prometheus")
     _deployment: Final = ctx.registry().deployment(deployment_id)
     if _deployment is None:
@@ -73,8 +86,6 @@ async def router_cooldown_event_callback(
             api_provider=llm_provider,
             exception_status=str(exception_status),
         )
-
-    return
 
 
 def get_prometheus_logger_from_callbacks() -> PrometheusLogger | None:
