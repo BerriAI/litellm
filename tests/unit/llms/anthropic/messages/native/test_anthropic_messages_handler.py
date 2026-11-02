@@ -3,6 +3,7 @@ import copy
 import json
 import os
 import uuid
+from dataclasses import dataclass
 from typing import Any, Dict, Final, List
 
 import httpx
@@ -10,7 +11,7 @@ import responses
 import respx
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -158,7 +159,7 @@ async def test_openai_model_does_not_forward_stream_options_to_responses_api():
         await litellm.anthropic.messages.acreate(
             max_tokens=100,
             messages=[{"role": "user", "content": "Hello, how are you?"}],
-            model="openai/gpt-5.5",
+            model="openai/gpt-6.1-sol",
             api_key="test-api-key",
             stream_options={"include_usage": True},
         )
@@ -668,7 +669,9 @@ class TestThinkingSummaryPreservation:
         )
 
         thinking = {"type": "enabled", "budget_tokens": 5000, "summary": "concise"}
-        result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(thinking)
+        result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
+            thinking, model="openai/gpt-6.1-sol"
+        )
         assert result == {"effort": "high", "summary": "concise"}
 
     def test_responses_adapter_no_summary_by_default(self):
@@ -682,7 +685,9 @@ class TestThinkingSummaryPreservation:
         try:
             litellm.reasoning_auto_summary = False
             thinking = {"type": "enabled", "budget_tokens": 5000}
-            result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(thinking)
+            result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
+                thinking, model="openai/gpt-6.1-sol"
+            )
             assert result == {"effort": "high"}
             assert result is not None and "summary" not in result
         finally:
@@ -2396,3 +2401,61 @@ def test_native_messages_tool_config_point_marks_last_tool_and_drops_the_key(mon
     assert "cache_control" not in captured["params"]["tools"][0]
     assert captured["messages"][0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
     assert tools == tools_before
+
+
+# Anthropic's 400 for a request past Claude's strict tool limits, seen live on claude-sonnet-4-6 on 2026-10-29
+_TOO_MANY_STRICT_TOOLS: Final = {
+    "type": "error",
+    "error": {
+        "type": "invalid_request_error",
+        "message": "Too many strict tools (21). The maximum number of strict tools supported is 20. Try reducing the "
+        "number of tools marked as strict.",
+    },
+    "request_id": "req_011CgWXzv8cmAr9vFs786WV4",
+}
+_JSON_BODY: Final = TypeAdapter(dict[str, object])
+
+
+@dataclass(slots=True)
+class _RejectsStrictToolsOnce:
+    sent: tuple[dict[str, object], ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.sent = (*self.sent, _JSON_BODY.validate_json(request.content))
+        if len(self.sent) == 1:
+            return httpx.Response(400, json=_TOO_MANY_STRICT_TOOLS, request=request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_strict_retry",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "done"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+            request=request,
+        )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_strict_tools_rejection_is_sent_again_without_strict_under_drop_params() -> None:
+    anthropic: Final = _RejectsStrictToolsOnce()
+    tool: Final = {"name": "lookup_record", "input_schema": {"type": "object"}, "strict": True}
+
+    response: Final = await litellm.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "Use lookup_record to find invoice 42"}],
+        model="anthropic/claude-sonnet-4-6",
+        api_key="sk-test",
+        tools=[tool],
+        drop_params=True,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+    )
+
+    first, second = anthropic.sent
+    assert first["tools"] == [tool]
+    assert second == {**first, "tools": [{"name": "lookup_record", "input_schema": {"type": "object"}}]}
+    assert _JSON_BODY.validate_python(response)["id"] == "msg_strict_retry"

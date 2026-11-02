@@ -22,6 +22,20 @@ interface RealtimePlaygroundProps {
   selectedGuardrails?: string[];
 }
 
+const sessionUpdate = (voice: string) =>
+  JSON.stringify({
+    type: "session.update",
+    session: {
+      type: "realtime",
+      modalities: ["text", "audio"],
+      voice,
+      input_audio_format: "pcm16",
+      output_audio_format: "pcm16",
+      input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
+      turn_detection: { type: "server_vad" },
+    },
+  });
+
 const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   accessToken,
   selectedModel,
@@ -125,21 +139,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
           const type = data.type;
 
           if (type === "session.created") {
-            // GA: session.type is required ("realtime" | "transcription")
-            ws.send(
-              JSON.stringify({
-                type: "session.update",
-                session: {
-                  type: "realtime",
-                  modalities: ["text", "audio"],
-                  voice: selectedVoice,
-                  input_audio_format: "pcm16",
-                  output_audio_format: "pcm16",
-                  input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
-                  turn_detection: null,
-                },
-              }),
-            );
+            ws.send(sessionUpdate(selectedVoice));
           } else if (type === "session.updated") {
             // session configured
           } else if (
@@ -231,22 +231,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   const startRecording = useCallback(async () => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
-    // Switch to server VAD mode for voice input
-    // GA: session.type is required
-    wsRef.current.send(
-      JSON.stringify({
-        type: "session.update",
-        session: {
-          type: "realtime",
-          modalities: ["text", "audio"],
-          voice: selectedVoice,
-          input_audio_format: "pcm16",
-          output_audio_format: "pcm16",
-          input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
-          turn_detection: { type: "server_vad" },
-        },
-      }),
-    );
+    wsRef.current.send(sessionUpdate(selectedVoice));
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -301,7 +286,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     } catch (err: any) {
       addMessage("status", `Microphone error: ${err.message}`);
     }
-  }, [addMessage]);
+  }, [addMessage, selectedVoice]);
 
   const stopRecording = useCallback(() => {
     processorRef.current?.disconnect();
@@ -317,21 +302,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     if (configureSessionRef.current) return;
     configureSessionRef.current = true;
-    // GA: session.type is required
-    wsRef.current.send(
-      JSON.stringify({
-        type: "session.update",
-        session: {
-          type: "realtime",
-          modalities: ["text", "audio"],
-          voice: selectedVoice,
-          input_audio_format: "pcm16",
-          output_audio_format: "pcm16",
-          input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
-          turn_detection: null,
-        },
-      }),
-    );
+    wsRef.current.send(sessionUpdate(selectedVoice));
   }, [selectedVoice]);
 
   const sendTextMessage = useCallback(() => {

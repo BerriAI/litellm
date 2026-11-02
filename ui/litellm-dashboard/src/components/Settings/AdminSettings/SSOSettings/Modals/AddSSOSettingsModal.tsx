@@ -12,7 +12,7 @@ import BaseSSOSettingsForm, {
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettings";
-import { processSSOSettingsPayload } from "../utils";
+import { diffSSOSettingsPayload, processSSOSettingsPayload } from "../utils";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddSSOSettingsModalProps {
@@ -26,7 +26,10 @@ const AddSSOSettingsModal: React.FC<AddSSOSettingsModalProps> = ({ isVisible, on
   const { mutateAsync, isPending } = useEditSSOSettings();
 
   const handleFormSubmit = async (formValues: SSOSettingsFormValues) => {
-    const payload = processSSOSettingsPayload(formValues);
+    const payload = diffSSOSettingsPayload(
+      processSSOSettingsPayload(emptySSOSettingsFormValues),
+      processSSOSettingsPayload(formValues),
+    );
 
     await mutateAsync(payload, {
       onSuccess: () => {

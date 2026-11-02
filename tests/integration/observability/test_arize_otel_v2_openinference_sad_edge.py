@@ -177,7 +177,7 @@ def test_arize_otel_v2_d4_unauthenticated_request_has_no_span(gateway: Gateway, 
             "error": {
                 "message": "Authentication Error, No api key passed in.",
                 "type": "auth_error",
-                "param": "None",
+                "param": None,
                 "code": "401",
             }
         }, body

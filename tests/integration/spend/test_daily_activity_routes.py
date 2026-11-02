@@ -451,9 +451,23 @@ def test_tag_daily_activity_scopes_internal_user_keys_and_filters(
             seeded_row(TAG_SPEND, "tag", "beta", digest_one_b, DAY),
             seeded_row(TAG_SPEND, "tag", "gamma", digest_one_a, DAY),
             seeded_row(TAG_SPEND, "tag", "alpha", digest_two, DAY),
+            seeded_row(TAG_SPEND, "tag", "alpha", "", DAY),
             replace(standard_model_row, model="gpt-4o"),
         )
         with daily_rows(rows):
+            for suffix in ("", "/aggregated"):
+                bucket_params: Final = {"start_date": DAY, "end_date": DAY, "tags": "alpha", "api_key": "unattributed"}
+                bucket_url: Final = f"/tag/daily/activity{suffix}"
+                denied_bucket: Final = gateway.request("GET", bucket_url, params=bucket_params, key=key_one_a)
+                admin_bucket: Final = gateway.request("GET", bucket_url, params=bucket_params)
+                assert denied_bucket.status_code == 200, denied_bucket.text
+                assert admin_bucket.status_code == 200, admin_bucket.text
+                denied_body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(denied_bucket.content)
+                allowed_body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(admin_bucket.content)
+                assert denied_body.results == []
+                assert denied_body.metadata.total_api_requests == 0
+                assert allowed_body.metadata.total_api_requests == 1
+                assert set(allowed_body.results[0].breakdown.api_keys) == {"unattributed"}
             scoped: Final = _tag_activity(
                 gateway,
                 key=key_one_a,
