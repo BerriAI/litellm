@@ -3832,3 +3832,18 @@ async def test_a_picked_code_redeems_only_for_the_resource_it_was_authorized_for
     assert (redeemed.status_code, json.loads(redeemed.body).get("error")) == (
         (200, None) if error is None else (400, error)
     )
+
+
+def test_an_oauth_error_response_is_logged_with_its_code_and_description(caplog):
+    import logging
+
+    from litellm.proxy.mcp_server.gateway_dcr_flow import _oauth_error
+
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    response = _oauth_error(400, "invalid_grant", "the refresh token was already used")
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_grant",
+        "error_description": "the refresh token was already used",
+    }
+    assert "400 invalid_grant: the refresh token was already used" in caplog.text
