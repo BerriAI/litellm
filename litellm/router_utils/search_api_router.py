@@ -5,16 +5,15 @@ Handles search tool selection, load balancing, and fallback logic for search req
 """
 
 import asyncio
-import random
 import traceback
 from collections.abc import Callable
 from functools import partial
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_router_logger
 from litellm.router_api import ChangeSet
 from litellm.router_deprecated import renamed_router_param
+from litellm.router_endpoint_table import search_tool_call
 from litellm.types.router import SearchToolLiteLLMParams, SearchToolTypedDict
 
 if TYPE_CHECKING:
@@ -205,44 +204,13 @@ class SearchAPIRouter:
         search_tool_name: Final = model  # model field contains the search_tool_name
 
         try:
-            # Find matching search tools
-            matching_tools: Final = SearchAPIRouter.get_matching_search_tools(
-                ctx=ctx,
-                search_tool_name=search_tool_name,
-            )
-
-            # Simple random selection for load balancing across multiple providers with same name
-            # For search tools, we use simple random choice since they don't have TPM/RPM constraints
-            selected_tool: Final = random.choice(matching_tools)
-
-            # Extract search provider and other params from litellm_params
-            litellm_params: Final = selected_tool.get("litellm_params", {})
-            search_provider: Final = litellm_params.get("search_provider")
-            if not search_provider:
-                raise ValueError(f"search_provider not found in litellm_params for search tool '{search_tool_name}'")
-
-            api_key, api_base = SearchAPIRouter._resolve_search_provider_credentials(
-                tool_litellm_params=litellm_params,
-            )
-            protected_params: Final = frozenset(("search_provider", "api_key", "api_base"))
-            search_params: Final = MappingProxyType(
-                {
-                    key: value
-                    for params in (litellm_params, kwargs)
-                    for key, value in params.items()
-                    if key not in protected_params and value is not None
-                }
-            )
+            call: Final = search_tool_call(ctx.settings().search_tools, search_tool_name, kwargs)
+            search_provider: Final = call["search_provider"]
 
             verbose_router_logger.debug("Selected search tool with provider: %s", search_provider)
 
             # Call the original search function with the provider config
-            response: Final = await original_generic_function(
-                search_provider=search_provider,
-                api_key=api_key,
-                api_base=api_base,
-                **search_params,
-            )
+            response: Final = await original_generic_function(**call)
 
             return response
 

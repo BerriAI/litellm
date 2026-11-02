@@ -19,6 +19,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model, can_token_call_search_tool
 from litellm.router_api import RegistryReader, RoutingContext
+from litellm.router_endpoint_table import EndpointHandler
 from litellm.search import asearch
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -61,7 +62,9 @@ async def is_search_tool_authorized_for_token(*, search_tool_name: str, valid_to
 
 
 def _is_search_request(request_kwargs: Mapping[str, object]) -> bool:
-    return request_kwargs.get("original_generic_function") is asearch
+    handler: Final = request_kwargs.get("original_generic_function")
+    # The router hands over the endpoint's table handler, which keys on the call type, not litellm.search.asearch.
+    return handler is asearch or (isinstance(handler, EndpointHandler) and handler.call_type == "asearch")
 
 
 def _token_in_metadata(metadata: object) -> UserAPIKeyAuth | None:
