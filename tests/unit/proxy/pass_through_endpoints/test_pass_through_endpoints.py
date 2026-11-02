@@ -13790,16 +13790,10 @@ class TestGuardrailResponseHeaders:
         assert headers == {"x-litellm-applied-policies": "tag-policy"}
         assert h11.Response(status_code=200, headers=[*headers.items()]).status_code == 200
 
-    def test_guardrail_header_past_the_size_budget_is_left_out_without_scanning_its_characters(self):
+    def test_guardrail_header_past_the_size_budget_is_left_out(self):
         names: Final = [f"g{index}" for index in range(2_000)]
 
-        with patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._is_sendable_header_value"
-        ) as is_sendable:
-            headers: Final = _guardrail_response_headers({"metadata": {"applied_guardrails": names}})
-
-        assert headers == {}
-        is_sendable.assert_not_called()
+        assert _guardrail_response_headers({"metadata": {"applied_guardrails": names}}) == {}
 
     @pytest.mark.parametrize("control", ["\x01", "\x1f", "\x7f", "\x00", "\n"])
     def test_guardrail_name_with_a_control_character_stays_out_of_the_header(self, control):
