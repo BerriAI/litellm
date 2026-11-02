@@ -14486,6 +14486,40 @@ async def test_late_requests_from_many_keys_with_windows_do_not_push_out_a_known
 
 
 @pytest.mark.asyncio
+async def test_a_slow_window_row_read_does_not_hold_back_the_key_spend_counter():
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    prisma_client: Final = _prisma_with_rows()
+    read_started: Final = asyncio.Event()
+    finish_read: Final = asyncio.Event()
+
+    async def slow_row_read(where: Mapping[str, str]) -> _StoredRow:
+        read_started.set()
+        await finish_read.wait()
+        return _StoredRow([_window("7d", 5.0)])
+
+    prisma_client.db.litellm_verificationtoken.find_unique = slow_row_read
+
+    with _window_spend_enqueue_env({}, prisma_client=prisma_client) as queue:
+        ps.spend_counter_cache.set_cache(key="spend:key:hashed-token", value=0.0)
+        ps.spend_counter_cache.set_cache(key="spend:key:hashed-token:window:7d", value=1.0)
+        charge: Final = asyncio.create_task(
+            increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
+        )
+        assert await asyncio.wait_for(read_started.wait(), timeout=5)
+        key_spend_while_the_row_read_waits: Final = ps.spend_counter_cache.get_cache(key="spend:key:hashed-token")
+        finish_read.set()
+        await charge
+        window_spend: Final = ps.spend_counter_cache.get_cache(key="spend:key:hashed-token:window:7d")
+        charged: Final = await _drain(queue)
+
+    assert key_spend_while_the_row_read_waits == pytest.approx(0.25)
+    assert window_spend == pytest.approx(1.25)
+    assert _charged_windows(charged) == [("hashed-token", "7d", pytest.approx(0.25))]
+
+
+@pytest.mark.asyncio
 async def test_a_late_request_that_misses_the_updated_team_charges_windows_the_team_did_not_have_before():
     """Another worker's /team/update only evicts this worker's cached team, so its next late cost reads the row."""
     import litellm.proxy.proxy_server as ps

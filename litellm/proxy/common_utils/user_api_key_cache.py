@@ -71,6 +71,7 @@ class UserApiKeyCache(DualCache):
         default_in_memory_ttl: float | None = None,
         default_redis_ttl: float | None = None,
         key_object_in_memory_cache: InMemoryCache | None = None,
+        budget_windows_absent_in_memory_cache: InMemoryCache | None = None,
     ) -> None:
         super().__init__(
             in_memory_cache=in_memory_cache,
@@ -84,8 +85,10 @@ class UserApiKeyCache(DualCache):
             default_in_memory_ttl=default_in_memory_ttl,
             default_redis_ttl=default_redis_ttl,
         )
-        self.budget_windows_absent_cache: Final = InMemoryCache(
-            default_ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+        self.budget_windows_absent_cache: Final = DualCache(
+            in_memory_cache=budget_windows_absent_in_memory_cache
+            or InMemoryCache(default_ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL),
+            default_in_memory_ttl=default_in_memory_ttl,
         )
 
     def in_memory_cache_for(self, key: str) -> InMemoryCache:
@@ -101,10 +104,14 @@ class UserApiKeyCache(DualCache):
         self.key_object_cache.update_cache_ttl(
             default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=default_redis_ttl
         )
+        self.budget_windows_absent_cache.update_cache_ttl(
+            default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=None
+        )
 
     def update_in_memory_max_size(self, max_size: int | None) -> None:
         super().update_in_memory_max_size(max_size)
         self.key_object_cache.update_in_memory_max_size(max_size)
+        self.budget_windows_absent_cache.update_in_memory_max_size(max_size)
 
     def attach_redis_cache(
         self, redis_cache: RedisCache | None = None, *, default_redis_ttl: float | None = None
