@@ -5717,7 +5717,6 @@ def _with_config_file_pass_through_endpoints(
 def _reload_settings_store(section: Section, store: SettingsStore, section_config: object) -> None:
     serving_pass_throughs: Final = store.get("pass_through_endpoints")
     store.load_yaml(_as_settings_mapping(section_config))
-    store.apply_db_row(section, _EMPTY_SETTINGS_MAPPING)
     if is_resource_list(section, "pass_through_endpoints") and serving_pass_throughs is not None:
         store["pass_through_endpoints"] = serving_pass_throughs
 
@@ -6540,6 +6539,9 @@ class ProxyConfig:
                 prisma_client=prisma_client,
                 store_model_in_db=store_model_in_db,
             )
+        else:
+            for section, store in self._settings_stores.items():
+                store.apply_db_row(section, _EMPTY_SETTINGS_MAPPING)
 
         config = self._config_with_resolved_settings(config)
 
@@ -8623,12 +8625,24 @@ class ProxyConfig:
         environment_read: Final = next(self._environment_read_numbers)
         sections: Final = tuple(self._settings_stores)
         responses: Final = await asyncio.gather(*(get_config_param(prisma_client, section) for section in sections))
+        general_settings_response: Final = responses[sections.index("general_settings")]
+        general_settings_value: Final[Mapping[str, SettingsJsonValue]] = (
+            self._prepared_db_settings_values("general_settings", general_settings_response.param_value)
+            if general_settings_response is not None and general_settings_response.param_value is not None
+            else _EMPTY_SETTINGS_MAPPING
+        )
+        self._settings_stores["general_settings"].apply_db_row("general_settings", general_settings_value)
+
         response: _ConfigParamValueRow | None
         for section, response in zip(sections, responses):
+            if section == "general_settings":
+                continue
             if response is None:
+                self._settings_stores[section].apply_db_row(section, _EMPTY_SETTINGS_MAPPING)
                 continue
             param_value: JsonValue = getattr(response, "param_value", None)
             if param_value is None:
+                self._settings_stores[section].apply_db_row(section, _EMPTY_SETTINGS_MAPPING)
                 continue
 
             verbose_proxy_logger.debug(
@@ -8639,6 +8653,7 @@ class ProxyConfig:
             if section == "litellm_settings":
                 self._apply_litellm_settings_db_values(self._prepared_db_settings_values(section, param_value))
             elif section == "environment_variables":
+                self._settings_stores[section].apply_db_row(section, _EMPTY_SETTINGS_MAPPING)
                 await self._apply_db_environment_variables_row(
                     prisma_client, response, environment_before_db, environment_read
                 )

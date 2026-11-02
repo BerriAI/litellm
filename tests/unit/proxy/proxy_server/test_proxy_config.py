@@ -32,11 +32,13 @@ import litellm
 from litellm._logging import turn_on_json
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.config_resolvers.settings_store import SettingsStore
 from litellm.router_api import ApplyResult, RouterSettings
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
+    _reload_settings_store,
     _scrub_db_overlay_remote_module_loads,
     _scrub_guardrail_inner,
     resolve_complexity_router_plugins,
@@ -68,6 +70,15 @@ def _db_model(model_id: str, model_name: str = "gpt-3.5-turbo") -> SimpleNamespa
         litellm_params={"model": encrypt_value_helper("openai/gpt-3.5-turbo")},
         blocked=False,
     )
+
+
+def test_yaml_settings_reload_keeps_db_general_settings_until_sync() -> None:
+    settings: Final = SettingsStore("general_settings")
+    settings.apply_db_row("general_settings", {"max_file_downloads_per_minute": 2})
+
+    _reload_settings_store("general_settings", settings, {})
+
+    assert settings["max_file_downloads_per_minute"] == 2
 
 
 @pytest.mark.asyncio
