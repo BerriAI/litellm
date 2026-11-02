@@ -1,6 +1,7 @@
 import asyncio
 import json
-from typing import Final
+from itertools import chain
+from typing import TYPE_CHECKING, Final
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,6 +20,10 @@ from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESS
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
+
+
+if TYPE_CHECKING:
+    from tests.unit.conftest import RouterRedis
 
 
 def _repinning_router(enabled: bool | None = True) -> litellm.Router:
@@ -100,7 +105,7 @@ async def test_session_repin_requires_opt_in_unavailable_original_and_success(
         assert await router.cache.async_get_cache(_repin_key()) == {"model_id": expected}
         assert await router.cache.async_get_cache(_repin_key("caller-2")) == {"model_id": "original"}
         assert await router.cache.async_get_cache(user_key) == {"model_id": "original"}
-        router.cooldown_cache.cooldown_store.flush_cache()
+        router.cooldown_cache.cooldown_store.evict_local("original")
         await _record_replacement_success(router, "other")
         assert await router.cache.async_get_cache(_repin_key()) == {"model_id": expected}
     finally:
@@ -129,7 +134,7 @@ async def test_concurrent_successful_replacements_keep_first_winner() -> None:
         await asyncio.gather(_record_replacement_success(router), _record_replacement_success(router, "other"))
         winner: Final = await router.cache.async_get_cache(_repin_key())
         assert winner in ({"model_id": "replacement"}, {"model_id": "other"})
-        router.cooldown_cache.cooldown_store.flush_cache()
+        router.cooldown_cache.cooldown_store.evict_local("original")
         await _record_replacement_success(router, "original")
         assert await router.cache.async_get_cache(_repin_key()) == winner
     finally:
@@ -320,22 +325,12 @@ async def test_unsuccessful_or_nested_response_envelopes_never_repin(response: M
         router.discard()
 
 
-class _ReadCountingCache(InMemoryCache):
-    def __init__(self) -> None:
-        super().__init__()
-        self.read_keys: tuple[str, ...] = ()
-
-    def get_cache(self, key: str, **kwargs: object) -> object:
-        self.read_keys += (key,)
-        return super().get_cache(key, **kwargs)
-
-
 @pytest.mark.parametrize("case", ["disabled", "no-session", "generated-session", "group-disabled", "active"])
-async def test_repin_cooldown_reads_are_limited_to_active_session_route(case: str) -> None:
+async def test_repin_cooldown_reads_are_limited_to_active_session_route(case: str, router_redis: "RouterRedis") -> None:
     router: Final = _repinning_router(case != "disabled")
-    reads: Final = _ReadCountingCache()
+    redis, commands = router_redis
     try:
-        router.cooldown_cache.cooldown_store.in_memory_cache = reads
+        router.update_redis_cache(redis)
         callback: Final = next(cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck))
         if case == "group-disabled":
             callback.model_group_affinity_config = {"repin-group": []}
@@ -351,14 +346,13 @@ async def test_repin_cooldown_reads_are_limited_to_active_session_route(case: st
             {"status": "completed"},
         )
         expected: Final = (
-            {
-                router.cooldown_cache.get_cooldown_cache_key(model_id)
-                for model_id in ("original", "replacement", "other")
-            }
+            {f"deployment:{model_id}:cooldown" for model_id in ("original", "replacement", "other")}
             if case == "active"
             else set()
         )
-        assert set(reads.read_keys) == expected
+        observed: Final = tuple(commands.get_nowait() for _ in range(commands.qsize()))
+        reads: Final = frozenset(chain.from_iterable(args[1:] for args, _, _ in observed if args[0] == "MGET"))
+        assert reads == expected
     finally:
         router.discard()
 

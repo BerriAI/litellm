@@ -12,7 +12,7 @@ import asyncio
 import itertools
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Final
@@ -82,8 +82,10 @@ class DualCache(BaseCache):
         default_redis_ttl: float | None = None,
         default_redis_batch_cache_expiry: float | None = None,
         default_max_redis_batch_cache_size: int = DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         super().__init__()
+        self._clock: Final = clock if clock is not None else lambda: time.time()
         # If in_memory_cache is not provided, use the default InMemoryCache
         self.in_memory_cache = in_memory_cache or InMemoryCache()
         # If redis_cache is not provided, use the default RedisCache
@@ -221,7 +223,7 @@ class DualCache(BaseCache):
             if None not in result or self.redis_cache is None or local_only:
                 return result
 
-            sublist_keys, previous_access_times = self._reserve_redis_batch_keys(time.time(), keys, result)
+            sublist_keys, previous_access_times = self._reserve_redis_batch_keys(self._clock(), keys, result)
             if len(sublist_keys) == 0:
                 return result
 
@@ -326,7 +328,7 @@ class DualCache(BaseCache):
             else memory.batch_get_cache(key_list)
         )
         result: Final = in_memory_result if in_memory_result is not None else tuple(None for _ in key_list)
-        return self._reserve_redis_batch_keys(time.time(), key_list, result)
+        return self._reserve_redis_batch_keys(self._clock(), key_list, result)
 
     def _rollback_redis_batch_key_reservations(self, previous_access_times: dict[str, float | None]) -> None:
         with self._last_redis_batch_access_time_lock:
@@ -350,7 +352,7 @@ class DualCache(BaseCache):
         previous_access_times: dict[str, float | None] = {}
         if None in result and self.redis_cache is not None and local_only is False:
             if throttle_redis:
-                redis_keys, previous_access_times = self._reserve_redis_batch_keys(time.time(), keys, result)
+                redis_keys, previous_access_times = self._reserve_redis_batch_keys(self._clock(), keys, result)
             else:
                 redis_keys = [key for key, value in zip(keys, result) if value is None]
         return PendingBatchRead(

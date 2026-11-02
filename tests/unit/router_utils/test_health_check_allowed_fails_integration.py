@@ -6,6 +6,7 @@ should increment the same counters used by allowed_fails_policy, using the
 actual exception type from the health check error.
 """
 
+from typing import Final
 from unittest.mock import ANY, patch
 
 import pytest
@@ -146,30 +147,26 @@ class TestGetAllowedFailsFromPolicyWithHealthCheckExceptions:
 class TestHealthCheckCooldownIntegration:
     """Test that health check failures trigger cooldown via set_cooldown_deployments."""
 
-    def test_health_check_failure_increments_failed_calls(self):
-        """Health check failure should increment the failed_calls counter."""
+    def test_health_check_failure_increments_failed_calls(self) -> None:
         from litellm.router_utils.cooldown_handlers import (
             should_cooldown_based_on_allowed_fails_policy,
         )
 
-        router = Router(
+        router: Final = Router(
             model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
             allowed_fails_policy=AllowedFailsPolicy(TimeoutErrorAllowedFails=3),
         )
 
-        timeout_exc = litellm.Timeout(message="Health check timeout", model="gpt-4", llm_provider="openai")
-
-        # First call: should not cooldown (1 <= 3)
-        result = should_cooldown_based_on_allowed_fails_policy(
-            ctx=RoutingContext(router),
-            deployment="deploy-1",
-            original_exception=timeout_exc,
+        timeout_exc: Final = litellm.Timeout(message="Health check timeout", model="gpt-4", llm_provider="openai")
+        results: Final = tuple(
+            should_cooldown_based_on_allowed_fails_policy(
+                ctx=RoutingContext(router),
+                deployment="deploy-1",
+                original_exception=timeout_exc,
+            )
+            for _ in range(4)
         )
-        assert result is False
-
-        # Check counter was incremented
-        current_fails = router.health().store.get_cache(key="deployment:deploy-1:allowed_fails")
-        assert current_fails == 1
+        assert results == (False, False, False, True)
 
     def test_health_check_failure_triggers_cooldown_at_threshold(self):
         """After exceeding allowed_fails threshold, deployment should enter cooldown."""
