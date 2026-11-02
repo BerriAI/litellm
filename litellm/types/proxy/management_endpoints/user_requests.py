@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import Field, field_validator, model_validator
 
@@ -36,6 +36,18 @@ class NewUserRequest(GenerateRequestBase):
     sso_user_id: str | None = None
     organizations: list[str] | None = None
     password: str | None = None
+
+    @field_validator("user_id")
+    @classmethod
+    def validate_user_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized: Final = value.strip()
+        if not normalized:
+            raise ValueError("user_id must not be empty or contain only whitespace")
+        if "\x00" in normalized:
+            raise ValueError("user_id must not contain NUL characters")
+        return normalized
 
     @field_validator("password")
     @classmethod

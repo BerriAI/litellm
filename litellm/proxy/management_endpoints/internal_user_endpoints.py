@@ -605,7 +605,9 @@ async def new_user(
             teams = check_if_default_team_set()
         organization_ids: Final = cast(list[str] | None, data_json.pop("organizations", None))
 
-        response: Final = await generate_key_helper_fn(request_type="user", **data_json, llm_router=None)
+        response: Final = await generate_key_helper_fn(
+            request_type="user", **data_json, llm_router=None, query_type="create_data"
+        )
         created_user_id: Final = cast(str | None, response.get("user_id", None))
         if created_user_id is not None:
             forget_missing_user(created_user_id)

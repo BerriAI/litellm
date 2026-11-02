@@ -308,7 +308,7 @@ describe("CreateUserButton", () => {
 
     const dialog = screen.getByRole("dialog", { name: /invite user/i });
 
-    expectControlBesideLabel(within(dialog).getByRole("checkbox"));
+    expectControlBesideLabel(within(dialog).getByRole("checkbox", { name: "Send invitation email" }));
   });
 
   describe("organizations", () => {

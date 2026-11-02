@@ -13,6 +13,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -47,6 +48,48 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
 )
 
 client = TestClient(app)
+
+
+@pytest.mark.parametrize("user_id", ["", " \t\n", "user\x00id", 123, True, [], {}])
+def test_new_user_rejects_invalid_custom_id(user_id: object) -> None:
+    with pytest.raises(ValidationError) as exc:
+        NewUserRequest.model_validate({"user_id": user_id})
+    assert exc.value.errors()[0]["loc"] == ("user_id",)
+
+
+@pytest.mark.parametrize("user_id", [None, "employee-42", "社員@example.test", "  employee-42  "])
+def test_new_user_normalizes_custom_id_and_preserves_auto_generation(user_id: str | None) -> None:
+    request: Final = NewUserRequest(user_id=user_id)
+    assert request.user_id == (user_id.strip() if user_id is not None else None)
+
+
+@pytest.mark.asyncio
+async def test_new_user_returns_conflict_when_id_is_taken_after_duplicate_check(mocker: MockerFixture) -> None:
+    from prisma.errors import UniqueViolationError
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import PrismaClient
+
+    table: Final = SimpleNamespace(
+        find_first=AsyncMock(return_value=None),
+        count=AsyncMock(return_value=0),
+        create=AsyncMock(side_effect=UniqueViolationError({}, message="Unique constraint failed on user_id")),
+        upsert=AsyncMock(return_value=LiteLLM_UserTable(user_id="employee-42")),
+    )
+    mocker.patch("prisma.Prisma", return_value=SimpleNamespace(litellm_usertable=table))
+    database: Final = PrismaClient(
+        database_url="postgresql://unused:unused@localhost/unused",
+        proxy_logging_obj=proxy_server.proxy_logging_obj,
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", database)
+    with pytest.raises(ProxyException) as exc:
+        await new_user(
+            data=NewUserRequest(user_id="employee-42", auto_create_key=False, send_invite_email=False),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert str(exc.value.code) == "409"
+    assert "employee-42" in exc.value.message
+
 
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
