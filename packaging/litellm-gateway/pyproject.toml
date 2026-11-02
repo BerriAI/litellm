@@ -14,3 +14,4 @@ manifest-path = "../../litellm-rust/crates/gateway/Cargo.toml"
 bindings = "bin"
 targets = [{ name = "litellm-gateway", kind = "bin" }]
 profile = "release"
+editable-profile = "dev"
