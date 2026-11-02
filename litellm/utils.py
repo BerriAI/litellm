@@ -3784,9 +3784,13 @@ def _replace_cost_map_entry(
     previous_fields: Final[frozenset[str]] = (
         current.registered_fields if isinstance(current, AliasedCostEntry) else frozenset()
     )
-    registered_fields: Final = previous_fields | frozenset(
-        name for name, value in registration.items() if value is not None
+    supplied_fields: Final = frozenset(name for name, value in registration.items() if value is not None)
+    replaced_fields: Final[frozenset[str]] = (
+        frozenset({"input_cost_per_query", "tiered_pricing"})
+        if merged.get("litellm_provider") == "exa_ai" and supplied_fields & {"input_cost_per_query", "tiered_pricing"}
+        else frozenset()
     )
+    registered_fields: Final = (previous_fields - replaced_fields) | supplied_fields
     sharing_names: Final = tuple(name for name in names if cost_map.get(name) is current)
     cost_map.update(dict.fromkeys((key, *sharing_names), AliasedCostEntry(merged, names, registered_fields)))
 

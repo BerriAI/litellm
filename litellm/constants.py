@@ -1765,6 +1765,9 @@ ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS: Final = {
 PASS_THROUGH_HEADER_PREFIX: Final = "x-pass-"
 TYPESAFE_DANGER_ZONE_HEADER_PREFIX: Final = "typesafe-danger-zone-"
 INTERNAL_KWARG_PREFIX: Final = "_litellm_"
+DEFAULT_MODEL_COST_MAP_URL: Final = (
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+)
 CONTROL_OPTIONS_KEY: Final = f"{INTERNAL_KWARG_PREFIX}control"
 SESSION_ID_FROM_TRACE_ID_PARAM_KEY: Final = f"{INTERNAL_KWARG_PREFIX}session_id_from_trace_id"
 
