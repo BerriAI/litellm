@@ -87,15 +87,13 @@
     "api_key_env": "GMI_API_KEY"
   },
   "sarvam": {
-    "base_url": "https://api.sarvam.ai/v1",
+    "base_url": "https://api.sarvam.ai/v2",
     "api_key_env": "SARVAM_API_KEY",
     "base_class": "openai_gpt",
-    "param_mappings": {
-      "max_completion_tokens": "max_tokens"
-    },
-    "headers": {
-      "api-subscription-key": "{api_key}"
-    }
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
   },
   "assemblyai": {
     "base_url": "https://llm-gateway.assemblyai.com/v1",
