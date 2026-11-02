@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, TypeVar, cast
 
 from httpx import Response, Timeout
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -91,6 +91,7 @@ from litellm.litellm_core_utils.hidden_params import (
     get_hidden_params,
     served_from_cache,
     set_hidden_param,
+    set_hidden_params,
 )
 from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
@@ -135,7 +136,7 @@ from litellm.litellm_core_utils.served_output_texts import (
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
-from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
 from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
@@ -564,6 +565,8 @@ def _resolve_mantle_region_for_cost(
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 _REDACTED_RESULT: Final = TypeAdapter(object)
+_CHAT_CALL_TYPES: Final = frozenset({CallTypes.completion.value, CallTypes.acompletion.value})
+_LoggedResponse: Final = TypeVar("_LoggedResponse")
 
 
 def _provider_response_id(source: object) -> str | None:
@@ -2910,6 +2913,19 @@ class Logging(LiteLLMLoggingBaseClass):
             return response
         return response.model_copy(update={"model": model})
 
+    def _as_served_chat_response(self, response: _LoggedResponse) -> _LoggedResponse | ModelResponse:
+        call_type: Final[object] = getattr(self, "call_type", None)
+        if call_type not in _CHAT_CALL_TYPES or not isinstance(response, ResponsesAPIResponse):
+            return response
+        translated: Final = self._translate_responses_api_response_to_model_response(response)
+        served: Final = translated.model_copy(
+            update={
+                "id": ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response.id)
+            }
+        )
+        set_hidden_params(served, {**(get_hidden_params(translated) or {}), **(get_hidden_params(response) or {})})
+        return served
+
     def _with_continued_response_id(
         self,
         response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
@@ -2971,6 +2987,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 result = self._handle_non_streaming_google_genai_generate_content_response_logging(result=result)
             elif self.call_type == CallTypes.asend_message.value or self.call_type == CallTypes.send_message.value:
                 result = self._handle_a2a_response_logging(result=result)
+            elif self.stream is not True:
+                result = self._as_served_chat_response(result)  # rebind-ok: bridged chat calls log the chat response
 
             logging_result: Final = self.normalize_logging_result(result=result)
             if cache_hit is None and _served_from_cache_at_no_charge(logging_result):
@@ -3308,7 +3326,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 self._add_continued_partial_spend(complete_streaming_response)
                 self._merge_hidden_params_from_response_into_metadata(complete_streaming_response)
                 logged_streaming_response: Final = self._with_continued_response_id(
-                    self._with_client_facing_stream_model(complete_streaming_response)
+                    self._with_client_facing_stream_model(self._as_served_chat_response(complete_streaming_response))
                 )
                 self.model_call_details["complete_streaming_response"] = logged_streaming_response
                 ## STANDARDIZED LOGGING PAYLOAD
@@ -3908,7 +3926,7 @@ class Logging(LiteLLMLoggingBaseClass):
             await self._prepare_baseline_cache_estimate(complete_streaming_response)
 
             logged_streaming_response: Final = self._with_continued_response_id(
-                self._with_client_facing_stream_model(complete_streaming_response)
+                self._with_client_facing_stream_model(self._as_served_chat_response(complete_streaming_response))
             )
             self.model_call_details["async_complete_streaming_response"] = logged_streaming_response
 

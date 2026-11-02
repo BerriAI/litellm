@@ -6,6 +6,8 @@ import os
 import queue
 import unittest
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
 
@@ -27,15 +29,13 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     LiteLLMResponsesTransformationHandler,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT
-from litellm.types.utils import StandardLoggingPayload
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT, ResponsesAPIResponse
+from litellm.types.utils import ModelResponse, StandardLoggingPayload
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseOutputItem
     from openai.types.responses.response_reasoning_item import ResponseReasoningItem
-
-    from litellm.types.llms.openai import ResponsesAPIResponse
-    from litellm.types.utils import ModelResponse
 
 
 def test_completion_over_responses_maps_anthropic_search_tool_to_openai_tool_search() -> None:
@@ -195,20 +195,52 @@ def test_auto_summary_sends_the_level_the_target_accepts(
     assert request_body["reasoning"] == {"effort": "low", "summary": expected_summary}
 
 
+@dataclass(frozen=True, slots=True)
+class _LoggedSuccess:
+    call_type: str
+    payload: StandardLoggingPayload
+    response_obj: object
+    complete_streaming_response: object
+
+
 class _LoggedCallTypes(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.seen: Final[queue.SimpleQueue[tuple[str, str]]] = queue.SimpleQueue()
+        self.seen_by_caller: Final = MappingProxyType(
+            {
+                "completion": queue.SimpleQueue[_LoggedSuccess](),
+                "acompletion": queue.SimpleQueue[_LoggedSuccess](),
+            }
+        )
 
-    def _record(self, kwargs: Mapping[str, object]) -> None:
-        payload: Final = cast(StandardLoggingPayload, kwargs["standard_logging_object"])
-        self.seen.put((str(kwargs["call_type"]), payload["call_type"]))
+    @staticmethod
+    def _logged(kwargs: Mapping[str, object], response_obj: object, streaming_key: str) -> _LoggedSuccess:
+        return _LoggedSuccess(
+            call_type=str(kwargs["call_type"]),
+            payload=cast(StandardLoggingPayload, kwargs["standard_logging_object"]),
+            response_obj=response_obj,
+            complete_streaming_response=kwargs.get(streaming_key),
+        )
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        self._record(kwargs)
+    def log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.seen_by_caller["completion"].put(self._logged(kwargs, response_obj, "complete_streaming_response"))
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        self._record(kwargs)
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.seen_by_caller["acompletion"].put(
+            self._logged(kwargs, response_obj, "async_complete_streaming_response")
+        )
 
 
 _GET_WEATHER_TOOL: Final = {
@@ -216,9 +248,7 @@ _GET_WEATHER_TOOL: Final = {
     "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
 }
 
-
-@pytest.mark.parametrize("caller", ["completion", "acompletion"])
-@pytest.mark.parametrize(
+_BRIDGED_PROVIDERS: Final = pytest.mark.parametrize(
     ("model", "url", "provider_kwargs"),
     [
         ("openai/gpt-5.3-codex", "https://api.openai.com/v1/responses", {}),
@@ -231,6 +261,73 @@ _GET_WEATHER_TOOL: Final = {
     ],
     ids=["openai-responses-only", "azure-tools", "bedrock-mantle-tools"],
 )
+
+
+def _searched_responses_body(model: str) -> Mapping[str, object]:
+    return {
+        "id": "resp_logged_call_type",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": model.rsplit("/", 1)[-1],
+        "output": [
+            {
+                "type": "web_search_call",
+                "id": "ws_logged_call_type",
+                "status": "completed",
+                "action": {"type": "search", "query": "weather"},
+            },
+            {
+                "type": "message",
+                "id": "msg_logged_call_type",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "pong", "annotations": []}],
+            },
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+    }
+
+
+def _responses_sse(response_body: Mapping[str, object]) -> str:
+    events: Final = (
+        {"type": "response.created", "response": {**response_body, "status": "in_progress", "output": [], "usage": None}},
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_logged_call_type",
+            "output_index": 1,
+            "content_index": 0,
+            "delta": "pong",
+        },
+        {"type": "response.completed", "response": response_body},
+    )
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+
+def _bridged_request(model: str, provider_kwargs: Mapping[str, object], stream: bool) -> Mapping[str, object]:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "tools": [_GET_WEATHER_TOOL],
+        "api_key": "test-key",
+        "cache": {"no-cache": True},
+        "stream": stream,
+        **provider_kwargs,
+    }
+
+
+async def _served_chunk_ids(caller: str, request: Mapping[str, object]) -> frozenset[str]:
+    if caller == "acompletion":
+        async_stream: Final = await litellm.acompletion(**request)
+        assert isinstance(async_stream, CustomStreamWrapper)
+        return frozenset([chunk.id async for chunk in async_stream])
+    sync_stream: Final = litellm.completion(**request)
+    assert isinstance(sync_stream, CustomStreamWrapper)
+    return frozenset(chunk.id for chunk in sync_stream)
+
+
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@_BRIDGED_PROVIDERS
 @pytest.mark.asyncio
 async def test_bridged_chat_call_is_logged_with_the_callers_call_type(
     monkeypatch: pytest.MonkeyPatch, caller: str, model: str, url: str, provider_kwargs: Mapping[str, object]
@@ -239,31 +336,8 @@ async def test_bridged_chat_call_is_logged_with_the_callers_call_type(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     recorder: Final = _LoggedCallTypes()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
-    response_body: Final = {
-        "id": "resp_logged_call_type",
-        "object": "response",
-        "created_at": 1789788253,
-        "status": "completed",
-        "model": model.rsplit("/", 1)[-1],
-        "output": [
-            {
-                "type": "message",
-                "id": "msg_logged_call_type",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
-            }
-        ],
-        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-    }
-    request: Final = {
-        "model": model,
-        "messages": [{"role": "user", "content": "ping"}],
-        "tools": [_GET_WEATHER_TOOL],
-        "api_key": "test-key",
-        "cache": {"no-cache": True},
-        **provider_kwargs,
-    }
+    response_body: Final = _searched_responses_body(model)
+    request: Final = _bridged_request(model, provider_kwargs, stream=False)
 
     with respx.mock(assert_all_called=True) as router:
         router.post(url__startswith=url).mock(return_value=httpx.Response(200, json=response_body))
@@ -271,9 +345,75 @@ async def test_bridged_chat_call_is_logged_with_the_callers_call_type(
             await litellm.acompletion(**request)
         else:
             litellm.completion(**request)
-        logged: Final = await asyncio.to_thread(recorder.seen.get, timeout=10)
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
 
-    assert logged == (caller, caller)
+    assert (logged.call_type, logged.payload["call_type"]) == (caller, caller)
+    assert isinstance(logged.response_obj, ModelResponse)
+    assert logged.response_obj.id == response_body["id"]
+    assert logged.response_obj.choices[0].message.content == "pong"
+    assert logged.payload["response"]["choices"][0]["message"]["content"] == "pong"
+    assert logged.payload["response_cost"] == litellm.completion_cost(
+        completion_response=ResponsesAPIResponse.model_validate(response_body), model=model
+    )
+
+
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@_BRIDGED_PROVIDERS
+@pytest.mark.asyncio
+async def test_bridged_chat_stream_is_logged_as_the_chat_completion_it_streamed(
+    monkeypatch: pytest.MonkeyPatch, caller: str, model: str, url: str, provider_kwargs: Mapping[str, object]
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = _searched_responses_body(model)
+    request: Final = _bridged_request(model, provider_kwargs, stream=True)
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith=url).mock(
+            return_value=httpx.Response(
+                200, text=_responses_sse(response_body), headers={"content-type": "text/event-stream"}
+            )
+        )
+        served_ids: Final = await _served_chunk_ids(caller, request)
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
+
+    assert isinstance(logged.complete_streaming_response, ModelResponse)
+    assert logged.response_obj is logged.complete_streaming_response
+    assert served_ids == {logged.complete_streaming_response.id}
+    assert logged.complete_streaming_response.choices[0].message.content == "pong"
+    assert logged.payload["response"]["choices"][0]["message"]["content"] == "pong"
+    assert logged.payload["response_cost"] == litellm.completion_cost(
+        completion_response=ResponsesAPIResponse.model_validate(response_body), model=model
+    )
+
+
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@pytest.mark.asyncio
+async def test_bridged_chat_stream_keeps_the_upstream_headers_when_its_output_cannot_be_translated(
+    monkeypatch: pytest.MonkeyPatch, caller: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = {**_searched_responses_body("openai/gpt-5.3-codex"), "output": []}
+    request: Final = _bridged_request("openai/gpt-5.3-codex", {}, stream=True)
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith="https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(
+                200,
+                text=_responses_sse(response_body),
+                headers={"content-type": "text/event-stream", "x-request-id": "req_upstream"},
+            )
+        )
+        await _served_chunk_ids(caller, request)
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
+
+    assert isinstance(logged.complete_streaming_response, ModelResponse)
+    assert logged.complete_streaming_response.id == response_body["id"]
+    assert logged.payload["hidden_params"]["additional_headers"]["llm_provider-x-request-id"] == "req_upstream"
 
 
 def test_convert_chat_completion_messages_to_responses_api_image_input():
