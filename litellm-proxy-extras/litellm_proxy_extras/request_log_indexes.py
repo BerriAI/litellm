@@ -2,7 +2,7 @@
 by the migration job, or by a serving proxy that ran the migrations itself (in the
 background, once it serves).
 
-A migration cannot build them: a plain `CREATE INDEX` blocks spend-log inserts for the
+A migration cannot build them: a plain `CREATE INDEX` blocks writes to the indexed table for the
 whole build, and `CREATE INDEX CONCURRENTLY` is refused on a partitioned parent
 (db_scripts/partition_spend_logs.sql). `REQUEST_LOG_INDEXES` is the one list to extend;
 names match what Prisma derives from the `@@index` declarations in schema.prisma, so an
@@ -59,6 +59,14 @@ class RequestLogIndex:
 REQUEST_LOG_INDEXES: Final = (
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_api_key_startTime_idx", '("api_key", "startTime")'),
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_litellm_call_id_idx", '("litellm_call_id")'),
+    RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_session_id_idx", '("session_id")'),
+    RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_startTime_request_id_idx", '("startTime", "request_id")'),
+    RequestLogIndex(
+        "LiteLLM_SpendLogToolIndex",
+        "LiteLLM_SpendLogToolIndex_tool_name_start_time_idx",
+        '("tool_name", "start_time")',
+    ),
+    RequestLogIndex("LiteLLM_SpendLogToolIndex", "LiteLLM_SpendLogToolIndex_start_time_idx", '("start_time")'),
 )
 
 _IDENTIFIER_MAX_BYTES: Final = 63
