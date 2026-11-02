@@ -495,7 +495,8 @@ async def _delete_redundant_uploads(
     uploads: Sequence[_ProviderUpload],
     delete_request: Mapping[str, object],
 ) -> None:
-    with internal_sub_call():
+    parent_call_id: Final = delete_request.get("litellm_call_id")
+    with internal_sub_call(parent_call_id if isinstance(parent_call_id, str) else None):
         await asyncio.gather(*(_delete_redundant_upload(llm_router, upload, delete_request) for upload in uploads))
 
 

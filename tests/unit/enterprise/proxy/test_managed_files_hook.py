@@ -16,7 +16,7 @@ import pytest
 from typing import TYPE_CHECKING, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from litellm._internal_context import is_internal_call
+from litellm._internal_context import internal_parent_request_id, is_internal_call
 from litellm.llms.base_llm.files.transformation import FileListModelScope
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import BATCH_CREATE_HIDDEN_PARAM
@@ -2293,9 +2293,15 @@ class _FakeFilesRouter:
         self.upload_count = 0
         self.deletes: tuple[tuple[str, str, Mapping[str, object], Mapping[str, str]], ...] = ()
         self.deletes_marked_internal: tuple[bool, ...] = ()
+        self.delete_parent_request_ids: tuple[str | None, ...] = ()
 
     async def acreate_file(
-        self, model: str, file: tuple[str, bytes, str], purpose: str, litellm_metadata: Mapping[str, object]
+        self,
+        model: str,
+        file: tuple[str, bytes, str],
+        purpose: str,
+        litellm_metadata: Mapping[str, object],
+        litellm_call_id: str,
     ) -> OpenAIFileObject:
         deployment_ids: Final = self.deployments_by_model[model]
         provider_file_ids: Final = tuple(
@@ -2323,6 +2329,7 @@ class _FakeFilesRouter:
         file_id: str,
         litellm_metadata: Mapping[str, object],
         _litellm_internal_model_credentials: Mapping[str, str],
+        litellm_call_id: str,
     ) -> None:
         if self.delete_gate is not None:
             await self.delete_gate.wait()
@@ -2330,6 +2337,7 @@ class _FakeFilesRouter:
             litellm_metadata.update({"model_info": {"id": model}})
         self.deletes = (*self.deletes, (model, file_id, litellm_metadata, _litellm_internal_model_credentials))
         self.deletes_marked_internal = (*self.deletes_marked_internal, is_internal_call.get())
+        self.delete_parent_request_ids = (*self.delete_parent_request_ids, internal_parent_request_id.get())
         if file_id in self.gone_file_ids:
             raise RuntimeError(f"No such File object: {file_id}")
         if self.delete_error is not None:
@@ -2359,6 +2367,7 @@ async def _upload(
             "file": ("notes.txt", b"the launch code is ORCHID-42\n", content_type),
             "purpose": "user_data",
             "litellm_metadata": litellm_metadata,
+            "litellm_call_id": "upload-call",
         },
         llm_router=router,
         target_model_names_list=target_model_names,
@@ -2469,14 +2478,16 @@ async def test_shutdown_drain_waits_for_the_repeat_upload_delete():
 
 
 @pytest.mark.asyncio
-async def test_repeat_upload_delete_runs_as_an_internal_call_the_client_is_not_billed_or_alerted_for():
+async def test_repeat_upload_delete_runs_as_an_internal_call_of_the_upload_request():
     router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)})
 
     await _create_managed_file(router, ["gpt-a", "gpt-b"])
     await drain_logging_tasks(timeout=1)
 
     assert router.deletes_marked_internal == (True,)
+    assert router.delete_parent_request_ids == ("upload-call",)
     assert is_internal_call.get() is False
+    assert internal_parent_request_id.get() is None
 
 
 @pytest.mark.asyncio
@@ -2507,7 +2518,11 @@ async def _upload_then_delete(
     mock_prisma.db.litellm_managedfiletable.delete = AsyncMock()
 
     deleted: Final = await managed_files.afile_delete(
-        file_id=response.id, litellm_parent_otel_span=None, llm_router=router, litellm_metadata=_REQUEST_METADATA
+        file_id=response.id,
+        litellm_parent_otel_span=None,
+        llm_router=router,
+        litellm_metadata=_REQUEST_METADATA,
+        litellm_call_id="delete-call",
     )
 
     assert deleted.deleted is True
@@ -2560,6 +2575,7 @@ async def test_deleting_a_file_still_succeeds_when_the_upload_its_id_carries_is_
 
     assert "file-upload-1" in caplog.text and "No such File object" in caplog.text
     assert router.deletes_marked_internal == (False, True)
+    assert router.delete_parent_request_ids == (None, "delete-call")
 
 
 @pytest.mark.asyncio
