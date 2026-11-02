@@ -23,7 +23,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import token_counter
 
-from ..common_utils import SagemakerError
+from ..common_utils import STR_KEYED_MAPPING, SagemakerError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -153,7 +153,9 @@ class SagemakerConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        inference_params: Final = optional_params.copy()
+        inference_params: Final = {
+            key: value for key, value in STR_KEYED_MAPPING.validate_python(optional_params).items() if key != "model_id"
+        }
         stream: Final = inference_params.pop("stream", False)
         data: Final[dict] = {"parameters": inference_params}
         if stream is True:

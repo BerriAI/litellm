@@ -57,7 +57,7 @@ def _route_refusal(response: httpx.Response, user_id: str) -> None:
                 f"keys/users/teams. Route=/v1/workflows/runs. Your role=internal_user. Your user_id={masked_user_id}"
             ),
             "type": "auth_error",
-            "param": "None",
+            "param": None,
             "code": "401",
         }
     }, response.text

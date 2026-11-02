@@ -179,7 +179,7 @@ async def test_lakera_v2_responses_api_input_redacted_writeback(
         LakeraAIGuardrail,
     )
 
-    guard = LakeraAIGuardrail(api_key="lk-test", on_flagged="block")
+    guard = LakeraAIGuardrail(api_key="lk-test", on_flagged="mask")
 
     async def fake_call_v2_guard(messages, request_data, event_type):
         return ({"flagged": True, "payload": []}, {"EMAIL": 1})
@@ -253,7 +253,7 @@ async def test_lakera_v2_multimodal_pii_degrades_to_block(user_api_key, monkeypa
         LakeraAIGuardrail,
     )
 
-    guard = LakeraAIGuardrail(api_key="lk-test", on_flagged="block")
+    guard = LakeraAIGuardrail(api_key="lk-test", on_flagged="mask")
 
     async def fake_call_v2_guard(messages, request_data, event_type):
         return (

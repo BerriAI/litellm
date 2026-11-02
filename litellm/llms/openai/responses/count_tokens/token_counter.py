@@ -15,7 +15,9 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.tool_fields import DropPolicy
+from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
+from litellm.llms.anthropic.messages.responses_adapters.handler import count_view_messages
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -93,6 +95,32 @@ def _count_error(model_to_use: str, request_model: str, message: str, status_cod
         error_message=message,
         status_code=status_code,
     )
+
+
+async def _sent_messages(
+    model: str,
+    messages: Sequence[Mapping[str, object]],
+    tools: Sequence[Mapping[str, object]] | None,
+    system: object,
+    messages_format: TokenCountMessagesFormat,
+    context_management: CountContextManagement | None,
+) -> Sequence[Mapping[str, object]] | AnthropicContextManagementError:
+    match messages_format:
+        case "openai":
+            return messages
+        case "anthropic":
+            try:
+                return await count_view_messages(
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    system=system,
+                    context_management=context_management,
+                )
+            except AnthropicContextManagementError as error:
+                return error
+        case _:
+            assert_never(messages_format)
 
 
 class OpenAITokenCounter(BaseTokenCounter):
@@ -175,13 +203,28 @@ class OpenAITokenCounter(BaseTokenCounter):
                 rejected_before_provider_call=True,
             )
 
+        sent_messages: Final = await _sent_messages(
+            model_to_use, messages, tools, system, messages_format, context_management
+        )
+        if isinstance(sent_messages, AnthropicContextManagementError):
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="openai_api",
+                error=True,
+                error_message=sent_messages.message,
+                status_code=sent_messages.status_code,
+                rejected_before_provider_call=True,
+            )
+
         resolved: Final = _count_credential(deployment, request_model or model_to_use)
         if isinstance(resolved, OpenAIError):
             return _count_error(model_to_use, request_model, resolved.message, resolved.status_code)
 
         input_items, instructions, counted_tools, text = self._responses_request_parts(
             model_to_use=model_to_use,
-            messages=messages,
+            messages=sent_messages,
             tools=tools,
             system=system,
             messages_format=messages_format,
