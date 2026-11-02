@@ -18,7 +18,6 @@ ANTHROPIC_MODEL: Final = "beta-gated-anthropic"
 FOUNDRY_MODEL: Final = "beta-gated-foundry"
 DATABRICKS_MODEL: Final = "beta-gated-databricks"
 DATABRICKS_DROP_PARAMS_MODEL: Final = "beta-gated-databricks-drop-params"
-DATABRICKS_CLAUDE: Final = "databricks/databricks-claude-sonnet-5-5"
 CLEAR_AT_BETA: Final = "mid-conversation-system-clear-at-2026-08-21"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _NONCE: Final = re.compile(rb"nonce-([0-9a-f]{32})")
@@ -74,11 +73,15 @@ def write_config(directory: Path, wire_url: str) -> Path:
                 "model_list": [
                     deployment(ANTHROPIC_MODEL, "anthropic/claude-opus-4-8", f"{wire_url}/anthropic"),
                     deployment(FOUNDRY_MODEL, "azure_ai/claude-opus-4-8", f"{wire_url}/foundry"),
-                    deployment(DATABRICKS_MODEL, DATABRICKS_CLAUDE, f"{wire_url}/dbx/serving-endpoints"),
+                    deployment(
+                        DATABRICKS_MODEL,
+                        "databricks/databricks-claude-opus-4-8",
+                        f"{wire_url}/databricks/serving-endpoints",
+                    ),
                     deployment(
                         DATABRICKS_DROP_PARAMS_MODEL,
-                        DATABRICKS_CLAUDE,
-                        f"{wire_url}/dbx/serving-endpoints",
+                        "databricks/databricks-claude-opus-4-8",
+                        f"{wire_url}/databricks/serving-endpoints",
                         drop_params=True,
                     ),
                 ],
