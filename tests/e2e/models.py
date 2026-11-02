@@ -45,8 +45,6 @@ class KeyLoggingCallbackVars(BaseModel):
     langfuse_public_key: str | None = Field(default=None, repr=False)
     langfuse_secret_key: str | None = Field(default=None, repr=False)
     langfuse_host: str | None = Field(default=None, repr=False)
-    wandb_api_key: str | None = Field(default=None, repr=False)
-    weave_project_id: str | None = None
 
 
 class KeyLoggingCallback(BaseModel):
@@ -364,6 +362,7 @@ class ChatBody(BaseModel):
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
     prompt_cache_key: str | None = None
+    prompt_cache_retention: str | None = None
     tools: Sequence[ChatTool | McpChatTool | GeminiUrlContextTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
@@ -732,28 +731,14 @@ class McpInfo(BaseModel):
     logo_url: str | None = None
 
 
-class McpOauthCredentials(BaseModel):
-    upstream_resource: str
-
-
 class McpServerCreateBody(BaseModel):
-    """POST /v1/mcp/server. For a gateway-managed OAuth server, `auth_type` is
-    `oauth2` and `oauth2_flow` is `authorization_code`; the upstream endpoints
-    are discovered and registered via DCR when left unset. `allow_all_keys`
-    false scopes the server to keys granted it through object_permission."""
+    """POST /v1/mcp/server. `allow_all_keys` false scopes the server to keys
+    granted it through object_permission."""
 
     alias: str
     url: str
     transport: str = "http"
     allow_all_keys: bool = True
-    auth_type: str | None = None
-    oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
-    per_server_oauth_discovery: bool | None = None
-    issuer: str | None = None
-    authorization_url: str | None = None
-    token_url: str | None = None
-    registration_url: str | None = None
-    credentials: McpOauthCredentials | None = Field(default=None, repr=False)
     server_name: str | None = None
     description: str | None = None
     mcp_info: McpInfo | None = None
@@ -791,26 +776,6 @@ class McpServerRow(McpServerInfo):
 
 class McpServerListResponse(RootModel[list[McpServerRow]]):
     """GET /v1/mcp/server answers with a bare array of servers."""
-
-
-class McpServerUserCredentialRow(BaseModel):
-    user_id: str
-    credential_type: Literal["oauth2", "byok"]
-    expires_at: str | None = None
-    connected_at: str | None = None
-    updated_at: str
-
-
-class McpServerUserCredentialListResponse(RootModel[tuple[McpServerUserCredentialRow, ...]]):
-    """GET /v1/mcp/server/{server_id}/user-credentials answers with a bare array."""
-
-
-class McpOauthUserCredentialStatus(BaseModel):
-    server_id: str
-    has_credential: bool
-    expires_at: str | None = None
-    is_expired: bool = False
-    connected_at: str | None = None
 
 
 class ToolsetTool(BaseModel):
@@ -1392,9 +1357,11 @@ class LiteLLMParamsBody(BaseModel):
     litellm_credential_name: str | None = None
     api_base: str | None = Field(default=None, repr=False)
     api_version: str | None = None
+    responses_api_version: str | None = None
     realtime_protocol: str | None = None
     allowed_openai_params: list[str] | None = None
     drop_params: bool | None = None
+    thought_signature_in_tool_call_id: bool | None = None
     aws_access_key_id: str | None = Field(default=None, repr=False)
     aws_secret_access_key: str | None = Field(default=None, repr=False)
     aws_region_name: str | None = None
@@ -1448,7 +1415,7 @@ class LiteLLMParamsBody(BaseModel):
     order: int | None = None
 
 
-ModelMode = Literal["chat", "batch", "realtime", "image_generation"]
+ModelMode = Literal["chat", "embedding", "batch", "realtime", "image_generation"]
 
 
 class TokenCountModelBody(BaseModel, frozen=True):
@@ -1457,6 +1424,7 @@ class TokenCountModelBody(BaseModel, frozen=True):
 
 
 class ModelInfoBody(BaseModel):
+    enforce_supported_endpoints: bool | None = None
     # id is left unset so the proxy assigns a unique model_id per deployment.
     # Pinning it to the model_name made re-registrations of a fixed-name model
     # (e.g. the batch suite's openai-batch) collide on the model_id unique
