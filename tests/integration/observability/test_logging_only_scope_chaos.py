@@ -41,6 +41,7 @@ from _logging_only_scope_support import (
     _record_audit_properties as _record_audit_properties,
 )
 from anthropic import APIConnectionError as AnthropicAPIConnectionError
+from integration._support.budget import readiness_seconds
 from integration._support.client import Gateway, eventually
 from integration._support.process import graceful_stop_seconds, owned_proxy, owned_proxy_process
 from integration._support.timing import Timed, assert_not_delayed_by, timed
@@ -568,7 +569,7 @@ def test_K3_two_worker_sigkill_checks_post_kill_spend_rows(
                     )
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(3 * readiness_seconds(2) + 3 * graceful_stop_seconds() + 180)
 def test_K4_proxy_restart_after_fifteen_responses_records_lost_ids(
     gateway: Gateway,
     tmp_path: Path,
@@ -620,7 +621,7 @@ def test_K4_proxy_restart_after_fifteen_responses_records_lost_ids(
                 if call.index < 15:
                     return first_gateway
                 second_wave_barrier.wait(timeout=90)
-                assert restart_gate.wait(timeout=90)
+                assert restart_gate.wait(timeout=readiness_seconds(2) + 90)
                 return restarted_gateways.get()
 
             def run(call: ChaosCall, first_gateway: Gateway) -> tuple[int, CallerResult]:
