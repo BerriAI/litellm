@@ -29,7 +29,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 
-from litellm.proxy._types import PassThroughGenericEndpoint, ProxyException
+from litellm.proxy._types import PassThroughGenericEndpoint, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import (
     check_api_key_for_custom_headers_or_pass_through_endpoints,
 )
@@ -117,11 +117,47 @@ async def test_runtime_check_treats_missing_auth_key_as_authenticated():
 
 
 @pytest.mark.asyncio
+async def test_runtime_check_unauthenticated_subpath_skips_validation() -> None:
+    request: Final = MagicMock()
+    request.headers = {}
+    endpoint: Final = {
+        "path": "/public-webhook",
+        "target": "https://example.com",
+        "include_subpath": True,
+        "auth": False,
+    }
+
+    result: Final = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request,
+        route="/public-webhook/event",
+        pass_through_endpoints=[endpoint],
+        api_key="",
+    )
+
+    assert isinstance(result, UserAPIKeyAuth)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth", ["true", "TRUE"])
+async def test_runtime_check_string_auth_true_requires_validation(auth: str) -> None:
+    request: Final = MagicMock()
+    request.headers = {}
+    endpoint: Final = {"path": "/forwarder", "target": "https://example.com", "auth": auth}
+
+    result: Final = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request,
+        route="/forwarder",
+        pass_through_endpoints=[endpoint],
+        api_key="sk-9876",
+    )
+
+    assert result == "sk-9876"
+
+
+@pytest.mark.asyncio
 async def test_runtime_check_explicit_auth_false_still_skips_validation():
     # Operators who explicitly set ``auth: False`` get the legacy
     # behaviour — an empty UserAPIKeyAuth, no key required.
-    from litellm.proxy._types import UserAPIKeyAuth
-
     request = MagicMock()
     request.headers = {}
     raw_endpoint_auth_false = {

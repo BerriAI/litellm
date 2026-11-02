@@ -1521,15 +1521,9 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
             api_key = request.headers.get("litellm_user_api_key") or ""
     if pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
+            if _request_matches_unauthenticated_pass_through(endpoint, route):
+                return UserAPIKeyAuth()
             if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
-                ## IF AUTH DISABLED
-                # Default to True: a config dict with no ``auth`` key
-                # otherwise produced an unauthenticated forwarder. The
-                # Pydantic ``PassThroughGenericEndpoint.auth`` default
-                # is also True, but raw config dicts skip that path —
-                # so this runtime check has to default to True too.
-                if endpoint.get("auth", True) is not True:
-                    return UserAPIKeyAuth()
                 ## IF AUTH ENABLED
                 ### IF CUSTOM PARSER REQUIRED
                 if endpoint.get("custom_auth_parser") is not None and endpoint.get("custom_auth_parser") == "langfuse":
@@ -3519,6 +3513,18 @@ async def _load_team_member_default_model_budget(
     )
 
 
+def _request_matches_unauthenticated_pass_through(endpoint: object, route: str) -> bool:
+    if not isinstance(endpoint, dict):
+        return False
+    endpoint_data: Final = cast("dict[str, object]", endpoint)
+    if str(endpoint_data.get("auth", True)).lower() == "true":
+        return False
+    path: Final = endpoint_data.get("path")
+    if not isinstance(path, str) or not path:
+        return False
+    return route == path or (endpoint_data.get("include_subpath") is True and route.startswith(path.rstrip("/") + "/"))
+
+
 @tracer.wrap()
 async def run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
@@ -3581,7 +3587,7 @@ async def run_centralized_common_checks(
     pass_through_endpoints: Final = general_settings.get("pass_through_endpoints", None)
     if not force_virtual_key_checks and pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
-            if isinstance(endpoint, dict) and endpoint.get("path", "") == route and endpoint.get("auth") is not True:
+            if _request_matches_unauthenticated_pass_through(endpoint, route):
                 return
 
     # No-auth dev mode: master_key unset AND no JWT/OAuth2 auth

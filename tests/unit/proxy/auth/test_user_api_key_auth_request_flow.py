@@ -21,7 +21,7 @@ import fastapi
 import orjson
 import pytest
 from fastapi import HTTPException, Request, status
-from starlette.datastructures import UploadFile
+from starlette.datastructures import URL, UploadFile
 
 import litellm
 import litellm.proxy.proxy_server
@@ -4838,6 +4838,40 @@ def _proxy_attrs_for_centralized_checks(user_custom_auth=None, flag=False, maste
         "litellm_proxy_admin_name": "admin",
         "master_key": master_key,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "endpoint, route, expect_common_checks",
+    [
+        ({"path": "/orx", "include_subpath": True, "auth": False}, "/orx/rerank", False),
+        ({"path": "/orx", "include_subpath": True, "auth": False}, "/orx", False),
+        ({"path": "/orx", "auth": False}, "/orx/rerank", True),
+        ({"path": "/orx", "include_subpath": True, "auth": False}, "/orxfoo", True),
+        ({"path": "/orx", "include_subpath": True}, "/orx/rerank", True),
+        ({"path": "/orx", "include_subpath": True, "auth": True}, "/orx/rerank", True),
+        ({"path": "/orx", "include_subpath": True, "auth": "true"}, "/orx/rerank", True),
+    ],
+)
+async def test_centralized_common_checks_include_subpath_pass_through_authz(
+    endpoint: dict[str, object], route: str, expect_common_checks: bool
+) -> None:
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
+    request = Request(scope={"type": "http", "method": "POST", "headers": [], "query_string": b""})
+    request._url = URL(url=route)
+    attrs = _proxy_attrs_for_centralized_checks()
+    attrs["general_settings"] = {"pass_through_endpoints": [endpoint]}
+    with (
+        patch.multiple(litellm.proxy.proxy_server, **attrs),
+        patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock) as mock_checks,
+    ):
+        await run_centralized_common_checks(
+            user_api_key_auth_obj=token,
+            request=request,
+            request_data={},
+            route=route,
+        )
+    assert bool(mock_checks.await_count) is expect_common_checks
 
 
 @pytest.mark.asyncio
