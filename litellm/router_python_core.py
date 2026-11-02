@@ -141,6 +141,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     is_registered_custom_provider,
     resolve_model_and_provider_for_metadata,
 )
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
 )
@@ -475,6 +476,7 @@ from litellm.types.router import (
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
+    COST_MAP_LOOKUP_KEY,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
@@ -486,6 +488,7 @@ from litellm.types.utils import (
     StandardLoggingRoutingDecision,
     Usage,
     all_litellm_params,
+    echoed_cost_map_fields,
     is_server_derived_pricing_key,
     shared_backend_model_info,
 )
@@ -770,6 +773,17 @@ def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object]
 
 def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, object]:
     return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
+
+
+def _operator_max_input_tokens(deployment: Mapping[str, object]) -> int | None:
+    model_info: Final = _configured_model_info(deployment)
+    catalog_key: Final = model_info.get(COST_MAP_LOOKUP_KEY)
+    catalog_entry: Final = (
+        GetModelCostMap.loaded_model_cost_map().get(catalog_key) if isinstance(catalog_key, str) else None
+    )
+    if catalog_entry is not None and "max_input_tokens" in echoed_cost_map_fields(model_info, catalog_entry):
+        return None
+    return coerce_token_limit(model_info.get("max_input_tokens"))
 
 
 def _search_tool_support(deployment: DeploymentTypedDict) -> bool | None:
@@ -12691,6 +12705,24 @@ class PythonCore(DeprecatedRouterMembers):
         return tuple(
             _configured_model_info(deployment).get("service_tiers")
             for deployment in self._routable_deployments(model_name, team_id)
+        )
+
+    def _core_get_configured_max_input_tokens(
+        self, model_name: str, team_id: str | None = None
+    ) -> tuple[int | None, ...]:
+        """
+        Return the max_input_tokens each deployment a request from team_id to
+        model_name can route to (see _routable_deployments) sets in its own
+        model_info, in model_list order, None for a deployment that sets none
+        or a malformed one. Unlike get_model_listing_info, neither the cost map
+        nor a discovered limit is read, so only an operator's own value counts,
+        and a value a saved /model/info response copied from the cost map is
+        skipped too.
+
+        Returns an empty tuple for wildcard-expanded or unknown names.
+        """
+        return tuple(
+            _operator_max_input_tokens(deployment) for deployment in self._routable_deployments(model_name, team_id)
         )
 
     def _core_get_search_tool_support(self, model_name: str, team_id: str | None = None) -> tuple[bool | None, ...]:
