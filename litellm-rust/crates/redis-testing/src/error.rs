@@ -8,4 +8,6 @@ pub enum Error {
     Unreachable { port: u16 },
     #[error("controlling the Redis container")]
     Container(#[from] testcontainers_modules::testcontainers::TestcontainersError),
+    #[error("{command} exited with {code}")]
+    Command { command: String, code: i64 },
 }

@@ -4,3 +4,7 @@
 - `RedisCluster` runs 3 masters in one container. Each node listens on the same port inside and outside and announces 127.0.0.1, so MOVED redirects work from the test process
 - Outages come from the container (`restart`, `freeze` / `thaw`), never `DEBUG`, which the official image disables
 - No env gate that makes a test pass without Redis. A test that can't start its container fails
+- `cli` / `cli_on_every_node` run `redis-cli -e` inside the container for setup such as ACL users, so tests don't need a second client. `-e` makes an error reply fail the call, and a test whose setup changes server state also asserts that state before relying on it
+- Not `redis-test`'s server helpers, which need local `redis-server` and `openssl` binaries
+- `RedisDeployment` runs either `Topology`, so a test can take `#[values(Topology::Standalone, Topology::Cluster)]`. `clients()` returns every client connection on every node from `CLIENT LIST`, leaving out the CLI's own
+- Server fixtures only. This crate never depends on a Redis client crate, so the client crates can dev-depend on it without a cycle

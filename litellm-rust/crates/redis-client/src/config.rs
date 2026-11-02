@@ -1,19 +1,42 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use redis::{ConnectionAddr, ConnectionInfo, IntoConnectionInfo, RedisConnectionInfo, RedisResult};
 
 use litellm_circuit_breaker::Breaker;
 use litellm_secret_value::SecretValue;
 
-use crate::Namespace;
+use crate::{Namespace, RedisEvents};
 
+// litellm/constants.py REDIS_SOCKET_TIMEOUT, which _coerce_redis_kwargs_types sets when socket_timeout is unset
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct RedisConfig {
     pub endpoint: Endpoint,
     pub namespace: Namespace,
-    pub timeout: Duration,
+    pub timeouts: Timeouts,
     pub breaker: Option<Breaker>,
+    pub events: Option<Arc<dyn RedisEvents>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Timeouts {
+    pub response: Duration,
+    pub connect: Duration,
+}
+
+impl Timeouts {
+    pub fn new(socket_timeout: Duration, connect_timeout: Option<Duration>) -> Self {
+        Self {
+            response: socket_timeout,
+            connect: connect_timeout.unwrap_or(socket_timeout),
+        }
+    }
+}
+
+impl Default for Timeouts {
+    fn default() -> Self {
+        Self::new(DEFAULT_TIMEOUT, None)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
