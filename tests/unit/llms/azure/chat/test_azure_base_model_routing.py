@@ -12,7 +12,7 @@ import openai
 import pytest
 
 import litellm
-from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from litellm.utils import ProviderConfigManager, get_optional_params
 from tests.unit.llms.bedrock.slow_upstream import STREAM_TIMEOUT_SECONDS, slow_upstream_transport

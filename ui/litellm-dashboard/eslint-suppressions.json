@@ -498,9 +498,6 @@
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/MCPToolsetsTab.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -625,23 +622,6 @@
   },
   "src/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/old-usage/_components/usage.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "max-lines": {
-      "count": 1
-    },
-    "prefer-const": {
-      "count": 6
-    },
-    "react-hooks/immutability": {
-      "count": 1
-    },
-    "react-hooks/purity": {
       "count": 1
     }
   },
@@ -1098,11 +1078,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/usage/_components/components/UsagePageView.tsx": {
-    "react-hooks/purity": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/users/_components/BulkEditUsers.tsx": {
     "prefer-const": {
       "count": 1
@@ -1164,11 +1139,6 @@
       "count": 3
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/chat/page.tsx": {
-    "no-nested-ternary": {
       "count": 1
     }
   },
@@ -1730,9 +1700,6 @@
   "src/components/model_group_alias_settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/components/model_info_view.tsx": {
@@ -1740,7 +1707,7 @@
       "count": 1
     },
     "prefer-const": {
-      "count": 5
+      "count": 3
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1765,10 +1732,10 @@
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 139
+      "count": 133
     },
     "prefer-const": {
-      "count": 28
+      "count": 26
     }
   },
   "src/components/object_permissions_view.tsx": {
@@ -2101,17 +2068,6 @@
       "count": 1
     }
   },
-  "src/components/view_user_spend.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "prefer-const": {
-      "count": 3
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
   "src/contexts/AuthContext.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -2172,11 +2128,6 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/utils/dataUtils.test.ts": {
-    "max-nested-callbacks": {
       "count": 1
     }
   },

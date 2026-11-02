@@ -1247,7 +1247,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         showCloseButton={false}
       >
         <TooltipProvider>
-          <div className="flex flex-col">
+          <div className="flex min-w-0 flex-col">
             {/* Header */}
             <div className="flex items-center justify-between border-b border-border px-6 py-4">
               <DialogTitle className="m-0 text-base font-semibold text-foreground">Create guardrail</DialogTitle>

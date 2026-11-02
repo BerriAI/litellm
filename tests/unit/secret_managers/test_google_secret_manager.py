@@ -1,6 +1,7 @@
 import base64
 import binascii
 import json
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Final
 
@@ -120,7 +121,7 @@ def manager(monkeypatch: pytest.MonkeyPatch) -> GoogleSecretManager:
     monkeypatch.setattr(litellm, "secret_manager_client", None)
     monkeypatch.setattr(litellm, "_key_management_system", None)
     monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings())
-    monkeypatch.setattr(litellm.vertex_chat_completion, "_credentials_project_mapping", {})
+    monkeypatch.setattr(litellm.vertex_chat_completion, "_credentials_project_mapping", OrderedDict())
     monkeypatch.setattr(google.auth, "default", _default_credentials)
     monkeypatch.setenv("GOOGLE_SECRET_MANAGER_PROJECT_ID", PROJECT_ID)
     monkeypatch.delenv("GOOGLE_SECRET_MANAGER_ALWAYS_READ_SECRET_MANAGER", raising=False)
