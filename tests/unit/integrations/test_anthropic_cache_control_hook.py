@@ -3489,12 +3489,23 @@ class TestOpenAIPromptCacheBreakpoint:
             ("gpt-5.6-sol", True),
             ("gpt-5.6-luna", True),
             ("gpt-5.7", True),
+            ("gpt-5.6o", True),
+            ("gpt-5.10", True),
+            ("gpt-5.06", True),
             ("gpt-6", True),
             ("GPT-5.6", True),
             ("gpt-5.5", False),
             ("gpt-5", False),
             ("gpt-5-chat-latest", False),
             ("gpt-4.1", False),
+            ("gpt-5-6-sol", True),
+            ("gpt-6-1", True),
+            ("gpt-5-4-mini", False),
+            ("gpt-5-32k", False),
+            ("gpt-5-6b", False),
+            ("gpt-5-06", False),
+            ("gpt-5-2026-03-01", False),
+            ("gpt-4-1106-preview", False),
             ("o3", False),
             ("claude-sonnet-4-5", False),
         ],
@@ -5248,6 +5259,61 @@ async def test_foundry_responses_drop_params_keeps_a_client_breakpoint_by_the_de
     }
 
 
+@pytest.mark.parametrize(
+    ("entrypoint", "part_type", "reply"),
+    [("acompletion", "text", _FOUNDRY_CHAT_ROUTE[1]), ("aresponses", "input_text", _FOUNDRY_RESPONSES_ROUTE[1])],
+    ids=["chat", "responses"],
+)
+@pytest.mark.parametrize("registration_order", [("opted-in", "unflagged"), ("unflagged", "opted-in")])
+async def test_azure_drop_params_keeps_a_client_breakpoint_by_the_deployments_own_flag_not_a_siblings(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    registration_order: tuple[str, ...],
+    entrypoint: str,
+    part_type: str,
+    reply: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    routes: Final = MappingProxyType(
+        {
+            host: respx_mock.post(host=f"{host}.openai.azure.com").mock(return_value=Response(200, json=dict(reply)))
+            for host in registration_order
+        }
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": host,
+                "litellm_params": {
+                    "model": "azure/gpt-4.1-qa-shared",
+                    "api_base": f"https://{host}.openai.azure.com",
+                    "api_key": "azure-test-key",
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": f"{host}-id", **_SIBLING_BREAKPOINT_FLAGS.get(host, {})},
+            }
+            for host in registration_order
+        ],
+        num_retries=0,
+    )
+    marked_system_prompt: Final = {
+        "role": "system",
+        "content": [{"type": part_type, "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+    }
+    request: Final = [marked_system_prompt, {"role": "user", "content": "hi"}]
+
+    for host in registration_order:
+        match entrypoint:
+            case "acompletion":
+                await router.acompletion(model=host, messages=request, drop_params=True)
+            case "aresponses":
+                await router.aresponses(model=host, input=request, drop_params=True)
+
+    assert {
+        host: b"prompt_cache_breakpoint" in routes[host].calls.last.request.content for host in registration_order
+    } == {"opted-in": True, "unflagged": False}
+
+
 @pytest.mark.parametrize("registration_order", [("opted-in", "unflagged"), ("unflagged", "opted-in")])
 async def test_openai_messages_bridge_sends_a_breakpoint_by_the_deployments_own_flag_not_a_siblings(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, registration_order: tuple[str, ...]
@@ -5303,6 +5369,7 @@ _APPLICATION_INFERENCE_PROFILE: Final = "arn:aws:bedrock:us-east-1:123456789012:
         ("gemini-3-pro", "gemini", False),
         ("qa-custom-model", "qa-custom-handler", False),
         ("qa-shared-gpt-deployment", "azure_ai", True),
+        ("my-custom-deployment", "azure", True),
         ("qa-mantle-model", "bedrock_mantle", True),
     ],
 )
@@ -5315,6 +5382,67 @@ def test_a_declared_breakpoint_flag_picks_openais_dialect_only_where_the_request
         )
         is expected
     )
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "injection_points"),
+    [
+        ("completion", [{"location": "message", "role": "system"}]),
+        ("acompletion", [{"location": "message", "role": "system"}]),
+        ("aresponses", [{"location": "message", "role": "system"}]),
+        ("aresponses-client-marked", None),
+    ],
+)
+async def test_an_azure_custom_deployment_declaring_the_breakpoint_flag_gets_openais_breakpoint(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+    injection_points: list[dict[str, str]] | None,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    azure: Final = respx_mock.post(host="qa-azure.openai.azure.com").mock(
+        side_effect=lambda request: Response(
+            200,
+            json=dict(
+                _FOUNDRY_RESPONSES_ROUTE[1] if request.url.path.endswith("/responses") else _FOUNDRY_CHAT_ROUTE[1]
+            ),
+        )
+    )
+    deployment_params: Final = {
+        "model": "azure/my-custom-deployment",
+        "api_base": "https://qa-azure.openai.azure.com",
+        "api_key": "azure-test-key",
+        "api_version": "2025-04-01-preview",
+    }
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "custom-azure",
+                "litellm_params": (
+                    deployment_params
+                    if injection_points is None
+                    else {**deployment_params, "cache_control_injection_points": injection_points}
+                ),
+                "model_info": {"id": "custom-azure-id", "supports_prompt_cache_breakpoint": True},
+            }
+        ],
+        num_retries=0,
+    )
+    client_marked_system_prompt: Final = {
+        "role": "system",
+        "content": [{"type": "input_text", "text": "stable", "cache_control": {"type": "ephemeral"}}],
+    }
+
+    match entrypoint:
+        case "aresponses-client-marked":
+            await router.aresponses(
+                model="custom-azure", input=[client_marked_system_prompt, {"role": "user", "content": "hi"}]
+            )
+        case _:
+            await _send_unmarked_system_prompt(router, "custom-azure", entrypoint)
+
+    body: Final = azure.calls.last.request.content
+    assert (b"prompt_cache_breakpoint" in body, b"cache_control" in body) == (True, False)
 
 
 _BEDROCK_CONVERSE_REPLY: Final = MappingProxyType(
