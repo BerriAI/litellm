@@ -899,6 +899,37 @@ def test_indexed_messages_follow_the_span_limits_of_a_per_request_tracer_overrid
     assert span.attributes["llm.output_messages.0.message.content"] == "reply 0"
 
 
+def _team_conversation_span(monkeypatch, redact, max_span_attributes):
+    monkeypatch.setattr("litellm.redact_user_api_key_info", redact)
+    return _conversation_span(
+        ["genai", "openinference", "langfuse"],
+        _conversation_payload(60),
+        span_limits=SpanLimits(max_span_attributes=max_span_attributes),
+    )
+
+
+def test_langfuse_identity_sheds_before_any_attribute_the_span_carries_without_it(monkeypatch):
+    """At its attribute limit a span drops the Langfuse identity keys first, then exactly what it drops without them."""
+    plain = _team_conversation_span(monkeypatch, True, SpanLimits.UNSET).attributes
+    full = _team_conversation_span(monkeypatch, False, SpanLimits.UNSET).attributes
+    identity_keys = set(full) - set(plain)
+    assert identity_keys == {
+        "langfuse.observation.metadata",
+        "langfuse.trace.metadata.user_api_key_team_id",
+        "langfuse.trace.metadata.user_api_key_team_alias",
+    }
+
+    squeezed_limit = len(plain) - 10
+    squeezed_plain = _team_conversation_span(monkeypatch, True, squeezed_limit)
+    squeezed = _team_conversation_span(monkeypatch, False, squeezed_limit)
+    assert dict(squeezed.attributes) == dict(squeezed_plain.attributes)
+    assert squeezed.dropped_attributes == squeezed_plain.dropped_attributes == 0
+
+    roomy = _team_conversation_span(monkeypatch, False, len(plain) + 2).attributes
+    assert {key: roomy.get(key) for key in plain} == dict(plain)
+    assert len(set(roomy) & identity_keys) == 2
+
+
 def test_span_attribute_limit_falls_back_to_the_environment_for_spans_outside_the_sdk(monkeypatch):
     monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "48")
     assert span_attribute_limit(INVALID_SPAN) == 48

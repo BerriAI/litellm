@@ -40,6 +40,7 @@ ENV UV_PYTHON_DOWNLOADS=0
 COPY pyproject.toml README.md rust-toolchain.toml ./
 COPY .cargo ./.cargo
 COPY litellm-rust ./litellm-rust
+COPY model_prices_and_context_window.json ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     mkdir -p litellm/rust_bridge /wheels && \
@@ -144,6 +145,7 @@ COPY --from=builder --chown=nonroot:nonroot /app/.venv /app/.venv
 COPY --from=builder --chown=nonroot:nonroot /app/litellm /app/litellm
 COPY --from=builder --chown=nonroot:nonroot /app/enterprise /app/enterprise
 COPY --from=builder --chown=nonroot:nonroot /app/gateway /app/gateway
+COPY --from=builder --chown=nonroot:nonroot /app/litellm_cli /app/litellm_cli
 COPY --from=builder --chown=nonroot:nonroot /app/docker/component_entrypoint.sh /app/docker/component_entrypoint.sh
 COPY --from=builder --chown=nonroot:nonroot /app/schema.prisma /app/schema.prisma
 COPY --from=builder /opt/prisma /opt/prisma
@@ -153,7 +155,7 @@ RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
     find /app/.venv -type d -path "*/tornado/test" -delete && \
     chmod -R a+rX /opt/prisma && \
     python -c "from prisma.client import BINARY_PATHS; paths = list(BINARY_PATHS.query_engine.values()); assert paths and all(p.startswith('/opt/prisma/') for p in paths), paths" && \
-    python -c "import litellm; from litellm.rust_bridge.loader import native_bridge_available; assert litellm.__file__ == '/app/litellm/__init__.py', litellm.__file__; assert native_bridge_available()"
+    python -c "import litellm, litellm.rust_bridge._native; assert litellm.__file__ == '/app/litellm/__init__.py', litellm.__file__"
 
 USER nonroot
 

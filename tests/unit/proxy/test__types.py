@@ -2,23 +2,35 @@ import json
 from typing import Final
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from litellm.proxy._types import (
     ROLES_WITHIN_ORG,
+    BudgetNewRequest,
     ChangePasswordRequest,
     GenerateKeyRequest,
+    GenerateKeyResponse,
     KeyRequest,
     LiteLLM_AuditLogs,
+    LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
     LiteLLM_TeamMembership,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
     LitellmUserRoles,
+    NewCustomerRequest,
     NewMCPServerRequest,
+    NewTeamRequest,
     NewUserRequest,
+    NewUserResponse,
     OrganizationMemberUpdateRequest,
+    RegenerateKeyRequest,
     ResetSpendRequest,
     UpdateKeyRequest,
     UpdateMCPServerRequest,
+    UpdateTeamRequest,
     UpdateUserRequest,
+    UpdateUserRequestNoUserIDorEmail,
     UserAPIKeyAuth,
 )
 
@@ -211,6 +223,75 @@ def test_an_empty_max_budget_from_a_form_post_reads_as_no_budget_not_as_zero():
 @pytest.mark.parametrize("sent", (0, 0.0, 25.5))
 def test_a_max_budget_that_was_actually_sent_is_kept(sent):
     assert GenerateKeyRequest(max_budget=sent).max_budget == sent
+
+
+RATE_LIMIT_REQUESTS: Final = (
+    (GenerateKeyRequest, {}),
+    (RegenerateKeyRequest, {}),
+    (UpdateKeyRequest, {"key": "sk-test"}),
+    (NewUserRequest, {}),
+    (UpdateUserRequestNoUserIDorEmail, {}),
+    (UpdateUserRequest, {"user_id": "user-test"}),
+    (NewTeamRequest, {}),
+    (UpdateTeamRequest, {"team_id": "team-test"}),
+    (BudgetNewRequest, {}),
+    (NewCustomerRequest, {"user_id": "customer-test"}),
+)
+
+
+@pytest.mark.parametrize(("request_model", "identifiers"), RATE_LIMIT_REQUESTS)
+@pytest.mark.parametrize("field", ("rpm_limit", "tpm_limit"))
+@pytest.mark.parametrize("value", (-1, -100))
+def test_management_requests_reject_negative_rate_limits(
+    request_model: type[BaseModel], identifiers: dict[str, str], field: str, value: int
+) -> None:
+    with pytest.raises(ValidationError) as error:
+        request_model.model_validate({**identifiers, field: value})
+    assert error.value.errors()[0]["loc"] == (field,)
+
+
+@pytest.mark.parametrize(("request_model", "identifiers"), RATE_LIMIT_REQUESTS)
+@pytest.mark.parametrize("value", (None, 0, 100))
+def test_management_requests_preserve_explicit_rate_limits(
+    request_model: type[BaseModel], identifiers: dict[str, str], value: int | None
+) -> None:
+    limits: Final = {"rpm_limit": value, "tpm_limit": value}
+    request: Final = request_model.model_validate({**identifiers, **limits})
+    assert request.model_dump(include={"rpm_limit", "tpm_limit"}, exclude_unset=True) == limits
+
+
+@pytest.mark.parametrize(("request_model", "identifiers"), RATE_LIMIT_REQUESTS)
+def test_management_requests_leave_omitted_rate_limits_unset(
+    request_model: type[BaseModel], identifiers: dict[str, str]
+) -> None:
+    request: Final = request_model.model_validate({**identifiers})
+    assert request.model_dump(include={"rpm_limit", "tpm_limit"}) == {"rpm_limit": None, "tpm_limit": None}
+    assert request.model_dump(include={"rpm_limit", "tpm_limit"}, exclude_unset=True) == {}
+
+
+@pytest.mark.parametrize(("response_model", "identifiers"), (
+    (GenerateKeyResponse, {"key": "sk-test"}),
+    (NewUserResponse, {"key": "sk-test"}),
+    (LiteLLM_TeamTable, {"team_id": "team-test"}),
+    (LiteLLM_UserTable, {"user_id": "user-test"}),
+    (LiteLLM_BudgetTable, {"budget_id": "budget-test"}),
+))
+def test_existing_negative_rate_limits_remain_readable(
+    response_model: type[BaseModel], identifiers: dict[str, str]
+) -> None:
+    limits: Final = {"rpm_limit": -1, "tpm_limit": -100}
+    response: Final = response_model.model_validate({**identifiers, **limits})
+    assert response.model_dump(include={"rpm_limit", "tpm_limit"}) == limits
+
+
+def test_existing_customer_negative_rate_limits_remain_readable() -> None:
+    customer: Final = LiteLLM_EndUserTable.model_validate({
+        "user_id": "customer-test", "blocked": False,
+        "litellm_budget_table": {"rpm_limit": -1, "tpm_limit": -100},
+    })
+    assert customer.litellm_budget_table is not None
+    assert customer.litellm_budget_table.rpm_limit == -1
+    assert customer.litellm_budget_table.tpm_limit == -100
 
 
 USER_IDENTIFIER_CASES = (

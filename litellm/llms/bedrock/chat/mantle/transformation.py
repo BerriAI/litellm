@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
 from litellm.llms.anthropic.chat.transformation import JsonModeRequest
-from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
 from litellm.llms.bedrock.common_utils import build_mantle_messages_url

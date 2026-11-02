@@ -1,5 +1,6 @@
 "use client";
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Unplug } from "lucide-react";
@@ -132,6 +133,7 @@ function SessionsBody({
   isLoading: boolean;
   onDisconnect: ((selector: MCPGatewaySessionSelector) => void) | null;
 }) {
+  const term = useTerminology();
   if (isLoading) {
     return (
       <div
@@ -156,8 +158,8 @@ function SessionsBody({
     return (
       <div className="rounded-lg border border-dashed border-border bg-card p-12 text-center">
         <p className="text-sm text-muted-foreground">
-          No live MCP connections on this worker (pid {data.worker_pid}). Connect an AI client to the gateway to see it
-          here.
+          No live MCP connections on this worker (pid {data.worker_pid}).{" "}
+          {term("Connect an AI client to the gateway to see it here.")}
         </p>
       </div>
     );
@@ -166,11 +168,11 @@ function SessionsBody({
     <>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard label="Live sessions" value={data.total_sessions} />
-        <StatCard label="AI clients" value={data.by_client.length} />
+        <StatCard label={term("AI clients")} value={data.by_client.length} />
         <StatCard label="Users" value={data.by_user.length} />
       </div>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <GroupCountTable title="Sessions by AI client" labelHeader="Client" groups={data.by_client} />
+        <GroupCountTable title={term("Sessions by AI client")} labelHeader="Client" groups={data.by_client} />
         <GroupCountTable
           title="Sessions by user"
           labelHeader="User"
@@ -257,6 +259,7 @@ interface MCPGatewaySessionsTabProps {
 }
 
 export function MCPGatewaySessionsTab({ accessToken, canTerminate }: MCPGatewaySessionsTabProps) {
+  const term = useTerminology();
   const queryClient = useQueryClient();
   const [pendingSelector, setPendingSelector] = useState<MCPGatewaySessionSelector | null>(null);
   const queryOptions = {
@@ -282,9 +285,9 @@ export function MCPGatewaySessionsTab({ accessToken, canTerminate }: MCPGatewayS
         <div>
           <h2 className="text-base font-semibold text-foreground">Live Connections</h2>
           <p className="text-sm text-muted-foreground">
-            Stateful Streamable HTTP sessions currently open on this proxy worker, grouped by the AI client that sent
-            the MCP initialize request and by the authenticated LiteLLM user. Stateless requests and SSE connections are
-            not counted.
+            {term(
+              "Stateful Streamable HTTP sessions currently open on this proxy worker, grouped by the AI client that sent the MCP initialize request and by the authenticated LiteLLM user. Stateless requests and SSE connections are not counted.",
+            )}
           </p>
         </div>
         <Button

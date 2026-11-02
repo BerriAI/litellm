@@ -1,3 +1,4 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useState } from "react";
 import { ArrowRight, Search } from "lucide-react";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
@@ -11,6 +12,7 @@ interface GuardrailGardenProps {
 }
 
 const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardrailCreated }) => {
+  const term = useTerminology();
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCard, setSelectedCard] = useState<GuardrailCardInfo | null>(null);
   const [showAllLitellm, setShowAllLitellm] = useState(false);
@@ -22,7 +24,7 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
     const q = searchQuery.toLowerCase();
     return (
       card.name.toLowerCase().includes(q) ||
-      card.description.toLowerCase().includes(q) ||
+      term(card.description).toLowerCase().includes(q) ||
       card.tags.some((t) => t.toLowerCase().includes(q))
     );
   });
@@ -106,7 +108,7 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
           Partner Guardrails
         </h2>
         <p className="mt-1 mb-5 text-[13px] text-muted-foreground">
-          Third-party guardrail integrations from leading AI security providers.
+          {term("Third-party guardrail integrations from leading AI security providers.")}
         </p>
         <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4">
           {partnerCards.map((card) => (

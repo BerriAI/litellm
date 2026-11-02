@@ -32,11 +32,11 @@ Usage:
 
     # Create a managed agent on the provider side
     result = litellm.interactions.agents.create(
-        name="waverunner",
+        id="waverunner",
         custom_llm_provider="gemini",
         api_key="...",
-        base_agent="gemini-2.5-flash",
-        instructions="You are a helpful assistant.",
+        base_agent="antigravity-preview-09-2026",
+        system_instruction="You are a helpful assistant.",
     )
 
 Methods:
