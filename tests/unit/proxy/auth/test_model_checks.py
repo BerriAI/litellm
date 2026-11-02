@@ -567,18 +567,21 @@ def test_hosted_vllm_wildcard_listing_sends_the_deployment_extra_headers(monkeyp
     assert listed == ["hosted_vllm/qwen2.5"]
 
 
+_SELF_SIGNED_CERT_NOT_VALID_BEFORE: Final = datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)
+_SELF_SIGNED_CERT_NOT_VALID_AFTER: Final = datetime.datetime(9999, 12, 31, tzinfo=datetime.UTC)
+
+
 def _self_signed_cert(directory: Path) -> tuple[Path, Path]:
     key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
-    now: Final = datetime.datetime.now(datetime.UTC)
     cert: Final = (
         x509.CertificateBuilder()
         .subject_name(name)
         .issuer_name(name)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(days=1))
-        .not_valid_after(now + datetime.timedelta(days=1))
+        .not_valid_before(_SELF_SIGNED_CERT_NOT_VALID_BEFORE)
+        .not_valid_after(_SELF_SIGNED_CERT_NOT_VALID_AFTER)
         .add_extension(
             x509.SubjectAlternativeName([x509.IPAddress(ipaddress.IPv4Address("127.0.0.1"))]), critical=False
         )
