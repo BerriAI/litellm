@@ -588,6 +588,7 @@ def test_v1_model_info_asks_a_wildcard_server_only_for_keys_that_can_call_it(
     from litellm.proxy._types import LitellmUserRoles
 
     wildcard_server: Final = f"http://vllm-{request.node.callspec.id}.test:8000/v1"
+    other_alias_server: Final = f"http://vllm-secure-{request.node.callspec.id}.test:8000/v1"
     monkeypatch.setattr(litellm, "check_provider_endpoint", True)
     router: Final = litellm.Router(
         model_list=[
@@ -596,6 +597,10 @@ def test_v1_model_info_asks_a_wildcard_server_only_for_keys_that_can_call_it(
                 "litellm_params": {"model": "hosted_vllm/qwen2.5", "api_base": "http://vllm-open.test:8000/v1"},
             },
             {"model_name": "hosted_vllm/*", "litellm_params": {"model": "hosted_vllm/*", "api_base": wildcard_server}},
+            {
+                "model_name": "vllm-secure/*",
+                "litellm_params": {"model": "hosted_vllm/*", "api_base": other_alias_server},
+            },
         ]
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
@@ -607,14 +612,18 @@ def test_v1_model_info_asks_a_wildcard_server_only_for_keys_that_can_call_it(
         listing: Final = upstream.get(f"{wildcard_server}/models").mock(
             return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
         )
+        other_alias_listing: Final = upstream.get(f"{other_alias_server}/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+        )
         with auth_as(role=LitellmUserRoles.INTERNAL_USER, models=key_models):
             response: Final = client.get("/v1/model/info")
 
     assert response.status_code == 200, response.text
-    assert ([model["model_name"] for model in response.json()["data"]], listing.call_count) == (
-        expected_names,
-        expected_listings,
-    )
+    assert (
+        [model["model_name"] for model in response.json()["data"]],
+        listing.call_count,
+        other_alias_listing.call_count,
+    ) == (expected_names, expected_listings, 0)
 
 
 # ---------------------------------------------------------------------------
