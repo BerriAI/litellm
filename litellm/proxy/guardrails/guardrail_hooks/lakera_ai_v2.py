@@ -3,7 +3,7 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from itertools import chain
+from itertools import chain, product
 from string import Formatter
 from types import MappingProxyType
 from typing import Final, Literal
@@ -232,6 +232,20 @@ def _unmaskable_reason(
     return None
 
 
+_GEMINI_TOOL_PART_FIELDS: Final = MappingProxyType(
+    {
+        "functionCall": "args",
+        "function_call": "args",
+        "functionResponse": "response",
+        "function_response": "response",
+        "executableCode": "code",
+        "executable_code": "code",
+        "codeExecutionResult": "output",
+        "code_execution_result": "output",
+    }
+)
+
+
 def _gemini_items(value: object) -> Sequence[object]:
     """A repeated Gemini field as a sequence: a JSON array, or the single object Google also accepts in its place."""
     single: Final = as_str_mapping(value)
@@ -247,13 +261,19 @@ def _gemini_text(content: object) -> str:
     return "\n".join(text for text in texts if isinstance(text, str) and text)
 
 
-def _gemini_tool_results(content: object) -> str:
-    """The results one Gemini ``Content`` hands back to the model in its function response parts, as JSON."""
+def _gemini_tool_text(content: object) -> str:
+    """What one Gemini ``Content`` carries in its function call, function response and code execution parts, with
+    structured values as JSON."""
     parts: Final = _gemini_items((as_str_mapping(content) or {}).get("parts"))
-    part_fields: Final = (as_str_mapping(part) or {} for part in parts)
-    responses: Final = (fields.get("functionResponse") or fields.get("function_response") for fields in part_fields)
-    results: Final = ((as_str_mapping(response) or {}).get("response") for response in responses)
-    return "\n".join(json.dumps(result, default=str, ensure_ascii=False) for result in results if result)
+    values: Final = (
+        (as_str_mapping((as_str_mapping(part) or {}).get(part_name)) or {}).get(field)
+        for part, (part_name, field) in product(parts, _GEMINI_TOOL_PART_FIELDS.items())
+    )
+    return "\n".join(
+        value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
+        for value in values
+        if value
+    )
 
 
 def _has_gemini_contents(data: object, call_type: str | None) -> bool:
@@ -274,15 +294,15 @@ def _has_gemini_contents(data: object, call_type: str | None) -> bool:
 def _gemini_inspection_messages(data: Mapping[str, object], call_type: str | None) -> Sequence[Mapping[str, str]]:
     """Chat-style messages for a Gemini ``generateContent`` body on a pass-through or Google ``generateContent``
     call: ``systemInstruction`` first as a system message, then each ``contents`` turn with its text parts joined and
-    ``model`` read as ``assistant``, followed by a tool message with the function results it carries. Turns with no
-    text are dropped."""
+    ``model`` read as ``assistant``, followed by a tool message with the tool parts it carries. Turns with no text
+    are dropped."""
     if not _has_gemini_contents(data, call_type):
         return []
     system_text: Final = _gemini_text(data.get("systemInstruction") or data.get("system_instruction"))
     turns: Final = chain.from_iterable(
         (
             {"role": _GEMINI_ROLES.get(str(content.get("role") or "user"), "user"), "content": _gemini_text(content)},
-            {"role": "tool", "content": _gemini_tool_results(content)},
+            {"role": "tool", "content": _gemini_tool_text(content)},
         )
         for content in map(as_str_mapping, _gemini_items(data.get("contents")))
         if content is not None
