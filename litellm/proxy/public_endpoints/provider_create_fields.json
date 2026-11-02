@@ -488,7 +488,7 @@
         "key": "api_base",
         "label": "Upstream API Base",
         "placeholder": "https://api.anthropic.com",
-        "tooltip": "Optional. Where the proxy forwards requests upstream. Leave blank to use Anthropic's public API. Set this only for private Anthropic deployments or reverse proxies. Do NOT set this to your LiteLLM proxy URL \u2014 that causes a recursive loop.",
+        "tooltip": "Optional. Where the proxy forwards requests upstream. Leave blank to use Anthropic's public API. Set this only for private Anthropic deployments or reverse proxies. Do NOT set this to your LiteLLM proxy URL — that causes a recursive loop.",
         "required": false,
         "field_type": "text",
         "options": null,
@@ -2455,10 +2455,7 @@
         "tooltip": "jwt_bearer_obo: on-behalf-of with the JWT bearer grant (Microsoft Entra). rfc8693: standard OAuth 2.0 token exchange.",
         "required": false,
         "field_type": "select",
-        "options": [
-          "jwt_bearer_obo",
-          "rfc8693"
-        ],
+        "options": ["jwt_bearer_obo", "rfc8693"],
         "default_value": "jwt_bearer_obo"
       },
       {
