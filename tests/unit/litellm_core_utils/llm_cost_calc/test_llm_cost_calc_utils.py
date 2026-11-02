@@ -324,18 +324,15 @@ def test_reasoning_tokens_gemini(_local_model_cost_map):
     )
 
 
-def test_image_tokens_with_custom_pricing():
+def test_image_tokens_with_custom_pricing() -> None:
     """Test that image_tokens in completion are properly costed with output_cost_per_image_token."""
-    from unittest.mock import patch
-
-    # Mock model info with image token pricing
-    mock_model_info = {
+    model_info: Final = {
         "input_cost_per_token": 1e-6,
         "output_cost_per_token": 2e-6,
         "output_cost_per_image_token": 5e-6,  # Custom pricing for image tokens in output
     }
 
-    usage = Usage(
+    usage: Final = Usage(
         completion_tokens=1720,  # text_tokens (600) + image_tokens (1120)
         prompt_tokens=14,
         total_tokens=1734,
@@ -352,36 +349,32 @@ def test_image_tokens_with_custom_pricing():
         ),
     )
 
-    with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
-        return_value=mock_model_info,
-    ):
-        prompt_cost, completion_cost = generic_cost_per_token(
-            model="test-model", usage=usage, custom_llm_provider="gemini"
-        )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="test-model",
+        usage=usage,
+        custom_llm_provider="gemini",
+        model_info=cast(ModelInfo, model_info),
+    )
 
     # Expected costs:
     # Prompt: 14 * 1e-6
     # Completion: (600 * 2e-6) + (1120 * 5e-6)
-    expected_prompt_cost = 14 * 1e-6
-    expected_completion_cost = (600 * 2e-6) + (1120 * 5e-6)
+    expected_prompt_cost: Final = 14 * 1e-6
+    expected_completion_cost: Final = (600 * 2e-6) + (1120 * 5e-6)
 
     assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
 
 
-def test_image_tokens_fallback_to_base_cost():
+def test_image_tokens_fallback_to_base_cost() -> None:
     """Test that image_tokens fall back to base cost when output_cost_per_image_token is not set."""
-    from unittest.mock import patch
-
-    # Mock model info without image token pricing
-    mock_model_info = {
+    model_info: Final = {
         "input_cost_per_token": 1e-6,
         "output_cost_per_token": 2e-6,
         # No output_cost_per_image_token defined
     }
 
-    usage = Usage(
+    usage: Final = Usage(
         completion_tokens=1720,
         prompt_tokens=14,
         total_tokens=1734,
@@ -398,19 +391,18 @@ def test_image_tokens_fallback_to_base_cost():
         ),
     )
 
-    with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
-        return_value=mock_model_info,
-    ):
-        prompt_cost, completion_cost = generic_cost_per_token(
-            model="test-model", usage=usage, custom_llm_provider="gemini"
-        )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="test-model",
+        usage=usage,
+        custom_llm_provider="gemini",
+        model_info=cast(ModelInfo, model_info),
+    )
 
     # Expected costs:
     # Prompt: 14 * 1e-6
     # Completion: (600 * 2e-6) + (1120 * 2e-6)  # image_tokens use base cost
-    expected_prompt_cost = 14 * 1e-6
-    expected_completion_cost = (600 * 2e-6) + (1120 * 2e-6)
+    expected_prompt_cost: Final = 14 * 1e-6
+    expected_completion_cost: Final = (600 * 2e-6) + (1120 * 2e-6)
 
     assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
@@ -441,16 +433,14 @@ def test_video_input_tokens_gemini_omni_flash_preview(_local_model_cost_map):
     )
 
 
-def test_video_tokens_fallback_to_base_cost():
+def test_video_tokens_fallback_to_base_cost() -> None:
     """Video output tokens fall back to the base output rate when output_cost_per_video_token is not set."""
-    from unittest.mock import patch
-
-    mock_model_info = {
+    model_info: Final = {
         "input_cost_per_token": 1e-6,
         "output_cost_per_token": 2e-6,
     }
 
-    usage = Usage(
+    usage: Final = Usage(
         completion_tokens=1720,
         prompt_tokens=14,
         total_tokens=1734,
@@ -461,30 +451,27 @@ def test_video_tokens_fallback_to_base_cost():
         prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=14),
     )
 
-    with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
-        return_value=mock_model_info,
-    ):
-        prompt_cost, completion_cost = generic_cost_per_token(
-            model="test-model", usage=usage, custom_llm_provider="gemini"
-        )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="test-model",
+        usage=usage,
+        custom_llm_provider="gemini",
+        model_info=cast(ModelInfo, model_info),
+    )
 
     assert round(prompt_cost, 12) == round(14 * 1e-6, 12)
     assert round(completion_cost, 12) == round((600 + 1120) * 2e-6, 12)
 
 
-def test_prompt_audio_and_video_tokens_without_modality_rates_bill_at_tiered_input_rate():
+def test_prompt_audio_and_video_tokens_without_modality_rates_bill_at_tiered_input_rate() -> None:
     """Prompt audio/video tokens with no modality rate are prompt tokens, so a >200k prompt bills them above-200k."""
-    from unittest.mock import patch
-
-    mock_model_info = {
+    model_info: Final = {
         "input_cost_per_token": 2e-6,
         "input_cost_per_token_above_200k_tokens": 4e-6,
         "output_cost_per_token": 1.2e-5,
         "output_cost_per_token_above_200k_tokens": 1.8e-5,
     }
 
-    usage = Usage(
+    usage: Final = Usage(
         prompt_tokens=816032,
         completion_tokens=4559,
         total_tokens=820591,
@@ -492,23 +479,20 @@ def test_prompt_audio_and_video_tokens_without_modality_rates_bill_at_tiered_inp
         completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=4559),
     )
 
-    with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
-        return_value=mock_model_info,
-    ):
-        prompt_cost, completion_cost = generic_cost_per_token(
-            model="test-model", usage=usage, custom_llm_provider="vertex_ai"
-        )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="test-model",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        model_info=cast(ModelInfo, model_info),
+    )
 
     assert round(prompt_cost, 9) == round(816032 * 4e-6, 9)
     assert round(completion_cost, 9) == round(4559 * 1.8e-5, 9)
 
 
-def test_prompt_modality_rates_still_win_over_tiered_input_rate():
+def test_prompt_modality_rates_still_win_over_tiered_input_rate() -> None:
     """An explicit input_cost_per_audio_token / input_cost_per_video_token beats the fallback, even above 200k."""
-    from unittest.mock import patch
-
-    mock_model_info = {
+    model_info: Final = {
         "input_cost_per_token": 2e-6,
         "input_cost_per_token_above_200k_tokens": 4e-6,
         "input_cost_per_audio_token": 3e-6,
@@ -516,7 +500,7 @@ def test_prompt_modality_rates_still_win_over_tiered_input_rate():
         "output_cost_per_token": 1.2e-5,
     }
 
-    usage = Usage(
+    usage: Final = Usage(
         prompt_tokens=300000,
         completion_tokens=10,
         total_tokens=300010,
@@ -524,11 +508,12 @@ def test_prompt_modality_rates_still_win_over_tiered_input_rate():
         completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=10),
     )
 
-    with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
-        return_value=mock_model_info,
-    ):
-        prompt_cost, _ = generic_cost_per_token(model="test-model", usage=usage, custom_llm_provider="vertex_ai")
+    prompt_cost, _ = generic_cost_per_token(
+        model="test-model",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        model_info=cast(ModelInfo, model_info),
+    )
 
     assert round(prompt_cost, 9) == round(100000 * 4e-6 + 100000 * 3e-6 + 100000 * 1e-6, 9)
 
@@ -1748,12 +1733,9 @@ def test_gpt55_dated_variants_match_base_reasoning_effort_capabilities(_local_mo
         )
 
 
-def test_string_cost_values():
+def test_string_cost_values() -> None:
     """Test that cost values defined as strings are properly converted to floats."""
-    from unittest.mock import patch
-
-    # Mock model info with string cost values (as might be read from config.yaml)
-    mock_model_info = {
+    model_info: Final = {
         "input_cost_per_token": "3e-7",  # String representation of scientific notation
         "output_cost_per_token": "6e-7",  # String representation of scientific notation
         "input_cost_per_audio_token": "0.000001",  # String representation of decimal
@@ -1765,7 +1747,7 @@ def test_string_cost_values():
     # Test usage with various token types
     # Note: prompt_tokens must equal sum of details to avoid double-counting adjustment
     # text_tokens(700) + audio_tokens(100) + cached_tokens(200) + cache_creation_tokens(150) = 1150
-    usage = Usage(
+    usage: Final = Usage(
         prompt_tokens=1150,
         completion_tokens=500,
         total_tokens=1650,
@@ -1785,18 +1767,16 @@ def test_string_cost_values():
         ),
     )
 
-    # Mock get_model_info to return our mock model info
-    with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
-        return_value=mock_model_info,
-    ):
-        prompt_cost, completion_cost = generic_cost_per_token(
-            model="test-model", usage=usage, custom_llm_provider="test-provider"
-        )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="test-model",
+        usage=usage,
+        custom_llm_provider="test-provider",
+        model_info=cast(ModelInfo, model_info),
+    )
 
     # Calculate expected costs manually
     # Prompt cost = text_tokens * input_cost + audio_tokens * audio_cost + cached_tokens * cache_read_cost + cache_creation_tokens * cache_creation_cost
-    expected_prompt_cost = (
+    expected_prompt_cost: Final = (
         700 * 3e-7  # text tokens
         + 100 * 1e-6  # audio tokens
         + 200 * 1.5e-8  # cached tokens
@@ -1804,7 +1784,7 @@ def test_string_cost_values():
     )
 
     # Completion cost = text_tokens * output_cost + audio_tokens * audio_output_cost
-    expected_completion_cost = 450 * 6e-7 + 50 * 2e-6  # text tokens  # audio tokens
+    expected_completion_cost: Final = 450 * 6e-7 + 50 * 2e-6  # text tokens  # audio tokens
 
     # Assert costs are calculated correctly
     assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
@@ -1918,19 +1898,17 @@ def test_calculate_cost_component_with_string_values():
     assert cost == 0.0
 
 
-def test_string_cost_values_edge_cases():
+def test_string_cost_values_edge_cases() -> None:
     """Test edge cases for string cost value handling."""
-    from unittest.mock import patch
-
     # Test with mixed string and float cost values
-    mock_model_info = {
+    model_info: Final = {
         "input_cost_per_token": "1e-6",  # String
         "output_cost_per_token": 2e-6,  # Float
         "input_cost_per_audio_token": "invalid",  # Invalid string
         "output_cost_per_audio_token": None,  # None value
     }
 
-    usage = Usage(
+    usage: Final = Usage(
         prompt_tokens=1000,
         completion_tokens=500,
         total_tokens=1500,
@@ -1946,30 +1924,26 @@ def test_string_cost_values_edge_cases():
         ),
     )
 
-    with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
-        return_value=mock_model_info,
-    ):
-        prompt_cost, completion_cost = generic_cost_per_token(
-            model="test-model", usage=usage, custom_llm_provider="test-provider"
-        )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="test-model",
+        usage=usage,
+        custom_llm_provider="test-provider",
+        model_info=cast(ModelInfo, model_info),
+    )
 
     # Expected costs:
     # Prompt: 1000 * 1e-6 + 100 * 0 (invalid string becomes 0)
     # Completion: 500 * 2e-6 + 50 * 2e-6 (audio tokens fall back to base cost when output_cost_per_audio_token is None)
-    expected_prompt_cost = 1000 * 1e-6
-    expected_completion_cost = 500 * 2e-6 + 50 * 2e-6
+    expected_prompt_cost: Final = 1000 * 1e-6
+    expected_completion_cost: Final = 500 * 2e-6 + 50 * 2e-6
 
     assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
 
 
-def test_string_cost_values_with_threshold():
+def test_string_cost_values_with_threshold() -> None:
     """Test that string cost values work correctly with threshold pricing."""
-    from unittest.mock import patch
-
-    # Mock model info with string cost values including threshold pricing
-    mock_model_info = {
+    model_info: Final = {
         "input_cost_per_token": "1e-6",  # String base cost
         "output_cost_per_token": "2e-6",  # String base cost
         "input_cost_per_token_above_200k_tokens": "5e-7",  # String threshold cost (lower)
@@ -1977,23 +1951,22 @@ def test_string_cost_values_with_threshold():
     }
 
     # Test usage above threshold
-    usage = Usage(
+    usage: Final = Usage(
         prompt_tokens=250000,  # Above 200k threshold
         completion_tokens=1000,
         total_tokens=251000,
     )
 
-    with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
-        return_value=mock_model_info,
-    ):
-        prompt_cost, completion_cost = generic_cost_per_token(
-            model="test-model", usage=usage, custom_llm_provider="test-provider"
-        )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="test-model",
+        usage=usage,
+        custom_llm_provider="test-provider",
+        model_info=cast(ModelInfo, model_info),
+    )
 
     # Expected costs using threshold pricing (string values converted to float)
-    expected_prompt_cost = 250000 * 5e-7  # threshold cost
-    expected_completion_cost = 1000 * 1e-6  # threshold cost
+    expected_prompt_cost: Final = 250000 * 5e-7  # threshold cost
+    expected_completion_cost: Final = 1000 * 1e-6  # threshold cost
 
     assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
