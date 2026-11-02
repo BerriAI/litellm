@@ -13742,6 +13742,37 @@ class TestGuardrailResponseHeaders:
             lambda: ",".join(names)
         )
 
+    @pytest.mark.parametrize("control", ["\x01", "\x1f", "\x7f", "\x00", "\n"])
+    def test_guardrail_name_with_a_control_character_stays_out_of_the_header(self, control):
+        assert _guardrail_response_headers({"metadata": {"applied_guardrails": [f"a{control}b"]}}) == {}
+
+    def test_guardrail_name_with_a_latin1_character_and_a_space_stays_in_the_header(self):
+        assert _guardrail_response_headers({"metadata": {"applied_guardrails": ["caf\xe9 guard"]}}) == {
+            "x-litellm-applied-guardrails": "caf\xe9 guard"
+        }
+
+    def test_guardrail_headers_stay_in_budget_across_the_earlier_and_the_final_set(self):
+        final_value: Final = "n" * 8000
+        response_headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            httpx.Headers(),
+            guardrail_request_data=({"metadata": {"applied_guardrails": [final_value]}},),
+            earlier_guardrail_headers={"x-litellm-policy-sources": "s" * 7900, "x-litellm-applied-guardrails": "old"},
+        )
+
+        assert response_headers == {"x-litellm-applied-guardrails": final_value}
+
+    def test_earlier_guardrail_header_within_the_budget_is_kept(self):
+        response_headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            httpx.Headers(),
+            guardrail_request_data=({"metadata": {"applied_guardrails": ["post-call"]}},),
+            earlier_guardrail_headers={"x-litellm-policy-sources": "p=q"},
+        )
+
+        assert response_headers == {
+            "x-litellm-applied-guardrails": "post-call",
+            "x-litellm-policy-sources": "p=q",
+        }
+
     def test_guardrail_headers_past_the_size_budget_are_left_out_so_a_client_can_read_the_response(self):
         names: Final = [f"caller-named-{index}" for index in range(10_000)]
         headers: Final = _guardrail_response_headers(
