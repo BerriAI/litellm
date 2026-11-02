@@ -80,23 +80,26 @@ class _CachedSpendSeed:
 
     started_at: int = 0
     landed_at: int = 0
-    in_flight: asyncio.Task[float | None] | None = None
+    in_flight: asyncio.Future[float | None] | None = None
 
     def on_this_loop(self) -> bool:
         return self.in_flight is None or self.in_flight.get_loop() is asyncio.get_running_loop()
 
-    def start(self, add: Callable[[], Awaitable[float | None]]) -> asyncio.Task[float | None]:
+    async def run(self, add: Callable[[], Awaitable[float | None]]) -> float | None:
+        """Run ``add`` in the calling task, so cancelling that task stops it, and publish its result to the requests
+        waiting on ``in_flight``, which ends cancelled when ``add`` fails or is cancelled."""
+        in_flight: Final[asyncio.Future[float | None]] = asyncio.get_running_loop().create_future()
         self.started_at = spend_counter_tick()
-        in_flight: Final = asyncio.ensure_future(add())
-        in_flight.add_done_callback(self._settle)
         self.in_flight = in_flight
-        return in_flight
-
-    def _settle(self, done: asyncio.Future[float | None]) -> None:
-        if self.in_flight is done:
-            self.in_flight = None
-        if not done.cancelled() and done.exception() is None:
+        try:
+            added: Final = await add()
             self.landed_at = spend_counter_tick()
+            in_flight.set_result(added)
+            return added
+        finally:
+            if self.in_flight is in_flight:
+                self.in_flight = None
+            in_flight.cancel()
 
 
 @functools.lru_cache(maxsize=SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE)
@@ -163,12 +166,12 @@ class SpendCounterReseed:
     ) -> None:
         """Run ``add``, this process adding its cached spend to a cold counter, once for all of this process's
         requests that read the counter cold before that add landed. A request joins an add that started after its read
-        came back and gets its result, and starts or joins another add when that one fails. When an add landed after
-        its read went out, or one that started before its read came back finishes, the request re-reads the counter
-        and adds again only if the counter is gone. A request waits on other requests' adds for at most
-        ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS`` in all and then adds its own. A request on another event loop than
-        the add in flight, one that finds the Redis circuit breaker not closed, and each other process, still add their
-        own cached spend."""
+        came back and gets its result, and starts or joins another add when that one fails or is cancelled. When an add
+        landed after its read went out, or one that started before its read came back finishes, the request re-reads
+        the counter and adds again only if the counter is gone. A request waits on other requests' adds and on a
+        re-read for at most ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS`` in all and then adds its own. A request on another
+        event loop than the add in flight, one that finds the Redis circuit breaker not closed, and each other process,
+        still add their own cached spend."""
         seed: Final = _cached_spend_seed(spend_counter_cache, counter_key)
         loop: Final = asyncio.get_running_loop()
         join_by: Final = loop.time() + SPEND_COUNTER_COLD_SEED_JOIN_SECONDS
@@ -179,17 +182,21 @@ class SpendCounterReseed:
                 return await add()
             if in_flight is None:
                 if seed.landed_at < cold.sent_at:
-                    return await asyncio.shield(seed.start(add))
+                    return await seed.run(add)
                 forget_spend_counter(counter_key)
                 sent_at: Final = spend_counter_tick()
-                if await is_warm():
+                try:
+                    warm: Final = await asyncio.wait_for(is_warm(), timeout=max(0.0, join_by - loop.time()))
+                except asyncio.TimeoutError:
+                    return await seed.run(add)
+                if warm:
                     return None
                 return await add_unless_covered(SpendCounterRead(sent_at=sent_at, returned_at=spend_counter_tick()))
             covers: Final = seed.started_at > cold.returned_at
             await asyncio.wait((in_flight,), timeout=max(0.0, join_by - loop.time()))
             if not in_flight.done():
-                return await asyncio.shield(seed.start(add))
-            if covers and not in_flight.cancelled() and in_flight.exception() is None:
+                return await seed.run(add)
+            if covers and not in_flight.cancelled():
                 return in_flight.result()
             return await add_unless_covered(cold)
 

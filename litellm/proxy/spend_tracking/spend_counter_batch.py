@@ -40,7 +40,7 @@ class SpendCounterRead:
 
 
 _NO_READS: Final[Mapping[str, SpendCounterRead]] = MappingProxyType({})
-_PendingMGet: TypeAlias = tuple[BatchResult[Mapping[str, object]], int, "asyncio.Future[int]"]
+_PendingMGet: TypeAlias = tuple[BatchResult[Mapping[str, object]], int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,25 +157,18 @@ class SpendCounterBatch:
             sent_at: Final = spend_counter_tick()
             with service_target(SPEND_COUNTERS_TARGET):
                 read: Final = self._request_batch.mget(sorted(pending))
-            returned_at: Final[asyncio.Future[int]] = asyncio.get_running_loop().create_future()
-            read.on_settled(lambda _: returned_at.set_result(spend_counter_tick()))
-            self._inflight.append((read, sent_at, returned_at))
+            self._inflight.append((read, sent_at))
 
     async def _collect_inflight(self) -> None:
         reads: Final = tuple(self._inflight)
         self._inflight.clear()
-        for read, sent_at, returned_at in reads:
+        for read, sent_at in reads:
             try:
                 fetched: Mapping[str, float | None] = _CounterValues.validate_python(await read)
             except Exception as e:  # noqa: BLE001  # per-key reads take over and apply their own Redis fallback
                 verbose_proxy_logger.debug("spend counter batch read failed, falling back to per-key reads: %s", e)
                 continue
-            self._merge(
-                fetched,
-                SpendCounterRead(
-                    sent_at=sent_at, returned_at=returned_at.result() if returned_at.done() else spend_counter_tick()
-                ),
-            )
+            self._merge(fetched, SpendCounterRead(sent_at=sent_at, returned_at=spend_counter_tick()))
 
     async def _fetch(self, keys: frozenset[str]) -> Mapping[str, float | None]:
         try:
@@ -194,12 +187,14 @@ def active_spend_counter_batch() -> SpendCounterBatch | None:
     return _active_batch.get()
 
 
-def spend_counter_read(counter_key: str, sent_at: int) -> SpendCounterRead:
-    """When this context's last read of the counter went out and came back: the open batch's MGET for it, else a read
-    that went out at ``sent_at`` and came back now."""
+def spend_counter_read(counter_key: str) -> SpendCounterRead:
+    """When this context's read of the counter went out and came back: the open batch's MGET for it, else now."""
     batch: Final = _active_batch.get()
     batched: Final = batch.counter_read(counter_key) if batch is not None else None
-    return batched if batched is not None else SpendCounterRead(sent_at=sent_at, returned_at=spend_counter_tick())
+    if batched is not None:
+        return batched
+    now: Final = spend_counter_tick()
+    return SpendCounterRead(sent_at=now, returned_at=now)
 
 
 class spend_counter_batch_scope:
