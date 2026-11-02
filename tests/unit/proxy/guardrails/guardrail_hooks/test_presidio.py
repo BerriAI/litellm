@@ -26,14 +26,25 @@ import litellm
 from litellm import mock_completion
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     OPTIONAL_PresidioPIIMasking,
     PresidioPerRequestConfig,
 )
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import PresidioAnalyzeRequest, PresidioAnalyzeResponseItem
-from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Choices,
+    Delta,
+    Function,
+    Message,
+    ModelResponse,
+    StreamingChoices,
+)
 
 
 def _make_mock_session_iterator(json_response, status=200, content_type="application/json", text_response=""):
@@ -696,7 +707,7 @@ async def test_presidio_sets_guardrail_information_in_request_data():
         "metadata": {},
     }
 
-    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data, reserved_tokens=frozenset()):
         assert request_data is not None
 
         presidio.add_standard_logging_guardrail_information_to_request_data(
@@ -754,7 +765,7 @@ async def test_request_data_flows_to_apply_guardrail():
         "metadata": {},
     }
 
-    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data, reserved_tokens=frozenset()):
         assert request_data is not None, "request_data should be passed to check_pii"
         assert "metadata" in request_data, "request_data should have metadata"
 
@@ -2336,7 +2347,7 @@ async def test_standalone_scans_without_restoration_tokens(input_type: Literal["
         mock_testing=True,
     )
 
-    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data, reserved_tokens=frozenset()):
         return text.replace("John Smith", "<PERSON>")
 
     guardrail.check_pii = mock_check_pii
@@ -5438,3 +5449,294 @@ def test_get_session_iterator_reuses_one_session_per_background_loop(
     assert len(sessions) == 10
     assert all(session is sessions[0] for session in sessions)
     assert presidio_guardrail._http_session is None
+
+def _function_tool_call(call_id: str, arguments: str) -> dict:
+    return {"id": call_id, "type": "function", "function": {"name": "lookup", "arguments": arguments}}
+
+
+def _tool_call_response(arguments: str) -> ModelResponse:
+    return ModelResponse(
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="call_1", type="function", function=Function(name="lookup", arguments=arguments)
+                        )
+                    ],
+                )
+            )
+        ]
+    )
+
+
+_UNQUOTED_PERSON_NAME: Final = re.compile(r'(?<!")\b[A-Z][a-z]+ [A-Z][a-z]+\b(?!")')
+
+
+async def _analyze_names_outside_json_quotes(request: web.Request) -> web.Response:
+    payload = await request.json()
+    return web.json_response(
+        [
+            {"entity_type": "PERSON", "start": match.start(), "end": match.end(), "score": 0.85}
+            for match in _UNQUOTED_PERSON_NAME.finditer(payload["text"])
+        ]
+    )
+
+
+def _json_blind_presidio_app() -> web.Application:
+    app = web.Application()
+    app.router.add_post("/analyze", _analyze_names_outside_json_quotes)
+    app.router.add_post("/anonymize", _fake_anonymize)
+    return app
+
+
+@asynccontextmanager
+async def _reversible_presidio_guardrail(
+    presidio_app: web.Application | None = None,
+) -> AsyncIterator[OPTIONAL_PresidioPIIMasking]:
+    async with TestServer(presidio_app or _fake_presidio_app()) as server:
+        guardrail: Final = OPTIONAL_PresidioPIIMasking(
+            presidio_analyzer_api_base=str(server.make_url("/")),
+            presidio_anonymizer_api_base=str(server.make_url("/")),
+            output_parse_pii=True,
+            pii_entities_config={PiiEntityType.PERSON: PiiAction.MASK},
+        )
+        yield guardrail
+        await guardrail._close_http_session()
+
+
+async def _masked_chat_request(guardrail: OPTIONAL_PresidioPIIMasking, messages: Sequence[dict]) -> dict:
+    data: Final = {"model": "claude-fable-5-1", "messages": copy.deepcopy(list(messages))}
+    await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+    return data
+
+
+async def _masked_anthropic_request(guardrail: OPTIONAL_PresidioPIIMasking, messages: Sequence[dict]) -> dict:
+    data: Final = {"model": "claude-fable-5-1", "max_tokens": 64, "messages": copy.deepcopy(list(messages))}
+    await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+    return data
+
+
+async def test_restore_writes_the_original_values_into_non_streaming_tool_call_arguments() -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        event_hook="pre_call", default_on=True, output_parse_pii=True, mock_testing=True
+    )
+    response: Final = _tool_call_response('{"guest": "<PERSON_1>"}')
+    data: Final = {"metadata": {"pii_tokens": {"<PERSON_1>": "Jane Doe"}}, "guardrail_to_apply": guardrail}
+
+    await UnifiedLLMGuardrails().async_post_call_success_hook(
+        data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
+    )
+
+    assert response.choices[0].message.tool_calls[0].function.arguments == '{"guest": "Jane Doe"}'
+
+
+async def test_restore_escapes_original_values_so_tool_call_arguments_stay_valid_json() -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        event_hook="pre_call", default_on=True, output_parse_pii=True, mock_testing=True
+    )
+    original: Final = 'Apt "B"\nFloor 2'
+    response: Final = _tool_call_response('{"address": "<LOCATION_1>"}')
+    data: Final = {"metadata": {"pii_tokens": {"<LOCATION_1>": original}}, "guardrail_to_apply": guardrail}
+
+    await UnifiedLLMGuardrails().async_post_call_success_hook(
+        data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
+    )
+
+    assert json.loads(response.choices[0].message.tool_calls[0].function.arguments) == {"address": original}
+
+
+async def test_names_inside_json_tool_call_arguments_are_masked_even_when_the_analyzer_needs_bare_text() -> None:
+    async with _reversible_presidio_guardrail(_json_blind_presidio_app()) as guardrail:
+        data: Final = await _masked_chat_request(
+            guardrail,
+            [{"role": "assistant", "content": None, "tool_calls": [_function_tool_call("call_1", '{"guest": "Jane Doe"}')]}],
+        )
+
+    masked: Final = json.loads(data["messages"][0]["tool_calls"][0]["function"]["arguments"])
+    pii_tokens: Final = data.get("metadata", {}).get("pii_tokens", {})
+    assert pii_tokens.get(masked["guest"]) == "Jane Doe", f"masked arguments {masked} against token map {pii_tokens}"
+
+
+async def test_tool_call_arguments_without_pii_reach_the_model_byte_for_byte() -> None:
+    arguments: Final = '{"city":"Boston","days":[1,2]}'
+    async with _reversible_presidio_guardrail() as guardrail:
+        data: Final = await _masked_chat_request(
+            guardrail,
+            [
+                {"role": "user", "content": "Plan a trip for Jane Doe."},
+                {"role": "assistant", "content": None, "tool_calls": [_function_tool_call("call_1", arguments)]},
+            ],
+        )
+
+    assert data["messages"][0]["content"] != "Plan a trip for Jane Doe.", data["messages"][0]
+    assert data["messages"][1]["tool_calls"][0]["function"]["arguments"] == arguments
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        pytest.param("call Jane Doe back", id="not-json"),
+        pytest.param('"Jane Doe"', id="json-string"),
+    ],
+)
+async def test_tool_call_arguments_that_are_not_a_json_object_are_still_masked_and_restored(arguments: str) -> None:
+    async with _reversible_presidio_guardrail() as guardrail:
+        data: Final = await _masked_chat_request(
+            guardrail,
+            [{"role": "assistant", "content": None, "tool_calls": [_function_tool_call("call_1", arguments)]}],
+        )
+
+    masked: Final = data["messages"][0]["tool_calls"][0]["function"]["arguments"]
+    assert "Jane Doe" not in masked, masked
+    assert OPTIONAL_PresidioPIIMasking._unmask_pii_text(masked, data["metadata"]["pii_tokens"]) == arguments, masked
+
+
+async def test_a_tool_call_without_string_arguments_passes_through_beside_masked_text() -> None:
+    tool_call: Final = {"id": "call_1", "type": "function", "function": {"name": "lookup"}}
+    async with _reversible_presidio_guardrail() as guardrail:
+        data: Final = await _masked_chat_request(
+            guardrail,
+            [
+                {"role": "user", "content": "Book for Jane Doe."},
+                {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            ],
+        )
+
+    assert "Jane Doe" not in data["messages"][0]["content"], data["messages"][0]
+    assert data["messages"][1]["tool_calls"] == [tool_call]
+
+
+async def test_apply_guardrail_restores_the_arguments_of_tool_call_objects() -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        event_hook="pre_call", default_on=True, output_parse_pii=True, mock_testing=True
+    )
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1", type="function", function=Function(name="lookup", arguments='{"guest": "<PERSON_1>"}')
+    )
+
+    await guardrail.apply_guardrail(
+        inputs={"texts": [], "tool_calls": [tool_call]},
+        request_data={"metadata": {"pii_tokens": {"<PERSON_1>": "Jane Doe"}}},
+        input_type="response",
+    )
+
+    assert tool_call.function.arguments == '{"guest": "Jane Doe"}'
+
+
+async def test_output_masking_masks_non_streaming_tool_call_arguments() -> None:
+    async with TestServer(_fake_presidio_app()) as server:
+        guardrail: Final = OPTIONAL_PresidioPIIMasking(
+            presidio_analyzer_api_base=str(server.make_url("/")),
+            presidio_anonymizer_api_base=str(server.make_url("/")),
+            apply_to_output=True,
+            event_hook="post_call",
+            default_on=True,
+            pii_entities_config={PiiEntityType.PERSON: PiiAction.MASK},
+        )
+        response: Final = _tool_call_response('{"guest": "Jane Doe"}')
+        await UnifiedLLMGuardrails().async_post_call_success_hook(
+            {"metadata": {}, "guardrail_to_apply": guardrail},
+            UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            response,
+        )
+        await guardrail._close_http_session()
+
+    assert response.choices[0].message.tool_calls[0].function.arguments == '{"guest": "<PERSON>"}'
+
+
+async def test_history_tool_call_arguments_reach_the_model_masked_and_restore_to_the_original() -> None:
+    messages: Final = [
+        {"role": "user", "content": "Book a table for Jane Doe."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_function_tool_call("call_1", '{"guest": "Jane Doe", "host": "John Smith"}')],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "Booked."},
+    ]
+    async with _reversible_presidio_guardrail() as guardrail:
+        data: Final = await _masked_chat_request(guardrail, messages)
+
+    masked: Final = json.loads(data["messages"][1]["tool_calls"][0]["function"]["arguments"])
+    pii_tokens: Final = data["metadata"]["pii_tokens"]
+    assert {key: pii_tokens.get(token) for key, token in masked.items()} == {
+        "guest": "Jane Doe",
+        "host": "John Smith",
+    }, f"masked arguments {masked} against token map {pii_tokens}"
+
+
+async def test_masking_history_tool_call_arguments_replays_a_byte_identical_prefix_across_turns() -> None:
+    earlier: Final = [
+        {"role": "user", "content": "My name is John Smith."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_function_tool_call("call_1", '{"name": "Alice Brown"}')],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "Found one match."},
+    ]
+    later: Final = [
+        *earlier,
+        {"role": "assistant", "content": "Noted."},
+        {"role": "user", "content": "Now add Bob Jones."},
+    ]
+    async with _reversible_presidio_guardrail() as guardrail:
+        first: Final = await _masked_chat_request(guardrail, earlier)
+        second: Final = await _masked_chat_request(guardrail, later)
+
+    assert "Alice Brown" not in json.dumps(first["messages"]), first["messages"]
+    assert second["messages"][: len(earlier)] == first["messages"]
+
+
+async def test_masking_anthropic_tool_use_input_replays_a_byte_identical_prefix_across_turns() -> None:
+    earlier: Final = [
+        {"role": "user", "content": "My name is John Smith."},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {"name": "Alice Brown"}}],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "Found one match."}]},
+    ]
+    later: Final = [
+        *earlier,
+        {"role": "assistant", "content": "Noted."},
+        {"role": "user", "content": "Now add Bob Jones."},
+    ]
+    async with _reversible_presidio_guardrail() as guardrail:
+        first: Final = await _masked_anthropic_request(guardrail, earlier)
+        second: Final = await _masked_anthropic_request(guardrail, later)
+
+    assert "Alice Brown" not in json.dumps(first["messages"]), first["messages"]
+    assert second["messages"][: len(earlier)] == first["messages"]
+
+
+@pytest.mark.parametrize(
+    ("contents", "literals"),
+    [
+        pytest.param(
+            ("The guest was <PERSON_1>.", "Book for Jane Doe."), ("<PERSON_1>",), id="literal-in-an-earlier-message"
+        ),
+        pytest.param(("Ask <PERSON_1> about Jane Doe.",), ("<PERSON_1>",), id="literal-beside-the-value"),
+        pytest.param(
+            ("Seen <PERSON_1> and <PERSON_2>.", "Book for Jane Doe.", "Add John Smith."),
+            ("<PERSON_1>", "<PERSON_2>"),
+            id="spare-skips-reserved-and-held-tokens",
+        ),
+    ],
+)
+async def test_a_token_the_request_already_carries_is_never_assigned_to_another_value(
+    contents: tuple[str, ...], literals: tuple[str, ...]
+) -> None:
+    async with _reversible_presidio_guardrail() as guardrail:
+        data: Final = await _masked_chat_request(
+            guardrail, [{"role": "user", "content": content} for content in contents]
+        )
+
+    masked: Final = tuple(message["content"] for message in data["messages"])
+    pii_tokens: Final = data["metadata"]["pii_tokens"]
+    assert "Jane Doe" not in " ".join(masked), masked
+    assert set(literals).isdisjoint(pii_tokens), pii_tokens
+    assert tuple(OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, pii_tokens) for text in masked) == contents, masked
