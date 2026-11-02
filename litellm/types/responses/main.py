@@ -4,6 +4,7 @@ from typing import Final, Literal, Optional, Union
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_function_web_search import ActionSearchSource, ResponseFunctionWebSearch
+from openai.types.responses.response_output_refusal import ResponseOutputRefusal
 from pydantic import ConfigDict, PrivateAttr
 from typing_extensions import Required, TypedDict
 
@@ -168,7 +169,7 @@ class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     id: str
     status: str  # "completed", "in_progress", etc.
     role: str  # "assistant", "user", etc.
-    content: list[OutputText]
+    content: list[OutputText | ResponseOutputRefusal]
     phase: Phase = None
 
 

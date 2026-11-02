@@ -3291,7 +3291,7 @@ def _fallback_edges(
     and its provider-stripped suffix, plus the router matcher run over the fuzzy
     entries that have not fired yet (tracked in ``fired_fuzzy`` by
     ``(list_index, entry_index)``), so each entry's targets are expanded once."""
-    from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+    from litellm.router_api import fallback_chain
 
     stripped: Final = model_group.split("/", 1)[1] if "/" in model_group else None
     targets: Final[set[str]] = set()  # mutable-ok: accumulates fallback targets
@@ -3302,7 +3302,7 @@ def _fallback_edges(
         pending = tuple(index for index in range(len(fuzzy)) if (list_index, index) not in fired_fuzzy)
         if not pending:
             continue
-        resolved = get_fallback_model_group(fallbacks=[fuzzy[index] for index in pending], model_group=model_group)[0]
+        resolved = fallback_chain([fuzzy[index] for index in pending], model_group)[0]
         values = resolved if isinstance(resolved, list) else ([resolved] if resolved is not None else [])
         targets.update(name for value in values if (name := _fallback_target_name(value)) is not None)
         if resolved is not None:
@@ -3489,7 +3489,7 @@ async def _resolve_user_provider_credentials_for_request(
             status_code=400,
             detail=(f"fallback lists in the request body cannot exceed {_FALLBACK_DISCOVERY_LIMIT} entries"),
         )
-    from litellm.router_utils.common_utils import resolve_model_group_alias
+    from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 
     # Discovery must see the group the router actually routes to, so include the
     # post-alias name from every alias map that may still rewrite data["model"]

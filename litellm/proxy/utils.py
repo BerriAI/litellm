@@ -160,10 +160,17 @@ from litellm.litellm_core_utils.core_helpers import (
     independent_snapshot,
     is_expected_client_error,
 )
+from litellm.litellm_core_utils.deployment_pricing import pricing_models
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
-from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, Logging, deployment_pricing_model_info
+from litellm.litellm_core_utils.litellm_logging import (
+    BilledRoundsDispatch,
+    Logging,
+    UsageObservation,
+    deployment_pricing_model_info,
+)
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
@@ -278,8 +285,6 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
-from litellm.router_utils.common_utils import resolve_model_group_alias
-from litellm.router_utils.deployment_pricing import pricing_models
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -744,6 +749,88 @@ def _request_steps_that_have_not_run(data: Mapping[str, object]) -> frozenset[st
     """Pre_call policy pipeline steps a pipeline skipped, whose guardrail nothing else ran or runs for this request."""
     pre_call: Final = pipeline_managed_guardrail_names(data, "pre_call")
     return frozenset(name for name in pre_call if _runs_only_in_pipelines(name, data, pre_call, frozenset()))
+
+
+def _steps_that_ran(result: PipelineExecutionResult) -> frozenset[str]:
+    return frozenset(step.guardrail_name for step in result.step_results if step.outcome != "skip")
+
+
+def _whole_response_log_waits_for_its_pipelines(data: Mapping[str, object], call_type: str) -> bool:
+    """
+    The success log is parked until the response hooks finish, and the headers are built
+    after them. The LLM pass-through route builds its headers first, and the generateContent
+    adapter logs its nested completion before the response hooks run.
+    """
+    logging_obj: Final = data.get("litellm_logging_obj")
+    return (
+        call_type not in (CallTypes.allm_passthrough_route.value, CallTypes.agenerate_content.value)
+        and isinstance(logging_obj, Logging)
+        and logging_obj.enqueue_deferred_logging is not None
+    )
+
+
+def _stream_log_waits_for_its_pipelines(data: Mapping[str, object]) -> bool:
+    return getattr(data.get("litellm_logging_obj"), "_on_deferred_stream_complete", None) is not None
+
+
+def _pipelines_settled_by(
+    pipelines: Sequence[tuple[str, "GuardrailPipeline"]], index: int, result: PipelineExecutionResult
+) -> Sequence[tuple[str, "GuardrailPipeline"]]:
+    """This pipeline, plus every later response pipeline when its verdict ends the request before they run."""
+    if result.terminal_action == "allow":
+        return pipelines[index : index + 1]
+    return (
+        pipelines[index],
+        *((policy_name, pipeline) for policy_name, pipeline in pipelines[index + 1 :] if pipeline.mode == "post_call"),
+    )
+
+
+def _steps_later_pipelines_still_run(
+    pipelines: Sequence[tuple[str, "GuardrailPipeline"]], index: int, result: PipelineExecutionResult
+) -> frozenset[str]:
+    """The steps of the later response pipelines, which still run when this pipeline's verdict lets the request on."""
+    if result.terminal_action != "allow":
+        return frozenset()
+    later: Final = tuple(
+        (policy_name, pipeline) for policy_name, pipeline in pipelines[index + 1 :] if pipeline.mode == "post_call"
+    )
+    return _pipeline_step_guardrail_names(later)
+
+
+def _drop_response_steps_that_did_not_run(
+    data: dict[str, object],  # mutable-ok: the request's applied guardrails are trimmed in place
+    pipelines: Sequence[tuple[str, "GuardrailPipeline"]],
+    steps_to_keep: frozenset[str],
+) -> None:
+    """
+    Drop from the applied guardrails the steps of these response pipelines outside ``steps_to_keep``,
+    unless their guardrail also runs outside pipelines. Every step is named up front, so a
+    log built before the pipeline finished, such as a cache hit's, still lists the steps
+    that ran. The list is trimmed in place, since a route's logging object may hold a
+    shallow copy of the metadata.
+    """
+    pre_call: Final = pipeline_managed_guardrail_names(data, "pre_call")
+    post_call: Final = _pipeline_step_guardrail_names(pipelines)
+    not_run: Final = frozenset(
+        name for name in post_call - steps_to_keep if _runs_only_in_pipelines(name, data, pre_call, post_call)
+    )
+    if not not_run:
+        return
+    for bucket_key in ("metadata", "litellm_metadata"):
+        _drop_applied_guardrails_in_place(data.get(bucket_key), not_run)
+
+
+def _drop_applied_guardrails_in_place(bucket: object, names: frozenset[str]) -> None:
+    if not isinstance(bucket, dict):
+        return
+    metadata: Final = cast("dict[str, object]", bucket)  # cast-ok: metadata buckets are str-keyed
+    applied: Final = metadata.get("applied_guardrails")
+    if not isinstance(applied, list):
+        return
+    entries: Final = cast("list[object]", applied)  # cast-ok: entries are only compared with names
+    entries[:] = [name for name in entries if name not in names]
+    if not entries:
+        metadata.pop("applied_guardrails")
 
 
 def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple[CustomLogger, ...]]:
@@ -1657,6 +1744,39 @@ def _failure_fields_to_lift(
         if _prompt_estimate is not None
         else ()
     )
+    from litellm.litellm_core_utils.litellm_logging import UsageCaptureObservation
+
+    _recorded_observation: Final[object] = _model_call_details.get("_accounting_usage_observed")
+    _current_usage: Final = (
+        _current_failure_usage_to_lift(
+            _model_call_details,
+            request_data,
+            _model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
+            _billed,
+            _deployment_id,
+            _base_model,
+            dispatched_call_type,
+        )
+        if Logging.usage_capture_callback is not None
+        and (_billed or _model_call_details.get("combined_usage_object") is not None)
+        else None
+    )
+    _current_observation: Final = (
+        _recorded_observation
+        if isinstance(_recorded_observation, UsageObservation)
+        else UsageObservation.UNKNOWN
+        if _current_usage is None
+        else UsageObservation.KNOWN
+        if _model_call_details.get("combined_usage_object") is not None
+        else UsageObservation.ESTIMATED
+    )
+    _capture_observation: Final = UsageCaptureObservation.from_usage(
+        _current_usage[0] if _current_usage is not None and isinstance(_current_usage[0], Usage) else None,
+        _current_observation,
+        float(_current_usage[1])
+        if _current_usage is not None and isinstance(_current_usage[1], (int, float))
+        else None,
+    )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),
         ("first_api_call_start_time", _first_handoff),
@@ -1665,6 +1785,16 @@ def _failure_fields_to_lift(
         ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
         ("billed_failed_attempts", _earlier_attempts or None),
+        ("_accounting_capture", _model_call_details.get("_accounting_capture")),
+        ("_accounting_pricing_snapshot", _model_call_details.get("_accounting_pricing_snapshot")),
+        ("_accounting_finalized_cost", _logging_obj.finalized_cost if isinstance(_logging_obj, Logging) else None),
+        (
+            "_accounting_allocation",
+            _logging_obj.cost_allowance_allocation if isinstance(_logging_obj, Logging) else None,
+        ),
+        ("_accounting_usage_observed", _current_observation if Logging.usage_capture_callback is not None else None),
+        ("_accounting_usage_snapshot", _capture_observation if Logging.usage_capture_callback is not None else None),
+        ("_accounting_prior_captures", _model_call_details.get("_accounting_prior_captures")),
     )
     return MappingProxyType({key: value for key, value in _entries if value is not None})
 
@@ -2814,7 +2944,10 @@ class ProxyLogging:
             return data, None
 
         current_response = response  # rebind-ok: chains each pipeline's replacement response into the next
-        for policy_name, pipeline in pipelines:
+        steps_that_ran: frozenset[str] = frozenset()  # rebind-ok: a later pipeline keeps a step an earlier one ran
+        request: Final = cast(dict[str, object], data)  # cast-ok: request payload, updated in place by every pipeline
+        log_waits: Final = event_hook == "post_call" and _whole_response_log_waits_for_its_pipelines(request, call_type)
+        for index, (policy_name, pipeline) in enumerate(pipelines):
             if pipeline.mode != event_hook:
                 continue
 
@@ -2829,6 +2962,14 @@ class ProxyLogging:
                 policy_name=policy_name,
                 raw_request_snapshot=raw_request_snapshot,
             )
+
+            steps_that_ran = steps_that_ran | _steps_that_ran(result)
+            if log_waits:
+                _drop_response_steps_that_did_not_run(
+                    request,
+                    _pipelines_settled_by(pipelines, index, result),
+                    steps_that_ran | _steps_later_pipelines_still_run(pipelines, index, result),
+                )
 
             data = self._handle_pipeline_result(
                 result=result,
@@ -2938,14 +3079,21 @@ class ProxyLogging:
         hook to consult, but it judges the payload the same way, so a proxy configured only with
         one of those still has something to say about every record.
         """
-        if request_metadata.get("_guardrail_pipelines"):
+        return self.request_has_pre_call_guardrails({"metadata": dict(request_metadata)}, event_type)
+
+    def request_has_pre_call_guardrails(
+        self,
+        request_data: Mapping[str, object],
+        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+    ) -> bool:
+        if _policy_state_metadata(request_data).get("_guardrail_pipelines"):
             return True
         caps: Final = ProxyLogging.callback_capabilities()
         if caps.has_content_enforcer:
             return True
-        probe: Final = {"metadata": dict(request_metadata)}
         return any(
-            isinstance(callback, CustomGuardrail) and callback.should_run_guardrail(data=probe, event_type=event_type)
+            isinstance(callback, CustomGuardrail)
+            and callback.should_run_guardrail(data=request_data, event_type=event_type)
             for callback in caps.resolved_callbacks
         )
 
@@ -4781,7 +4929,8 @@ class ProxyLogging:
 
         call_type, endpoint_translation = translation
 
-        for policy_name, pipeline in pipelines:
+        steps_that_ran: frozenset[str] = frozenset()  # rebind-ok: a later pipeline keeps a step an earlier one ran
+        for index, (policy_name, pipeline) in enumerate(pipelines):
             result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
                 steps=pipeline.steps,
                 mode="post_call",
@@ -4792,6 +4941,13 @@ class ProxyLogging:
                 streaming_chunks=buffered,
                 endpoint_translation=endpoint_translation,
             )
+            steps_that_ran = steps_that_ran | _steps_that_ran(result)
+            if _stream_log_waits_for_its_pipelines(request_data):
+                _drop_response_steps_that_did_not_run(
+                    request_data,
+                    _pipelines_settled_by(pipelines, index, result),
+                    steps_that_ran | _steps_later_pipelines_still_run(pipelines, index, result),
+                )
             try:
                 ProxyLogging._handle_pipeline_result(
                     result, data=request_data, policy_name=policy_name, original_response=buffered
