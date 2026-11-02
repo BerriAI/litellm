@@ -18,6 +18,10 @@ def gateway_binary() -> str | None:
     return shutil.which(name, path=sysconfig.get_path("scripts")) or shutil.which(name)
 
 
+def unsupported_proxy_trust(value: str | None) -> bool:
+    return any(host.strip() not in ("", "127.0.0.1") for host in (value or "").split(","))
+
+
 def startup_error(binary: str | None, unsupported: Mapping[str, object]) -> str | None:
     flag: Final = next((name for name, value in unsupported.items() if value), None)
     if flag is not None:
@@ -26,6 +30,8 @@ def startup_error(binary: str | None, unsupported: Mapping[str, object]) -> str 
         return "--rust_gateway requires POSIX inherited sockets and process signals"
     if binary is None:
         return "--rust_gateway requires the litellm-gateway binary. Install litellm[proxy] in this environment"
+    if unsupported_proxy_trust(os.environ.get("FORWARDED_ALLOW_IPS")):
+        return "--rust_gateway does not support non-loopback FORWARDED_ALLOW_IPS; disable Rust forwarding for this deployment"
     return None
 
 
