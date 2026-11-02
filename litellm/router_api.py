@@ -155,6 +155,7 @@ GroupField: TypeAlias = Literal[
     "display_name",
     "mode",
     "service_tiers",
+    "pinned_reasoning_efforts",
     "token_limits",
     "listing_info",
 ]
@@ -850,7 +851,7 @@ class RouterRegistry:
         self,
         name: str,
         *,
-        field: Literal["service_tiers"],
+        field: Literal["service_tiers", "pinned_reasoning_efforts"],
         include_hidden: bool = False,
         team_id: str | None = None,
     ) -> tuple[object, ...]: ...
@@ -894,6 +895,7 @@ class RouterRegistry:
           (were ``get_configured_display_name``, ``get_configured_mode``,
           ``get_configured_token_limits``, ``get_model_listing_info``)
         - ``service_tiers``: (was ``get_configured_service_tiers``)
+        - ``pinned_reasoning_efforts``: the ``reasoning_effort`` each routable deployment pins
         """
         r: Final = self._router
         if field == "info":
@@ -906,6 +908,8 @@ class RouterRegistry:
             return r._core_get_configured_mode(name)
         if field == "service_tiers":
             return r._core_get_configured_service_tiers(name, team_id=team_id)
+        if field == "pinned_reasoning_efforts":
+            return r._core_get_pinned_reasoning_efforts(name, team_id=team_id)
         if field == "token_limits":
             return r._core_get_configured_token_limits(name)
         if field == "listing_info":

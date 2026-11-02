@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import json
@@ -567,7 +568,9 @@ async def _catalog(
     etag: Final = None if upstream_etag is None else await _remembered_models_etag(caller, upstream_etag, rows, cache)
     if not rows:
         return upstream
-    merged: Final = merged_codex_catalog(upstream_body, rows, client_version=request.query_params.get("client_version"))
+    merged: Final = await asyncio.to_thread(
+        merged_codex_catalog, upstream_body, rows, client_version=request.query_params.get("client_version")
+    )
     return _with_etag(upstream, merged if merged is not None else upstream_body, etag)
 
 

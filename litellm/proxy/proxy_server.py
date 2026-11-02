@@ -12501,7 +12501,9 @@ async def codex_catalog_rows_for_key(user_api_key_dict: UserAPIKeyAuth) -> tuple
         await _caller_aliases(user_api_key_dict, None),
         await _listing_hidden_names(None),
     )
-    return codex_catalog_rows(listing.rows, listing.entries, llm_router, user_api_key_dict.team_id, listing.labels)
+    return await asyncio.to_thread(
+        codex_catalog_rows, listing.rows, listing.entries, llm_router, user_api_key_dict.team_id, listing.labels
+    )
 
 
 @router.get("/v1/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"])

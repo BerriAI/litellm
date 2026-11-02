@@ -584,6 +584,11 @@ def _group_reasoning_efforts(
     return group.supported_reasoning_efforts if group is not None else None
 
 
+def _shared_pinned_effort(pinned: tuple[object, ...]) -> str | None:
+    first: Final = next(iter(pinned), None)
+    return first if isinstance(first, str) and all(effort == first for effort in pinned) else None
+
+
 def _catalog_row(
     row: ModelInfoResponse, lookup_id: str, label_id: str, llm_router: Router | None, team_id: str | None
 ) -> CodexCatalogRow:
@@ -594,6 +599,11 @@ def _catalog_row(
         max_input_tokens=row.get("max_input_tokens"),
         upstream_model=registry.resolve(lookup_id, kind="upstream", team_id=team_id) if registry is not None else None,
         display_name=registry.group(label_id, field="display_name") if registry is not None else None,
+        reasoning_effort=(
+            _shared_pinned_effort(registry.group(lookup_id, field="pinned_reasoning_efforts", team_id=team_id))
+            if registry is not None
+            else None
+        ),
         service_tiers=registry.group(lookup_id, field="service_tiers", team_id=team_id) if registry is not None else (),
         supported_reasoning_efforts=_group_reasoning_efforts(row, lookup_id, registry, team_id),
         search_tool_support=(

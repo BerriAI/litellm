@@ -12680,6 +12680,20 @@ class PythonCore(DeprecatedRouterMembers):
             for deployment in self._routable_deployments(model_name, team_id)
         )
 
+    def _core_get_pinned_reasoning_efforts(self, model_name: str, team_id: str | None = None) -> tuple[object, ...]:
+        """
+        Return the litellm_params.reasoning_effort each deployment a request
+        from team_id to model_name can route to (see _routable_deployments)
+        pins, unvalidated and in model_list order, None for a deployment that
+        pins none; the caller decides how the deployments combine.
+
+        Returns an empty tuple for wildcard-expanded or unknown names.
+        """
+        return tuple(
+            _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"]).get("reasoning_effort")
+            for deployment in self._routable_deployments(model_name, team_id)
+        )
+
     def _core_get_search_tool_support(self, model_name: str, team_id: str | None = None) -> tuple[bool | None, ...]:
         """
         Whether each deployment a request from team_id to model_name can route

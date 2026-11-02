@@ -814,6 +814,9 @@ def test_entry_names_a_default_reasoning_level_exactly_when_the_native_entry_car
         model_list=[
             {"model_name": "open-weights", "litellm_params": {"model": "fireworks_ai/open-weights"}},
             {"model_name": "coding-model", "litellm_params": {"model": "openai/gpt-5.5"}},
+            {"model_name": "pinned-model", "litellm_params": {"model": "openai/gpt-5.5", "reasoning_effort": "high"}},
+            {"model_name": "split-pin", "litellm_params": {"model": "openai/gpt-5.5", "reasoning_effort": "high"}},
+            {"model_name": "split-pin", "litellm_params": {"model": "openai/gpt-5.5", "reasoning_effort": "low"}},
             {
                 "model_name": "max-only",
                 "litellm_params": {"model": "hosted_vllm/qa-local-coder", "api_base": "https://vllm.example/v1"},
@@ -821,7 +824,7 @@ def test_entry_names_a_default_reasoning_level_exactly_when_the_native_entry_car
             },
         ]
     )
-    names = ("open-weights", "coding-model", "max-only")
+    names = ("open-weights", "coding-model", "pinned-model", "split-pin", "max-only")
     listing = tuple(
         {"id": name, "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"} for name in names
     )
@@ -833,7 +836,8 @@ def test_entry_names_a_default_reasoning_level_exactly_when_the_native_entry_car
     assert [
         codex_entry_names_default_reasoning_level(entry["slug"], router, None, client_version) for entry in served
     ] == served_names_one
-    assert served_names_one == [False, False, client_version is not None]
+    assert served_names_one == [False, False, True, False, client_version is not None]
+    assert served[2]["default_reasoning_level"] == "high"
 
 
 def test_codex_tool_search_is_offered_off_the_route_and_model_info_and_only_when_every_deployment_answers_it():
