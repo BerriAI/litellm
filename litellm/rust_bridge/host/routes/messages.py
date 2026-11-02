@@ -79,7 +79,12 @@ def map_failure(error: Exception, request: Mapping[str, object], request_provide
             llm_provider=request_provider,
         )
     return failures.map_native_failure(
-        error, str(request["model"]), request_provider, request, optional_str(request.get("api_base"))
+        error,
+        str(request["model"]),
+        request_provider,
+        request,
+        optional_str(request.get("api_base")),
+        preserve_model_prefix=True,
     )
 
 

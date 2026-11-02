@@ -17,8 +17,8 @@ _UPSTREAM_HEADERS: Final = TypeAdapter(list[tuple[str, str]])
 
 class UpstreamFailure(Exception):
     def __init__(self, response: httpx.Response, cause: Exception) -> None:
-        super().__init__(str(cause))
-        self.message: Final = str(cause)
+        super().__init__(response.text)
+        self.message: Final = response.text
         self.response: Final = response
         self.status_code: Final = response.status_code
         self.__cause__ = cause
@@ -49,13 +49,20 @@ class ExceptionMapper(Protocol):
     ) -> Exception: ...
 
 
-def map_failure(error: Exception, model: str, request_provider: str, kwargs: Mapping[str, object]) -> Exception:
+def map_failure(
+    error: Exception,
+    model: str,
+    request_provider: str,
+    kwargs: Mapping[str, object],
+    *,
+    preserve_model_prefix: bool = False,
+) -> Exception:
     mapper: Final = cast(  # cast-ok: bounded adapter for the legacy public exception mapper
         ExceptionMapper, litellm.exception_type
     )
     try:
         return mapper(
-            model=model.removeprefix(f"{request_provider}/"),
+            model=model if preserve_model_prefix else model.removeprefix(f"{request_provider}/"),
             custom_llm_provider=request_provider,
             original_exception=error,
             completion_kwargs=dict(kwargs),
@@ -67,11 +74,19 @@ def map_failure(error: Exception, model: str, request_provider: str, kwargs: Map
 
 
 def map_native_failure(
-    error: Exception, model: str, request_provider: str, kwargs: Mapping[str, object], api_base: str | None = None
+    error: Exception,
+    model: str,
+    request_provider: str,
+    kwargs: Mapping[str, object],
+    api_base: str | None = None,
+    *,
+    preserve_model_prefix: bool = False,
 ) -> Exception:
     """`map_failure`, reading a native `(status, body)` provider failure as the HTTP response it was."""
     original: Final = _upstream_failure(error, api_base)
-    public_error: Final = map_failure(original, model, request_provider, kwargs)
+    public_error: Final = map_failure(
+        original, model, request_provider, kwargs, preserve_model_prefix=preserve_model_prefix
+    )
     if isinstance(original, UpstreamFailure) and public_error.__context__ is original:
         public_error.__context__ = error
         if isinstance(public_error, openai.APIStatusError):

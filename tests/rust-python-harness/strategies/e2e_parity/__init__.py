@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Final
 
-from ...shared.reporting.models import SURFACES
+from ...shared.reporting.models import SURFACES, Coverage
 from ...shared.reporting.strategy import (
     CaseDefinition,
     ModuleCaseSpec,
@@ -19,8 +19,10 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
     ),
     CaseDefinition(
         "messages",
-        NotImplementedCaseSpec(
-            reason="Bridge unit tests exist, but no standalone end-to-end parity case is registered."
+        ModuleCaseSpec(
+            coverage=Coverage.PARTIAL,
+            module=f"{__package__}.sdk.messages.case",
+            note="使用本地上游对齐 Anthropic 异步非流式请求、响应和错误，暂不覆盖同步、流式及回调。",
         ),
         surface="sdk",
     ),
