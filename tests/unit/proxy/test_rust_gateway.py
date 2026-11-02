@@ -53,6 +53,20 @@ def test_missing_binary_gives_install_instruction() -> None:
     )
 
 
+@pytest.mark.parametrize("trusted", [None, "", "127.0.0.1", "192.0.2.1", "*", "127.0.0.1,192.0.2.1"])
+def test_configured_proxy_trust_is_not_silently_discarded(trusted: str | None, monkeypatch: pytest.MonkeyPatch) -> None:
+    if trusted is None:
+        monkeypatch.delenv("FORWARDED_ALLOW_IPS", raising=False)
+    else:
+        monkeypatch.setenv("FORWARDED_ALLOW_IPS", trusted)
+    expected: Final = (
+        None
+        if trusted in (None, "", "127.0.0.1")
+        else "--rust_gateway does not support non-loopback FORWARDED_ALLOW_IPS; disable Rust forwarding for this deployment"
+    )
+    assert startup_error("gateway", {}) == expected
+
+
 @pytest.mark.parametrize("supervised", [False, True])
 @pytest.mark.parametrize("host", ["0.0.0.0", "192.0.2.1", "::"])
 def test_metrics_keep_configured_host_separate_from_private_listener(
@@ -158,6 +172,7 @@ def test_supervisor_drains_before_stopping_python_and_reaps_both_children(
         patch("asyncio.create_subprocess_exec", side_effect=spawn) as launch,
         patch("socket.socket", return_value=listener),
         patch("os.killpg", side_effect=kill_group) as kill,
+        patch.dict("os.environ", {"FORWARDED_ALLOW_IPS": "*"}),
     ):
         assert supervise("gateway", ("python", "--rust_gateway"), "0.0.0.0", 4000) == expected
 
