@@ -11,6 +11,7 @@ import importlib
 import pytest
 
 import litellm
+from litellm.utils import UnsupportedParamsError, get_optional_params
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -194,6 +195,69 @@ class TestGigaChatParamsTransformation:
         from litellm.llms.gigachat.chat.transformation import GigaChatConfig
 
         return GigaChatConfig()
+
+
+    def test_stop_raises_unsupported_params_error(self):
+        with pytest.raises(UnsupportedParamsError):
+            get_optional_params(
+                model="GigaChat-Pro",
+                custom_llm_provider="gigachat",
+                stop=["\n\n"],
+                request_timeout=10,
+                num_retries=0,
+            )
+
+    def test_stop_dropped_with_drop_params_true(self):
+        result = get_optional_params(
+            model="GigaChat-Pro",
+            custom_llm_provider="gigachat",
+            stop=["\n\n"],
+            request_timeout=10,
+            num_retries=0,
+            drop_params=True,
+        )
+        assert "stop" not in result
+
+    def test_response_format_json_object_raises_unsupported(self, config):
+        with pytest.raises(UnsupportedParamsError):
+            config.map_openai_params(
+                non_default_params={"response_format": {"type": "json_object"}},
+                optional_params={},
+                model="GigaChat",
+                drop_params=False,
+            )
+
+    def test_response_format_json_object_dropped_with_drop_params(self, config):
+        result = config.map_openai_params(
+            non_default_params={"response_format": {"type": "json_object"}},
+            optional_params={},
+            model="GigaChat",
+            drop_params=True,
+        )
+        assert "functions" not in result
+        assert "function_call" not in result
+
+    def test_response_format_json_object_dropped_with_global_drop_params(self, config, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", True, raising=False)
+        result = config.map_openai_params(
+            non_default_params={"response_format": {"type": "json_object"}},
+            optional_params={},
+            model="GigaChat",
+            drop_params=False,
+        )
+        assert "functions" not in result
+        assert "function_call" not in result
+
+    def test_response_format_json_object_raises_when_global_drop_params_off(self, config, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False, raising=False)
+        with pytest.raises(UnsupportedParamsError):
+            config.map_openai_params(
+                non_default_params={"response_format": {"type": "json_object"}},
+                optional_params={},
+                model="GigaChat",
+                drop_params=False,
+            )
+
 
     def test_temperature_zero_becomes_top_p_zero(self, config):
         """temperature=0 should become top_p=0"""
