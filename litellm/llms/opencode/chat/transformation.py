@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
 import httpx
 from pydantic import TypeAdapter
@@ -159,6 +159,7 @@ class OpenCodeGoMessagesChatConfig(_GoReportedCostMixin, AnthropicConfig):
 
 class OpenCodeGoGeminiChatConfig(_GoReportedCostMixin, GoogleAIStudioGeminiConfig):
     go_usage_key: str = "usageMetadata"
+    _route: ClassVar[str] = "opencode_go"
 
     @property
     def supports_stream_param_in_request_body(self) -> bool:
