@@ -598,13 +598,20 @@ def restricted_key(monkeypatch: pytest.MonkeyPatch) -> Callable[..., str]:
     monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
 
     def mint(
-        models: list[str], allowed_routes: tuple[str, ...] = (), user_role: LitellmUserRoles | None = None
+        models: list[str],
+        allowed_routes: tuple[str, ...] = (),
+        user_role: LitellmUserRoles | None = None,
+        allowed_tools: tuple[str, ...] = (),
     ) -> str:
-        key: Final = f"sk-test-{'-'.join((*models, *allowed_routes, str(user_role)))}"
+        key: Final = f"sk-test-{'-'.join((*models, *allowed_routes, str(user_role), *allowed_tools))}"
         proxy_server.user_api_key_cache.set_cache(
             key=hash_token(key),
             value=UserAPIKeyAuth(
-                token=hash_token(key), models=models, allowed_routes=list(allowed_routes), user_role=user_role
+                token=hash_token(key),
+                models=models,
+                allowed_routes=list(allowed_routes),
+                user_role=user_role,
+                metadata={"allowed_tools": list(allowed_tools)} if allowed_tools else {},
             ),
         )
         return key
@@ -1392,6 +1399,45 @@ def test_codex_additional_tools_item_reaches_each_provider_in_a_shape_it_accepts
     sent: Final = json.loads((fireworks if model == "open-weights" else luna).calls.last.request.content)
     assert sent["input"] == expected_input
     assert [tool["name"] for tool in sent["tools"]] == expected_tool_names
+
+
+_FORBIDDEN_TOOL: Final = {"type": "function", "name": "delete_user", "parameters": {"type": "object"}}
+
+
+@pytest.mark.parametrize(
+    ("tools", "input_items", "allowed"),
+    [
+        pytest.param([_EXEC_TOOL, _FORBIDDEN_TOOL], [_USER_TURN], False, id="a forbidden top-level tool"),
+        pytest.param(
+            [_EXEC_TOOL],
+            [{"type": "additional_tools", "role": "developer", "tools": [_FORBIDDEN_TOOL]}, _USER_TURN],
+            False,
+            id="a forbidden tool in an additional_tools item",
+        ),
+        pytest.param([_EXEC_TOOL], [_USER_TURN], True, id="only allowed tools"),
+    ],
+)
+def test_native_litellm_turn_enforces_the_key_tool_allowlist(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    xai_fireworks_and_openai_router: Router,
+    restricted_key: Callable[..., str],
+    tools: list[dict[str, object]],
+    input_items: list[dict[str, object]],
+    allowed: bool,
+) -> None:
+    _account_catalog(respx_mock)
+    fireworks: Final = _open_weights_provider(respx_mock)
+    key: Final = restricted_key(
+        ["open-weights"], (*_NATIVE_ROUTES, "/v1/responses"), allowed_tools=(str(_EXEC_TOOL["name"]),)
+    )
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={"model": "open-weights", "input": input_items, "tools": tools, "stream": False, "store": False},
+        headers={**_ACCOUNT_HEADERS, "x-litellm-api-key": key},
+    )
+    assert response.status_code == (200 if allowed else 403), response.text
+    assert fireworks.called is allowed
 
 
 _ANTHROPIC_BASE: Final = "https://anthropic-api.test"

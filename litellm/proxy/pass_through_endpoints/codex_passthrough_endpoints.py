@@ -24,7 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has untyped params
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import check_model_access_helper
+from litellm.proxy.auth.auth_checks import check_model_access_helper, check_tools_allowlist
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.codex_model_catalog import (
@@ -592,6 +592,12 @@ async def _responses(
     body: Final = _JSON_OBJECT.validate_python(await read_request_body(request))
     if await _serves_through_litellm(body.get("model"), llm_router, user_api_key_dict, headers, cache):
         litellm_body: Final = _litellm_body(body, llm_router, user_api_key_dict.team_id, headers)
+        await check_tools_allowlist(
+            request_body=dict(litellm_body),
+            valid_token=user_api_key_dict,
+            team_object=None,
+            route=_LITELLM_RESPONSES_PATH,
+        )
         return await responses_api(
             _as_litellm_responses_request(request, json.dumps(litellm_body).encode(), litellm_body),
             fastapi_response,
