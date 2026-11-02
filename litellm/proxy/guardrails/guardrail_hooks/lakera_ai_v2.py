@@ -283,7 +283,7 @@ def _has_gemini_contents(data: object, call_type: str | None) -> bool:
     fields: Final = as_str_mapping(data) or {}
     return (
         call_type in _GEMINI_BODY_CALL_TYPES
-        and not (call_type == CallTypes.pass_through.value and ("messages" in fields or "input" in fields))
+        and not (call_type == CallTypes.pass_through.value and (fields.get("messages") or fields.get("input")))
         and (
             isinstance(fields.get("contents"), list | dict)
             or isinstance(fields.get("systemInstruction") or fields.get("system_instruction"), dict)

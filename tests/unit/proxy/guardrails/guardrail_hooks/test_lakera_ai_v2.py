@@ -1848,6 +1848,14 @@ class TestGeminiContents:
         ]
 
     @pytest.mark.parametrize("chat_field", ["messages", "input"])
+    @pytest.mark.parametrize("empty", [[], None, ""])
+    def test_an_empty_chat_field_does_not_hide_contents_on_a_pass_through_body(self, chat_field: str, empty: object):
+        data: Final = {chat_field: empty, "contents": [{"parts": [{"text": "card"}]}]}
+        assert _build_lakera_inspection_messages(data, call_type="pass_through_endpoint") == [
+            {"role": "user", "content": "card"}
+        ]
+
+    @pytest.mark.parametrize("chat_field", ["messages", "input"])
     def test_a_pass_through_chat_body_with_stray_contents_is_read_as_chat(self, chat_field: str):
         data: Final = {chat_field: [USER_MSG], "contents": [{"parts": [{"text": "stray"}]}]}
         assert _build_lakera_inspection_messages(data, call_type="pass_through_endpoint") == [USER_MSG]
