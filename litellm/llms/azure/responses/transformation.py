@@ -70,9 +70,6 @@ def _with_responses_api_version(api_base: str | None, litellm_params: Mapping[st
 
 
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
-    # Parameters not supported by Azure Responses API
-    AZURE_UNSUPPORTED_PARAMS = ["context_management"]
-
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.AZURE
@@ -98,13 +95,6 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def unresolved_model_reasoning_field_values(self, model: str) -> ReasoningFieldValues | None:
         return SUMMARY_ONLY_REASONING_FIELD_VALUES if self._is_gpt_5_model(model) else None
-
-    def get_supported_openai_params(self, model: str) -> list:
-        """
-        Azure Responses API does not support context_management (compaction).
-        """
-        base_supported_params: Final = super().get_supported_openai_params(model)
-        return [param for param in base_supported_params if param not in self.AZURE_UNSUPPORTED_PARAMS]
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         return BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
