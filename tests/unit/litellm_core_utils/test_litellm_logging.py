@@ -11090,6 +11090,33 @@ def test_get_assembled_streaming_response_bills_a_provider_reported_usage_cost()
     assert logging_obj.response_cost_calculator(result=assembled) == 0.0042
 
 
+@pytest.mark.parametrize("client_facing_response_id", ["resp_encryptedidtheclientsaw", None])
+def test_sync_success_handler_logs_a_stream_under_the_id_the_client_saw(client_facing_response_id):
+    class Recorder(CustomLogger):
+        def __init__(self):
+            super().__init__()
+            self.logged = []
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            self.logged.append((response_obj.id, kwargs["standard_logging_object"]["id"]))
+
+    recorder: Final = Recorder()
+    logging_obj: Final = _responses_stream_logging_obj()
+    logging_obj.dynamic_success_callbacks = [recorder]
+    logging_obj.client_facing_response_id = client_facing_response_id
+    now: Final = datetime.datetime.now()
+
+    logging_obj.success_handler(
+        result=_completed_responses_event(ResponseAPIUsage(input_tokens=3, output_tokens=2, total_tokens=5)),
+        start_time=now,
+        end_time=now,
+        cache_hit=False,
+    )
+
+    expected_id: Final = client_facing_response_id or "resp-1"
+    assert recorder.logged == [(expected_id, expected_id)]
+
+
 def test_response_cost_calculator_prices_terminal_responses_event_from_its_response():
     logging_obj: Final = _responses_stream_logging_obj()
     inner_response: Final = ResponsesAPIResponse(

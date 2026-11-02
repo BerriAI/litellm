@@ -203,9 +203,6 @@ def test_retrieve_routes_to_the_deployment_that_created_the_response(
 
 @pytest.mark.parametrize("prefix", _ALIASES)
 def test_retrieve_returns_the_id_the_client_holds(gateway: Gateway, prefix: str) -> None:
-    pytest.skip(
-        "BUG: GET /v1/responses/{id} returns a re-encrypted id that differs byte-for-byte from the id the client sent"
-    )
     raw_id: Final = f"resp_retrieve_id_{uuid.uuid4().hex}"
 
     def respond(request: Request) -> Reply:

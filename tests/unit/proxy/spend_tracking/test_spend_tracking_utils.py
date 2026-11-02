@@ -5150,6 +5150,23 @@ def test_a_background_response_billing_event_writes_a_row_apart_from_the_read_th
     assert request_ids == ("resp_shared", "resp_shared_background_cost")
 
 
+@pytest.mark.parametrize("call_type", ["aget_responses", "acancel_responses"])
+def test_a_read_or_cancel_row_carries_the_id_its_callbacks_logged(call_type: str):
+    row: Final = get_logging_payload(
+        kwargs={
+            "call_type": call_type,
+            "model": "gpt-5.6",
+            "litellm_call_id": "call-read",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj={"id": "resp_logged_by_callbacks", "object": "response", "status": "completed"},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert row["request_id"] == "resp_logged_by_callbacks"
+
+
 @pytest.mark.parametrize("forged_marker", [True, BackgroundResponseSettlement.SETTLES.value])
 def test_a_request_body_cannot_move_its_spend_row_onto_a_background_settlement_id(forged_marker):
     """A failed call logs its raw request body as kwargs, so a body field named like the settlement

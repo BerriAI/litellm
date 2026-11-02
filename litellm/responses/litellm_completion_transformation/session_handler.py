@@ -1,14 +1,16 @@
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.responses.litellm_completion_transformation.client_tool_search import (
     bridge_client_tool_search,
     client_tool_search_loaded_tools,
@@ -69,6 +71,78 @@ def _is_a_conversation_turn(spend_log: "SpendLogsPayload") -> bool:
     return spend_log.get("call_type") not in _MCP_TOOL_CALL_TYPES and not _is_a_failed_turn(spend_log)
 
 
+_RESPONSE_READ_CALL_TYPES: Final = frozenset(("aget_responses", "acancel_responses"))
+
+
+def _output_item_id(item: object) -> str | None:
+    match item:
+        case {"id": str() as item_id}:
+            return item_id
+        case _:
+            return None
+
+
+def _is_a_response_read(spend_log: "SpendLogsPayload") -> bool:
+    return "call_type" in spend_log and spend_log["call_type"] in _RESPONSE_READ_CALL_TYPES
+
+
+def _stored_response(spend_log: "SpendLogsPayload") -> object:
+    return spend_log.get("response")
+
+
+def _output_item_ids(spend_log: "SpendLogsPayload") -> frozenset[str]:
+    output: Final = _stored_responses_api_output(_stored_response(spend_log)) or []
+    return frozenset(item_id for item_id in map(_output_item_id, output) if item_id is not None)
+
+
+def _first_index_holding_each_item(indexed_turns: Iterable[tuple[int, "SpendLogsPayload"]]) -> Mapping[str, int]:
+    return dict(
+        chain.from_iterable(
+            ((item_id, index) for item_id in _output_item_ids(turn)) for index, turn in reversed(tuple(indexed_turns))
+        )
+    )
+
+
+def _turn_replaying_each_item(turns: Sequence["SpendLogsPayload"]) -> Mapping[str, int]:
+    indexed_turns: Final = tuple(enumerate(turns))
+    first_read_holding: Final = _first_index_holding_each_item(
+        (index, turn) for index, turn in indexed_turns if _is_a_response_read(turn)
+    )
+    first_other_turn_holding: Final = _first_index_holding_each_item(
+        (index, turn) for index, turn in indexed_turns if not _is_a_response_read(turn)
+    )
+    return MappingProxyType({**first_read_holding, **first_other_turn_holding})
+
+
+def _replayed_by(item: object, index: int, turn_replaying: Mapping[str, int]) -> bool:
+    item_id: Final = _output_item_id(item)
+    return item_id is not None and turn_replaying.get(item_id) == index
+
+
+def _with_only_new_output(
+    index: int, turn: "SpendLogsPayload", turn_replaying: Mapping[str, int]
+) -> "SpendLogsPayload | None":
+    if not _is_a_response_read(turn):
+        return turn
+    stored_response: Final = as_str_mapping(_stored_response(turn))
+    new_output: Final = [
+        item
+        for item in _stored_responses_api_output(stored_response) or []
+        if _replayed_by(item, index, turn_replaying)
+    ]
+    if stored_response is None or not new_output:
+        return None
+    replayed_turn: Final[SpendLogsPayload] = {**turn, "response": {**stored_response, "output": new_output}}
+    return replayed_turn
+
+
+def _conversation_turns(spend_logs: Sequence["SpendLogsPayload"]) -> tuple["SpendLogsPayload", ...]:
+    turns: Final = tuple(filter(_is_a_conversation_turn, spend_logs))
+    turn_replaying: Final = _turn_replaying_each_item(turns)
+    replayed: Final = (_with_only_new_output(index, turn, turn_replaying) for index, turn in enumerate(turns))
+    return tuple(turn for turn in replayed if turn is not None)
+
+
 _MCP_AUTO_EXECUTE_OUTPUT_TYPES: Final = frozenset(("mcp_tools_fetched", "tool_execution_results"))
 
 
@@ -101,7 +175,7 @@ class StoredTurns:
 def _compaction_point(
     index: int, spend_log: "SpendLogsPayload", proxy_server_request: Mapping[str, object] | None
 ) -> _ReplayStart | None:
-    if response_holds_compaction_block(spend_log.get("response")):
+    if response_holds_compaction_block(_stored_response(spend_log)):
         return _ReplayStart(index=index, at_output=True)
     if proxy_server_request is not None and holds_compaction_summary(proxy_server_request.get("input")):
         return _ReplayStart(index=index, at_output=False)
@@ -271,12 +345,10 @@ class ResponsesSessionHandler:
         previous_response_id: str,
         client_response_ids: tuple[str, ...] = (),
     ) -> StoredTurns:
-        spend_logs: Final = tuple(
-            spend_log
-            for spend_log in await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+        spend_logs: Final = _conversation_turns(
+            await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
                 previous_response_id, client_response_ids
             )
-            if _is_a_conversation_turn(spend_log)
         )
         return StoredTurns(
             spend_logs=spend_logs,
@@ -378,7 +450,7 @@ class ResponsesSessionHandler:
         ############################################################
         # Add Output messages for this Spend Log
         ############################################################
-        _response_output: Final[object] = spend_log.get("response", "{}")
+        _response_output: Final = _stored_response(spend_log)
         if (responses_api_output := _stored_responses_api_output(_response_output)) is not None:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(

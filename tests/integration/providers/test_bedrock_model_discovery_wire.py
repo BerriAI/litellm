@@ -301,11 +301,7 @@ def _spend_row_id(rows: Sequence[Mapping[str, JsonValue]], tag: str) -> str:
 
 
 def _landed_once(served: tuple[tuple[str, str, bool], ...], tags: tuple[str, ...]) -> None:
-    """One spend row per tagged call, carrying the id the client saw.
-
-    FIXME: a streamed /v1/responses row carries the managed `resp_` id LiteLLM built before the proxy encrypted the
-    advertised one, so that row is matched by tag alone until the spend log reads the id the client received.
-    """
+    """One spend row per tagged call, carrying the id the client saw."""
     rows: Final = eventually(
         lambda: read_rows(
             'SELECT request_id, request_tags FROM "LiteLLM_SpendLogs" WHERE request_tags ?| %s',
@@ -316,9 +312,6 @@ def _landed_once(served: tuple[tuple[str, str, bool], ...], tags: tuple[str, ...
     )
     for (identity, path, stream), tag in zip(served, tags, strict=True):
         row_id: Final = _spend_row_id(rows, tag)
-        if path == "/v1/responses" and stream:
-            assert row_id.startswith("resp_"), (row_id, identity)
-            continue
         assert row_id == identity, (path, stream, row_id, identity)
 
 

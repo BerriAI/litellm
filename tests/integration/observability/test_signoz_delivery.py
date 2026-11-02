@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 import re
 import signal
@@ -9,7 +8,6 @@ from collections import deque
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 from typing import Final
 
@@ -137,17 +135,6 @@ def _upstream(request: Request) -> Reply:
     return _chat_reply(f"chatcmpl-{marker}", stream)
 
 
-def _decoded_responses_id(identity: str) -> str:
-    try:
-        return base64.b64decode(identity.removeprefix("resp_").encode()).decode()
-    except (ValueError, UnicodeDecodeError):
-        return identity
-
-
-def _canonical_id(identity: str) -> str:
-    return _decoded_responses_id(identity).rpartition("response_id:")[2]
-
-
 def _sse_events(text: str) -> tuple[dict[str, JsonValue], ...]:
     return tuple(
         object_value(JSON.validate_json(line[6:]))
@@ -232,8 +219,7 @@ class Collector:
         return tuple(
             span
             for span in self.spans()
-            if RESPONSE_ID in span.attributes
-            and _canonical_id(span.attributes[RESPONSE_ID]) == _canonical_id(response_id)
+            if RESPONSE_ID in span.attributes and span.attributes[RESPONSE_ID] == response_id
         )
 
     def single_span(self, response_id: str, *, elsewhere: "Collector | None" = None) -> Span:
@@ -249,11 +235,8 @@ class Collector:
     def landed(self, response_ids: Sequence[str]) -> dict[str, int]:
         spans: Final = self.spans()
         return {
-            _canonical_id(identity): sum(
-                1
-                for span in spans
-                if RESPONSE_ID in span.attributes
-                and _canonical_id(span.attributes[RESPONSE_ID]) == _canonical_id(identity)
+            identity: sum(
+                1 for span in spans if RESPONSE_ID in span.attributes and span.attributes[RESPONSE_ID] == identity
             )
             for identity in response_ids
         }
@@ -448,7 +431,7 @@ def _assert_operator_span(rig: Rig, response_id: str, marker: str) -> Span:
     span: Final = rig.sink.single_span(response_id)
     assert span.target == "/v1/traces", span
     assert span.ingestion_key == OPERATOR_KEY, span
-    assert rig.tenant_sink.landed((response_id,)) == {_canonical_id(response_id): 0}
+    assert rig.tenant_sink.landed((response_id,)) == {response_id: 0}
     bodies: Final = rig.upstream_bodies(marker)
     assert len(bodies) == 1, bodies
     assert "signoz" not in json.dumps(bodies[0]).replace(marker, ""), bodies[0]
@@ -522,7 +505,7 @@ def test_responses_stream_raw_httpx_span_lands_once_after_the_stream_is_consumed
     marker: Final = _marker()
     response: Final = rig.proxy.request("POST", "/v1/responses", {"model": rig.model, "input": marker, "stream": True})
     assert response.status_code == 200, response.text
-    _assert_operator_span(rig, _responses_id(response, marker), marker)
+    _assert_operator_span(rig, _responses_id(response), marker)
 
 
 def test_v2_flag_on_still_delivers_the_operator_span_with_the_ingestion_key(v2_rig: Rig) -> None:
@@ -821,7 +804,7 @@ def _chat_id(response: httpx.Response) -> str:
     return next(iter(identities))
 
 
-def _responses_id(response: httpx.Response, marker: str) -> str:
+def _responses_id(response: httpx.Response) -> str:
     if not _is_event_stream(response):
         return _body_id(response)
     completed: Final = tuple(
@@ -830,7 +813,7 @@ def _responses_id(response: httpx.Response, marker: str) -> str:
         if event.get("type") == "response.completed"
     )
     assert len(completed) == 1 and completed[0].startswith("resp_"), response.text
-    return f"resp_{marker}"
+    return completed[0]
 
 
 def _message_id(response: httpx.Response) -> str:
@@ -852,7 +835,7 @@ def _burst(rig: Rig, count: int) -> tuple[tuple[int, str, str | None], ...]:
         stream: Final = index % 2 == 0
         path, body, identity_of = (
             ("/v1/chat/completions", {"model": rig.model, "messages": [{"role": "user", "content": marker}]}, _chat_id),
-            ("/v1/responses", {"model": rig.model, "input": marker}, partial(_responses_id, marker=marker)),
+            ("/v1/responses", {"model": rig.model, "input": marker}, _responses_id),
             (
                 "/v1/messages",
                 {"model": rig.model, "max_tokens": 16, "messages": [{"role": "user", "content": marker}]},
@@ -874,8 +857,8 @@ def _assert_exactly_once(rig: Rig, identities: Sequence[str]) -> None:
     landed: Final = eventually(
         lambda: rig.sink.landed(identities), lambda seen: all(count >= 1 for count in seen.values()), seconds=80
     )
-    assert landed == {_canonical_id(identity): 1 for identity in identities}, landed
-    charged: Final = frozenset(identity for identity in identities if not identity.startswith("resp_"))
+    assert landed == {identity: 1 for identity in identities}, landed
+    charged: Final = frozenset(identities)
     spend: Final = eventually(
         lambda: read_rows(
             'SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id = ANY(%s::text[])',
