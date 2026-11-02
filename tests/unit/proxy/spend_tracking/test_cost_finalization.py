@@ -91,12 +91,20 @@ def response(cost: float = 0.5) -> ModelResponse:
 async def test_header_and_logging_share_one_allowance_allocation(
     logging_obj: Logging, used: int, expected: float
 ) -> None:
+    import json
+
+    from litellm.proxy.db.accounting_ledger import UsageWrite
+    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+
     counter: Final = Counter(used)
     result: Final = response()
     costs: Final = await asyncio.gather(*(finalize_response_cost(logging_obj, result, counter, NOW) for _ in range(3)))
     assert costs[0] is costs[1] is costs[2]
     assert costs[0] is not None
     assert costs[0].amount == pytest.approx(expected)
+    assert logging_obj.cost_allowance_allocation is not None
+    assert logging_obj.cost_allowance_allocation.discount == pytest.approx(costs[0].allowance_discount)
     assert counter.calls == 1
     logging_obj._success_handler_helper_fn(result=result, start_time=NOW, end_time=NOW)
     payload: Final = logging_obj.model_call_details["standard_logging_object"]
@@ -106,6 +114,25 @@ async def test_header_and_logging_share_one_allowance_allocation(
     assert float(headers["x-litellm-response-cost"]) == pytest.approx(payload["response_cost"])
     assert payload["cost_finalized"] is True
     assert payload["cost_breakdown"] == costs[0].logging_breakdown()
+
+    committed: Final[asyncio.Queue[UsageWrite]] = asyncio.Queue()
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        for write in writes:
+            committed.put_nowait(write)
+
+    meter: Final = DurableUsageMeter(persist, UsageCaptureSettings())
+    assert logging_obj.prepared_cost is not None
+    prepared_usage: Final = logging_obj.prepared_cost.usage.model_dump()
+    result.usage = Usage(prompt_tokens=999)
+    capture_logging_usage(meter, logging_obj, result, NOW, NOW)
+    await meter.close()
+    committed.get_nowait()
+    event: Final = json.loads(committed.get_nowait().envelope)
+    assert event["finalized_cost"]["response_cost"] == pytest.approx(costs[0].amount)
+    assert event["allocation"]["discount"] == pytest.approx(costs[0].allowance_discount)
+    assert event["usage"] == prepared_usage
+    assert counter.calls == 1
 
 
 @pytest.mark.asyncio
