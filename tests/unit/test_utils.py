@@ -11276,6 +11276,26 @@ def test_vertex_llama3_model_info_resolves_without_the_meta_prefix():
         assert prefixed_info["key"] == f"vertex_ai/{model}", model
 
 
+def test_the_catalog_with_register_model_entries_lists_each_model_once_and_leaves_router_registrations_out() -> None:
+    from litellm.utils import catalog_with_runtime_registrations
+
+    catalog: Final = catalog_with_runtime_registrations()
+    catalog_size: Final = len(catalog)
+    catalogued_model: Final = next(iter(catalog))
+    catalogued_entry: Final = dict(catalog[catalogued_model])
+    litellm.register_model({catalogued_model: {"supports_prompt_cache_breakpoint": True}})
+    litellm.register_model({"qa-registered-only-model": {"litellm_provider": "openai", "mode": "chat"}})
+    litellm.register_model({"qa-router-deployment-id": {"mode": "chat"}}, persist_across_reloads=False)
+
+    merged: Final = catalog_with_runtime_registrations()
+    listed: Final = list(merged)
+
+    assert len(listed) == len(merged) == catalog_size + 1
+    assert "qa-registered-only-model" in listed
+    assert "qa-router-deployment-id" not in listed
+    assert dict(merged[catalogued_model]) == {**catalogued_entry, "supports_prompt_cache_breakpoint": True}
+
+
 @pytest.mark.parametrize(
     "key", ("openai.test-converse", "bedrock/openai.test-converse", "bedrock/converse/openai.test-converse")
 )

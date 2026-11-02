@@ -1519,10 +1519,10 @@ def bedrock_declared_cache_point_support(model: str, model_info: Mapping[str, ob
 
 
 def _catalog_entry_reader(model_info: Mapping[str, object] | None) -> Callable[[str], Mapping[str, object] | None]:
-    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+    from litellm.utils import catalog_with_runtime_registrations
 
     if model_info is not None:
-        return GetModelCostMap.loaded_model_cost_map().get
+        return catalog_with_runtime_registrations().get
     return _model_cost_entry
 
 

@@ -4136,6 +4136,32 @@ def _register_on_current_map(
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
 
 
+@dataclass(frozen=True, slots=True)
+class _RegistrationsOverCatalog(Mapping[str, Mapping[str, object]]):
+    catalog: Mapping[str, Mapping[str, object]]
+    registrations: Mapping[str, Mapping[str, object]]
+
+    def __getitem__(self, key: str) -> Mapping[str, object]:
+        registered: Final = self.registrations.get(key)
+        if registered is None:
+            return self.catalog[key]
+        return MappingProxyType({**self.catalog.get(key, {}), **registered})
+
+    def __iter__(self) -> Iterator[str]:
+        return iter({**dict.fromkeys(self.catalog), **dict.fromkeys(self.registrations)})
+
+    def __len__(self) -> int:
+        return len(self.catalog.keys() | self.registrations.keys())
+
+
+def catalog_with_runtime_registrations() -> Mapping[str, Mapping[str, object]]:
+    """The loaded catalog plus ``register_model`` calls, without what routers register for their deployments."""
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    if not _runtime_registered_model_cost:
+        return catalog
+    return _RegistrationsOverCatalog(catalog, MappingProxyType(_runtime_registered_model_cost))
+
+
 def runtime_model_cost_registrations(
     model: str, custom_llm_provider: str
 ) -> tuple[tuple[str, Mapping[str, object]], ...]:

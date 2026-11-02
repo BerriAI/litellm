@@ -689,6 +689,38 @@ async def test_a_bedrock_deployment_sends_cache_points_by_its_own_flag_not_a_sib
         "flagless": not declared,
     }
 
+async def test_a_routed_bedrock_deployment_sends_cache_points_when_register_model_opted_its_model_in(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    from litellm import Router
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    converse: Final = respx_mock.post(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/moonshotai.kimi-k3/converse"
+    ).mock(return_value=Response(200, json=_CONVERSE_REPLY))
+    litellm.register_model({"bedrock/moonshotai.kimi-k3": {"supports_prompt_cache_breakpoint": True}})
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "flagless",
+                "litellm_params": {
+                    "model": "bedrock/moonshotai.kimi-k3",
+                    "aws_access_key_id": "bedrock-test-key",
+                    "aws_secret_access_key": "bedrock-test-secret",
+                    "aws_region_name": "us-east-1",
+                    "cache_control_injection_points": [{"location": "message", "role": "system"}],
+                },
+                "model_info": {"id": "flagless-id"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    await router.acompletion(model="flagless", messages=[{"role": "system", "content": "stable"}, {"role": "user", "content": "hi"}])
+
+    assert b"cachePoint" in converse.calls.last.request.content
+
+
 def test_merge_bedrock_aws_request_params_strips_caller_identity_when_deployment_has_static_credentials():
     from litellm.llms.bedrock.common_utils import merge_bedrock_aws_request_params
 

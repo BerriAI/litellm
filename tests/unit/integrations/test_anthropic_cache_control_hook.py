@@ -5371,6 +5371,9 @@ _APPLICATION_INFERENCE_PROFILE: Final = "arn:aws:bedrock:us-east-1:123456789012:
         ("qa-shared-gpt-deployment", "azure_ai", True),
         ("my-custom-deployment", "azure", True),
         ("qa-mantle-model", "bedrock_mantle", True),
+        ("anthropic/qa-gateway-claude", "openrouter", False),
+        ("qa-downstream-claude", "litellm_proxy", False),
+        ("qa-self-hosted-model", "hosted_vllm", False),
     ],
 )
 def test_a_declared_breakpoint_flag_picks_openais_dialect_only_where_the_request_goes_out_openai_shaped(
@@ -5382,6 +5385,52 @@ def test_a_declared_breakpoint_flag_picks_openais_dialect_only_where_the_request
         )
         is expected
     )
+
+
+def test_a_gateway_deployment_declaring_the_flag_picks_openais_dialect_for_a_model_the_cost_map_lists_there() -> None:
+    litellm.register_model({"openrouter/qa-listed-gpt": {"litellm_provider": "openrouter", "mode": "chat"}})
+
+    assert [
+        AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+            model, "openrouter", model_info={"supports_prompt_cache_breakpoint": True}
+        )
+        for model in ("qa-listed-gpt", "qa-unlisted-gpt")
+    ] == [True, False]
+
+
+def test_a_custom_handler_provider_declaring_the_flag_keeps_the_anthropic_mark() -> None:
+    litellm.register_model(
+        {"qa-custom-handler/qa-model": {"litellm_provider": "qa-custom-handler", "mode": "chat"}}
+    )
+
+    assert (
+        AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+            "qa-model", "qa-custom-handler", model_info={"supports_prompt_cache_breakpoint": True}
+        )
+        is False
+    )
+
+
+def test_a_routed_deployment_without_its_own_flag_reads_a_register_model_opt_in_but_not_a_siblings() -> None:
+    litellm.register_model(
+        {"azure_ai/qa-registered-gpt": {"litellm_provider": "azure_ai", "supports_prompt_cache_breakpoint": True}}
+    )
+    Router(
+        model_list=[
+            {
+                "model_name": "qa-opted-in-sibling",
+                "litellm_params": {"model": "azure_ai/qa-sibling-gpt", "api_base": "https://qa.services.ai.azure.com"},
+                "model_info": {"id": "qa-opted-in-sibling-id", "supports_prompt_cache_breakpoint": True},
+            }
+        ]
+    )
+
+    assert [
+        AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+            model, "azure_ai", model_info={"id": "qa-flagless-id"}
+        )
+        for model in ("qa-registered-gpt", "qa-sibling-gpt")
+    ] == [True, False]
 
 
 @pytest.mark.parametrize(

@@ -24,7 +24,6 @@ from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     cache_control_as_prompt_cache_breakpoint,
     with_prompt_cache_breakpoint,
@@ -112,8 +111,14 @@ def declared_prompt_cache_breakpoint(model_info: Mapping[str, object] | None) ->
     return declared if isinstance(declared, bool) else None
 
 
+def routed_cost_map() -> CostMap:
+    from litellm.utils import catalog_with_runtime_registrations
+
+    return catalog_with_runtime_registrations()
+
+
 def _catalog_unless_unrouted(model_info: Mapping[str, object] | None) -> CostMap | None:
-    return None if model_info is None else GetModelCostMap.loaded_model_cost_map()
+    return None if model_info is None else routed_cost_map()
 
 
 def _validated_object_mapping(value: object) -> dict[object, object] | None:
@@ -456,10 +461,16 @@ def _hosted_openai_dialect_flag(
         return None
     if isinstance(exact_entry, Mapping) and exact_provider == provider:
         return _hosted_entry_flag(exact_entry, lambda: provider)
+    entries: Final = (cost_map.get(candidate) for candidate in _provider_cost_map_keys(model, provider))
+    flags: Final = (_hosted_entry_flag(entry, lambda: provider) for entry in entries if isinstance(entry, Mapping))
+    return next((flag for flag in flags if flag is not None), None)
+
+
+def _provider_cost_map_keys(model: str, provider: str) -> tuple[str, ...]:
     from litellm.utils import get_potential_model_names
 
     names: Final = get_potential_model_names(model, provider)
-    candidates: Final = (
+    return (
         names["combined_model_name"],
         names["region_free_combined_model_name"],
         names["split_model"],
@@ -467,26 +478,35 @@ def _hosted_openai_dialect_flag(
         names["stripped_model_name"],
         names["provider_prefixed_model_name"],
     )
-    entries: Final = (cost_map.get(candidate) for candidate in candidates)
-    flags: Final = (_hosted_entry_flag(entry, lambda: provider) for entry in entries if isinstance(entry, Mapping))
-    return next((flag for flag in flags if flag is not None), None)
+
+
+def _cost_map_lists_model_for_provider(model: str, provider: str, model_cost: CostMap) -> bool:
+    entries: Final = (model_cost.get(key) for key in (model, *_provider_cost_map_keys(model, provider)))
+    return any(isinstance(entry, Mapping) and entry.get("litellm_provider") == provider for entry in entries)
 
 
 _PROVIDERS_READING_THE_FLAG_AS_CACHE_POINT: Final = frozenset(("bedrock", "bedrock_converse"))
+_PROVIDERS_HOSTING_OPENAIS_API: Final = frozenset(("azure", "azure_ai", "bedrock_mantle"))
 
 
-def _declared_hosted_flag(declared: bool, model: str, provider: str | None) -> bool | None:
+def _declared_hosted_flag(declared: bool, model: str, provider: str | None, model_cost: CostMap) -> bool | None:
     """
     A deployment's own ``supports_prompt_cache_breakpoint`` picks OpenAI's breakpoint only where the
     request goes out OpenAI-shaped. Bedrock reads the same flag on every route as whether Converse takes
     a ``cachePoint``, and a provider building Anthropic messages takes ``cache_control``, so both keep
-    the Anthropic mark.
+    the Anthropic mark. A gateway or self-hosted server (OpenRouter, a LiteLLM proxy, vLLM) may pass
+    the request on to Anthropic, so there the flag only picks OpenAI's breakpoint for a model the cost
+    map lists under that provider.
     """
     if provider is None or provider == "openai":
         return None
     return (
         declared
         and provider not in _PROVIDERS_READING_THE_FLAG_AS_CACHE_POINT
+        and (
+            provider in _PROVIDERS_HOSTING_OPENAIS_API
+            or _cost_map_lists_model_for_provider(model, provider, model_cost)
+        )
         and _sends_openai_shaped_chat(model, provider)
     )
 
@@ -845,7 +865,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             )
             if declared is None
             else _declared_hosted_flag(
-                declared, model, custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model, api_base)
+                declared,
+                model,
+                custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model, api_base),
+                routed_cost_map(),
             )
         )
         if hosted_flag is not None:
