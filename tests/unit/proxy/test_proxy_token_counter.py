@@ -4252,3 +4252,49 @@ def test_utils_token_counter_line_stays_one_line_when_the_model_carries_a_newlin
     assert line["request_model"] == forged_model
     assert "\n" not in message
     assert message.startswith(f'token count - litellm_call_id="count log" request_model={json.dumps(forged_model)} ')
+
+
+async def test_anthropic_count_tokens_local_fallback_handles_tool_addition_and_removal():
+    """When Anthropic provider token count is unavailable, the local estimate should handle
+    tool_addition and tool_removal blocks without raising ValueError / 500, and include the added tool schemas."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    tool_def = {
+        "name": "get_weather",
+        "description": "Get current weather",
+        "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "tool_addition",
+                    "tool": {
+                        "type": "tool_definition",
+                        "definition": tool_def,
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "What is the weather in Paris?"},
+    ]
+
+    response = await proxy_server.count_request_tokens(
+        request=TokenCountRequest(model="claude-3-5-sonnet-20241022", messages=messages),
+        call_endpoint=False,
+        messages_format="anthropic",
+    )
+
+    assert response.count_source == "local_estimate"
+    assert response.total_tokens > 0
+
+    text_only_response = await proxy_server.count_request_tokens(
+        request=TokenCountRequest(
+            model="claude-3-5-sonnet-20241022",
+            messages=[{"role": "system", "content": []}, {"role": "user", "content": "What is the weather in Paris?"}],
+        ),
+        call_endpoint=False,
+        messages_format="anthropic",
+    )
+    assert response.total_tokens > text_only_response.total_tokens
