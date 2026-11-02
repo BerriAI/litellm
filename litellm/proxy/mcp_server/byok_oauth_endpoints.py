@@ -50,11 +50,16 @@ from litellm.proxy.middleware.per_request_root_path_middleware import get_server
 _byok_auth_codes: Final[dict[str, dict]] = {}
 _AUTH_CODE_CACHE_PREFIX: Final = "mcp_byok_auth_code:"
 _AUTH_CODE_CLAIM_PREFIX: Final = "mcp_byok_auth_code_claim:"
+# Codes issued in the current TTL window, counted in the shared store; bounds pending codes
+# there the way len(_byok_auth_codes) bounds them in memory.
+_AUTH_CODE_WINDOW_KEY: Final = "mcp_byok_auth_code_window"
 
 # Authorization codes expire after 5 minutes.
 _AUTH_CODE_TTL_SECONDS: Final = 300
 # Hard cap to prevent memory exhaustion from incomplete OAuth flows.
 _AUTH_CODES_MAX_SIZE: Final = 1000
+# Upper bound for a submitted API key, so a pending code cannot carry an arbitrarily large value.
+_MAX_API_KEY_LENGTH: Final = 8192
 
 router: Final = APIRouter(tags=["mcp"])
 
@@ -131,6 +136,21 @@ async def _discard_auth_code(code: str) -> None:
     shared: Final = _shared_code_store()
     if shared is not None:
         await shared.async_delete_cache(_AUTH_CODE_CACHE_PREFIX + code)
+
+
+async def _reserve_auth_code_slot() -> bool:
+    """Whether another pending code may be issued. In memory this is the dict size; with the
+    shared store it is an atomic per-window counter, since the dict stays empty there. A shared
+    store that cannot count refuses (fail closed)."""
+    shared: Final = _shared_code_store()
+    if shared is None:
+        return len(_byok_auth_codes) < _AUTH_CODES_MAX_SIZE
+    try:
+        issued: Final = await shared.async_increment(_AUTH_CODE_WINDOW_KEY, 1, ttl=_AUTH_CODE_TTL_SECONDS)
+    except Exception as e:  # noqa: BLE001  # any shared-store fault refuses the new code
+        verbose_proxy_logger.warning("byok authorize: pending-code counter unavailable: %s", e)
+        return False
+    return issued <= _AUTH_CODES_MAX_SIZE
 
 
 async def _claim_auth_code(code: str) -> bool:
@@ -904,7 +924,9 @@ async def byok_authorize_post(
 
     # Reject new codes if the store is at capacity (prevents memory exhaustion
     # from a burst of abandoned OAuth flows).
-    if len(_byok_auth_codes) >= _AUTH_CODES_MAX_SIZE:
+    if len(api_key) > _MAX_API_KEY_LENGTH:
+        raise HTTPException(status_code=400, detail="api_key is too long")
+    if not await _reserve_auth_code_slot():
         raise HTTPException(status_code=503, detail="Too many pending authorization flows")
 
     if code_challenge_method != "S256":
