@@ -298,17 +298,10 @@ class AzureOpenAIConfig(BaseConfig):
         headers: dict,
     ) -> dict:
         ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
-        known_support: Final = deployment_prompt_cache_breakpoint_support(model, "azure", litellm_params)
-        drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
         wire_messages: Final = (
-            ordered_messages
-            if not drop_params
-            else [without_prompt_cache_breakpoints(message) for message in ordered_messages]
-            if known_support is False
-            else [
-                chat_completion_prompt_cache_breakpoints_for_wire(message, drop_params=True)
-                for message in ordered_messages
-            ]
+            self._with_wire_safe_prompt_cache_breakpoints(model, ordered_messages, litellm_params)
+            if drops_unsupported_params(litellm_params.get("drop_params"))
+            else ordered_messages
         )
         stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(wire_messages)
         azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(stripped_messages))
@@ -325,6 +318,14 @@ class AzureOpenAIConfig(BaseConfig):
             **request_params,
             **sanitized_tools_update(optional_params),
         }
+
+    @staticmethod
+    def _with_wire_safe_prompt_cache_breakpoints(
+        model: str, messages: list[AllMessageValues], litellm_params: Mapping[str, object]
+    ) -> list[AllMessageValues]:
+        if deployment_prompt_cache_breakpoint_support(model, "azure", litellm_params) is False:
+            return [without_prompt_cache_breakpoints(message) for message in messages]
+        return [chat_completion_prompt_cache_breakpoints_for_wire(message, drop_params=True) for message in messages]
 
     def transform_response(
         self,

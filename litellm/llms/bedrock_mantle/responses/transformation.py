@@ -64,6 +64,10 @@ _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
 _BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES: Final = frozenset({"auto"})
 
 
+def _prompt_cache_breakpoint_as_sent_or_none(marker: object) -> object:
+    return marker if chat_completion_prompt_cache_breakpoint_for_wire(marker, drop_params=True) == marker else None
+
+
 class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPIConfig):
     def __init__(
         self,
@@ -118,7 +122,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     def _prompt_cache_breakpoint_to_wire(
         self, litellm_params: GenericLiteLLMParams, reads_breakpoints: bool, known_support: bool | None
     ) -> Callable[[object], object]:
-        return partial(chat_completion_prompt_cache_breakpoint_for_wire, drop_params=True)
+        if reads_breakpoints or known_support is True:
+            return partial(chat_completion_prompt_cache_breakpoint_for_wire, drop_params=True)
+        return _prompt_cache_breakpoint_as_sent_or_none
 
     def supports_native_file_search(self) -> bool:
         return False
