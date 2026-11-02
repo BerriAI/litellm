@@ -2079,12 +2079,13 @@ def test_bedrock_invoke_claude_default_max_tokens_ignores_a_sibling_deployments_
     assert body["max_tokens"] == mapped_cap, f"a sibling's cap on the shared id leaked, got {body['max_tokens']}"
 
 
-def test_bedrock_invoke_claude_default_max_tokens_yields_to_anthropic_config(local_model_cost_map, monkeypatch):
+def test_bedrock_invoke_claude_default_max_tokens_yields_to_anthropic_config(local_model_cost_map):
     configured_max_tokens: Final = 1000
     assert litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID) != configured_max_tokens
-    monkeypatch.setattr(litellm.AnthropicConfig, "max_tokens", configured_max_tokens)
 
-    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+    body: Final = AmazonAnthropicClaudeConfig(
+        read_configured_max_tokens=lambda: configured_max_tokens
+    ).transform_request(
         model=f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}",
         messages=[{"role": "user", "content": "hi"}],
         optional_params={},
@@ -2097,11 +2098,11 @@ def test_bedrock_invoke_claude_default_max_tokens_yields_to_anthropic_config(loc
 
 @pytest.mark.parametrize(("configured_max_tokens", "deployment_cap"), [(100000, 50), (1000, 8192)])
 def test_bedrock_invoke_claude_default_max_tokens_is_the_lower_of_anthropic_config_and_the_deployments_cap(
-    local_model_cost_map, monkeypatch, configured_max_tokens: int, deployment_cap: int
+    local_model_cost_map, configured_max_tokens: int, deployment_cap: int
 ):
-    monkeypatch.setattr(litellm.AnthropicConfig, "max_tokens", configured_max_tokens)
-
-    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+    body: Final = AmazonAnthropicClaudeConfig(
+        read_configured_max_tokens=lambda: configured_max_tokens
+    ).transform_request(
         model=f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}",
         messages=[{"role": "user", "content": "hi"}],
         optional_params={},

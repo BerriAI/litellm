@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -64,6 +64,10 @@ _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
+def _anthropic_config_max_tokens() -> int | None:
+    return litellm.AnthropicConfig.max_tokens
+
+
 def _mapped_max_tokens(model: str) -> int | None:
     row: Final = object_mapping(litellm.model_cost.get(model)) or {}  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # cost map rows are untyped JSON
     match row.get("max_output_tokens"):
@@ -93,9 +97,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
     anthropic_version: str = "bedrock-2023-05-31"
 
-    def __init__(self, model_info: Mapping[str, object] | None = None) -> None:
+    def __init__(
+        self,
+        model_info: Mapping[str, object] | None = None,
+        read_configured_max_tokens: Callable[[], int | None] = _anthropic_config_max_tokens,
+    ) -> None:
         super().__init__()
         self._deployment_model_info: Final = model_info
+        self._read_configured_max_tokens: Final = read_configured_max_tokens
 
     @classmethod
     def get_config(cls, *, model: str | None = None) -> dict[str, object]:  # mutable-ok: overrides BaseConfig's dict
@@ -266,8 +275,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             ),
         )
 
-    def _default_max_tokens(self, model: str, litellm_params: Mapping[str, object]) -> int | None:
-        configured_max_tokens: Final = litellm.AnthropicConfig.max_tokens
+    def _default_max_tokens(self, model: str, litellm_params: Mapping[str, object]) -> int:
+        configured_max_tokens: Final = self._read_configured_max_tokens()
         match deployment_model_info(litellm_params).get("max_output_tokens"):
             case int() as deployment_max_tokens:
                 return (
@@ -276,7 +285,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                     else min(deployment_max_tokens, configured_max_tokens)
                 )
             case _ if configured_max_tokens is not None:
-                return None
+                return configured_max_tokens
             case _:
                 return next(
                     (
