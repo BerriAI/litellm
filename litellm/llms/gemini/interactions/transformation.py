@@ -126,6 +126,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             "response_format",
             "response_mime_type",
             "previous_interaction_id",
+            "continuation_token",
         ]
 
     def validate_environment(
@@ -206,6 +207,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             "environment",
             "response_modalities",
             "previous_interaction_id",
+            "continuation_token",
         ]
         dropped_keys: Final = (
             frozenset({"agent_config"})
