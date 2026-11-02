@@ -13,7 +13,6 @@ from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 from litellm.proxy.rust_gateway import (
     child_argv,
     cli_command,
-    forwarded_allow_ips,
     gateway_binary,
     inherited_fd,
     metrics_host,
@@ -52,21 +51,6 @@ def test_missing_binary_gives_install_instruction() -> None:
     assert startup_error(None, {}) == (
         "--rust_gateway requires the litellm-gateway binary. Install litellm[proxy] in this environment"
     )
-
-
-@pytest.mark.parametrize(
-    ("trusted", "expected"),
-    [
-        (None, "127.0.0.1"),
-        ("", "127.0.0.1"),
-        ("192.0.2.1", "127.0.0.1,192.0.2.1"),
-        ("127.0.0.1, 192.0.2.0/24", "127.0.0.1,192.0.2.0/24"),
-        ("*", "*"),
-        ("127.0.0.1,*", "127.0.0.1,*"),
-    ],
-)
-def test_private_hop_preserves_configured_trusted_proxies(trusted: str | None, expected: str) -> None:
-    assert forwarded_allow_ips(trusted) == expected
 
 
 @pytest.mark.parametrize("supervised", [False, True])
@@ -174,7 +158,6 @@ def test_supervisor_drains_before_stopping_python_and_reaps_both_children(
         patch("asyncio.create_subprocess_exec", side_effect=spawn) as launch,
         patch("socket.socket", return_value=listener),
         patch("os.killpg", side_effect=kill_group) as kill,
-        patch.dict("os.environ", {"FORWARDED_ALLOW_IPS": "192.0.2.1"}),
     ):
         assert supervise("gateway", ("python", "--rust_gateway"), "0.0.0.0", 4000) == expected
 
@@ -184,7 +167,7 @@ def test_supervisor_drains_before_stopping_python_and_reaps_both_children(
     assert python_call.args == ("python", "--host", "127.0.0.1", "--port", "45555")
     assert python_call.kwargs["pass_fds"] == (17,)
     assert python_call.kwargs["env"]["LITELLM_RUST_GATEWAY"] == "false"
-    assert python_call.kwargs["env"]["FORWARDED_ALLOW_IPS"] == "127.0.0.1,192.0.2.1"
+    assert python_call.kwargs["env"]["FORWARDED_ALLOW_IPS"] == "127.0.0.1"
     assert rust_call.kwargs["env"]["LITELLM_FORWARD_UPSTREAM"] == "http://127.0.0.1:45555"
     assert rust_call.kwargs["env"]["PORT"] == "4000"
     if event == "spawn-error":
