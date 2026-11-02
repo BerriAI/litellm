@@ -995,7 +995,7 @@ def _gated(gateway: Gateway, cell: str, key: str | None) -> httpx.Response:
 
 
 def recorded_before(cell: str) -> list[tuple[str, str, str, float]]:
-    if cell in ("invalid-key", "expired-key"):
+    if cell != "no-model-access":
         return []
     return sorted([(FAILURES, "", "", 1.0), (TOTALS, "", "", 1.0), (LLM_FAILED, identity(cell), "", 1.0)])
 
