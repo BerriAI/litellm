@@ -15411,17 +15411,23 @@ def _native_responses_count(
     )
 
 
-def _deployment_api_base(deployment: _TokenCountDeployment) -> str | None:
-    return _non_empty_str(deployment.get("litellm_params", {}).get("api_base"))
+def _inference_api_base(
+    deployment: _TokenCountDeployment, responses_request: Mapping[str, object] | None
+) -> str | None:
+    return _non_empty_str(
+        _inference_params(deployment.get("litellm_params", {}), responses_request or {}).get("api_base")
+    )
 
 
-def _deployment_provider(deployment: _TokenCountDeployment, request_model: str) -> str | None:
+def _deployment_provider(
+    deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
+) -> str | None:
     params: Final = deployment.get("litellm_params", {})
     try:
         return litellm.get_llm_provider(
             model=_non_empty_str(params.get("model")) or request_model,
             custom_llm_provider=_non_empty_str(params.get("custom_llm_provider")),
-            api_base=_deployment_api_base(deployment),
+            api_base=_inference_api_base(deployment, responses_request),
         )[1]
     except litellm.BadRequestError:
         return None
@@ -15431,16 +15437,15 @@ def _serves_native_responses(
     deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object]
 ) -> bool:
     params: Final = deployment.get("litellm_params", {})
+    inference: Final = _inference_params(params, responses_request)
     try:
         return provider_stores_the_conversation(
             _non_empty_str(params.get("model")) or request_model,
             _non_empty_str(params.get("custom_llm_provider")),
             {
-                "use_chat_completions_api": bool(
-                    _inference_params(params, responses_request).get("use_chat_completions_api")
-                ),
+                "use_chat_completions_api": bool(inference.get("use_chat_completions_api")),
                 "model_info": dict(deployment.get("model_info", {})),
-                "api_base": _deployment_api_base(deployment),
+                "api_base": _non_empty_str(inference.get("api_base")),
             },
         )
     except litellm.BadRequestError:
@@ -15624,7 +15629,7 @@ async def _count_request_tokens(
         else await chat_count_request(
             model_to_use,
             custom_llm_provider,
-            _deployment_api_base(deployment_view),
+            _inference_api_base(deployment_view, routed_request),
             routed_request,
             _count_drop_policy(routed_deployment, routed_request),
         )
@@ -15714,7 +15719,7 @@ async def _count_request_tokens(
         cast(list[ChatCompletionToolParam], list(_with_strict_by_default(sent_tools)))  # cast-ok: strict added
         if sent_tools is not None
         and native_responses
-        and _deployment_provider(deployment_view, request.model) in _AZURE_PROVIDERS
+        and _deployment_provider(deployment_view, request.model, responses_request) in _AZURE_PROVIDERS
         and tool_section is not None
         and tool_section.renders_strict_only_when_true
         else sent_tools

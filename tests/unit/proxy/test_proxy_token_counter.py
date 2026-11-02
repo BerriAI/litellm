@@ -3174,6 +3174,29 @@ async def test_a_responses_count_that_asks_for_the_chat_completions_bridge_frame
 
 
 @pytest.mark.asyncio
+async def test_a_responses_count_frames_for_the_api_base_router_defaults_send_inference_to(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "counted",
+                "litellm_params": {
+                    "api_key": "unused",
+                    "model": _AZURE_GROK_4_1,
+                    "api_base": _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1],
+                },
+                "model_info": {},
+            }
+        ],
+        default_litellm_params={"api_base": "https://unused.cognitiveservices.azure.com/models"},
+    )
+    chat_count: Final = await _count_with_router(monkeypatch, router, (_GET_WEATHER,), responses=False)
+
+    assert await _count_with_router(monkeypatch, router, (_GET_WEATHER,), responses=True) == chat_count
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("use_chat_completions_api", ["maybe", {"a": 1}])
 async def test_a_responses_count_with_a_malformed_bridge_flag_reads_it_the_way_the_responses_route_does(
     monkeypatch: pytest.MonkeyPatch, use_chat_completions_api: object
