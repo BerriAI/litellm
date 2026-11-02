@@ -1013,3 +1013,15 @@ _check_non_standard_fallback_format = check_non_standard_fallback_format
 
 def run_non_standard_fallback_format(fallbacks: Sequence[str] | Sequence[Mapping[str, object]], model_group: str):
     pass
+
+
+def non_stream_fallback_answer_as_chunk(fallback_response: object) -> object:
+    """A mid-stream fallback that answered without a stream: the whole response as the one stream
+    chunk it is, as a mocked stream sends a full response (`convert_model_response_to_streaming`).
+    Anything that is not a chat response is yielded as it is."""
+    from litellm.llms.base_llm.base_model_iterator import convert_model_response_to_streaming
+    from litellm.types.utils import ModelResponse
+
+    if isinstance(fallback_response, ModelResponse):
+        return convert_model_response_to_streaming(fallback_response)
+    return fallback_response

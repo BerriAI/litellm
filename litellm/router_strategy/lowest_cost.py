@@ -209,15 +209,32 @@ class LowestCostLoggingHandler(CustomLogger):
         """
         Returns a deployment with the lowest cost
         """
-        cost_key: Final = f"cost_map:{model_group}"
+        request_count_dict: Final = await self.router_cache.async_get_cache(key=f"cost_map:{model_group}") or {}  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # legacy untyped selector internals
+        return self._lowest_cost_deployment(request_count_dict, healthy_deployments, messages, input)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # legacy untyped selector internals
 
-        request_count_dict: Final = await self.router_cache.async_get_cache(key=cost_key) or {}
+    @with_service_target("router_usage")
+    def get_available_deployments(  # pyright: ignore[reportUnknownParameterType]  # noqa: ANN201  # the selector's untyped deployment dict, as the async twin returns it
+        self,
+        model_group: str,
+        healthy_deployments: list,  # pyright: ignore[reportMissingTypeArgument, reportUnknownParameterType]  # mutable-ok: the router's list of deployment dicts, as the async twin takes it
+        messages: list[dict[str, str]] | None = None,  # mutable-ok: the request's messages, as given
+        input: str | list | None = None,  # pyright: ignore[reportMissingTypeArgument, reportUnknownParameterType]  # mutable-ok: the request's input, as given
+        request_kwargs: dict | None = None,  # pyright: ignore[reportMissingTypeArgument, reportUnknownParameterType]  # mutable-ok: unused, the same signature as the async twin
+    ):
+        """
+        The sync twin of `async_get_available_deployments`: the deployment with the lowest cost
+        """
+        request_count_dict: Final = self.router_cache.get_cache(key=f"cost_map:{model_group}") or {}  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # legacy untyped selector internals
+        return self._lowest_cost_deployment(request_count_dict, healthy_deployments, messages, input)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # legacy untyped selector internals
 
-        # -----------------------
-        # Find lowest used model
-        # ----------------------
-        float("inf")
-
+    def _lowest_cost_deployment(  # pyright: ignore[reportUnknownParameterType]  # noqa: ANN202  # the selector's untyped deployment dict
+        self,
+        request_count_dict: dict | None,  # pyright: ignore[reportMissingTypeArgument, reportUnknownParameterType]  # mutable-ok: the untyped cached usage map, filled in place as before
+        healthy_deployments: list,  # pyright: ignore[reportMissingTypeArgument, reportUnknownParameterType]  # mutable-ok: the router's list of deployment dicts
+        messages: list[dict[str, str]] | None,  # mutable-ok: the request's messages, as given
+        input: str | list | None,  # pyright: ignore[reportMissingTypeArgument, reportUnknownParameterType]  # mutable-ok: the request's input, as given
+    ):
+        """The cheapest healthy deployment still under its tpm/rpm limits this minute, else None."""
         current_date: Final = datetime.now().strftime("%Y-%m-%d")
         current_hour: Final = datetime.now().strftime("%H")
         current_minute: Final = datetime.now().strftime("%M")
@@ -296,8 +313,8 @@ class LowestCostLoggingHandler(CustomLogger):
             verbose_router_logger.debug(
                 "item_cost: %s, item_tpm: %s, item_rpm: %s, model_id: %s",
                 item_cost,
-                item_tpm,
-                item_rpm,
+                item_tpm,  # pyright: ignore[reportUnknownArgumentType]  # the untyped cached usage map
+                item_rpm,  # pyright: ignore[reportUnknownArgumentType]  # the untyped cached usage map
                 _deployment.get("model_info", {}).get("id"),
             )
 

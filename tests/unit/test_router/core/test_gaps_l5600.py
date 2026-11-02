@@ -8,6 +8,7 @@ Python does them today and called out in the test's docstring.
 """
 
 import datetime
+import inspect
 import io
 from collections.abc import Callable, Mapping
 from types import SimpleNamespace
@@ -73,6 +74,10 @@ ROUTED_ENDPOINTS: Final[dict[str, dict[str, object]]] = {
     "acancel_batch": {"batch_id": "b1"},
 }
 
+SYNC_COUNTED: Final[dict[str, dict[str, object]]] = {
+    "completion": {"messages": MESSAGES},
+    "embedding": {"input": ["a"]},
+}
 
 # --- batch completions (5565-5790) ----------------------------------------------------------
 
@@ -320,17 +325,21 @@ async def test_image_generation_for_an_unknown_group_raises_without_calling_the_
         ("aembedding", "openai/d1", "openai/d1"),
         ("acreate_batch", "openai/d1", "g"),
         ("acancel_batch", "openai/d1", "g"),
-        ("image_generation", "", ""),
+        ("image_generation", "openai/d1", "openai/d1"),
+        ("text_completion", "openai/d1", "g"),
+        ("completion", "openai/d1", "openai/d1"),
+        ("embedding", "openai/d1", "openai/d1"),
     ],
 )
-async def test_call_counters_are_keyed_differently_per_endpoint(
+async def test_call_counters_are_keyed_per_endpoint_and_the_same_for_sync_and_async(
     make_core: MakeCore, host: EndpointHost, endpoint: str, total_key: str, fail_key: str
 ):
     """total_calls/fail_calls are keyed by the deployment model for some endpoints and by the model group
-    for others (fail_calls even differs from total_calls for some); sync image_generation counts under ""."""
+    for others (fail_calls even differs from total_calls for some); a sync endpoint counts as its async
+    twin does."""
     host.answer("*", rate_limit())
     core: Final = make_core(model_list=[deployment("g", "d1")], num_retries=1)
-    request: Final = ROUTED_ENDPOINTS.get(endpoint, {"prompt": "p"})
+    request: Final = SYNC_COUNTED.get(endpoint) or ROUTED_ENDPOINTS.get(endpoint, {"prompt": "p"})
     with pytest.raises(litellm.RateLimitError):
         await core.call(endpoint, {"model": "g", **request})
     assert dict(core.total_calls) == {total_key: 2}  # pyright: ignore[reportAttributeAccessIssue]  # a public counter
@@ -399,16 +408,22 @@ async def test_async_passthrough_rewrites_only_whole_path_segments_naming_the_gr
     assert host.calls[0].kwargs["endpoint"] == "/model/us.anthropic.claude/invoke/gg/us.anthropic.claude:stream"
 
 
-async def test_sync_generic_call_replaces_every_substring_of_the_group_name_in_the_endpoint(
-    make_core: MakeCore, monkeypatch: pytest.MonkeyPatch, host: EndpointHost
+@pytest.mark.parametrize("endpoint", ["aresponses", "responses"])  # pyright: ignore[reportUnknownMemberType, reportUntypedFunctionDecorator]  # pytest and the cores' untyped members
+async def test_generic_call_rewrites_only_whole_path_segments_naming_the_group(
+    make_core: MakeCore,
+    monkeypatch: pytest.MonkeyPatch,
+    host: EndpointHost,
+    endpoint: str,  # pyright: ignore[reportUnknownMemberType, reportUnknownParameterType]  # pytest and the cores' untyped members
 ):
-    """The sync path uses str.replace with the full deployment model (provider prefix kept), so a group
-    name inside other path segments is rewritten too, unlike the async path's segment-bounded rewrite."""
+    """Sync and async both swap the group name for the provider-stripped deployment model one whole path
+    segment at a time, so a segment that merely contains the group name ("gg") is left alone."""
     patch_direct_endpoints(monkeypatch, host)
     core: Final = make_core(model_list=[deployment("g", "d1")])
-    core.responses(model="g", input="hi", endpoint="/gg/g")
+    sent: Final = getattr(core, endpoint)(model="g", input="hi", endpoint="/gg/g")  # pyright: ignore[reportAny]  # pytest and the cores' untyped members
+    if inspect.isawaitable(sent):  # pyright: ignore[reportAny]  # pytest and the cores' untyped members
+        await sent
     call: Final = host.calls[0]
-    assert (call.model, call.kwargs["endpoint"]) == ("openai/d1", "/openai/d1openai/d1/openai/d1")
+    assert (call.model, call.kwargs["endpoint"]) == ("openai/d1", "/gg/d1")
 
 
 # --- batches (8112-8362) --------------------------------------------------------------------

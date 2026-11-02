@@ -70,7 +70,7 @@ Kind = Literal[  # rebind-ok: rebound as the Python router rebinds it
     "search",
 ]
 Stamp = Literal["deployment", "retry_skip", "none"]  # rebind-ok: rebound as the Python router rebinds it
-CountKey = Literal["deployment", "group", "empty"]  # rebind-ok: rebound as the Python router rebinds it
+CountKey = Literal["deployment", "group"]  # rebind-ok: rebound as the Python router rebinds it
 
 # Request keys the router reads to route the call; the deployment call never receives them.
 ROUTING_KEYS: Final = frozenset(
@@ -174,15 +174,21 @@ PLANS: Final[Mapping[str, Plan]] = MappingProxyType(
             sync=True,
             splits_stream_timeout=True,
             stamp="deployment",
-            total_key=None,
-            success_key=None,
-            fail_key=None,
             named=("messages",),
         ),
         "atext_completion": Plan(
             "atext_completion",
             "atext_completion",
             "text",
+            splits_stream_timeout=True,
+            fail_key="group",
+            named=("prompt",),
+        ),
+        "text_completion": Plan(
+            "text_completion",
+            "text_completion",
+            "text",
+            sync=True,
             splits_stream_timeout=True,
             fail_key="group",
             named=("prompt",),
@@ -208,9 +214,6 @@ PLANS: Final[Mapping[str, Plan]] = MappingProxyType(
             "image",
             sync=True,
             prepare_field=None,
-            total_key="empty",
-            success_key="empty",
-            fail_key="empty",
             named=("prompt",),
         ),
         "atranscription": Plan(
@@ -379,7 +382,7 @@ class Counters:
 
     @staticmethod
     def _key(which: CountKey, model_name: str, group: str) -> str:
-        return model_name if which == "deployment" else group if which == "group" else ""
+        return model_name if which == "deployment" else group
 
     def started(self, plan: Plan, call: AttemptCall) -> None:
         if plan.total_key is not None:
@@ -492,9 +495,7 @@ def attempt_call(
                 function_name="generic_api_call",
                 splits_stream_timeout=plan.splits_stream_timeout,
             )
-            endpoint = kwargs.get("endpoint")  # rebind-ok: rebound as the Python router rebinds it
-            if endpoint and isinstance(endpoint, str):
-                kwargs["endpoint"] = endpoint.replace(requested, model_name)
+            rewrite_endpoint(core, kwargs, requested, model_name)
             kwargs["model"] = model_name
             final = {  # rebind-ok: rebound as the Python router rebinds it
                 **data,
@@ -516,6 +517,33 @@ def attempt_call(
             return AttemptCall(plan.host_op, kwargs, kwargs, requested, group)
 
 
+def rewrite_endpoint(
+    core: "RustCore",
+    kwargs: dict[str, object],  # mutable-ok: the attempt's own kwargs, shaped in place
+    requested: str,
+    model_name: str,
+) -> None:
+    """`_add_deployment_model_to_endpoint_for_llm_passthrough_route`: the requested name, as a whole
+    path segment of the request's endpoint, becomes the deployment's model without its provider."""
+    from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
+
+    endpoint: Final = kwargs.get("endpoint")
+    if not endpoint:
+        return
+    try:
+        stripped, _, _, _ = core._host.invoke("get_llm_provider")(  # pyright: ignore[reportPrivateUsage]  # the core's host
+            model=model_name,
+            custom_llm_provider=kwargs.get("custom_llm_provider"),
+            api_base=kwargs.get("api_base"),
+        )
+        replacement = str(stripped)  # rebind-ok: rebound as the Python router rebinds it
+    except Exception:  # noqa: BLE001  # as the Python router: an unresolvable model is used as is
+        replacement = model_name  # rebind-ok: rebound as the Python router rebinds it
+    kwargs["endpoint"] = replace_path_segment(  # rebind-ok: the attempt's kwargs, shaped in place
+        str(endpoint), requested, replacement
+    )
+
+
 def _generic_attempt(
     core: "RustCore",
     plan: Plan,
@@ -526,7 +554,6 @@ def _generic_attempt(
     group: str,
 ) -> AttemptCall:
     """`_ageneric_api_call_with_fallbacks_helper` for one deployment."""
-    from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
     from litellm.router_rust_websocket import turn_admission
 
     socket: Final = plan.call_type == "_aresponses_websocket"
@@ -540,20 +567,7 @@ def _generic_attempt(
         opens_responses_socket=socket,
     )
     model_name: Final = str(data.get("model"))
-    endpoint: Final = kwargs.get("endpoint")
-    if endpoint:
-        try:
-            stripped, _, _, _ = core._host.invoke("get_llm_provider")(  # pyright: ignore[reportPrivateUsage]  # the core's host
-                model=model_name,
-                custom_llm_provider=kwargs.get("custom_llm_provider"),
-                api_base=kwargs.get("api_base"),
-            )
-            replacement = str(stripped)  # rebind-ok: rebound as the Python router rebinds it
-        except Exception:  # noqa: BLE001  # as the Python router: an unresolvable model is used as is
-            replacement = model_name  # rebind-ok: rebound as the Python router rebinds it
-        kwargs["endpoint"] = (  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
-            replace_path_segment(str(endpoint), requested, replacement)
-        )
+    rewrite_endpoint(core, kwargs, requested, model_name)
     provider: Final = _generic_provider(data)
     final: Final = {
         **without_retrieve_stream_defaults(data, kwargs),
@@ -604,14 +618,14 @@ def model_client(
     core: "RustCore", plan: Plan, deployment: Mapping[str, object], kwargs: Mapping[str, object]
 ) -> object:
     """The SDK client cached for the deployment (`_get_async_openai_model_client`; `_get_client`
-    with the sync keys for sync completion and embedding), dropped when the request carries
+    with the sync keys for sync completion, text completion and embedding), dropped when the request carries
     another api key."""
     from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 
     if as_dict(deployment.get("litellm_params")).get("kubernetes_pod_discovery") is True:
         return None
     model_id: Final = as_dict(deployment.get("model_info")).get("id")
-    sync_keys: Final = plan.sync and plan.kind in ("chat", "embedding")
+    sync_keys: Final = plan.sync and plan.kind in ("chat", "embedding", "text")
     stream: Final = "stream_" if kwargs.get("stream") is True else ""
     key: Final = f"{model_id}_{stream}client" if sync_keys else f"{model_id}_{stream}async_client"
     span: Final = get_parent_otel_span_from_kwargs(dict(kwargs))
@@ -832,14 +846,13 @@ class RustEndpoints:
     """The public endpoint methods of one Rust core, beyond the routed call loop the core drives."""
 
     def __init__(self, core: "RustCore", config: "RouterConfig") -> None:
-        from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
         from litellm.router_utils.request_priority import InvalidPriority, parse_default_priority
 
         self._core: Final = core
         self.counters: Final = Counters()
         explicit: Final = config.get("timeout")
         self._explicit_timeout: Final = explicit
-        self._request_timeout: Final = get_configured_request_timeout() if explicit is not None else None
+        self._request_timeout: Final = self.process_request_timeout() if explicit is not None else None
         self._stream_timeout: Final = config.get("stream_timeout")
         # apply() flips it after construction, as on the Python core
         self._cache_responses: bool = bool(config.get("cache_responses"))
@@ -927,7 +940,15 @@ class RustEndpoints:
             request_timeout=self._request_timeout,
             stream_timeout=self._stream_timeout,
             cache_responses=self._cache_responses,
+            process_request_timeout=self.process_request_timeout,
         )
+
+    def process_request_timeout(self) -> float | None:
+        """The host's explicitly configured process ``request_timeout``, else None."""
+        from litellm.litellm_core_utils.request_timeout_resolver import configured_request_timeout
+
+        dynamic: Final = self._core._host.dynamic()  # pyright: ignore[reportPrivateUsage]  # the endpoints serve their own core
+        return configured_request_timeout(dynamic.request_timeout, dynamic.request_timeout_explicitly_set)
 
     def default_litellm_params(self, resolved: "Resolved") -> Mapping[str, object]:
         """The defaults the Python constructor completes before any call: the router ``timeout``
@@ -1495,30 +1516,12 @@ class RustEndpoints:
         return await self._direct("amoderation", prepared)
 
     def text_completion(self, request: Mapping[str, object]) -> object:
-        """The sync `text_completion`: one pick, no retries, the group name as the model."""
-        from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin
-
-        kwargs: Final = {k: v for k, v in request.items() if k not in ("is_retry", "is_fallback", "is_async")}
-        model: Final = kwargs.get("model")
-        prompt: Final = kwargs.get("prompt")
+        """The sync `text_completion`: routed, retried and fallen back as `atext_completion` is."""
+        model: Final = request.get("model")
         if not isinstance(model, str):
             raise TypeError("text_completion() missing 1 required positional argument: 'model'")
-        kwargs["num_retries"] = kwargs.get("num_retries", self._core._resolved.num_retries)  # pyright: ignore[reportPrivateUsage]  # see above
-        metadata_bucket(kwargs, "metadata").update({"model_group": model})
-        specific: Final = kwargs.pop("specific_deployment", None)
-        deployment: Final = self.select_sync(model, kwargs, specific=bool(specific))
-        data: Final = as_dict(deployment.get("litellm_params"))
-        for key, value in self._core._resolved.default_litellm_params.items():  # pyright: ignore[reportPrivateUsage]  # see above
-            if key not in kwargs:
-                kwargs[key] = value
-            elif key == "metadata":
-                bucket = kwargs[key]
-                if isinstance(bucket, dict):
-                    bucket.update(as_dict(value))  # pyright: ignore[reportUnknownMemberType]  # the request's metadata dict
-        pinned: Final = deployment_model_id_pin(data)
-        if pinned is not None:
-            kwargs["model_id"] = pinned
-        return self._invoke("text_completion")(**{**data, "prompt": prompt, "caching": self._cache_responses, **kwargs})
+        kwargs: Final = {k: v for k, v in request.items() if k not in ("is_retry", "is_fallback", "is_async")}
+        return self._core._call_sync(PLANS["text_completion"], kwargs)  # pyright: ignore[reportPrivateUsage]  # the endpoints serve their own core
 
     def select_sync(self, model: str, request: Mapping[str, object], *, specific: bool = False) -> Mapping[str, object]:
         """Pick a deployment for ``model`` on the sync path (`get_available_deployment`)."""

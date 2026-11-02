@@ -61,33 +61,34 @@ def stream_with_usage(sync: bool = False) -> Callable[..., object]:
 # --- a fallback that answers without a stream --------------------------------------------------
 
 
-async def test_a_mid_stream_fallback_that_answers_without_a_stream_yields_one_none_item(
+async def test_a_mid_stream_fallback_that_answers_without_a_stream_yields_its_response_as_one_chunk(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
-    """Oddity: the fallback's whole response is dropped and the stream yields ``None`` in its place."""
     host.answer("openai/a", chat_stream(error=rate_limit(), leading_role_chunk=True))
     host.answer("openai/b", completion_response("not streamed", model="b"))
     core: Final = build(make_core)
     stream: Final = await core.acompletion(model="a", messages=MESSAGES, stream=True)  # pyright: ignore[reportAttributeAccessIssue]
     seen: list[object] = []
     await drain_into(stream, seen)
-    assert seen[-1] is None
+    last: Final = seen[-1]
+    assert isinstance(last, ModelResponseStream)
+    assert (last.model, last.choices[0].delta.content) == ("b", "not streamed")  # pyright: ignore[reportUnknownMemberType]  # pytest and the cores' untyped members
     assert host.deployments_called() == ["a", "b"]
 
 
-def test_a_sync_mid_stream_fallback_that_answers_without_a_stream_yields_the_response_fields(
+def test_a_sync_mid_stream_fallback_that_answers_without_a_stream_yields_its_response_as_one_chunk(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
-    """Oddity: a ``ModelResponse`` is iterable (pydantic yields ``(field, value)`` pairs), so the sync
-    wrapper streams the fallback response's fields instead of chunks."""
+    """The sync wrapper yields the same one chunk as the async one, not the response's pydantic fields."""
     host.answer("openai/a", chat_stream(error=rate_limit(), leading_role_chunk=True, sync=True))
     host.answer("openai/b", completion_response("not streamed", model="b"))
     core: Final = build(make_core)
     stream: Final = core.completion(model="a", messages=MESSAGES, stream=True)  # pyright: ignore[reportAttributeAccessIssue]
     items: Final = list(stream)  # pyright: ignore[reportArgumentType]
-    fields: Final = [item for item in items if isinstance(item, tuple)]
-    assert ("model", "b") in fields
-    assert {name for name, _ in fields} >= {"id", "choices", "usage"}
+    assert not any(isinstance(item, tuple) for item in items)  # pyright: ignore[reportUnknownVariableType]  # pytest and the cores' untyped members
+    last: Final = items[-1]  # pyright: ignore[reportUnknownVariableType]  # pytest and the cores' untyped members
+    assert isinstance(last, ModelResponseStream)
+    assert (last.model, last.choices[0].delta.content) == ("b", "not streamed")  # pyright: ignore[reportUnknownMemberType]  # pytest and the cores' untyped members
     assert host.deployments_called() == ["a", "b"]
 
 
