@@ -292,6 +292,12 @@ class TestProviderScopedResolution:
         "registered-base": AliasedCostEntry({"deprecation_date": "2026-12-15"}, (), frozenset({"deprecation_date"})),
         "gpt-4.1": {"deprecation_date": "2027-01-14", "litellm_provider": "openai"},
         "azure/gpt-4.1": {"deprecation_date": "2027-04-14", "litellm_provider": "azure"},
+        "gpt-4o-2024-05-13": {"deprecation_date": "2026-10-23", "litellm_provider": "openai"},
+        "azure/gpt-4o-2024-05-13": {"deprecation_date": "2026-12-09", "litellm_provider": "azure"},
+        "azure/aliased-base": AliasedCostEntry(
+            {"deprecation_date": "2026-11-20"}, ("azure/aliased-base", "azure/aliased-base-v1")
+        ),
+        "aliased-base": {"deprecation_date": "2027-02-01"},
     }
 
     @pytest.mark.parametrize(
@@ -328,6 +334,21 @@ class TestProviderScopedResolution:
                 {"base_model": "registered-base"},
                 ("registered-base", date(2026, 12, 15), None),
             ),
+            (
+                {"model": "azure/prod-chat"},
+                {"base_model": "aliased-base"},
+                ("azure/aliased-base", date(2026, 11, 20), None),
+            ),
+            (
+                {"model": "openai/gpt-4o-2024-05-13"},
+                {"base_model": "gpt-4o"},
+                ("gpt-4o-2024-05-13", date(2026, 10, 23), "openai"),
+            ),
+            (
+                {"model": "azure/gpt-4o-2024-05-13"},
+                {"base_model": "gpt-4o"},
+                ("azure/gpt-4o-2024-05-13", date(2026, 12, 9), "azure"),
+            ),
         ],
         ids=[
             "bare",
@@ -341,6 +362,9 @@ class TestProviderScopedResolution:
             "azure-ai-own-row-wins",
             "custom-base-model-row-wins",
             "registered-base-model-row-wins",
+            "aliased-base-model-row-wins",
+            "openai-snapshot-shuts-down-before-its-base-model",
+            "azure-snapshot-shuts-down-before-its-base-model",
         ],
     )
     def test_should_prefer_the_deployments_own_provider_date(

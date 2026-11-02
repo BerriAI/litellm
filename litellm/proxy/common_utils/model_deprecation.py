@@ -65,9 +65,15 @@ def _cost_map_lookup(model_key: str | None) -> _ResolvedDeprecation | None:
         litellm_model=model_key,
         litellm_provider=provider if isinstance(provider, str) else None,
         copied_from_another_row=isinstance(entry, AliasedCostEntry)
+        and not entry.names
         and "deprecation_date" not in entry.registered_fields
         and not isinstance(provider, str),
     )
+
+
+def _first_own_row(model_keys: Sequence[str | None]) -> _ResolvedDeprecation | None:
+    found: Final = tuple(resolved for resolved in (_cost_map_lookup(key) for key in model_keys) if resolved is not None)
+    return next((resolved for resolved in found if not resolved.copied_from_another_row), next(iter(found), None))
 
 
 def _deployment_provider(litellm_params: Mapping[str, object]) -> str | None:
@@ -123,14 +129,17 @@ def _resolve_deployment_deprecation(
     provider: Final = _deployment_provider(litellm_params)
     base_model: Final = _as_model_key(model_info.get("base_model"))
     model_name: Final = model_key.split("/", 1)[1] if model_key is not None and "/" in model_key else model_key
-    candidates: Final = (
-        *_schedule_keys(provider, base_model),
-        _provider_qualified(provider, model_key),
-        model_key,
-        *_schedule_keys(provider, model_name),
+    picks: Final = tuple(
+        pick
+        for pick in (
+            _first_own_row(_schedule_keys(provider, base_model)),
+            _first_own_row(
+                (_provider_qualified(provider, model_key), model_key, *_schedule_keys(provider, model_name))
+            ),
+        )
+        if pick is not None
     )
-    found: Final = tuple(resolved for resolved in (_cost_map_lookup(key) for key in candidates) if resolved is not None)
-    return next((resolved for resolved in found if not resolved.copied_from_another_row), next(iter(found), None))
+    return min(picks, key=lambda pick: pick.deprecation_date, default=None)
 
 
 def _classify(days_until: int, warn_within_days: int) -> DeprecationStatus:
