@@ -215,6 +215,8 @@ def merged_guardrail_entries(*entry_lists: Iterable[object]) -> list[object]:
     """Merges guardrail lists so each guardrail is named once: the first ``{name: settings}`` entry naming it wins over
     any plain name in either order, else its first plain name stays"""
     entries: Final = tuple(chain.from_iterable(entry_lists))
+    if all(isinstance(entry, str) for entry in entries):
+        return list(dict.fromkeys(entries))
     named_with_settings: Final = frozenset(
         chain.from_iterable(guardrail_entry_names(entry) for entry in entries if isinstance(entry, dict))
     )
