@@ -1293,6 +1293,9 @@ def test_get_vertex_model_id_from_url():
     model_id = get_vertex_model_id_from_url(url)
     assert model_id == "gemini-pro"
 
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro?key=provider-secret#frag"
+    assert get_vertex_model_id_from_url(url) == "gemini-pro"
+
     # Test with invalid URL
     url = "https://invalid-url.com"
     model_id = get_vertex_model_id_from_url(url)

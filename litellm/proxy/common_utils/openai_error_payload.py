@@ -28,6 +28,8 @@ _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
 
 _AUTH_FAILURE_STATUS_CODES: Final = frozenset({status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN})
 
+_HTTP_ERROR_STATUSES: Final = range(status.HTTP_400_BAD_REQUEST, 600)
+
 _ERROR_BODY: Final = TypeAdapter(dict[str, object])
 
 _FAILOVER_SQLSTATES: Final = frozenset({"25006", "57P01", "57P02", "57P03"})
@@ -47,13 +49,26 @@ def attribute_of(value: object, name: str, default: object = None) -> object:
 
 
 def error_status_code(exc: object, default: int) -> int:
-    """The HTTP status an exception carries as ``status_code`` or, the way ``ProxyException``
-    stores it, as a stringified ``code``; ``default`` when it carries neither."""
-    carried: Final = attribute_of(exc, "status_code")
-    if isinstance(carried, int) and not isinstance(carried, bool):
+    """The 4xx or 5xx HTTP status an exception carries as ``status_code`` (an int or a decimal string) or,
+    the way ``ProxyException`` stores it, as a stringified ``code``; ``default`` when it carries neither."""
+    carried: Final = _http_error_status(attribute_of(exc, "status_code"))
+    if carried is not None:
         return carried
     stringified: Final = attribute_of(exc, "code")
-    return int(stringified) if isinstance(stringified, str) and stringified.isdecimal() else default
+    from_code: Final = _http_error_status(stringified) if isinstance(stringified, str) else None
+    return default if from_code is None else from_code
+
+
+def _http_error_status(value: object) -> int | None:
+    match value:
+        case bool():
+            return None
+        case int() if value in _HTTP_ERROR_STATUSES:
+            return value
+        case str() if len(value) == 3 and value.isascii() and value.isdigit() and int(value) in _HTTP_ERROR_STATUSES:
+            return int(value)
+        case _:
+            return None
 
 
 def openai_error_type(exc: object, status_code: int) -> str:
@@ -105,9 +120,9 @@ def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyExcept
                 code=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         case HTTPException(status_code=status_code, detail=detail):
-            return _openai_shaped_proxy_exception(exc, str(detail), status_code)
+            return openai_shaped_proxy_exception(exc, str(detail), status_code)
         case _:
-            return _openai_shaped_proxy_exception(
+            return openai_shaped_proxy_exception(
                 exc, str(exc) or type(exc).__name__, error_status_code(exc, default_status_code)
             )
 
@@ -176,14 +191,19 @@ def _route_failure_error_type(exc: Exception, raised_status: int, answered_statu
     return openai_error_type(exc, answered_status)
 
 
-def _openai_shaped_proxy_exception(exc: Exception, message: str, status_code: int) -> ProxyException:
+def openai_shaped_proxy_exception(exc: Exception, message: str, status_code: int) -> ProxyException:
     answered_status: Final = answered_status_code(message, status_code)
-    return ProxyException(
-        message=message,
-        type=_catch_all_error_type(exc, answered_status),
-        param=openai_error_param(exc),
-        code=answered_status,
-    )
+    return _proxy_exception(exc, message, answered_status, _catch_all_error_type(exc, answered_status))
+
+
+def status_typed_proxy_exception(exc: HTTPException) -> ProxyException:
+    message: Final = str(exc.detail)
+    answered_status: Final = answered_status_code(message, exc.status_code)
+    return _proxy_exception(exc, message, answered_status, openai_error_type(exc, answered_status))
+
+
+def _proxy_exception(exc: Exception, message: str, answered_status: int, error_type: str) -> ProxyException:
+    return ProxyException(message=message, type=error_type, param=openai_error_param(exc), code=answered_status)
 
 
 def _catch_all_error_type(exc: Exception, status_code: int) -> str:

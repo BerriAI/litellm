@@ -4,6 +4,7 @@ import { MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { Info, Server } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
+import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import React, { useId, useState } from "react";
@@ -11,13 +12,14 @@ import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ChartLoader } from "@/components/shared/chart_loader";
 import { Panel } from "../overview/Primitives";
 
-type ProviderSpendData = {
+export type ProviderSpendData = {
   provider: string;
   spend: number;
   requests: number;
   successful_requests: number;
   failed_requests: number;
   tokens: number;
+  subscription_covered?: boolean;
 };
 
 interface SpendByProviderProps {
@@ -48,7 +50,15 @@ const columns: ColumnDef<ProviderSpendData>[] = [
     header: "Spend",
     accessorKey: "spend",
     meta: { numeric: true, ...QUIET_HEADER },
-    cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={2} />,
+    cell: ({ row }) =>
+      row.original.subscription_covered ? (
+        <div className="flex items-center justify-end gap-2">
+          {row.original.spend > 0 && <MoneyCell value={row.original.spend} decimals={2} />}
+          <Badge variant="secondary">Included in subscription</Badge>
+        </div>
+      ) : (
+        <MoneyCell value={row.original.spend} decimals={2} />
+      ),
   },
   {
     header: "Successful",
@@ -162,6 +172,10 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
     // If includeUnknown is true, always include unknown provider
     if (isUnknown) {
       return includeUnknown;
+    }
+
+    if (provider.subscription_covered) {
+      return true;
     }
 
     // If includeZeroSpend is true, include all providers (including those with 0 spend)
