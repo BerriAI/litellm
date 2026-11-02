@@ -3735,6 +3735,44 @@ def test_an_earlier_timed_out_responses_attempt_counts_its_input_from_the_newest
     assert sent == earlier_attempt_prompt_tokens([COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION])
 
 
+@pytest.mark.asyncio
+async def test_a_billed_responses_route_failure_captures_usage_from_the_newest_compaction_item() -> None:
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.litellm_core_utils.litellm_logging import UsageCaptureObservation
+    from litellm.proxy.db.accounting_ledger import UsageWrite
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    async def persist(_: tuple[UsageWrite, ...]) -> None:
+        return None
+
+    def captured_prompt_tokens(request_input: list[dict[str, str]]) -> int:
+        logging_obj: Final = _dispatched_failure_logging_obj(FAILURE_USAGE_MODEL, get_litellm_params())
+        logging_obj.model_call_details["call_type"] = "aresponses"
+        logging_obj.model_call_details["messages"] = request_input
+        lifted: Final = _failure_fields_to_lift(
+            {"litellm_logging_obj": logging_obj}, provider_billed=True, route_call_type="aresponses"
+        )
+        snapshot: Final = lifted["_accounting_usage_snapshot"]
+        assert isinstance(snapshot, UsageCaptureObservation) and snapshot.usage_json is not None
+        return json.loads(snapshot.usage_json)["prompt_tokens"]
+
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(persist, UsageCaptureSettings())
+    try:
+        sent: Final = captured_prompt_tokens(
+            [COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
+        )
+        since_compaction: Final = captured_prompt_tokens(
+            [COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
+        )
+    finally:
+        await runtime.stop(1)
+
+    assert sent == since_compaction
+
+
 @pytest.mark.parametrize(
     "current_attempt_api_call_start_time",
     [None, 1700000001.0],

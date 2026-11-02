@@ -10,6 +10,7 @@ Pins (PR2):
 from __future__ import annotations
 
 import io
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -216,7 +217,6 @@ def test_audio_speech_error(client, auth_as, patched_speech_error, path):
     assert response.status_code == 500
     error = response.json()["error"]
     assert (error["type"], error["param"]) == ("internal_server_error", None)
-    assert proxy_server.proxy_logging_obj.post_call_failure_hook.await_args.kwargs["dispatched_call_type"] == "aspeech"
 
 
 def test_audio_speech_bad_request_maps_to_400(client, auth_as, patched_speech_provider_rejection):
@@ -360,7 +360,23 @@ def test_audio_transcription_error(client, auth_as, patched_transcription_error,
         response = client.post(path, files=files, data=data)
     assert response.status_code == 500
     assert len(response.content) > 0
-    assert (
-        proxy_server.proxy_logging_obj.post_call_failure_hook.await_args.kwargs["dispatched_call_type"]
-        == "atranscription"
-    )
+
+
+@pytest.mark.parametrize(
+    ("path", "request_kwargs", "call_type"),
+    [
+        ("/v1/audio/speech", {"json": {"model": "tts-1", "input": "Hi", "voice": "alloy"}}, "aspeech"),
+        (
+            "/v1/audio/transcriptions",
+            {"files": {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}, "data": {"model": "whisper-1"}},
+            "atranscription",
+        ),
+    ],
+)
+def test_a_provider_rejection_logs_the_audio_endpoint_call_type(
+    client, auth_as, failed_spend_row, path, request_kwargs, call_type
+):
+    with auth_as():
+        response: Final = client.post(path, **request_kwargs)
+    assert response.status_code == 400, response.text
+    assert failed_spend_row() == ("failure", call_type)

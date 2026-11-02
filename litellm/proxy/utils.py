@@ -1759,7 +1759,7 @@ def _failure_fields_to_lift(
             _billed,
             _deployment_id,
             _base_model,
-            dispatched_call_type,
+            _estimate_call_type,
         )
         if Logging.usage_capture_callback is not None
         and (_billed or _model_call_details.get("combined_usage_object") is not None)

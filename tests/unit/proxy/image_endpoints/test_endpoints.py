@@ -717,50 +717,22 @@ def test_image_generation_uses_key_num_retries(monkeypatch: pytest.MonkeyPatch) 
     assert get_deployment_failures_for_current_minute(router, "image-regression-failing") == 3
 
 
-@pytest.mark.asyncio
-async def test_failed_image_generation_spend_row_records_aimage_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_failed_image_generation_spend_row_records_aimage_generation(monkeypatch: pytest.MonkeyPatch) -> None:
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
-    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
-    proxy_logging_obj.alert_types = []
     spend_writer: Final = MagicMock(update_database=AsyncMock())
-
-    async def add_body_call_type(*, data: Mapping[str, object], **_: object) -> object:
-        return {**data, "call_type": "acompletion"}
-
-    async def provider_rejects(**_: object) -> None:
-        raise litellm.BadRequestError(message="prompt rejected", model="dall-e-3", llm_provider="openai")
-
     monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
-    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", add_body_call_type)
-    monkeypatch.setattr("litellm.proxy.image_endpoints.endpoints.route_request", provider_rejects)
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
-    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", MagicMock())
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {})
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
-    monkeypatch.setattr("litellm.proxy.proxy_server.version", "test-version")
-    monkeypatch.setattr(proxy_logging_obj, "update_request_status", AsyncMock())
-
-    body: Final = orjson.dumps({"model": "dall-e-3", "prompt": "a lighthouse at dusk"})
-
-    async def receive() -> dict[str, object]:
-        return {"type": "http.request", "body": body, "more_body": False}
-
-    request: Final = Request(
-        {"type": "http", "method": "POST", "path": "/v1/images/generations", "headers": []}, receive
-    )
+    client, handler = _image_generation_client(monkeypatch, UserAPIKeyAuth(api_key="sk-test"))
     try:
-        with pytest.raises(ProxyException):
-            await endpoints.image_generation(
-                request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth(api_key="sk-test")
-            )
+        with client:
+            response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
     finally:
         ProxyLogging._callback_capabilities_cache.clear()
 
+    assert (response.status_code, handler.calls) == (429, ["failing"]), response.text
     db_call: Final = spend_writer.update_database.call_args.kwargs
     payload: Final = get_logging_payload(
         kwargs=db_call["kwargs"],

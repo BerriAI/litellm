@@ -7,6 +7,7 @@ Pins (PR2):
 
 from __future__ import annotations
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -109,4 +110,10 @@ def test_moderation_error(client, auth_as, moderation_pipeline_raises, path):
         response = client.post(path, json=payload)
     assert response.status_code == 500
     assert len(response.content) > 0
-    assert proxy_server.proxy_logging_obj.post_call_failure_hook.await_args.kwargs["dispatched_call_type"] == "amoderation"
+
+
+def test_a_provider_rejection_logs_the_moderation_call_type(client, auth_as, failed_spend_row):
+    with auth_as():
+        response: Final = client.post("/v1/moderations", json={"model": "omni-moderation", "input": ["one", "two"]})
+    assert response.status_code == 400, response.text
+    assert failed_spend_row() == ("failure", "amoderation")
