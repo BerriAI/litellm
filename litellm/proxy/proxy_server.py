@@ -61,6 +61,8 @@ import websockets
 import websockets.exceptions
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import FieldInfo, PydanticUndefined
+from pydantic.main import IncEx
+from pydantic_core import PydanticSerializationError, to_jsonable_python
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
@@ -10186,6 +10188,8 @@ def _event_with_restamped_nested_model(event: Mapping[str, object], target_model
 _SSE_DATA_FIELD: Final = b"data:"
 _SSE_NESTED_RESPONSE_MARKER: Final = b'"response"'
 _SSE_EVENT_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_JSON_OBJECT: Final = TypeAdapter(dict[object, object])
+_JSON_ARRAY: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 def _restamp_nested_response_model_in_sse_frame(frame: bytes, target_model: str) -> bytes:
@@ -10211,91 +10215,64 @@ def _restamp_nested_response_model_in_sse_line(line: bytes, target_model: str) -
     return _SSE_DATA_FIELD + b" " + serialized_event.encode() + line_ending
 
 
-def _fast_serialize_simple_model_response_stream(
-    chunk: ModelResponseStream,
-) -> bytes | None:
-    """
-    Serialize the common OpenAI text streaming chunk without the full Pydantic
-    serializer. Fall back for richer chunks so tool calls, logprobs, usage, and
-    provider-specific fields keep the canonical model_dump_json behavior.
-    """
-    if (
-        getattr(chunk, "provider_specific_fields", None) is not None
-        or getattr(chunk, "system_fingerprint", None) is not None
-        or getattr(chunk, "usage", None) is not None
-    ):
-        return None
-
-    choices: Final = getattr(chunk, "choices", None)
-    if not isinstance(choices, list) or len(choices) != 1:
-        return None
-
-    choice: Final = choices[0]
-    if getattr(choice, "logprobs", None) is not None or getattr(choice, "enhancements", None) is not None:
-        return None
-
-    delta: Final[object] = getattr(choice, "delta", None)
-    if delta is None:
-        return None
-
-    unsupported_delta_fields: Final = (
-        "function_call",
-        "tool_calls",
-        "audio",
-        "images",
-        "annotations",
-        "reasoning_content",
-        "thinking_blocks",
-        "provider_specific_fields",
-        "refusal",
-    )
-    if any(getattr(delta, field, None) is not None for field in unsupported_delta_fields):
-        return None
-
-    delta_dict: Final[dict] = {}
-    role: Final = getattr(delta, "role", None)
-    content: Final = getattr(delta, "content", None)
-    if role is not None:
-        delta_dict["role"] = role
-    if content is not None:
-        delta_dict["content"] = content
-
-    choice_dict: Final = {"index": getattr(choice, "index", 0), "delta": delta_dict}
-    finish_reason: Final = getattr(choice, "finish_reason", None)
-    if finish_reason is not None:
-        choice_dict["finish_reason"] = finish_reason
-
-    # Match the canonical ``model_dump_json(exclude_none=True)`` shape — if a
-    # field is None, omit it entirely rather than emitting ``"key": null``.
-    # Strict OpenAI-compatible clients reject ``null`` for optional fields like
-    # ``model``, so diverging here would surface as a client-side regression
-    # only on the fast path. Fall back to the slow path if a required-looking
-    # top-level identifier is missing.
-    model: Final = getattr(chunk, "model", None)
-    if model is None:
-        return None
-
-    payload: Final[dict] = {
-        "id": getattr(chunk, "id", None),
-        "object": getattr(chunk, "object", None),
-        "created": getattr(chunk, "created", None),
-        "model": model,
-        "service_tier": getattr(chunk, "service_tier", None),
-        "choices": [choice_dict],
-    }
-    for top_level_key in ("id", "object", "created", "service_tier"):
-        if payload[top_level_key] is None:
-            payload.pop(top_level_key)
-    return orjson.dumps(payload)
+def _json_encodes(value: object) -> bool:
+    try:
+        to_jsonable_python(value)
+    except ValueError:
+        return False
+    return True
 
 
-def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
+def _unencodable_part(value: object, ancestors: frozenset[int]) -> IncEx | bool:
+    if id(value) in ancestors:
+        return True
+    lineage: Final = ancestors | {id(value)}
+    if isinstance(value, BaseModel):
+        return _unencodable_keys(iter(value), lineage) or True
+    if isinstance(value, dict):
+        return _unencodable_entries(_JSON_OBJECT.validate_python(value), lineage)
+    if isinstance(value, (list, tuple)):
+        return _unencodable_indexes(enumerate(_JSON_ARRAY.validate_python(value)), lineage) or True
+    return True
+
+
+def _unencodable_entries(entries: Mapping[object, object], lineage: frozenset[int]) -> IncEx | bool:
+    by_name: Final = {key: item for key, item in entries.items() if isinstance(key, str)}
+    if len(by_name) == len(entries):
+        return _unencodable_keys(by_name.items(), lineage) or True
+    by_index: Final = {key: item for key, item in entries.items() if isinstance(key, int)}
+    if len(by_index) == len(entries):
+        return _unencodable_indexes(by_index.items(), lineage) or True
+    return True
+
+
+def _unencodable_keys(items: Iterable[tuple[str, object]], lineage: frozenset[int]) -> Mapping[str, IncEx | bool]:
+    return {key: _unencodable_part(item, lineage) for key, item in items if not _json_encodes(item)}
+
+
+def _unencodable_indexes(items: Iterable[tuple[int, object]], lineage: frozenset[int]) -> Mapping[int, IncEx | bool]:
+    return {index: _unencodable_part(item, lineage) for index, item in items if not _json_encodes(item)}
+
+
+def _serialize_chat_chunk_leniently(chunk: ModelResponseStream) -> bytes:
+    exclude: Final = _unencodable_keys(iter(chunk), frozenset({id(chunk)}))
+    if exclude:
+        verbose_proxy_logger.warning("Dropping streamed chunk fields that JSON cannot encode: %s", exclude)
+    jsonable: Final = chunk.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=exclude)
+    return json.dumps(jsonable, ensure_ascii=True, separators=(",", ":")).encode()
+
+
+def _serialize_chat_chunk(chunk: ModelResponseStream) -> bytes:
+    try:
+        return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+    except PydanticSerializationError:
+        return _serialize_chat_chunk_leniently(chunk)
+
+
+def _serialize_streaming_chunk(chunk: BaseModel) -> bytes:
     if isinstance(chunk, ModelResponseStream):
-        serialized_chunk: Final = _fast_serialize_simple_model_response_stream(chunk)
-        if serialized_chunk is not None:
-            return serialized_chunk
-
-    return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+        return _serialize_chat_chunk(chunk)
+    return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
 
 
 async def _apply_streaming_chunk_hooks(
