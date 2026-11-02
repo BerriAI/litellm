@@ -8,7 +8,7 @@ import logging
 from datetime import date, datetime, timezone
 from unittest.mock import MagicMock
 
-
+import pytest
 
 import litellm
 from litellm import Router
@@ -274,6 +274,48 @@ class TestCollectModelDeprecations:
 
         assert len(snapshot.imminent) == 1
         assert snapshot.imminent[0].litellm_model == "base-thing"
+
+
+class TestProviderScopedResolution:
+    COST_MAP = {
+        "gpt-4o": {"deprecation_date": "2027-01-14", "litellm_provider": "openai"},
+        "azure/gpt-4o": {"deprecation_date": "2027-04-14", "litellm_provider": "azure"},
+        "github_copilot/gpt-4o": {"litellm_provider": "github_copilot"},
+    }
+
+    @pytest.mark.parametrize(
+        ("litellm_params", "model_info", "expected"),
+        [
+            ({"model": "gpt-4o"}, {}, ("gpt-4o", date(2027, 1, 14), "openai")),
+            ({"model": "openai/gpt-4o"}, {}, ("gpt-4o", date(2027, 1, 14), "openai")),
+            (
+                {"model": "gpt-4o", "custom_llm_provider": "azure"},
+                {},
+                ("azure/gpt-4o", date(2027, 4, 14), "azure"),
+            ),
+            ({"model": "azure/gpt-4o"}, {}, ("azure/gpt-4o", date(2027, 4, 14), "azure")),
+            (
+                {"model": "azure/prod-chat"},
+                {"base_model": "gpt-4o"},
+                ("azure/gpt-4o", date(2027, 4, 14), "azure"),
+            ),
+            (
+                {"model": "gpt-4o", "custom_llm_provider": "github_copilot"},
+                {},
+                ("gpt-4o", date(2027, 1, 14), "openai"),
+            ),
+        ],
+        ids=["bare", "openai-prefix", "declared-azure", "azure-prefix", "azure-base-model", "undated-own-row"],
+    )
+    def test_should_prefer_the_deployments_own_provider_date(self, monkeypatch, litellm_params, model_info, expected):
+        monkeypatch.setattr(litellm, "model_cost", self.COST_MAP)
+        router = _make_router(
+            [{"model_name": "alias", "litellm_params": litellm_params, "model_info": {"id": "1", **model_info}}]
+        )
+
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
+
+        assert [(m.litellm_model, m.deprecation_date, m.litellm_provider) for m in snapshot.upcoming] == [expected]
 
 
 class TestFormatDeprecationAlertMessage:

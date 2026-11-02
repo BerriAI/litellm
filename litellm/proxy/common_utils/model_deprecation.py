@@ -47,8 +47,8 @@ def _successor_model(raw_value: object) -> str | None:
     return raw_value.strip() or None if isinstance(raw_value, str) else None
 
 
-def _cost_map_lookup(model_key: object) -> _ResolvedDeprecation | None:
-    if not isinstance(model_key, str) or not model_key:
+def _cost_map_lookup(model_key: str | None) -> _ResolvedDeprecation | None:
+    if model_key is None:
         return None
     entry: Final = litellm.model_cost.get(model_key)
     if not isinstance(entry, Mapping):
@@ -64,6 +64,25 @@ def _cost_map_lookup(model_key: object) -> _ResolvedDeprecation | None:
     )
 
 
+def _deployment_provider(litellm_params: Mapping[str, object]) -> str | None:
+    declared: Final = litellm_params.get("custom_llm_provider")
+    if isinstance(declared, str) and declared:
+        return declared
+    model: Final = litellm_params.get("model")
+    prefix: Final = model.split("/", 1)[0] if isinstance(model, str) and "/" in model else None
+    return prefix if prefix in litellm.provider_list else None
+
+
+def _provider_qualified(provider: str | None, model_key: str | None) -> str | None:
+    if provider is None or model_key is None or model_key.startswith(f"{provider}/"):
+        return None
+    return f"{provider}/{model_key}"
+
+
+def _as_model_key(raw_value: object) -> str | None:
+    return raw_value if isinstance(raw_value, str) and raw_value else None
+
+
 def _mapping_field(deployment: Mapping[str, object], key: str) -> Mapping[str, object]:
     value: Final = deployment.get(key)
     return value if isinstance(value, Mapping) else _NO_MODEL_METADATA
@@ -74,28 +93,30 @@ def _resolve_deployment_deprecation(
 ) -> _ResolvedDeprecation | None:
     """Resolve a deployment's deprecation date, preferring its explicit override"""
     model_info: Final = _mapping_field(deployment, "model_info")
-    raw_model: Final = _mapping_field(deployment, "litellm_params").get("model")
+    litellm_params: Final = _mapping_field(deployment, "litellm_params")
+    model_key: Final = _as_model_key(litellm_params.get("model"))
 
     override: Final = _parse_deprecation_date(model_info.get("deprecation_date"))
     if override is not None:
-        provider: Final = model_info.get("litellm_provider")
+        override_provider: Final = model_info.get("litellm_provider")
         return _ResolvedDeprecation(
             deprecation_date=override,
-            litellm_model=raw_model if isinstance(raw_model, str) else None,
-            litellm_provider=provider if isinstance(provider, str) else None,
+            litellm_model=model_key,
+            litellm_provider=override_provider if isinstance(override_provider, str) else None,
         )
 
-    unprefixed: Final = raw_model.split("/", 1)[1] if isinstance(raw_model, str) and "/" in raw_model else None
+    provider: Final = _deployment_provider(litellm_params)
+    base_model: Final = _as_model_key(model_info.get("base_model"))
+    unprefixed: Final = model_key.split("/", 1)[1] if model_key is not None and "/" in model_key else None
+    candidates: Final = (
+        _provider_qualified(provider, base_model),
+        base_model,
+        _provider_qualified(provider, model_key),
+        model_key,
+        unprefixed,
+    )
     return next(
-        (
-            resolved
-            for resolved in (
-                _cost_map_lookup(model_info.get("base_model")),
-                _cost_map_lookup(raw_model),
-                _cost_map_lookup(unprefixed),
-            )
-            if resolved is not None
-        ),
+        (resolved for resolved in (_cost_map_lookup(key) for key in candidates) if resolved is not None),
         None,
     )
 

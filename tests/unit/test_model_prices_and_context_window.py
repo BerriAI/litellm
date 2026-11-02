@@ -399,12 +399,21 @@ OPENAI_GPT_4_SERIES_SNAPSHOTS: Final = MappingProxyType(
 )
 
 
+class _ShutdownRow(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    deprecation_date: str | None = None
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 @pytest.mark.parametrize("alias", sorted(OPENAI_GPT_4_SERIES_SNAPSHOTS))
-def test_openai_gpt_4_series_aliases_retire_with_their_snapshots(prices: dict, alias: str):
+def test_openai_gpt_4_series_aliases_retire_with_their_snapshots(path: Path, alias: str) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
     snapshot_dates: Final = frozenset(
-        prices[snapshot].get("deprecation_date") for snapshot in OPENAI_GPT_4_SERIES_SNAPSHOTS[alias]
+        _ShutdownRow.model_validate(prices[snapshot]).deprecation_date
+        for snapshot in OPENAI_GPT_4_SERIES_SNAPSHOTS[alias]
     )
-    assert snapshot_dates == {prices[alias].get("deprecation_date")}
+    assert snapshot_dates == {_ShutdownRow.model_validate(prices[alias]).deprecation_date}
 
 
 def _sampling_flags_across_provider_twins(prices: Mapping[str, Mapping[str, object]], key: str) -> frozenset[object]:
