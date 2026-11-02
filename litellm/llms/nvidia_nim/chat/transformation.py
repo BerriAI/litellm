@@ -10,6 +10,7 @@ API calling is done using the OpenAI SDK with an api_base
 
 from typing import Final
 
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
@@ -107,9 +108,13 @@ class NvidiaNimConfig(OpenAIGPTConfig):
         drop_params: bool,
     ) -> dict:
         supported_openai_params: Final = self.get_supported_openai_params(model=model)
+        asks_logprobs: Final = "logprobs" in non_default_params and non_default_params["logprobs"] is True
+        drops_top_logprobs: Final = not asks_logprobs and drops_unsupported_params(drop_params)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
+            elif param == "top_logprobs" and drops_top_logprobs:
+                continue
             elif param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
