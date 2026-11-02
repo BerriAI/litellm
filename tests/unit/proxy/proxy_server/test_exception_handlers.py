@@ -25,6 +25,7 @@ from starlette.types import Message
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from litellm.proxy._types import ProxyException
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.proxy_server import (
     _close_dangling_otel_server_span,
     openai_exception_handler,
@@ -565,7 +566,7 @@ async def test_http_exception_on_a_connecting_websocket_denies_the_upgrade_with_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("status_code", "close_code"), [(403, 1008), (429, 1008), (500, 1011), (503, 1011)])
+@pytest.mark.parametrize(("status_code", "close_code"), [(403, 1008), (429, 1013), (500, 1011), (503, 1011)])
 async def test_http_exception_on_an_accepted_websocket_closes_it_with_a_matching_code(
     status_code: int, close_code: int
 ) -> None:
@@ -576,7 +577,108 @@ async def test_http_exception_on_an_accepted_websocket_closes_it_with_a_matching
     response: Final = await otlp_http_exception_handler(websocket, HTTPException(status_code, "late failure"))
 
     assert response is None
-    assert sent[-1] == {"type": "websocket.close", "code": close_code, "reason": ""}
+    assert sent[-1] == {"type": "websocket.close", "code": close_code, "reason": "late failure"}
+
+
+class _SentMessages:
+    def __init__(self) -> None:
+        self.messages: tuple[Message, ...] = ()
+
+    async def send(self, message: Message) -> None:
+        self.messages = (*self.messages, message)
+
+
+@pytest.mark.asyncio
+async def test_http_exception_after_the_client_left_an_accepted_websocket_sends_nothing_more() -> None:
+    client_messages: Final = iter(({"type": "websocket.connect"}, {"type": "websocket.disconnect", "code": 1000}))
+    sent: Final = _SentMessages()
+
+    async def receive() -> Message:
+        return next(client_messages)
+
+    websocket: Final = WebSocket(
+        {"type": "websocket", "path": "/vertex_ai/live", "headers": [], "query_string": b""}, receive, sent.send
+    )
+    await websocket.accept()
+    await websocket.receive()
+
+    response: Final = await otlp_http_exception_handler(websocket, HTTPException(429, "Rate limit exceeded"))
+
+    assert (response, sent.messages) == (None, ({"type": "websocket.accept", "subprotocol": None, "headers": []},))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "detail", "close_code", "reason"),
+    [
+        pytest.param(
+            429, "é" * 100, 1013, "é" * 61, id="long detail cut to the close frame without splitting a character"
+        ),
+        pytest.param(
+            400,
+            {"error": "Violated content safety policy", "guardrail_response": {"flagged": True}},
+            1008,
+            "Violated content safety policy",
+            id="structured detail closes with its error message",
+        ),
+        pytest.param(
+            400, {"error": {"message": "blocked by policy"}}, 1008, "blocked by policy", id="nested error message"
+        ),
+        pytest.param(
+            503,
+            "guardrail unreachable at http://guardrail.internal.svc:8080/v1/check",
+            1011,
+            "guardrail unreachable at http://REDACTED.svc:8080/v1/check",
+            id="internal host in a server error is redacted",
+        ),
+        pytest.param(
+            400,
+            "x" * 112 + " sk-Abc123Def456Ghi789Jkl012",
+            1008,
+            "x" * 112 + " REDACTED",
+            id="key across the close frame limit is redacted before the cut",
+        ),
+        pytest.param(429, "", 1013, "Too Many Requests", id="empty detail falls back to the status phrase"),
+        pytest.param(499, "", 1008, "WebSocket error", id="non-standard status falls back to a generic reason"),
+    ],
+)
+async def test_http_exception_on_an_accepted_websocket_closes_it_with_its_detail_as_the_reason(
+    status_code: int, detail: object, close_code: int, reason: str
+) -> None:
+    sent: Final[list[Message]] = []
+    websocket: Final = _websocket(sent)
+    await websocket.accept()
+
+    await otlp_http_exception_handler(websocket, HTTPException(status_code, detail))
+
+    assert sent == [
+        {"type": "websocket.accept", "subprotocol": None, "headers": []},
+        {"type": "websocket.close", "code": close_code, "reason": reason},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_on_an_accepted_websocket_closes_with_the_limit_and_retry_time() -> None:
+    sent: Final[list[Message]] = []
+    websocket: Final = _websocket(sent)
+    await websocket.accept()
+    refusal: Final = ProxyRateLimitError(
+        detail="Rate limit exceeded for model_per_key: 5f2c:live/gemini. Limit type: requests. Current limit: 1",
+        headers={"retry-after": "60", "rate_limit_type": "requests"},
+        model="gemini-3.8-live",
+        descriptor_key="model_per_key",
+    )
+
+    await otlp_http_exception_handler(websocket, refusal)
+
+    assert sent == [
+        {"type": "websocket.accept", "subprotocol": None, "headers": []},
+        {
+            "type": "websocket.close",
+            "code": 1013,
+            "reason": "Rate limit exceeded for model_per_key (requests), retry after 60s",
+        },
+    ]
 
 
 def test_websocket_auth_rejection_reaches_the_client_as_a_denial_instead_of_a_server_error() -> None:

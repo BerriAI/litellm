@@ -687,7 +687,7 @@ def _as_success_dispatcher(logging_obj: _DispatchesSuccessHandlers) -> _Dispatch
 
 def serialize_http_exception_detail(
     detail: object,
-) -> tuple[str, dict | None]:
+) -> tuple[str, Mapping[str, object] | None]:
     """
     Convert an HTTPException.detail value into (message, structured_fields)
     for ProxyException / SSE error frames.

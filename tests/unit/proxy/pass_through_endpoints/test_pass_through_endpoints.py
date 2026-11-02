@@ -2,10 +2,12 @@ import asyncio
 import base64
 import contextvars
 import gzip
+import itertools
 import json
 import logging
 import os
 import sys
+import traceback
 import uuid
 import zlib
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
@@ -32,7 +34,13 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH, ANTHROPIC_MAX_USER_ID_LENGTH, DEFAULT_REQUEST_TIMEOUT_SECONDS
+from litellm.constants import (
+    ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH,
+    ANTHROPIC_MAX_USER_ID_LENGTH,
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    SERVER_STREAMING_CLASSIFICATION_KEY,
+    SERVER_STREAMING_CLASSIFICATION_MARKER,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
@@ -44,6 +52,7 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitErro
 from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _build_vertex_live_session_model
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
@@ -7650,6 +7659,283 @@ async def test_websocket_passthrough_relays_upstream_policy_close_to_client():
     websocket.close.assert_awaited_once_with(code=1008, reason=upstream_reason)
 
 
+class _UpstreamDials:
+    def __init__(self) -> None:
+        self.targets: tuple[str, ...] = ()
+
+    def dial(self, target: str, additional_headers: Mapping[str, str]) -> FakeUpstreamConnect:
+        self.targets = (*self.targets, target)
+        return FakeUpstreamConnect(FakeUpstreamWebSocket())
+
+
+def _record_upstream_dials(monkeypatch: pytest.MonkeyPatch) -> _UpstreamDials:
+    dials: Final = _UpstreamDials()
+    monkeypatch.setattr("litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect", dials.dial)
+    return dials
+
+
+async def _relay_one_client_session(caller: UserAPIKeyAuth, model: str | None) -> None:
+    await websocket_passthrough_request(
+        websocket=_client_websocket(AsyncMock(return_value={"type": "websocket.disconnect"})),
+        target="wss://upstream.example.test/v1/speak",
+        custom_headers={},
+        user_api_key_dict=caller,
+        forward_headers=False,
+        endpoint="/ws-model-rpm",
+        accept_websocket=False,
+        model=model,
+    )
+
+
+class _PreCallDataRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.data: tuple[Mapping[str, object], ...] = ()
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: str,
+    ) -> None:
+        self.data = (*self.data, MappingProxyType(dict(data)))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "hook_data"),
+    [
+        pytest.param(
+            None,
+            {SERVER_STREAMING_CLASSIFICATION_KEY: SERVER_STREAMING_CLASSIFICATION_MARKER},
+            id="route authorized no model",
+        ),
+        pytest.param(
+            "nova-3",
+            {"model": "nova-3", SERVER_STREAMING_CLASSIFICATION_KEY: SERVER_STREAMING_CLASSIFICATION_MARKER},
+            id="route authorized nova-3",
+        ),
+    ],
+)
+async def test_websocket_passthrough_hands_pre_call_hooks_exactly_the_model_it_was_given(
+    model: str | None, hook_data: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    recorder: Final = _PreCallDataRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=user_api_key_cache))
+    _record_upstream_dials(monkeypatch)
+
+    await _relay_one_client_session(UserAPIKeyAuth(), model)
+
+    assert tuple(
+        {key: value for key, value in data.items() if key != "litellm_call_id"} for data in recorder.data
+    ) == (hook_data,)
+
+
+class _VertexLiveDials:
+    def __init__(self) -> None:
+        self.upstreams: tuple[RecordingUpstreamWebSocket, ...] = ()
+
+    def dial(self, target: str, additional_headers: Mapping[str, str]) -> FakeUpstreamConnect:
+        upstream: Final = RecordingUpstreamWebSocket()
+        self.upstreams = (*self.upstreams, upstream)
+        return FakeUpstreamConnect(upstream)
+
+    def frames_sent(self) -> tuple[str | bytes, ...]:
+        calls: Final = itertools.chain.from_iterable(upstream.send.await_args_list for upstream in self.upstreams)
+        return tuple(call.args[0] for call in calls)
+
+
+def _vertex_live_setup(model: str) -> str:
+    return json.dumps({"setup": {"model": model, "generationConfig": {"responseModalities": ["AUDIO"]}}})
+
+
+def _client_frame_message(frame: str | bytes) -> Mapping[str, object]:
+    return (
+        {"type": "websocket.receive", "text": frame}
+        if isinstance(frame, str)
+        else {"type": "websocket.receive", "bytes": frame}
+    )
+
+
+_TOO_DEEP_TO_PARSE: Final = b"[" * 100_000 + b"]" * 100_000
+_TOO_LONG_A_NUMBER_TO_PARSE: Final = b'{"setup": NaN, "n": ' + b"1" * 5_000 + b"}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url_model", "first_frame", "hooked_model"),
+    [
+        pytest.param(None, _vertex_live_setup("gemini-live-2.5-flash"), "gemini-live-2.5-flash", id="no url model"),
+        pytest.param(
+            "gemini-2.0-flash-live-001",
+            _vertex_live_setup("models/gemini-live-2.5-flash"),
+            "gemini-live-2.5-flash",
+            id="setup model overrides a different url model",
+        ),
+        pytest.param(
+            None,
+            _vertex_live_setup("projects/p/locations/us-central1/publishers/google/models/gemini-live-2.5-flash"),
+            "gemini-live-2.5-flash",
+            id="full resource path",
+        ),
+        pytest.param(
+            None,
+            _vertex_live_setup("vertex_ai/gemini-live-2.5-flash"),
+            "gemini-live-2.5-flash",
+            id="litellm model id",
+        ),
+        pytest.param(None, _vertex_live_setup("models/gemini-live"), "gemini-live", id="gateway alias"),
+        pytest.param(None, _vertex_live_setup("team/gemini-live"), "gemini-live", id="gateway alias behind a prefix"),
+        pytest.param(None, _vertex_live_setup("live/gemini"), "live/gemini", id="gateway alias with a slash"),
+        pytest.param(
+            None,
+            _vertex_live_setup("gemini-live-2.5-flash").encode(),
+            "gemini-live-2.5-flash",
+            id="setup sent as bytes",
+        ),
+        pytest.param(
+            "gemini-live-2.5-flash",
+            json.dumps({"realtimeInput": {"text": "hi"}}),
+            "gemini-live-2.5-flash",
+            id="first frame names no model",
+        ),
+        pytest.param(
+            "gemini-live-2.5-flash", _TOO_DEEP_TO_PARSE, "gemini-live-2.5-flash", id="first frame too deep to parse"
+        ),
+        pytest.param(
+            "gemini-live-2.5-flash",
+            _TOO_LONG_A_NUMBER_TO_PARSE,
+            "gemini-live-2.5-flash",
+            id="first frame with a number too long to parse",
+        ),
+        pytest.param("gemini-live-2.5-flash", None, "gemini-live-2.5-flash", id="client leaves before setup"),
+    ],
+)
+async def test_vertex_live_relay_runs_pre_call_hooks_on_the_model_the_setup_frame_selects(
+    url_model: str | None, first_frame: str | bytes | None, hooked_model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    recorder: Final = _PreCallDataRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=user_api_key_cache))
+    dials: Final = _VertexLiveDials()
+    monkeypatch.setattr("litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect", dials.dial)
+    client_frames: Final = () if first_frame is None else (first_frame,)
+    llm_router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gemini-live", "litellm_params": {"model": "vertex_ai/gemini-live-2.5-flash"}},
+            {"model_name": "live/gemini", "litellm_params": {"model": "vertex_ai/gemini-live-2.5-flash"}},
+        ]
+    )
+
+    await websocket_passthrough_request(
+        websocket=_client_websocket(
+            AsyncMock(side_effect=[*map(_client_frame_message, client_frames), {"type": "websocket.disconnect"}])
+        ),
+        target="wss://aiplatform.example.test/ws/live",
+        custom_headers={},
+        user_api_key_dict=UserAPIKeyAuth(),
+        forward_headers=False,
+        endpoint="/vertex_ai/live",
+        accept_websocket=False,
+        model=url_model,
+        opening_frame_model=_build_vertex_live_session_model(llm_router),
+    )
+
+    assert (tuple(data.get("model") for data in recorder.data), dials.frames_sent()) == (
+        (hooked_model,),
+        client_frames,
+    )
+
+
+class _RefusingPreCallHook(CustomLogger):
+    def __init__(self, refusal: HTTPException) -> None:
+        super().__init__()
+        self.refusal = refusal
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: str,
+    ) -> None:
+        data["guardrail_seen"] = "pii-guard"  # rebind-ok: the guardrail-style write this test traces
+        raise self.refusal
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_reports_a_pre_call_refusal_to_the_failure_hooks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    refusal: Final = HTTPException(status_code=429, detail="Rate limit exceeded")
+    recorder: Final = _FailureHookRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [_RefusingPreCallHook(refusal), recorder])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=user_api_key_cache))
+    dialed: Final = _record_upstream_dials(monkeypatch)
+
+    with pytest.raises(HTTPException) as raised:
+        await _relay_one_client_session(UserAPIKeyAuth(), "nova-3")
+
+    assert raised.value is refusal
+    assert (
+        [failure.original_exception for failure in recorder.failures],
+        [(failure.request_data["model"], failure.request_data["guardrail_seen"]) for failure in recorder.failures],
+        [str(failure.traceback_str).splitlines()[-1] for failure in recorder.failures],
+        dialed.targets,
+    ) == (
+        [refusal],
+        [("nova-3", "pii-guard")],
+        ["".join(traceback.format_exception_only(refusal)).strip()],
+        (),
+    )
+
+
+class _RewritingFailureHook(CustomLogger):
+    def __init__(self, replacement: HTTPException) -> None:
+        super().__init__()
+        self.replacement = replacement
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException:
+        return self.replacement
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_raises_the_failure_hooks_replacement_for_a_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    refusal: Final = HTTPException(status_code=429, detail="Rate limit exceeded for model_per_key: internal detail")
+    replacement: Final = HTTPException(status_code=429, detail="Too many sessions, try again later")
+    monkeypatch.setattr(litellm, "callbacks", [_RefusingPreCallHook(refusal), _RewritingFailureHook(replacement)])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=user_api_key_cache))
+    _record_upstream_dials(monkeypatch)
+
+    with pytest.raises(HTTPException) as raised:
+        await _relay_one_client_session(UserAPIKeyAuth(), "nova-3")
+
+    assert raised.value is replacement
+    assert raised.value.__cause__ is refusal
+
+
 @pytest.mark.asyncio
 async def test_websocket_passthrough_keeps_normal_upstream_close_normal():
     from websockets.exceptions import ConnectionClosedOK
@@ -10856,16 +11142,29 @@ async def test_websocket_passthrough_connect_failure_logs_the_provider_of_the_up
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure_kind", ["rejected_handshake", "unreachable_host"])
-@pytest.mark.parametrize("model, expected_model", [("gemini-3.8-live", "gemini-3.8-live"), (None, "")])
+@pytest.mark.parametrize(
+    "model, setup_model, expected_model",
+    [
+        ("gemini-3.8-live", None, "gemini-3.8-live"),
+        (None, None, ""),
+        ("gemini-3.8-live", "models/gemini-live-2.5-flash", "gemini-live-2.5-flash"),
+    ],
+)
 async def test_websocket_passthrough_connect_failure_logs_the_model_the_caller_named(
-    failure_kind: str, model: str | None, expected_model: str
-):
-    failure: Final = await _run_websocket_connect_failure(failure_kind, _VERTEX_LIVE_TARGET, True, model=model)
+    failure_kind: str, model: str | None, setup_model: str | None, expected_model: str
+) -> None:
+    failure: Final = await _run_websocket_connect_failure(
+        failure_kind, _VERTEX_LIVE_TARGET, True, model=model, setup_model=setup_model
+    )
     assert failure.request_data["model"] == expected_model
 
 
 async def _run_websocket_connect_failure(
-    failure_kind: str, target: str, builtin_provider_route: bool, model: str | None = None
+    failure_kind: str,
+    target: str,
+    builtin_provider_route: bool,
+    model: str | None = None,
+    setup_model: str | None = None,
 ) -> _RecordedFailure:
     recorder: Final = _FailureHookRecorder()
     with (
@@ -10880,7 +11179,11 @@ async def _run_websocket_connect_failure(
     ):
         litellm_patch.setattr(litellm, "callbacks", [recorder])
         await websocket_passthrough_request(
-            websocket=_client_websocket(_pending_receive),
+            websocket=_client_websocket(
+                _pending_receive
+                if setup_model is None
+                else AsyncMock(return_value={"type": "websocket.receive", "text": _vertex_live_setup(setup_model)})
+            ),
             target=target,
             custom_headers={},
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
@@ -10888,6 +11191,7 @@ async def _run_websocket_connect_failure(
             accept_websocket=False,
             builtin_provider_route=builtin_provider_route,
             model=model,
+            opening_frame_model=None if setup_model is None else _build_vertex_live_session_model(None),
         )
     assert len(recorder.failures) == 1
     return recorder.failures[0]

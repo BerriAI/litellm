@@ -6324,7 +6324,8 @@ class TestVertexAILiveWebsocketPassthrough:
                         "vertex_location": "global",
                         "vertex_credentials": '{"type": "service_account"}',
                     },
-                }
+                },
+                {"model_name": "live/gemini", "litellm_params": {"model": "vertex_ai/gemini-live-2.5-flash"}},
             ]
         )
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
@@ -6358,6 +6359,10 @@ class TestVertexAILiveWebsocketPassthrough:
         assert rewriter("gemini-live") == (
             "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
         )
+        session_model: Final = passthrough_kwargs["opening_frame_model"]
+        assert tuple(
+            session_model(json.dumps({"setup": {"model": model}})) for model in ("models/gemini-live", "live/gemini")
+        ) == ("gemini-live", "live/gemini")
         websocket.close.assert_not_awaited()
 
     @pytest.mark.parametrize(

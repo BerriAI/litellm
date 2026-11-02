@@ -2,33 +2,41 @@
 target URL."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.routing import WebSocketRoute
-from starlette.websockets import WebSocketDisconnect
+from starlette.types import Message
+from starlette.websockets import WebSocket, WebSocketDisconnect
+from websockets.exceptions import ConnectionClosedOK
+from websockets.frames import Close
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import WEBSOCKET_CLOSE_REASON_MAX_BYTES
 from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
 from litellm.llms.deepgram.common_utils import DeepgramSpeakMeter
 from litellm.proxy._lazy_features import LAZY_FEATURES
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import cache_key_object
+from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _websocket_relay,
     deepgram_listen_websocket_route,
+    deepgram_speak_user_api_key_auth,
     deepgram_speak_websocket_route,
     router,
 )
-from litellm.proxy.utils import hash_token
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.passthrough_endpoints.pass_through_endpoints import WebSocketSessionMeter
 
 GET_CREDENTIALS: Final = (
@@ -87,6 +95,7 @@ class _FakeRelay:
         endpoint: str,
         accept_websocket: bool,
         meter: WebSocketSessionMeter | None = None,
+        model: str | None = None,
     ) -> None:
         self.calls.append(
             _RelayCall(
@@ -534,6 +543,174 @@ async def test_deepgram_speak_relays_with_provider_auth_and_meters_the_session(
     ]
     assert websocket.accepts == [None]
     assert websocket.closed is None
+
+
+def _client_that_hangs_up(path: str, query: str) -> WebSocket:
+    handshake: Final = iter(({"type": "websocket.connect"},))
+
+    async def receive() -> Message:
+        return next(handshake, {"type": "websocket.disconnect", "code": 1000})
+
+    async def send(message: Message) -> None:
+        return None
+
+    return WebSocket({"type": "websocket", "path": path, "query_string": query.encode(), "headers": []}, receive, send)
+
+
+class _UpstreamThatClosesAtOnce:
+    async def recv(self, decode: bool | None = None) -> str:
+        raise ConnectionClosedOK(rcvd=Close(1000, ""), sent=Close(1000, ""), rcvd_then_sent=True)
+
+    async def send(self, message: str | bytes) -> None:
+        return None
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        return None
+
+
+class _UpstreamConnect:
+    async def __aenter__(self) -> _UpstreamThatClosesAtOnce:
+        return _UpstreamThatClosesAtOnce()
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
+class _UpstreamDials:
+    def __init__(self) -> None:
+        self.targets: tuple[str, ...] = ()
+
+    def dial(self, target: str, additional_headers: Mapping[str, str]) -> _UpstreamConnect:
+        self.targets = (*self.targets, target)
+        return _UpstreamConnect()
+
+
+def _upstream_dials_under_the_real_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> _UpstreamDials:
+    from litellm.proxy import proxy_server
+
+    fixed_now: Final = datetime.fromisoformat("2026-10-31T12:00:00+00:00")
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(DualCache(in_memory_cache=InMemoryCache(clock=fixed_now.timestamp))),
+        time_provider=lambda: fixed_now,
+        model_group_resolver=lambda _model: None,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [limiter])
+    monkeypatch.setattr(
+        proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=proxy_server.user_api_key_cache)
+    )
+    dials: Final = _UpstreamDials()
+    monkeypatch.setattr("litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect", dials.dial)
+    return dials
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "path", "limited_model", "first_query", "second_query", "first_target"),
+    [
+        pytest.param(
+            deepgram_listen_websocket_route,
+            "/deepgram/v1/listen",
+            "nova-3",
+            "model=nova-3",
+            "model=nova-3&model=nova-2",
+            "wss://api.deepgram.com/v1/listen?model=nova-3",
+            id="listen repeated model",
+        ),
+        pytest.param(
+            deepgram_listen_websocket_route,
+            "/deepgram/v1/listen",
+            "nova-3",
+            "",
+            "",
+            "wss://api.deepgram.com/v1/listen?model=nova-3",
+            id="listen default model",
+        ),
+        pytest.param(
+            deepgram_speak_websocket_route,
+            "/deepgram/v1/speak",
+            "aura-2-thalia-en",
+            "model=aura-2-thalia-en",
+            "model=aura-2-thalia-en&model=aura-asteria-en",
+            "wss://api.deepgram.com/v1/speak?model=aura-2-thalia-en",
+            id="speak repeated model",
+        ),
+        pytest.param(
+            deepgram_speak_websocket_route,
+            "/deepgram/v1/speak",
+            "aura-asteria-en",
+            "",
+            "",
+            "wss://api.deepgram.com/v1/speak?model=aura-asteria-en",
+            id="speak default model",
+        ),
+    ],
+)
+async def test_deepgram_routes_refuse_a_second_session_over_the_keys_model_rpm_limit(
+    route: Callable[..., Awaitable[None]],
+    path: str,
+    limited_model: str,
+    first_query: str,
+    second_query: str,
+    first_target: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-provider-key")
+    dialed: Final = _upstream_dials_under_the_real_rate_limiter(monkeypatch)
+    caller: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-deepgram-model-rpm"), metadata={"model_rpm_limit": {limited_model: 1}}
+    )
+
+    async def session(query: str) -> None:
+        await route(
+            websocket=_client_that_hangs_up(path, query),
+            user_api_key_dict=caller,
+            relay=_websocket_relay(),
+        )
+
+    await asyncio.create_task(session(first_query))
+    with pytest.raises(HTTPException) as refused:
+        await asyncio.create_task(session(second_query))
+
+    assert (refused.value.status_code, refused.value.detail, dialed.targets) == (
+        429,
+        f"Rate limit exceeded for model_per_key: {caller.api_key}:{limited_model}. Limit type: requests. "
+        "Current limit: 1, Remaining: 0. Limit resets at: 2026-10-31 12:01:00 UTC",
+        (first_target,),
+    )
+
+
+@pytest.mark.timeout(10)
+def test_deepgram_speak_tells_a_client_over_its_model_rpm_limit_why_it_was_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.proxy_server import otlp_http_exception_handler
+
+    monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-provider-key")
+    _upstream_dials_under_the_real_rate_limiter(monkeypatch)
+    caller: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-deepgram-model-rpm"), metadata={"model_rpm_limit": {"aura-2-thalia-en": 1}}
+    )
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.exception_handler(StarletteHTTPException)(otlp_http_exception_handler)
+    app.dependency_overrides[deepgram_speak_user_api_key_auth] = lambda: caller
+    client: Final = TestClient(app)
+
+    with client.websocket_connect("/deepgram/v1/speak?model=aura-2-thalia-en") as first:
+        first_close: Final = first.receive()
+    with client.websocket_connect("/deepgram/v1/speak?model=aura-2-thalia-en") as second:
+        second_close: Final = second.receive()
+
+    assert (first_close, second_close) == (
+        {"type": "websocket.close", "code": 1000, "reason": ""},
+        {
+            "type": "websocket.close",
+            "code": 1013,
+            "reason": "Rate limit exceeded for model_per_key (requests), retry after 60s",
+        },
+    )
 
 
 @pytest.mark.asyncio

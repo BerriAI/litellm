@@ -35,6 +35,7 @@ from collections.abc import (
 )
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from http.client import responses as http_status_phrases
 from itertools import chain
 from types import MappingProxyType, TracebackType, UnionType
 from typing import (
@@ -168,6 +169,7 @@ from litellm.proxy.common_utils.callback_utils import (
     process_callback,
     strip_callback_config,
 )
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  # legacy module exports
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
@@ -319,6 +321,7 @@ from litellm._internal_context import service_target, with_service_target
 from litellm._logging import (
     STARTUP_OUTPUT_SETTINGS,
     print_startup_message,
+    redact_internal_details_from_client_message,
     redact_string,
     verbose_proxy_logger,
     verbose_router_logger,
@@ -485,6 +488,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     open_sse_before_first_byte,
     proxy_exception_from_route_error,
     resolve_litellm_call_id,
+    serialize_http_exception_detail,
     should_return_raw_model_name,
     sse_error_payload,
     ttft_keepalive_interval,
@@ -2311,17 +2315,43 @@ async def _websocket_http_exception_response(websocket: WebSocket, exc: Starlett
     match state:
         case WebSocketState.CONNECTING:
             return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
-        case WebSocketState.CONNECTED:
-            await websocket.close(code=_websocket_close_code(exc.status_code))
+        case WebSocketState.CONNECTED if websocket.client_state is not WebSocketState.DISCONNECTED:
+            await websocket.close(code=_websocket_close_code(exc.status_code), reason=_websocket_close_reason(exc))
             return None
-        case WebSocketState.RESPONSE | WebSocketState.DISCONNECTED:
+        case WebSocketState.CONNECTED | WebSocketState.RESPONSE | WebSocketState.DISCONNECTED:
             return None
         case _:
             assert_never(state)
 
 
 def _websocket_close_code(status_code: int) -> int:
+    if status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+        return status.WS_1013_TRY_AGAIN_LATER
     return status.WS_1011_INTERNAL_ERROR if status_code >= 500 else status.WS_1008_POLICY_VIOLATION
+
+
+def _websocket_close_reason(exc: StarletteHTTPException) -> str:
+    message: Final = (
+        _rate_limit_close_message(exc)
+        if isinstance(exc, ProxyRateLimitError)
+        else serialize_http_exception_detail(exc.detail)[0]
+    )
+    return websocket_close_reason(
+        redact_internal_details_from_client_message(message),
+        fallback=http_status_phrases.get(exc.status_code, "WebSocket error"),
+    )
+
+
+def _rate_limit_close_message(exc: ProxyRateLimitError) -> str:
+    headers: Final = exc.headers or {}
+    limit_type: Final = exc.rate_limit_type or headers.get("rate_limit_type")
+    retry_after: Final = headers.get("retry-after")
+    return (
+        "Rate limit exceeded"
+        + (f" for {exc.descriptor_key}" if exc.descriptor_key else "")
+        + (f" ({limit_type})" if limit_type else "")
+        + (f", retry after {retry_after}s" if retry_after else "")
+    )
 
 
 def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Exception | None = None) -> None:

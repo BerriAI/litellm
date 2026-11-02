@@ -153,6 +153,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_websocket_passthrough_route,
     refuse_websocket,
     truncated_close_reason,
+    vertex_live_setup_frame_model,
     websocket_passthrough_request,
 )
 from litellm.proxy.utils import ProxyLogging as ProxyLoggingType
@@ -178,7 +179,7 @@ from litellm.types.passthrough_endpoints.tinyfish import (
     is_allowed_tinyfish_endpoint,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
-from litellm.types.router import LiteLLMParamsTypedDict
+from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
 from litellm.types.utils import CallTypes, LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
@@ -3466,6 +3467,7 @@ class _WebsocketRelay(Protocol):
         client_frame_model_gate: WebsocketFrameModelGate | None = None,
         upstream_frame_kind: WebsocketUpstreamFrameClassifier | None = None,
         meter: WebSocketSessionMeter | None = None,
+        model: str | None = None,
     ) -> None: ...
 
 
@@ -3718,6 +3720,7 @@ async def deepgram_listen_websocket_route(
         forward_headers=False,
         endpoint=websocket.url.path,
         accept_websocket=False,
+        model=deepgram_listen_requested_model(websocket.url.query),
     )
 
 
@@ -3766,6 +3769,7 @@ async def deepgram_speak_websocket_route(
         endpoint=websocket.url.path,
         accept_websocket=False,
         meter=DeepgramSpeakMeter(target, character_rate),
+        model=deepgram_speak_requested_model(websocket.url.query),
     )
 
 
@@ -4171,21 +4175,26 @@ def _build_vertex_live_setup_model_rewriter(
     return rewrite
 
 
-def _resolve_alias_to_upstream_model(setup_model: str, llm_router: Router | None) -> str:
+def _setup_model_deployment(setup_model: str, llm_router: Router | None) -> DeploymentTypedDict | None:
     """
     The Live SDK wraps whatever the caller typed as ``models/<name>``, so a gateway alias arrives prefixed
     """
     if llm_router is None:
-        return setup_model
+        return None
     candidates: Final = (setup_model, setup_model.rsplit("/", 1)[-1])
-    upstream: Final = next(
+    return next(
         (
-            deployment["litellm_params"].get("model")
+            deployment
             for deployment in (llm_router.registry().deployments() or ())
             if deployment.get("model_name") in candidates
         ),
         None,
     )
+
+
+def _resolve_alias_to_upstream_model(setup_model: str, llm_router: Router | None) -> str:
+    deployment: Final = _setup_model_deployment(setup_model, llm_router)
+    upstream: Final = None if deployment is None else deployment["litellm_params"].get("model")
     if upstream is None:
         return setup_model
     try:
@@ -4195,13 +4204,29 @@ def _resolve_alias_to_upstream_model(setup_model: str, llm_router: Router | None
     return upstream.removeprefix(f"{provider}/")
 
 
+def _build_vertex_live_session_model(llm_router: Router | None) -> Callable[[str | bytes], str | None]:
+    """
+    Name a Live session's model the way the setup rewriter resolves it, the gateway alias its setup frame names or
+    else the publisher model id Vertex serves
+    """
+
+    def session_model(frame: str | bytes) -> str | None:
+        setup_model: Final = vertex_live_setup_frame_model(frame)
+        if setup_model is None:
+            return None
+        deployment: Final = _setup_model_deployment(setup_model, llm_router)
+        return setup_model.rsplit("/", 1)[-1] if deployment is None else deployment["model_name"]
+
+    return session_model
+
+
 async def vertex_ai_live_websocket_passthrough(
     websocket: WebSocket,
     model: str | None = None,
     vertex_project: str | None = None,
     vertex_location: str | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-):
+) -> None:
     """
     Vertex AI Live API WebSocket Pass-through Function
 
@@ -4301,6 +4326,7 @@ async def vertex_ai_live_websocket_passthrough(
         accept_websocket=False,
         builtin_provider_route=True,
         model=model,
+        opening_frame_model=_build_vertex_live_session_model(_get_llm_router()),
         setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
             vertex_project=resolved_project,
             vertex_location=resolved_location,
