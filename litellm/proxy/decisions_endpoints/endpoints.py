@@ -10,6 +10,7 @@ from litellm.exceptions import BadRequestError
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import YieldsToConfiguredPassThroughRoute
 from litellm.types.decisions import (
     DecisionsRequest,
     DecisionsRequestBody,
@@ -20,7 +21,7 @@ from litellm.types.decisions import (
 )
 from litellm.types.extraction import ExtractionRequest, ExtractionRequestBody, ExtractionResponse
 
-router: Final = APIRouter()
+router: Final = APIRouter(route_class=YieldsToConfiguredPassThroughRoute)
 _REQUEST_DATA_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _DECISIONS_REQUEST_BODY_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _OPENAI_DECISION_REQUEST_BODY_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(

@@ -6,7 +6,7 @@ import json
 import random
 import sys
 from collections.abc import AsyncGenerator, Callable, Iterator, Mapping
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Final, Literal
 
@@ -22,11 +22,15 @@ import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.decisions_pricing import apply_decisions_pricing
-from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeature, attach_lazy_features
+from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeature, attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.decisions_endpoints.endpoints import decisions, router, systemone
-from litellm.proxy.pass_through_endpoints.pass_through_endpoints import SafeRouteAdder
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    InitPassThroughEndpointHelpers,
+    _registered_pass_through_routes,
+)
 from litellm.proxy.proxy_server import (
     app,
     cleanup_router_config_variables,
@@ -1322,20 +1326,58 @@ def _serving_endpoint(bare: FastAPI, path: str) -> object:
     )
 
 
-def test_a_config_pass_through_at_v1_decisions_keeps_its_route_and_the_native_api_serves_decisions(
+@pytest.fixture
+def config_pass_through_upstream(monkeypatch: pytest.MonkeyPatch) -> Iterator[respx.Route]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            yield upstream.post("https://operator.example/decide").respond(200, json={"operator": True})
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+
+
+def _add_config_pass_through(app_: FastAPI, path: str) -> None:
+    InitPassThroughEndpointHelpers.add_exact_path_route(
+        app=app_,
+        path=path,
+        target="https://operator.example/decide",
+        custom_headers={},
+        forward_headers=None,
+        merge_query_params=None,
+        dependencies=None,
+        cost_per_request=None,
+        endpoint_id="decisions-operator",
+        methods=["POST"],
+    )
+
+
+def _app_with_the_proxy_decisions_slot(
     monkeypatch: pytest.MonkeyPatch,
+    lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]] | None = None,
+) -> FastAPI:
+    bare: Final = FastAPI(lifespan=lifespan)
+    reserve_lazy_slot(bare, "decisions", features=(_decisions_feature(),))
+    attach_lazy_features(bare, (_decisions_feature(),))
+    monkeypatch.setitem(bare.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+    return bare
+
+
+@pytest.mark.parametrize("path", ("/v1/decisions", "/openai/v1/decisions"))
+def test_a_config_pass_through_at_a_decisions_path_keeps_its_route_and_the_native_api_serves_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+    config_pass_through_upstream: respx.Route,
+    path: str,
 ) -> None:
     monkeypatch.delenv("LITELLM_DISABLE_LAZY_ROUTES", raising=False)
 
-    async def pass_through() -> dict[str, str]:
-        return {"served_by": "pass-through"}
-
-    bare: Final = FastAPI()
-    attach_lazy_features(bare, (_decisions_feature(),))
-    SafeRouteAdder.add_api_route_if_not_exists(bare, "/v1/decisions", pass_through, ["POST"])
+    bare: Final = _app_with_the_proxy_decisions_slot(monkeypatch)
+    _add_config_pass_through(bare, path)
     with TestClient(bare) as client:
-        assert client.post("/v1/decisions", json={"model": "gpt-6-luna"}).json() == {"served_by": "pass-through"}
-    assert _serving_endpoint(bare, "/v1/decisions") is pass_through
+        assert client.post(path, json={"model": "gpt-6-luna"}).json() == {"operator": True}
+    assert config_pass_through_upstream.call_count == 1
     assert _serving_endpoint(bare, "/decisions") is decisions
     assert _serving_endpoint(bare, "/v1/systemone") is systemone
     assert _serving_endpoint(bare, "/systemone") is systemone
@@ -1343,24 +1385,19 @@ def test_a_config_pass_through_at_v1_decisions_keeps_its_route_and_the_native_ap
 
 def test_with_lazy_routes_disabled_a_config_pass_through_at_v1_decisions_still_wins(
     monkeypatch: pytest.MonkeyPatch,
+    config_pass_through_upstream: respx.Route,
 ) -> None:
     monkeypatch.setenv("LITELLM_DISABLE_LAZY_ROUTES", "true")
 
-    async def pass_through() -> dict[str, str]:
-        return {"served_by": "pass-through"}
-
     @asynccontextmanager
     async def loads_the_config(app_: FastAPI) -> AsyncGenerator[None]:
-        assert SafeRouteAdder.add_api_route_if_not_exists(app_, "/v1/decisions", pass_through, ["POST"]), (
-            "the native route registered at startup must not block the config pass-through"
-        )
+        _add_config_pass_through(app_, "/v1/decisions")
         yield
 
-    bare: Final = FastAPI(lifespan=loads_the_config)
-    attach_lazy_features(bare, (_decisions_feature(),))
+    bare: Final = _app_with_the_proxy_decisions_slot(monkeypatch, loads_the_config)
     with TestClient(bare) as client:
-        assert client.post("/v1/decisions", json={"model": "gpt-6-luna"}).json() == {"served_by": "pass-through"}
-    assert _serving_endpoint(bare, "/v1/decisions") is pass_through
+        assert client.post("/v1/decisions", json={"model": "gpt-6-luna"}).json() == {"operator": True}
+    assert config_pass_through_upstream.call_count == 1
     assert _serving_endpoint(bare, "/decisions") is decisions
 
 
