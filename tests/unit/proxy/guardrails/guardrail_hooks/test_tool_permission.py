@@ -2215,6 +2215,27 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert result["tools"] == [{"type": "namespace", "name": "functions", "tools": members[1:]}]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("exec_first", [True, False], ids=["exec_namespace_first", "exec_namespace_last"])
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    async def test_pre_call_denies_a_bare_name_another_namespace_shares_a_qualified_name_with(
+        self, on_disallowed_action: Literal["block", "rewrite"], exec_first: bool
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "deny_exec", "tool_name": r"^exec$", "decision": "deny"}], on_disallowed_action
+        )
+        exec_namespace = {"type": "namespace", "name": "mcp__ops", "tools": [{"type": "function", "name": "exec"}]}
+        twin_namespace = {"type": "namespace", "name": "mcp", "tools": [{"type": "function", "name": "ops__exec"}]}
+        tools = [exec_namespace, twin_namespace] if exec_first else [twin_namespace, exec_namespace]
+        data = {"model": "gpt-5", "input": "run date", "tools": tools}
+
+        if on_disallowed_action == "rewrite":
+            assert (await self._run_pre_call(guardrail, data, "responses"))["tools"] == []
+            return
+        with pytest.raises(HTTPException) as excinfo:
+            await self._run_pre_call(guardrail, data, "responses")
+        assert excinfo.value.detail["detection_message"] == "Tool 'exec' denied by rule 'deny_exec'"
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("placement", ["tools", "functions"])
     @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
     @pytest.mark.parametrize(

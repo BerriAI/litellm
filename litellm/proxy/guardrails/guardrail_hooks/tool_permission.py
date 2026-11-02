@@ -661,13 +661,17 @@ class ToolPermissionGuardrail(CustomGuardrail):
         return bare if bare_rule.decision == "deny" else qualified
 
     def _check_target_permission(
-        self, target: _ToolTarget, bare_names: Mapping[str, str]
+        self, target: _ToolTarget, bare_names: Mapping[str, frozenset[str]]
     ) -> tuple[bool, str | None, str | None]:
         name, tool_type = target
-        bare_name: Final = bare_names.get(name) if name is not None else None
-        if name is None or bare_name is None:
+        candidates: Final = tuple(sorted(bare_names.get(name, ()))) if name is not None else ()
+        if name is None or not candidates:
             return self._check_tool_permission(name, tool_type)
-        return self._check_tool_permission(self._deciding_member_name(name, bare_name, tool_type), tool_type)
+        results: Final = tuple(
+            self._check_tool_permission(self._deciding_member_name(name, bare_name, tool_type), tool_type)
+            for bare_name in candidates
+        )
+        return next((result for result in results if not result[0]), results[0])
 
     def _parse_tool_call_arguments(
         self, tool_call: ChatCompletionMessageToolCall
@@ -1392,8 +1396,14 @@ class ToolPermissionGuardrail(CustomGuardrail):
             )
             return data
 
+        member_names: Final = tuple(
+            chain.from_iterable(map(self._bare_member_names, _sent_tools(_REQUEST_DATA.validate_python(data))))
+        )
         bare_names: Final = MappingProxyType(
-            dict(chain.from_iterable(map(self._bare_member_names, _sent_tools(_REQUEST_DATA.validate_python(data)))))
+            {
+                qualified: frozenset(bare for key, bare in member_names if key == qualified)
+                for qualified, _ in member_names
+            }
         )
         decisions: Final = tuple((target, self._check_target_permission(target, bare_names)) for target in new_tools)
         denied: Final = tuple(
