@@ -21,6 +21,7 @@ from typing import (
     TypedDict,
     Union,
     cast,
+    runtime_checkable,
 )
 from uuid import NAMESPACE_URL, uuid5
 
@@ -374,6 +375,12 @@ class _ManagedResourcePrismaClient(Protocol):
     def db(self) -> _ManagedResourceDatabase: ...
 
 
+@runtime_checkable
+class _WriterRoutedDatabase(Protocol):
+    @property
+    def writer(self) -> _ManagedResourceDatabase: ...
+
+
 class _SchedulerWithJobLookup(Protocol):
     def get_job(self, job_id: str) -> object: ...
 
@@ -479,6 +486,11 @@ def _managed_object_table(prisma_client: _ManagedResourcePrismaClient) -> _Manag
     return prisma_client.db.litellm_managedobjecttable
 
 
+def _writer_database(db: _ManagedResourceDatabase) -> _ManagedResourceDatabase:
+    """Reads that feed a write must see the create that just happened; a lagging read replica may not"""
+    return db.writer if isinstance(db, _WriterRoutedDatabase) else db
+
+
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _POSTGRES_UNSTORABLE_CHARACTER: Final = "\x00"
 
@@ -510,6 +522,25 @@ def _without_model_output(
     return (
         file_object.model_copy(update={"output": []}) if isinstance(file_object, ResponsesAPIResponse) else file_object
     )
+
+
+def _with_model_id(
+    file_object: LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse,
+    model_id: str | None,
+) -> LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse:
+    return file_object if model_id is None else file_object.model_copy(update={"model_id": model_id})
+
+
+async def _stored_model_id(managed_object_table: _ManagedObjectTableActions, unified_object_id: str) -> str | None:
+    row: Final = await managed_object_table.find_first(where={"unified_object_id": unified_object_id})
+    if row is None:
+        return None
+    try:
+        parsed: Final = _JSON_VALUE_ADAPTER.validate_python(_decode_json_blob(row.file_object))
+    except (json.JSONDecodeError, ValidationError):
+        return None
+    model_id: Final = parsed.get("model_id") if isinstance(parsed, dict) else None
+    return model_id if isinstance(model_id, str) and model_id else None
 
 
 def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, str]:
@@ -697,8 +728,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         persist_attribution: bool = False,
         create_if_missing: bool = True,
         batch_processed: bool = False,
+        creating_model_id: str | None = None,
     ) -> None:
         """Persist a managed object row, caching it and upserting it in the DB.
+
+        creating_model_id is the router deployment that created the object. It is kept
+        inside the stored file_object JSON as `model_id`, because the raw provider id an
+        unmanaged batch stores as unified_object_id says nothing about which deployment
+        made it, and the cost poller needs that deployment to read the result back. A
+        later observe of the row (create_if_missing=False) keeps the stored value rather
+        than overwriting it with whichever deployment served the retrieve.
 
         persist_attribution is set only by the batch and background response creates,
         the callers that can speak for the creator; it gates the api_key, request_tags, and,
@@ -720,7 +759,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         It is written only in the upsert create branch.
         """
         verbose_logger.info(f"Storing LiteLLM Managed {file_purpose} object with id={unified_object_id} in cache")
-        stored_object: Final = _without_model_output(file_object)
+        managed_database: Final = _managed_database(self.prisma_client)
+        managed_object_table: Final = managed_database.litellm_managedobjecttable
+        preserved_model_id: Final = (
+            creating_model_id
+            if creating_model_id is not None or create_if_missing
+            else await _stored_model_id(_writer_database(managed_database).litellm_managedobjecttable, unified_object_id)
+        )
+        stored_object: Final = _with_model_id(_without_model_output(file_object), preserved_model_id)
         litellm_managed_object = LiteLLM_ManagedObjectTable(
             unified_object_id=unified_object_id,
             model_object_id=model_object_id,
@@ -752,7 +798,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "status": file_object.status,
             "updated_by": user_api_key_dict.user_id,
         }
-        managed_object_table: Final = _managed_object_table(self.prisma_client)
         if not create_if_missing:
             await managed_object_table.update_many(
                 where={"unified_object_id": unified_object_id},
@@ -2170,6 +2215,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 request_tags=request_tags_from_metadata(request_metadata if isinstance(request_metadata, dict) else {}),
                 persist_attribution=is_batch_create,
                 create_if_missing=is_batch_create,
+                creating_model_id=model_id if is_batch_create else None,
             )
             if not is_batch_create:
                 await self.store_batch_output_file_ownership(

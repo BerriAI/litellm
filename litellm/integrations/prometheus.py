@@ -66,7 +66,7 @@ from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import EndUserRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
-from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
+from litellm.router_api import deployment_metadata
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
@@ -82,6 +82,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot,
 )
 from litellm.types.utils import (
+    CallTypes,
     StandardLoggingGuardrailInformation,
     StandardLoggingPayload,
     StandardLoggingZeroCostDiagnostic,
@@ -277,6 +278,11 @@ def _logged_fields(value: object) -> Mapping[str, object]:
         return _LOGGED_FIELDS.validate_python(value)
     except ValidationError:
         return _NO_LOGGED_FIELDS
+
+
+_GOOGLE_PASS_THROUGH_PROVIDERS: Final = frozenset(
+    (litellm.LlmProviders.GEMINI.value, litellm.LlmProviders.VERTEX_AI.value)
+)
 
 
 def _is_llm_provider(name: str) -> bool:
@@ -2943,6 +2949,22 @@ class PrometheusLogger(CustomLogger):
         return False
 
     @staticmethod
+    def _google_pass_through_provider(request_data: Mapping[str, object]) -> str | None:
+        declared_provider: Final = request_data.get("custom_llm_provider")
+        if request_data.get("call_type") != CallTypes.pass_through.value or not isinstance(declared_provider, str):
+            return None
+        return declared_provider if declared_provider in _GOOGLE_PASS_THROUGH_PROVIDERS else None
+
+    @staticmethod
+    def _failed_request_requested_model(request_data: Mapping[str, object]) -> object:
+        requested_model: Final = request_data.get("model", "")
+        if PrometheusLogger._google_pass_through_provider(request_data) is None:
+            return requested_model
+        request_metadata: Final = _logged_fields(_logged_fields(request_data.get("litellm_params")).get("metadata"))
+        model_group: Final = request_metadata.get("model_group")
+        return model_group if isinstance(model_group, str) and model_group else requested_model
+
+    @staticmethod
     def _extract_api_provider_from_request_data(request_data: dict) -> str | None:
         """
         Best-effort provider for the client-side failure path.
@@ -2950,22 +2972,27 @@ class PrometheusLogger(CustomLogger):
         A request can fail before a deployment is resolved, so the provider is
         not always known. Prefer the resolved ``custom_llm_provider`` on
         ``litellm_params``, then any provider recovered onto a partial
-        ``standard_logging_object`` (e.g. a stream that broke mid-flight), and
-        finally infer it from the requested model name (e.g. ``gpt-4o-mini`` ->
-        ``openai``) since the proxy's failure ``request_data`` usually carries
-        only the client-supplied model. Return ``None`` when it cannot be
-        determined so the label emits empty rather than a guess.
+        ``standard_logging_object`` (e.g. a stream that broke mid-flight). On a
+        Gemini or Vertex pass-through failure only, next take the provider the
+        failure payload names (``gemini`` or ``vertex_ai``), so every other
+        pass-through route keeps its earlier label. Finally infer it from the
+        requested model name (e.g. ``gpt-4o-mini`` -> ``openai``) since the
+        proxy's failure ``request_data`` usually carries only the client-supplied
+        model. Return ``None`` when it cannot be determined so the label emits
+        empty rather than a guess.
         """
         litellm_params: Final = request_data.get("litellm_params") or {}
-        provider = litellm_params.get("custom_llm_provider")
-        if provider:
-            return provider
         standard_logging_object: Final = request_data.get("standard_logging_object") or {}
-        provider = standard_logging_object.get("custom_llm_provider")
-        if provider:
-            return provider
+        resolved_provider: Final = litellm_params.get("custom_llm_provider") or standard_logging_object.get(
+            "custom_llm_provider"
+        )
+        if resolved_provider:
+            return resolved_provider
+        google_provider: Final = PrometheusLogger._google_pass_through_provider(request_data)
+        if google_provider is not None:
+            return google_provider
         model: Final = litellm_params.get("model") or request_data.get("model")
-        if not model:
+        if not isinstance(model, str) or not model:
             return None
         try:
             return litellm.get_llm_provider(model=model)[1] or None
@@ -2995,8 +3022,8 @@ class PrometheusLogger(CustomLogger):
         ).get("custom_llm_provider")
         if isinstance(provider, str) and provider:
             return provider
-        deployment_metadata: Final = find_deployment_metadata(litellm_params)
-        return _deployment_model_provider(deployment_metadata.get("deployment") if deployment_metadata else None)
+        picked_deployment: Final = deployment_metadata(litellm_params)
+        return _deployment_model_provider(picked_deployment.get("deployment") if picked_deployment else None)
 
     @staticmethod
     def _extract_api_provider_from_exception(exception: Exception) -> str | None:
@@ -3052,7 +3079,7 @@ class PrometheusLogger(CustomLogger):
                 team_alias=user_api_key_dict.team_alias,
                 org_id=user_api_key_dict.org_id,
                 org_alias=user_api_key_dict.organization_alias,
-                requested_model=_bounded_requested_model_label(request_data.get("model", "")),
+                requested_model=_bounded_requested_model_label(self._failed_request_requested_model(request_data)),
                 status_code=str(status_code),
                 exception_status=str(status_code),
                 exception_class=self._get_exception_class_name(original_exception),
@@ -5182,7 +5209,7 @@ def _tag_matches_wildcard_configured_pattern(tags: Sequence[str], configured_tag
     """
     import re
 
-    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 
     pattern_router: Final = PatternMatchRouter()
     regex_pattern: Final = pattern_router.pattern_to_regex(configured_tag)
