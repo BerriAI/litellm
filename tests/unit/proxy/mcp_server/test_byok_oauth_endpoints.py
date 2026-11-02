@@ -2019,7 +2019,7 @@ class _SharedStore:
         self.values.pop(key, None)
 
     async def async_increment(self, key: str, value: int, **_: Any) -> int:
-        if self.fail_increment:
+        if self.fail_increment and key.startswith("mcp_byok_auth_code_claim:"):
             raise ConnectionError("redis down")
         self.counts[key] = self.counts.get(key, 0) + value
         return self.counts[key]
@@ -2114,3 +2114,46 @@ async def test_a_shared_code_is_not_redeemed_when_the_single_use_claim_cannot_be
         result = await _redeem(code, verifier, store_credential)
     assert result.status_code == 400
     store_credential.assert_not_awaited()
+
+
+def test_the_pending_code_cap_holds_with_the_shared_store(client, monkeypatch):
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODE_WINDOW_KEY, _AUTH_CODES_MAX_SIZE
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
+    shared = _SharedStore()
+    shared.counts[_AUTH_CODE_WINDOW_KEY] = _AUTH_CODES_MAX_SIZE
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        resp = client.post(
+            "/v1/mcp/oauth/authorize",
+            data={
+                "client_id": "user-123",
+                "redirect_uri": "http://127.0.0.1:3000/callback",
+                "code_challenge": _make_challenge("a_code_verifier_that_is_long_enough_for_pkce_43"),
+                "code_challenge_method": "S256",
+                "state": "st",
+                "server_id": "server-xyz",
+                "api_key": "sk-supersecretkey",
+            },
+            follow_redirects=False,
+        )
+    assert resp.status_code == 503
+    assert shared.values == {}
+
+
+def test_an_oversized_api_key_is_rejected_before_a_code_is_issued(client):
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import _MAX_API_KEY_LENGTH
+
+    resp = client.post(
+        "/v1/mcp/oauth/authorize",
+        data={
+            "client_id": "user-123",
+            "redirect_uri": "http://127.0.0.1:3000/callback",
+            "code_challenge": _make_challenge("a_code_verifier_that_is_long_enough_for_pkce_43"),
+            "code_challenge_method": "S256",
+            "state": "st",
+            "server_id": "server-xyz",
+            "api_key": "k" * (_MAX_API_KEY_LENGTH + 1),
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
