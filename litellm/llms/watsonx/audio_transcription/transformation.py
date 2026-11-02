@@ -12,6 +12,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
@@ -28,6 +29,7 @@ from ...openai.transcriptions.whisper_transformation import (
 from ..common_utils import IBMWatsonXMixin
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTranscriptionConfig):
@@ -150,10 +152,9 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         """
         # Get base URL
         url = self._get_base_url(api_base=api_base)
-        url = url.rstrip("/")
 
         # Add the audio transcription endpoint
-        url = f"{url}/ml/v1/audio/transcriptions"
+        url = join_api_base(url, "ml/v1/audio/transcriptions")
 
         # Add version parameter (only version in query string, not project_id)
         api_version: Final = optional_params.get("api_version", None) or litellm.WATSONX_DEFAULT_API_VERSION
@@ -172,7 +173,7 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         removed before creating the TranscriptionResponse object.
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise ValueError(f"Error transforming response to json: {e}\nResponse: {raw_response.text}")
 

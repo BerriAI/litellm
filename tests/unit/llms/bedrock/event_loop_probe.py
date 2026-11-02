@@ -16,7 +16,6 @@ from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagem
 
 REFRESH_RELEASE_TIMEOUT_SECONDS: Final = 2.0
 REFRESH_START_TIMEOUT_SECONDS: Final = 10.0
-LOOP_SERVE_TIMEOUT_SECONDS: Final = 2.0
 
 
 class EventLoopProbe:
@@ -63,26 +62,21 @@ class EventLoopProbe:
 
 
 class LoopProbingVault:
-    """A Vault holding none of its hosted secrets, whose read waits for the event loop to run a callback.
+    """A Vault with no hosted secrets that records reads on the event-loop thread."""
 
-    A read made on the loop thread can never see that callback, so `stalled_the_loop` is set only then.
-    """
-
-    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
-        self._loop: Final = loop
+    def __init__(self) -> None:
+        self._loop_thread_id: Final = threading.get_ident()
         self.read: Final = threading.Event()
-        self.stalled_the_loop: Final = threading.Event()
+        self.read_on_loop: Final = threading.Event()
 
     def sync_read_secret(self, secret_name: str) -> None:
         self.read.set()
-        served: Final = threading.Event()
-        self._loop.call_soon_threadsafe(served.set)
-        if not served.wait(timeout=LOOP_SERVE_TIMEOUT_SECONDS):
-            self.stalled_the_loop.set()
+        if threading.get_ident() == self._loop_thread_id:
+            self.read_on_loop.set()
 
 
 def host_in_loop_probing_vault(monkeypatch: pytest.MonkeyPatch, *secret_names: str) -> LoopProbingVault:
-    vault: Final = LoopProbingVault(asyncio.get_running_loop())
+    vault: Final = LoopProbingVault()
     monkeypatch.setattr(litellm, "secret_manager_client", vault)
     monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.HASHICORP_VAULT)
     monkeypatch.setattr(

@@ -181,6 +181,18 @@ async def test_breach_check_skipped_when_disabled():
 
 
 @pytest.mark.asyncio
+async def test_breach_check_skipped_in_offline_mode(monkeypatch):
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
+    password = "correct horse battery staple"
+    result = await validate_password_not_breached(
+        password=password,
+        general_settings={},
+        client=_client_returning(f"{_sha1_upper(password)[5:]}:42"),
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_rejects_breached_password():
     password = "correct horse battery staple"
     sha1 = _sha1_upper(password)

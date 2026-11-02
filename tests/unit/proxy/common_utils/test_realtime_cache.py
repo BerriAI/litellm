@@ -1,4 +1,5 @@
-from typing import Any, cast
+import json
+from typing import Any, Final, cast
 
 import pytest
 
@@ -38,6 +39,12 @@ def test_realtime_request_body_caches_each_model_separately():
     assert gpt4o_body_first == b'{"model": "gpt-4o"}'
     assert gpt4o_mini_body == b'{"model": "gpt-4o-mini"}'
     assert gpt4o_body_first is not gpt4o_mini_body
+
+
+def test_realtime_request_body_keeps_a_model_name_with_quotes_inside_its_own_field():
+    body: Final = realtime_request_body('gpt-4o", "user": "someone-else')
+
+    assert json.loads(body) == {"model": 'gpt-4o", "user": "someone-else'}
 
 
 def test_realtime_query_params_template_caches_each_pair_separately():

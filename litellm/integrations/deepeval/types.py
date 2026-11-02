@@ -1,6 +1,6 @@
 # Duplicate -> https://github.com/confident-ai/deepeval/blob/main/deepeval/tracing/api.py
 from enum import Enum
-from typing import Any, ClassVar, Literal
+from typing import ClassVar, Literal
 
 from pydantic import ConfigDict, Field
 
@@ -55,7 +55,7 @@ class TraceApi(LiteLLMBaseModel):
     tool_spans: list[BaseApiSpan] = Field(alias="toolSpans")
     start_time: str = Field(alias="startTime")
     end_time: str = Field(alias="endTime")
-    metadata: dict[str, Any] | None = Field(None)
+    metadata: dict[str, object] | None = Field(None)
     tags: list[str] | None = Field(None)
     environment: str | None = Field(None)
 

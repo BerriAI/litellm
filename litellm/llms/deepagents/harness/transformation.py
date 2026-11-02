@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import itertools
 import json
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
+
+from pydantic import TypeAdapter
 
 from litellm.harness.options import DeepAgentsOptions
 from litellm.harness.types import (
@@ -41,6 +43,7 @@ DEEPAGENTS_DEFAULT_RECURSION_LIMIT: Final = 1000
 _MODEL_NODE: Final = "model"
 # Only these graph nodes produce new messages; middleware hooks may re-emit history.
 _EVENT_NODES: Final = frozenset({"model", "tools"})
+_TOOL_CALLS: Final = TypeAdapter(Iterable[Mapping[str, object]])
 
 NORMALIZED_TO_NATIVE: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -208,7 +211,7 @@ def update_events(
 def _message_events(message: object, skip_tools: frozenset[str]) -> tuple[Event, ...]:
     kind = getattr(message, "type", None)
     if kind == "ai":
-        calls = getattr(message, "tool_calls", None) or ()
+        calls: Final = _TOOL_CALLS.validate_python(getattr(message, "tool_calls", None) or ())
         return tuple(tool_call_event(call) for call in calls if call.get("name") not in skip_tools)
     if kind == "tool" and getattr(message, "name", None) not in skip_tools:
         status: Final[object] = getattr(message, "status", None)

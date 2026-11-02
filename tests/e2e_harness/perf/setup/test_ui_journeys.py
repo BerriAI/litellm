@@ -8,6 +8,7 @@ from setup.ui_journeys import (
     Sample,
     assert_within_ceiling,
     database_failures,
+    error_code,
     journeys,
     summarize,
     ui_junit_properties,
@@ -142,3 +143,31 @@ def test_slow_journey_fails_its_ceiling() -> None:
         assert_within_ceiling("logs_open_24h", (*fast[:8], Sample(seconds=25, rows=25), Sample(seconds=25, rows=25)))
     with pytest.raises(AssertionError, match=r"logs_open_24h p50 11\.0s over 10s"):
         assert_within_ceiling("logs_open_24h", tuple(Sample(seconds=11, rows=25) for _ in range(3)))
+
+
+def test_failed_data_request_status_becomes_the_error_code() -> None:
+    gateway_error: Final = Sample(seconds=0.4, error="AssertionError: Locator expected to be enabled", status=500)
+    slow: Final = Sample(seconds=60.0, error="timeout", status=200, request="GET /spend/logs/ui")
+    hung: Final = Sample(seconds=700.0, error="wall_clock TimeoutError: logs_next_page exceeded its 660s wall clock")
+    assert (error_code(gateway_error), error_code(slow), error_code(hung)) == ("http_500", "timeout", "wall_clock")
+    metrics: Final = dict(ui_junit_properties((gateway_error, slow, hung)))
+    assert metrics["perf_ui_error_http_500"] == 1 and metrics["perf_ui_error_wall_clock"] == 1
+    assert "perf_ui_error_ui" not in metrics
+
+
+def test_volume_properties_name_rows_and_bytes_per_queried_table() -> None:
+    from setup.ui_query_fixture import TableVolume, volume_properties
+
+    properties: Final = volume_properties(
+        (
+            TableVolume(table="LiteLLM_SpendLogs", rows=850_000_000, bytes=1_000_000_000_000),
+            TableVolume(table="LiteLLM_VerificationToken", rows=5_000, bytes=4_194_304),
+        )
+    )
+
+    assert properties == (
+        ("perf_ui_db_rows_LiteLLM_SpendLogs", 850_000_000),
+        ("perf_ui_db_bytes_LiteLLM_SpendLogs", 1_000_000_000_000),
+        ("perf_ui_db_rows_LiteLLM_VerificationToken", 5_000),
+        ("perf_ui_db_bytes_LiteLLM_VerificationToken", 4_194_304),
+    )

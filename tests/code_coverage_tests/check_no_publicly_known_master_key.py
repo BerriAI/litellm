@@ -9,7 +9,6 @@ from typing import Final
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 PUBLICLY_KNOWN_MASTER_KEY_PREFIX: Final = "sk-" + "1234"
-GENERATED_DASHBOARD_BUNDLE_PATHSPEC: Final = ":(exclude)litellm/proxy/_experimental/out"
 
 
 def _file_violations(repo_root: Path, relative_path: str) -> tuple[str, ...]:
@@ -35,7 +34,7 @@ def _file_violations(repo_root: Path, relative_path: str) -> tuple[str, ...]:
 
 def _tracked_paths(repo_root: Path) -> tuple[str, ...]:
     result: Final = subprocess.run(
-        ["git", "-C", os.fspath(repo_root), "ls-files", "-z", "--", ".", GENERATED_DASHBOARD_BUNDLE_PATHSPEC],
+        ["git", "-C", os.fspath(repo_root), "ls-files", "-z"],
         check=True,
         stdout=subprocess.PIPE,
     )

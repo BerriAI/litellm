@@ -46,6 +46,11 @@ model_list:
       model: openai/gpt-6-luna
       api_base: os.environ/E2E_PERF_MOCK_OPENAI_URL
       api_key: perf-mock-not-checked
+  - model_name: gpt-6-luna-responses
+    litellm_params:
+      model: openai/responses/gpt-6-luna
+      api_base: os.environ/E2E_PERF_MOCK_OPENAI_URL
+      api_key: perf-mock-not-checked
   - model_name: claude-sonnet-5
     litellm_params:
       model: anthropic/claude-sonnet-5
@@ -54,6 +59,13 @@ model_list:
   - model_name: claude-sonnet-5-bedrock
     litellm_params:
       model: bedrock/anthropic.claude-sonnet-5
+      aws_bedrock_runtime_endpoint: os.environ/E2E_PERF_MOCK_BEDROCK_URL
+      aws_region_name: us-east-1
+      aws_access_key_id: perf-mock-not-checked
+      aws_secret_access_key: perf-mock-not-checked
+  - model_name: claude-sonnet-5-bedrock-converse
+    litellm_params:
+      model: bedrock/converse/anthropic.claude-sonnet-5
       aws_bedrock_runtime_endpoint: os.environ/E2E_PERF_MOCK_BEDROCK_URL
       aws_region_name: us-east-1
       aws_access_key_id: perf-mock-not-checked

@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, StrictBool, StrictInt, StrictStr, TypeAda
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.videos.async_task_utils import (
     input_reference_url,
@@ -37,6 +37,8 @@ from litellm.types.videos.utils import (
     extract_original_video_id,
 )
 from litellm.utils import get_model_info
+
+from ..common_utils import resolve_dashscope_endpoints
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -206,6 +208,9 @@ def _parse_task_response(raw_response: httpx.Response) -> _TaskResponse:
 
 
 def _normalized_api_base(api_base: str) -> str:
+    endpoints: Final = resolve_dashscope_endpoints(api_base)
+    if endpoints is not None:
+        return endpoints.origin
     trimmed: Final = api_base.rstrip("/")
     if trimmed.endswith(DASHSCOPE_COMPATIBLE_MODE_PATH):
         return trimmed[: -len(DASHSCOPE_COMPATIBLE_MODE_PATH)]
@@ -708,7 +713,7 @@ class DashScopeVideoConfig(BaseVideoConfig):
         if parameters:
             request_data["parameters"] = parameters
 
-        return request_data, (), f"{api_base}{DASHSCOPE_VIDEO_SYNTHESIS_PATH}"
+        return request_data, (), join_api_base(api_base, DASHSCOPE_VIDEO_SYNTHESIS_PATH)
 
     @staticmethod
     def _reference_input(
@@ -773,7 +778,7 @@ class DashScopeVideoConfig(BaseVideoConfig):
     def _task_url(video_id: str, api_base: str) -> str:
         original_task_id: Final = extract_original_video_id(video_id)
         encoded_task_id: Final = encode_url_path_segment(original_task_id, field_name="video_id")
-        return f"{api_base}{DASHSCOPE_TASKS_PATH}/{encoded_task_id}"
+        return join_api_base(api_base, f"{DASHSCOPE_TASKS_PATH}/{encoded_task_id}")
 
     def transform_video_status_retrieve_response(
         self,

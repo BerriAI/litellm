@@ -1,6 +1,8 @@
 use std::sync::LazyLock;
 
-use litellm_auth::{AwsParams, CredentialPlacement, ParamSpec, SecretValue};
+use litellm_auth::{AwsParams, CredentialPlacement, ParamKind, ParamSpec};
+use litellm_secret_value::SecretValue;
+
 use litellm_auth_aws::{AwsCredentialSource, resolve_aws_region};
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{header_value, with_header, without_headers};
@@ -36,6 +38,7 @@ const WORKSPACE_FIELDS: &[&str] = &[
 const WORKSPACE_HEADER: &str = "anthropic-workspace-id";
 static WORKSPACE: ParamSpec = ParamSpec {
     setting: "workspace_id",
+    kind: ParamKind::Setting,
     wire: WORKSPACE_FIELDS,
     module_global: None,
     env: WORKSPACE_ENVS,

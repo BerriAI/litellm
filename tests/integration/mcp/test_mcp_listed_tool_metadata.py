@@ -7,6 +7,7 @@ what metadata the gateway attached to the hook
 """
 
 import json
+import queue
 import threading
 import uuid
 from collections.abc import Callable, Generator, Iterator, Mapping
@@ -23,7 +24,10 @@ from integration._support.mcp import (
     EntryPoint,
     JsonRpc,
     McpCaller,
+    McpPeer,
     ScriptedTool,
+    jsonrpc_error,
+    jsonrpc_reply,
     listed_tools,
     openapi_peer,
     register_mcp,
@@ -32,13 +36,13 @@ from integration._support.mcp import (
     tool_calls,
 )
 from integration._support.process import owned_proxy
+from integration._support.wire import Reply, Request, wire_server
 from pydantic import TypeAdapter
 
 _ECHO: Final = "catalog-echo:"
 _PROBE: Final = "catalog-probe"
 _CALLERS_PER_SERVER: Final = 256
 _PIN_SECONDS: Final = 120
-_COLD: Final[tuple[str, JsonRpc]] = ("", {"type": "object", "properties": {}, "additionalProperties": False})
 _PID: Final = TypeAdapter(int)
 _HEADERS: Final = TypeAdapter(dict[bytes, bytes])
 _SCHEMA: Final = TypeAdapter(dict[str, object])
@@ -296,7 +300,7 @@ def test_openapi_call_is_evaluated_against_the_entry_this_key_was_listed_not_the
         )
 
 
-def test_direct_call_without_a_listing_hands_the_hook_no_metadata_on_either_worker(rig: Gateway) -> None:
+def test_direct_call_without_a_listing_fetches_guarded_metadata_on_either_worker(rig: Gateway) -> None:
     with scripted_peer(_lookup_tool()) as peer, ExitStack() as stack:
         (first, first_pid), (other, other_pid) = _two_workers(stack, rig)
         with first.scenario() as scenario:
@@ -305,12 +309,12 @@ def test_direct_call_without_a_listing_hands_the_hook_no_metadata_on_either_work
             key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
             name: Final = _served_name(first, observer, identity, "lookup")
             seen: Final = tuple(_settled_probe(gateway, key, name, identity) for gateway in (first, other))
-            assert seen == (_COLD, _COLD), (seen, first_pid, other_pid)
+            assert seen == (("Look up one record", _LOOKUP_SCHEMA),) * 2, (seen, first_pid, other_pid)
             assert (_worker(first), _worker(other)) == (first_pid, other_pid)
             assert tool_calls(peer.drain()) == (), "the probe is blocked at the hook, before the upstream"
 
 
-def test_warm_metadata_is_local_to_the_worker_that_served_the_listing(rig: Gateway) -> None:
+def test_a_different_worker_fetches_guarded_metadata_before_calling(rig: Gateway) -> None:
     with scripted_peer(_lookup_tool()) as peer, ExitStack() as stack:
         (first, first_pid), (other, other_pid) = _two_workers(stack, rig)
         with first.scenario() as scenario:
@@ -319,8 +323,8 @@ def test_warm_metadata_is_local_to_the_worker_that_served_the_listing(rig: Gatew
             name: Final = _served_name(first, key, identity, "lookup")
             warm: Final = ("Look up one record", _LOOKUP_SCHEMA)
             assert _probe(McpCaller(first, key, "rest"), name, identity) == warm, first_pid
-            assert _settled_probe(other, key, name, identity) == _COLD, (
-                "a worker that never served this caller a listing has no catalog for it",
+            assert _settled_probe(other, key, name, identity) == warm, (
+                "a worker without this caller's listing must fetch metadata before applying call guardrails",
                 other_pid,
             )
             assert _served_name(other, key, identity, "lookup") == name
@@ -344,7 +348,7 @@ def test_listed_tools_without_a_description_still_hand_the_hook_the_schema_the_l
             ("", open_schema),
         ), served
         seen: Final = tuple(_probe(McpCaller(worker, key, "rest"), name, identity) for name in names)
-        assert seen == (("", open_schema), ("", open_schema)), (seen, _COLD)
+        assert seen == (("", open_schema), ("", open_schema)), seen
         assert _worker(worker) == pid
         assert tool_calls(peer.drain()) == ()
 
@@ -382,7 +386,7 @@ def test_hook_receives_the_nested_schema_with_the_leaves_the_listing_masked(rig:
         assert tool_calls(peer.drain()) == ()
 
 
-def test_a_server_definition_update_drops_the_catalog_on_every_worker_until_the_caller_lists_again(
+def test_a_server_definition_update_refreshes_call_metadata_on_every_worker_without_relisting(
     rig: Gateway,
 ) -> None:
     with scripted_peer(_lookup_tool()) as peer, ExitStack() as stack:
@@ -400,14 +404,14 @@ def test_a_server_definition_update_drops_the_catalog_on_every_worker_until_the_
                 {"server_id": identity, "tool_name_to_description": {"lookup": "Audited lookup"}},
             )
             assert updated.status_code == 202, updated.text
-            assert _probe(McpCaller(first, key, "rest"), name, identity) == _COLD, (
-                "the worker that applied the update must drop its catalog at once",
+            assert _probe(McpCaller(first, key, "rest"), name, identity) == ("Audited lookup", _LOOKUP_SCHEMA), (
+                "the worker that applied the update must use the new definition at once",
                 first_pid,
             )
-            assert (
-                eventually(lambda: _probe(McpCaller(other, key, "rest"), name, identity), lambda seen: seen == _COLD)
-                == _COLD
-            ), other_pid
+            assert eventually(
+                lambda: _probe(McpCaller(other, key, "rest"), name, identity),
+                lambda seen: seen == ("Audited lookup", _LOOKUP_SCHEMA),
+            ) == ("Audited lookup", _LOOKUP_SCHEMA), other_pid
             relisted: Final = tuple(
                 listed_tools(gateway, key, identity)[name]["description"] for gateway in (first, other)
             )
@@ -453,7 +457,7 @@ def test_a_listing_in_flight_across_a_server_update_does_not_resurrect_the_old_c
             release.set()
             stale: Final = pending.result(timeout=20)
             assert stale.ok, stale.raw
-            assert _probe(McpCaller(worker, key, "rest"), name, identity) == _COLD, (
+            assert _probe(McpCaller(worker, key, "rest"), name, identity) == ("Audited lookup", _LOOKUP_SCHEMA), (
                 "a listing fetched before the update must not be recorded after it"
             )
             assert listed_tools(worker, key, identity)[name]["description"] == "Audited lookup"
@@ -462,7 +466,7 @@ def test_a_listing_in_flight_across_a_server_update_does_not_resurrect_the_old_c
             assert tool_calls(peer.drain()) == ()
 
 
-def test_a_server_keeps_the_newest_256_caller_catalogs_and_evicts_the_oldest(rig: Gateway) -> None:
+def test_calls_fetch_the_same_caller_metadata_after_the_catalog_is_evicted(rig: Gateway) -> None:
     tool: Final = _lookup_tool(lambda headers: f"Lookup for tenant {headers.get('x-tenant', 'nobody')}")
     with scripted_peer(tool) as peer, _pinned(rig) as worker, worker.scenario() as scenario:
         pid: Final = _worker(worker)
@@ -481,51 +485,207 @@ def test_a_server_keeps_the_newest_256_caller_catalogs_and_evicts_the_oldest(rig
             return _probe(callers[tenant], name, identity)[0]
 
         assert (seen("t0"), seen("t1"), seen(tenants[-1])) == (
-            "",
+            "Lookup for tenant t0",
             "Lookup for tenant t1",
             f"Lookup for tenant {tenants[-1]}",
-        ), "the oldest of 257 callers is evicted, the newest 256 keep their own catalog"
+        ), "an evicted caller must recover its own guarded metadata before the call"
         assert callers["t0"].list_tools().ok
-        assert (seen("t0"), seen("t1")) == ("Lookup for tenant t0", ""), "relisting makes t0 newest and evicts t1"
+        assert (seen("t0"), seen("t1")) == ("Lookup for tenant t0", "Lookup for tenant t1")
         assert _worker(worker) == pid
         observed: Final = peer.drain()
         assert _forwarded_tenants(observed) == frozenset(tenant.encode() for tenant in tenants), len(observed)
         assert tool_calls(observed) == ()
 
 
-def test_an_admin_include_disabled_tools_listing_does_not_warm_the_runtime_catalog(rig: Gateway) -> None:
-    """``include_disabled_tools=true`` is the admin-only configuration view, not a listing the caller
-    runs against: recording it would warm tools/call metadata no runtime listing ever served."""
-    tool: Final = _lookup_tool()
-    with scripted_peer(tool) as peer, rig.scenario() as scenario:
+def test_an_admin_include_disabled_tools_listing_cannot_admit_a_guardrail_blocked_call(rig: Gateway) -> None:
+    tool: Final = _lookup_tool(_PROBE)
+    with scripted_peer(tool) as peer, _pinned(rig) as worker, worker.scenario() as scenario:
         alias: Final = "adminview" + uuid.uuid4().hex[:8]
         identity: Final = register_mcp(scenario, peer, alias)
-        admin: Final = rig.key
-        caller: Final = McpCaller(rig, admin, "rest")
-        name: Final = eventually(
-            lambda: caller.call(f"{alias}-lookup", {"probe": _PROBE}, server_id=identity),
-            lambda value: value.error is not None and _ECHO in value.raw,
+        observer: Final = scenario.key(
+            object_permission={"mcp_servers": [identity]}, metadata={"disable_global_guardrails": True}
         )
-        assert _echoed(name.raw) == _COLD, "before any listing the call is cold"
-
-        view: Final = eventually(
-            lambda: rig.client.get(
-                "/mcp-rest/tools/list",
-                params={"server_id": identity, "include_disabled_tools": "true"},
-                headers={"x-litellm-api-key": admin},
-            ),
-            lambda response: response.status_code == 200
-            and any(entry["name"].endswith("lookup") for entry in response.json()["tools"]),
+        name: Final = _served_name(worker, observer, identity, "lookup")
+        view: Final = worker.client.get(
+            "/mcp-rest/tools/list",
+            params={"server_id": identity, "include_disabled_tools": "true"},
+            headers={"x-litellm-api-key": worker.key},
         )
         assert view.status_code == 200, view.text
+        assert not any(entry["name"] == name for entry in view.json()["tools"]), view.text
+        peer.drain()
+        blocked: Final = McpCaller(worker, worker.key, "rest").call(name, {}, server_id=identity)
+        assert blocked.error is not None, blocked.raw
+        assert tool_calls(peer.drain()) == (), "the admin configuration view must not bypass runtime guardrails"
 
-        after_view: Final = _probe(caller, f"{alias}-lookup", identity)
-        assert after_view == _COLD, (
-            "the admin-only include_disabled_tools view must not record the caller's listed-tools slot"
-        )
 
-        runtime: Final = caller.list_tools(server_id=identity)
-        assert runtime.ok, runtime.raw
-        assert _probe(caller, f"{alias}-lookup", identity)[0] == "Look up one record", (
-            "a genuine runtime listing still warms the slot"
+@pytest.mark.parametrize("entry", ["rest", "mcp", "server_mcp"])
+@pytest.mark.parametrize("listed_first", [False, True], ids=["direct", "after-list"])
+@pytest.mark.parametrize("poison_schema", [False, True], ids=["description", "nested-schema"])
+def test_a_guardrail_hidden_tool_cannot_be_called_by_its_known_name(
+    rig: Gateway, entry: EntryPoint, listed_first: bool, poison_schema: bool
+) -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            "filter": {
+                "type": "object",
+                "properties": {"path": {"type": "string", "description": _PROBE if poison_schema else "Path"}},
+            }
+        },
+    }
+    blocked_tool: Final = ScriptedTool(
+        "blocked",
+        lambda _: text_result("must not run"),
+        description="Read a record" if poison_schema else _PROBE,
+        input_schema=schema,
+    )
+    allowed_tool: Final = ScriptedTool("allowed", lambda _: text_result("allowed"), description="Read a record")
+    with scripted_peer(blocked_tool, allowed_tool) as peer, _pinned(rig) as worker, worker.scenario() as scenario:
+        alias: Final = "deny" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias)
+        observer: Final = scenario.key(
+            object_permission={"mcp_servers": [identity]}, metadata={"disable_global_guardrails": True}
         )
+        name: Final = _served_name(worker, observer, identity, "blocked")
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        caller: Final = McpCaller(worker, key, entry, alias, headers={"x-mcp-servers": alias})
+        assert caller.initialize().ok
+        if listed_first:
+            listing: Final = caller.list_tools(server_id=identity)
+            assert listing.ok and name not in listing.tools, listing.raw
+            assert any(tool.endswith("allowed") for tool in listing.tools), listing.raw
+        peer.drain()
+        blocked: Final = caller.call(name, {}, server_id=identity)
+        assert blocked.error is not None, blocked.raw
+        assert tool_calls(peer.drain()) == (), "a tool rejected by catalog scanning reached the upstream"
+        allowed: Final = caller.call(f"{alias}-allowed", {}, server_id=identity)
+        assert allowed.text == "allowed", allowed.raw
+        assert len(tool_calls(peer.drain())) == 1
+
+
+def test_guarded_call_discovery_uses_the_callers_forwarded_headers(rig: Gateway) -> None:
+    tool: Final = ScriptedTool(
+        "report",
+        lambda _: text_result("report"),
+        description=lambda headers: _PROBE if headers.get("x-tenant") == "blocked" else "Read a report",
+    )
+    with scripted_peer(tool) as peer, _pinned(rig) as worker, worker.scenario() as scenario:
+        alias: Final = "scope" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias, extra_headers=["x-tenant"])
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        allowed: Final = McpCaller(worker, key, "server_mcp", alias, headers={"x-tenant": "allowed"})
+        blocked: Final = McpCaller(worker, key, "server_mcp", alias, headers={"x-tenant": "blocked"})
+        listing: Final = allowed.list_tools()
+        assert listing.ok, listing.raw
+        name: Final = next(full for full in listing.tools if full.endswith("report"))
+        peer.drain()
+        denied: Final = blocked.call(name, {})
+        assert denied.error is not None, denied.raw
+        observed: Final = peer.drain()
+        assert _forwarded_tenants(observed) == frozenset({b"blocked"}), observed
+        assert tool_calls(observed) == (), "another tenant's safe catalog must not admit this caller"
+        accepted: Final = allowed.call(name, {})
+        assert accepted.text == "report", accepted.raw
+        assert len(tool_calls(peer.drain())) == 1
+
+
+def test_a_catalog_block_is_enforced_on_a_worker_that_never_served_the_listing(rig: Gateway) -> None:
+    with scripted_peer(_lookup_tool(_PROBE)) as peer, ExitStack() as stack:
+        (first, first_pid), (other, other_pid) = _two_workers(stack, rig)
+        with first.scenario() as scenario:
+            identity: Final = register_mcp(scenario, peer, "blockedworker" + uuid.uuid4().hex[:8])
+            observer: Final = scenario.key(
+                object_permission={"mcp_servers": [identity]}, metadata={"disable_global_guardrails": True}
+            )
+            name: Final = _served_name(first, observer, identity, "lookup")
+            assert _served_name(other, observer, identity, "lookup") == name
+            key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+            listing: Final = McpCaller(first, key, "rest").list_tools(server_id=identity)
+            assert listing.ok and name not in listing.tools, listing.raw
+            peer.drain()
+            outcomes: Final = tuple(
+                McpCaller(gateway, key, "rest").call(name, {}, server_id=identity) for gateway in (first, other)
+            )
+            assert all(outcome.error is not None for outcome in outcomes), tuple(outcome.raw for outcome in outcomes)
+            assert (_worker(first), _worker(other)) == (first_pid, other_pid)
+            assert tool_calls(peer.drain()) == (), "catalog denial must survive routing to another worker"
+
+
+@pytest.mark.parametrize("listed_first", [False, True], ids=["direct", "after-list"])
+def test_openapi_tool_with_a_blocked_description_override_is_refused(rig: Gateway, listed_first: bool) -> None:
+    with openapi_peer() as peer, _pinned(rig) as worker, worker.scenario() as scenario:
+        alias: Final = "blockedpet" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias, tool_name_to_description={"getpet": _PROBE})
+        observer: Final = scenario.key(
+            object_permission={"mcp_servers": [identity]}, metadata={"disable_global_guardrails": True}
+        )
+        name: Final = _served_name(worker, observer, identity, "getpet")
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        caller: Final = McpCaller(worker, key, "rest")
+        if listed_first:
+            listing: Final = caller.list_tools(server_id=identity)
+            assert listing.ok and name not in listing.tools, listing.raw
+        peer.drain()
+        blocked: Final = caller.call(name, {"petId": "1"}, server_id=identity)
+        assert blocked.error is not None, blocked.raw
+        assert not [call for call in peer.drain() if call["path"].startswith("/pets")], "blocked before upstream"
+        allowed: Final = caller.call(f"{alias}-createpet", {"name": "test-pet"}, server_id=identity)
+        assert allowed.error is None, allowed.raw
+        assert len([call for call in peer.drain() if call["path"].startswith("/pets")]) == 1
+
+
+def test_direct_guarded_call_fails_closed_when_discovery_is_unavailable(rig: Gateway) -> None:
+    unavailable: Final = threading.Event()
+
+    def respond(request: Request) -> Reply:
+        if request.method != "POST":
+            return Reply(status=405)
+        body: Final = _SCHEMA.validate_python(json.loads(request.body))
+        identity: Final = body.get("id")
+        if identity is None:
+            return Reply(status=202)
+        if body["method"] == "initialize":
+            params: Final = _SCHEMA.validate_python(body["params"])
+            return jsonrpc_reply(
+                identity,
+                {
+                    "protocolVersion": params["protocolVersion"],
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "unavailable-catalog", "version": "1"},
+                },
+            )
+        if body["method"] == "tools/list":
+            if unavailable.is_set():
+                return jsonrpc_error(identity, -32603, "Catalog unavailable")
+            return jsonrpc_reply(
+                identity,
+                {
+                    "tools": [
+                        {
+                            "name": "lookup",
+                            "description": "Read a record",
+                            "inputSchema": {"type": "object"},
+                        }
+                    ]
+                },
+            )
+        return jsonrpc_reply(identity, text_result("found"))
+
+    with wire_server(respond) as wire, _pinned(rig) as worker, worker.scenario() as scenario:
+        peer: Final = McpPeer(wire.url + "/mcp", queue.Queue())
+        identity: Final = register_mcp(scenario, peer, "unavailable" + uuid.uuid4().hex[:8])
+        observer: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        name: Final = _served_name(worker, observer, identity, "lookup")
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        caller: Final = McpCaller(worker, key, "rest")
+        unavailable.set()
+        wire.drain()
+        refused: Final = caller.call(name, {}, server_id=identity)
+        assert refused.error is not None, refused.raw
+        methods: Final = tuple(json.loads(request.body).get("method") for request in wire.drain() if request.body)
+        assert "tools/list" in methods and "tools/call" not in methods, methods
+        unavailable.clear()
+        accepted: Final = caller.call(name, {}, server_id=identity)
+        assert accepted.text == "found", accepted.raw
+        assert any(json.loads(request.body).get("method") == "tools/call" for request in wire.drain() if request.body)

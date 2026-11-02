@@ -116,6 +116,36 @@ describe("AccessGroupBudgetsPanel", () => {
     expect(await screen.findByLabelText(/Max Budget/)).toHaveValue(2.5);
   });
 
+  it("keeps the stored reset period when Keep current is selected", async () => {
+    GET.mockResolvedValue({
+      data: {
+        access_groups: [
+          {
+            ...BUDGETED_GROUP,
+            budget: { ...BUDGETED_GROUP.budget, budget_duration: "24h" },
+          },
+        ],
+      },
+    });
+    renderPanel();
+    await openActions("premium");
+    await userEvent.click(await screen.findByText("Edit budget"));
+
+    await userEvent.click(await screen.findByRole("combobox", { name: "Reset Budget" }));
+    const keepCurrentOption = await screen.findByRole("option", { name: "Keep current" });
+    expect(keepCurrentOption).toBeInTheDocument();
+    await userEvent.click(keepCurrentOption);
+    await userEvent.click(screen.getByRole("button", { name: "Save Budget" }));
+
+    await waitFor(() =>
+      expect(PUT).toHaveBeenCalledWith("/access_group/{access_group}/budget", {
+        params: { path: { access_group: "premium" } },
+        body: { max_budget: 2.5 },
+      }),
+    );
+    expect(PUT.mock.calls[0][1].body).not.toHaveProperty("budget_duration");
+  });
+
   it("refuses to save a budget with every field blank", async () => {
     renderPanel();
     await openActions("shared");

@@ -113,7 +113,7 @@ class SpeechToCompletionBridgeHandler:
             voice=voice,
         )
 
-        with internal_sub_call():
+        with internal_sub_call(logging_obj.litellm_call_id):
             result: Final = completion(
                 **request_data,
             )
@@ -122,6 +122,7 @@ class SpeechToCompletionBridgeHandler:
         if isinstance(result, ModelResponse):
             return self.transformation_handler.transform_response(
                 model_response=result,
+                model=model,
                 response_format=requested_response_format if isinstance(requested_response_format, str) else None,
             )
         else:

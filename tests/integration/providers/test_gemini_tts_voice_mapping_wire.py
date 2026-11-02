@@ -501,7 +501,7 @@ def test_vertex_batch_file_rows_carry_the_mapped_voice(gateway: Gateway) -> None
         assert tuple(text_in(row) for row in rows) == (first, second)
 
 
-def test_vertex_live_default_mode_sends_one_setup_without_the_client_voice(gateway: Gateway) -> None:
+def test_vertex_live_sends_one_setup_carrying_the_mapped_session_update_voice(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         handle: Final = live_scenario(scenario)
         key: Final = scenario.key()
@@ -511,7 +511,7 @@ def test_vertex_live_default_mode_sends_one_setup_without_the_client_voice(gatew
         assert types[0] == "session.created" and types[-1] == "response.done", frames
         setups: Final = live_setups(gateway, handle.scenario_id)
         assert len(setups) == 1, setups
-        assert voice_in(setups[0]) == NO_VOICE, setups[0]
+        assert voice_in(setups[0]) == "Umbriel", setups[0]
 
 
 @dataclass(frozen=True, slots=True)

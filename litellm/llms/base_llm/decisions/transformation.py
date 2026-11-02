@@ -1,16 +1,19 @@
 import json
 from abc import ABC
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from pydantic_core import ErrorDetails
 from typing_extensions import assert_never
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
@@ -295,13 +298,7 @@ def _systemone_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
             assert_never(question)
 
 
-def ir_to_systemone_request(
-    model: str, request: DecisionsIRRequest, *, supports_audio: bool = False, supports_video: bool = False
-) -> Mapping[str, object] | UnsupportedDecisionsRequest:
-    if request.audio and not supports_audio:
-        return UnsupportedDecisionsRequest(reason="audio input is not supported by this Decisions model")
-    if request.videos and not supports_video:
-        return UnsupportedDecisionsRequest(reason="video input is not supported by this Decisions model")
+def ir_to_systemone_request(model: str, request: DecisionsIRRequest) -> Mapping[str, object]:
     state: Final = _systemone_state(request.input)
     keyed_questions: Final = zip(systemone_keys(request.questions), request.questions, strict=True)
     images: Final = input_images(request.input)
@@ -349,9 +346,10 @@ def _ir_score_answer(question: DecisionsIRScoreQuestion, answer: ScoreAnswer) ->
             DecisionsIRScoreProbability(
                 value=index,
                 label=answer.legend.get(str(index), level.label),
-                probability=answer.probabilities.get(str(index), 0.0),
+                probability=answer.probabilities[str(index)],
             )
             for index, level in enumerate(question.levels)
+            if str(index) in answer.probabilities
         ),
         extra=MappingProxyType(answer.model_extra or {}),
     )
@@ -374,12 +372,14 @@ def _ir_answer(question: DecisionsIRQuestion, answer: DecisionAnswer | None) -> 
 
 
 def systemone_response_to_ir(response: DecisionsResponse, request: DecisionsIRRequest) -> DecisionsIRResponse:
-    usage: Final = response.usage or DecisionsUsage()
+    usage: Final = response.usage
     keyed_questions: Final = zip(systemone_keys(request.questions), request.questions, strict=True)
     return DecisionsIRResponse(
         model=response.model,
         answers=tuple(_ir_answer(question, response.answers.get(key)) for key, question in keyed_questions),
-        usage=DecisionsIRUsage(
+        usage=None
+        if usage is None
+        else DecisionsIRUsage(
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             cached_tokens=usage.cached_tokens,
@@ -394,7 +394,9 @@ _MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, ob
 _LABELS: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
 
 
-def _normalize_answer(value: object) -> Mapping[str, object]:
+def _normalize_answer(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
     answer: Final = _MAPPING.validate_python(value)
     legend: Final = answer.get("legend")
     if answer.get("type") != "score" or not isinstance(legend, list):
@@ -403,11 +405,36 @@ def _normalize_answer(value: object) -> Mapping[str, object]:
     return {**answer, "legend": {str(index): label for index, label in enumerate(labels)}}
 
 
-def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
+def _normalize_systemone_response(payload: object) -> object:
+    if not isinstance(payload, Mapping):
+        return payload
     response: Final = _MAPPING.validate_python(payload)
-    answers: Final = _MAPPING.validate_python(response.get("answers"))
-    normalized: Final = {**response, "answers": {name: _normalize_answer(answer) for name, answer in answers.items()}}
-    return systemone_response_to_ir(_SYSTEMONE_RESPONSE_ADAPTER.validate_python(normalized), request)
+    answers: Final = response.get("answers")
+    if not isinstance(answers, Mapping):
+        return response
+    return {
+        **response,
+        "answers": {name: _normalize_answer(answer) for name, answer in _MAPPING.validate_python(answers).items()},
+    }
+
+
+def _validation_detail(detail: ErrorDetails) -> str:
+    location: Final = ".".join(str(part) for part in detail["loc"])
+    return f"{location}: {detail['msg']}" if location else detail["msg"]
+
+
+def _validation_summary(error: ValidationError) -> str:
+    return "; ".join(_validation_detail(detail) for detail in error.errors(include_url=False, include_input=False))
+
+
+class DecisionsResponseValidationError(BaseLLMException):
+    pass
+
+
+def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
+    return systemone_response_to_ir(
+        _SYSTEMONE_RESPONSE_ADAPTER.validate_python(_normalize_systemone_response(payload)), request
+    )
 
 
 def _systemone_answer(answer: DecisionsIRAnswer) -> DecisionAnswer | None:
@@ -456,7 +483,9 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
             **response.extra,
             "model": response.model,
             "answers": {key: answer for key, answer in keyed_answers if answer is not None},
-            "usage": DecisionsUsage.model_validate(
+            "usage": None
+            if response.usage is None
+            else DecisionsUsage.model_validate(
                 {
                     **response.usage.extra,
                     "input_tokens": response.usage.input_tokens,
@@ -469,12 +498,28 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
     )
 
 
+def catalog_mode(model: str, custom_llm_provider: str) -> str | None:
+    try:
+        key: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)["key"]
+    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which the catalog does not list
+        return None
+    entry: Final = GetModelCostMap.loaded_model_cost_map().get(key)
+    mode: Final = entry.get("mode") if entry is not None else None
+    return mode if isinstance(mode, str) else None
+
+
 def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
     try:
         model_mode: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get("mode")
     except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which has no mode
         return False
     return is_decisions_model_mode(model_mode)
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsInputLimits:
+    max_request_tokens: int | None = None
+    max_question_tokens: int | None = None
 
 
 class BaseDecisionsConfig(ABC):
@@ -498,6 +543,19 @@ class BaseDecisionsConfig(ABC):
 
     def provider_reported_cost(self, response: DecisionsIRResponse) -> float | None:
         return None
+
+    def get_input_limits(
+        self, model: str, custom_llm_provider: str, headers: Mapping[str, str]
+    ) -> DecisionsInputLimits:
+        try:
+            limit: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get(
+                "max_input_tokens"
+            )
+        except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model
+            return DecisionsInputLimits()
+        return DecisionsInputLimits(
+            max_request_tokens=limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else None
+        )
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return f"api_base is required for Decisions provider '{custom_llm_provider}'"
@@ -554,7 +612,7 @@ class BaseDecisionsConfig(ABC):
         )
 
     def get_complete_url(self, api_base: str, model: str) -> str:
-        return f"{api_base.rstrip('/').removesuffix('/v1')}{self.path}"
+        return join_api_base(api_base.rstrip("/").removesuffix("/v1"), self.path)
 
     def signs_with_aws(self, api_base: str) -> bool:
         return False
@@ -587,12 +645,16 @@ class BaseDecisionsConfig(ABC):
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-    def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
+    def supports_audio_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
+        if deployment_flag is not None:
+            return deployment_flag
         return _is_decisions_model(model, custom_llm_provider) and litellm.supports_audio_input(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-    def supports_video_input(self, model: str, custom_llm_provider: str) -> bool:
+    def supports_video_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
+        if deployment_flag is not None:
+            return deployment_flag
         return _is_decisions_model(model, custom_llm_provider) and litellm.supports_video_input(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -603,12 +665,7 @@ class BaseDecisionsConfig(ABC):
         request: DecisionsIRRequest,
         custom_llm_provider: str,
     ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
-        return ir_to_systemone_request(
-            self.request_model(model),
-            request,
-            supports_audio=self.supports_audio_input(model, custom_llm_provider),
-            supports_video=self.supports_video_input(model, custom_llm_provider),
-        )
+        return ir_to_systemone_request(self.request_model(model), request)
 
     def unwrap_response(self, payload: object) -> object:
         return payload
@@ -623,13 +680,14 @@ class BaseDecisionsConfig(ABC):
         raw_response: httpx.Response,
         request: DecisionsIRRequest,
     ) -> DecisionsIRResponse:
-        payload: Final[object] = _PAYLOAD_ADAPTER.validate_json(raw_response.content)
         try:
+            payload: Final[object] = _PAYLOAD_ADAPTER.validate_json(raw_response.content)
             return self.parse_response(payload, request)
         except ValidationError as error:
-            raise BaseLLMException(
+            raise DecisionsResponseValidationError(
                 status_code=500,
-                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: {error}",
+                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
+                f"{error.title} {_validation_summary(error)}",
             ) from error
 
     def get_error_class(

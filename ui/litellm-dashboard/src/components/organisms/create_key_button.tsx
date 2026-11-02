@@ -1,4 +1,5 @@
 "use client";
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
@@ -227,6 +228,12 @@ export const fetchUserModels = async (
  */
 const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOpenCreate, prefillData }) => {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const term = useTerminology();
+  const keyTypeOptions = KEY_TYPE_OPTIONS.map((option) => ({
+    ...option,
+    label: term(option.label),
+    hint: term(option.hint),
+  }));
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const canViewPolicies = useCan("viewPolicies");
   const canViewPrompts = useCan("viewPrompts");
@@ -994,7 +1001,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   >
                     {(control) => (
                       <Select
-                        items={KEY_TYPE_OPTIONS}
+                        items={keyTypeOptions}
                         value={control.value as string | undefined}
                         onValueChange={(value: string | null) =>
                           value != null && changeKeyType(control.onChange)(value)
@@ -1009,7 +1016,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <SelectValue placeholder="Select key type" />
                         </SelectTrigger>
                         <SelectContent>
-                          {KEY_TYPE_OPTIONS.map((option) => (
+                          {keyTypeOptions.map((option) => (
                             <SelectItem key={option.value} value={option.value}>
                               <div className="py-1">
                                 <div className="font-medium">{option.label}</div>
