@@ -25,7 +25,7 @@ from litellm._logging import verbose_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs, iter_items
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_convert_url_to_base64
 from litellm.types.utils import CallTypes
@@ -244,45 +244,116 @@ _SCAN_METADATA_KEYS: Final = frozenset(
 )
 
 
+# What a scan writes into its metadata for logging, carried back to the parent request
+_GUARDRAIL_RECORD_KEYS: Final = ("applied_guardrails", "standard_logging_guardrail_information")
+
+
+@dataclass(frozen=True, slots=True)
+class _Scan:
+    result: DescriptionResult
+    records: Mapping[str, tuple[object, ...]]  # record key -> entries the scan wrote
+
+
 def _scan_payload(kwargs: Mapping[str, object], text: str) -> dict[str, object]:  # mutable-ok: pre_call_hook data
-    """A chat request that carries only `text`, with the parent's guardrail selection and policy state"""
+    """A chat request that carries only `text`, with the parent's guardrail selection, policy state and raw request
+    (headers and url, with a body rebuilt from this payload), so guardrails that read the raw request see the text"""
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
     bags: Final = {
         bag: {key: value for key, value in metadata.items() if key in _SCAN_METADATA_KEYS}
         for bag in ("metadata", "litellm_metadata")
         if (metadata := as_str_mapping(kwargs.get(bag))) is not None
     }
     guardrails: Final = kwargs.get("guardrails")
-    return {
+    raw_request: Final = as_str_mapping(kwargs.get("proxy_server_request"))
+    payload: Final[dict[str, object]] = {  # mutable-ok: the body snapshot below is written into it
         "model": kwargs.get("model"),
         "messages": [{"role": "user", "content": text}],
         **bags,
         **({"guardrails": guardrails} if guardrails is not None else {}),
+        **({"proxy_server_request": {**raw_request, "body": {}}} if raw_request is not None else {}),
+    }
+    refresh_proxy_server_request_body_snapshot(payload)
+    return payload
+
+
+def _guardrail_records(scanned: Mapping[str, object]) -> Mapping[str, tuple[object, ...]]:
+    bags: Final = tuple(as_str_mapping(scanned.get(bag)) or {} for bag in ("metadata", "litellm_metadata"))
+    return {
+        key: tuple(chain.from_iterable(_list_items(metadata.get(key)) or () for metadata in bags))
+        for key in _GUARDRAIL_RECORD_KEYS
     }
 
 
-async def _scanned_description(result: DescriptionResult, kwargs: Mapping[str, object]) -> DescriptionResult:
+def _reject_rerouting(scanned: Mapping[str, object], payload_model: object) -> None:
+    """A guardrail may ask to route sensitive text to another model. The request is already routed by the time an
+    image is described, so that cannot be honored here: block the request instead of sending the text on"""
+    from litellm.proxy.guardrails.exception_utils import pre_call_rejection
+
+    metadata: Final = as_str_mapping(scanned.get("metadata")) or {}
+    if metadata.get("sensitive_data_routing_applied") is not True and scanned.get("model") == payload_model:
+        return
+    guardrail: Final = metadata.get("sensitive_data_routing_guardrail")
+    guardrail_name: Final = guardrail if isinstance(guardrail, str) else None
+    raise pre_call_rejection(
+        f"{guardrail_name or 'A guardrail'} asked to reroute the request to {scanned.get('model')} over an image "
+        "description; a request cannot be rerouted after the image was described, so it was blocked",
+        guardrail_name,
+    )
+
+
+async def _scanned_description(result: DescriptionResult, kwargs: Mapping[str, object]) -> _Scan:
     """Run a description through the request's input guardrails and pre-call policy pipelines. They ran before the
     image became text, so the text would otherwise reach the model unchecked. A guardrail or pipeline that rejects
     it raises and blocks the request"""
     if isinstance(result, DescriptionFailed):
-        return result
+        return _Scan(result, {})
     from litellm.proxy.proxy_server import proxy_logging_obj
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
+    payload: Final = _scan_payload(kwargs, result.text)
+    payload_model: Final = payload.get("model")
     scanned: Final = _JSON_OBJECT.validate_python(
         await proxy_logging_obj.pre_call_hook(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # ProxyLogging.pre_call_hook returns an untyped dict
             user_api_key_dict=_request_auth(kwargs) or UserAPIKeyAuth(),
-            data=_scan_payload(kwargs, result.text),
+            data=payload,
             call_type="acompletion",
             guardrails_only=True,
         )
     )
+    _reject_rerouting(scanned, payload_model)
     messages: Final = _list_items(scanned.get("messages")) or ()
     first: Final = as_str_mapping(messages[0]) if len(messages) == 1 else None
     text: Final = _message_text(first) if first is not None else None
     if text is None:
-        return DescriptionFailed("a guardrail changed the description into something other than text")
-    return Described(text)
+        return _Scan(DescriptionFailed("a guardrail changed the description into something other than text"), {})
+    return _Scan(Described(text), _guardrail_records(scanned))
+
+
+def _with_guardrail_records(kwargs: Mapping[str, object], scans: Sequence[_Scan]) -> Mapping[str, object]:
+    """The parent's metadata bag with every scan's guardrail records appended, so the parent's logs show them"""
+    new: Final = {
+        key: tuple(chain.from_iterable(scan.records.get(key, ()) for scan in scans)) for key in _GUARDRAIL_RECORD_KEYS
+    }
+    if not any(new.values()):
+        return {}
+    bag: Final = get_metadata_variable_name_from_kwargs(kwargs)
+    metadata: Final = as_str_mapping(kwargs.get(bag)) or {}
+    return {
+        bag: {
+            **metadata,
+            **{
+                key: _appended(_list_items(metadata.get(key)) or (), entries, unique=key == "applied_guardrails")
+                for key, entries in new.items()
+                if entries
+            },
+        }
+    }
+
+
+def _appended(existing: Sequence[object], entries: Sequence[object], *, unique: bool) -> list[object]:
+    """`existing` then `entries`; applied guardrail names are listed once each"""
+    return [*existing, *(entry for entry in entries if not unique or entry not in existing)]
 
 
 def _message_text(message: Mapping[str, object]) -> str | None:
@@ -458,9 +529,9 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
             )
             for key, image in images.items()
         }
-        scanned: Final = {key: await _scanned_description(outcome, kwargs) for key, outcome in outcomes.items()}
+        scans: Final = {key: await _scanned_description(outcome, kwargs) for key, outcome in outcomes.items()}
         texts: Final = [
-            self._replacement_text(number, image, scanned[key] if key is not None else None)
+            self._replacement_text(number, image, scans[key].result if key is not None else None)
             for number, (image, key) in enumerate(zip(loaded, keys, strict=True), 1)
         ]
         replacements: Final = {
@@ -469,6 +540,7 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
         verbose_logger.debug("ImageDescriptionInterception: replaced %d image part(s)", len(replacements))
         return {
             **kwargs,
+            **_with_guardrail_records(kwargs, tuple(scans.values())),
             "messages": [_with_text_parts(index, message, replacements) for index, message in enumerate(messages)],
         }
 

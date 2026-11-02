@@ -9,8 +9,10 @@ from typing import Final
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 import litellm
+from litellm.exceptions import SensitiveDataRouteException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.image_description_interception.handler import (
     Described,
@@ -22,6 +24,7 @@ from litellm.integrations.image_description_interception.handler import (
 )
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy.guardrails.guardrail_hooks.onyx.onyx import OnyxGuardrail
 from litellm.proxy.child_request import ChildResponse, chat_child_request
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
@@ -596,3 +599,90 @@ async def test_descriptions_pass_the_request_policy_pipeline(monkeypatch: pytest
 
     assert result == {**request, "messages": [_described_turn("hi", 1, "the PIN is [PIN]")]}
     assert guardrail.scanned == ["the PIN is 1234"]
+
+
+class _RoutingGuardrail(CustomGuardrail):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: object, data: dict, call_type: object
+    ) -> dict:  # mutable-ok: the guardrail hook contract hands over the request dict
+        raise SensitiveDataRouteException(
+            route_to_model="private-model", session_id="session-1", guardrail_name="route-pii"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_that_reroutes_a_description_blocks_the_request(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [_RoutingGuardrail(guardrail_name="route-pii", event_hook=GuardrailEventHooks.pre_call, default_on=True)],
+    )
+    logger: Final = _logger(_RecordingDescriber([Described("the PIN is 1234")]))
+
+    with pytest.raises(HTTPException) as raised:
+        await logger.async_pre_call_deployment_hook(_request([_image_turn("hi")]), CallTypes.acompletion)
+
+    assert raised.value.status_code == 400
+    assert "cannot be rerouted after the image was described" in str(raised.value.detail)
+
+
+def _onyx_guardrail(validated: list[object]) -> OnyxGuardrail:  # mutable-ok: records each validated payload
+    def serve(request: httpx.Request) -> httpx.Response:
+        payload: Final = json.loads(request.content)["payload"]
+        validated.append(payload)
+        return httpx.Response(200, json={"allowed": "SECRET" not in json.dumps(payload)})
+
+    guardrail: Final = OnyxGuardrail(
+        api_key="fixture",
+        api_base="https://guard.invalid",
+        guardrail_name="onyx",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+    guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(serve))
+    return guardrail
+
+
+def _raw_request(text: str) -> dict[str, object]:  # mutable-ok: hook request dict
+    return {
+        **_request([_image_turn(text)]),
+        "proxy_server_request": {
+            "url": "http://proxy.test/v1/chat/completions",
+            "headers": {"x-tenant": "acme"},
+            "body": {"model": "text-only", "messages": [_image_turn(text)]},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_guardrails_that_read_the_raw_request_see_the_description_and_log_to_the_parent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    validated: Final[list[object]] = []  # mutable-ok: records each validated payload
+    monkeypatch.setattr(litellm, "callbacks", [_onyx_guardrail(validated)])
+
+    result: Final = await _logger(_RecordingDescriber([Described("a cat")])).async_pre_call_deployment_hook(
+        _raw_request("hi"), CallTypes.acompletion
+    )
+
+    assert len(validated) == 1
+    payload: Final = validated[0]
+    assert isinstance(payload, dict)
+    assert (payload["headers"], payload["body"]["messages"]) == (
+        {"x-tenant": "acme"},
+        [{"role": "user", "content": "a cat"}],
+    )
+    assert result is not None
+    metadata: Final = result["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata["applied_guardrails"] == ["onyx"]
+    assert len(metadata["standard_logging_guardrail_information"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_raw_request_guardrail_blocks_a_sensitive_description(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "callbacks", [_onyx_guardrail([])])
+    logger: Final = _logger(_RecordingDescriber([Described("the code is SECRET")]))
+
+    with pytest.raises(HTTPException, match="Onyx"):
+        await logger.async_pre_call_deployment_hook(_raw_request("hi"), CallTypes.acompletion)
