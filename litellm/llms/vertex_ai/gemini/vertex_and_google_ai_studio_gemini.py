@@ -535,12 +535,19 @@ def _declared_function_name(tool: JsonValue) -> str | None:
     return name if isinstance(name, str) else None
 
 
+def _is_namespace(tool: JsonValue) -> bool:
+    return isinstance(tool, dict) and tool.get("type") == "namespace"
+
+
+def _first_declarations(tools: tuple[JsonValue, ...]) -> tuple[JsonValue, ...]:
+    names: Final = tuple(map(_declared_function_name, tools))
+    return tuple(tool for index, tool in enumerate(tools) if names[index] is None or names[index] not in names[:index])
+
+
 def _with_namespace_members_inlined(tools: JsonValue) -> JsonValue:
-    if not isinstance(tools, list):
+    if not isinstance(tools, list) or not any(map(_is_namespace, tools)):
         return tools
-    inlined: Final = tuple(chain.from_iterable(map(_namespace_members_or_tool, tools)))
-    names: Final = tuple(name for name in map(_declared_function_name, inlined) if name is not None)
-    return list(inlined) if len(names) == len(frozenset(names)) else tools
+    return list(_first_declarations(tuple(chain.from_iterable(map(_namespace_members_or_tool, tools)))))
 
 
 class VertexAIBaseConfig:

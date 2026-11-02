@@ -1835,11 +1835,23 @@ _GET_WEATHER = {"type": "function", "name": "get_weather", "parameters": {"type"
     ],
     ids=["namespaces_share_a_member", "member_repeats_a_top_level_tool"],
 )
-def test_vertex_ai_map_tools_never_declares_a_function_name_twice_for_namespaces(tools: list[dict]) -> None:
+def test_vertex_ai_map_tools_declares_a_repeated_member_name_once_and_never_a_namespace_name(
+    tools: list[dict],
+) -> None:
     mapped = VertexGeminiConfig().map_function(value=tools, optional_params={})
 
-    names = [declaration["name"] for declaration in mapped[0]["function_declarations"]]
-    assert len(names) == len(set(names)) == 2
+    assert [declaration["name"] for declaration in mapped[0]["function_declarations"]] == ["get_weather"]
+
+
+def test_vertex_ai_map_tools_keeps_repeated_chat_tools_when_no_namespace_is_sent() -> None:
+    function = {k: v for k, v in _GET_WEATHER.items() if k != "type"}
+
+    mapped = VertexGeminiConfig().map_function(
+        value=[{"type": "function", "function": function}, {"type": "function", "function": function}],
+        optional_params={},
+    )
+
+    assert [declaration["name"] for declaration in mapped[0]["function_declarations"]] == ["get_weather", "get_weather"]
 
 
 def test_vertex_ai_map_tool_with_anyof():
