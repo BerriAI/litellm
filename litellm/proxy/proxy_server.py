@@ -26,6 +26,7 @@ from collections.abc import (
     Collection,
     Container,
     Iterable,
+    Iterator,
     Mapping,
     MutableMapping,
     Sequence,
@@ -588,6 +589,7 @@ from litellm.proxy.common_utils.token_count_log import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
+    budget_windows_absent_cache_key,
     end_user_cache_key,
     get_management_object_ttl,
     model_access_group_cache_key,
@@ -3636,6 +3638,52 @@ def _cached_budget_limits(cached: object) -> object:
     return _UNTYPED_VALUE.validate_python(json.loads(stored)) if isinstance(stored, str) else stored
 
 
+def _has_budget_windows(budget_limits: object) -> bool:
+    return isinstance(budget_limits, list) and budget_limits != []
+
+
+def _budget_windows_absent_marker(absent_key: str) -> object:
+    return _UNTYPED_VALUE.validate_python(user_api_key_cache.budget_windows_absent_cache.get_cache(key=absent_key))
+
+
+def _finish_pending_read(absent_key: str, pending_read: str, remember_absent: bool) -> None:
+    if _budget_windows_absent_marker(absent_key) != pending_read:
+        return
+    if remember_absent:
+        user_api_key_cache.budget_windows_absent_cache.set_cache(key=absent_key, value=True)
+        return
+    user_api_key_cache.budget_windows_absent_cache.delete_cache(absent_key)
+
+
+async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str) -> object:
+    """Read only: caching the row here could race a delete and put a just-deleted key back into the auth cache."""
+    if prisma_client is None:
+        return None
+    absent_key: Final = budget_windows_absent_cache_key(entity_type.value, entity_id)
+    if _budget_windows_absent_marker(absent_key) is True:
+        return None
+    pending_read: Final = f"reading:{secrets.token_hex(8)}"
+    user_api_key_cache.budget_windows_absent_cache.set_cache(key=absent_key, value=pending_read)
+    try:
+        row: Final[SupportsModelDump | None] = (
+            await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": entity_id})
+            if entity_type == Litellm_EntityType.KEY
+            else await TeamRepository(prisma_client).table.find_unique(where={"team_id": entity_id})
+        )
+    except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback
+        verbose_proxy_logger.warning(
+            "Unable to read budget windows for %s=%s; this request's window spend is not counted: %s",
+            entity_type.value,
+            entity_id,
+            e,
+        )
+        _finish_pending_read(absent_key, pending_read, remember_absent=False)
+        return None
+    budget_limits: Final[object] = None if row is None else _cached_budget_limits(row)
+    _finish_pending_read(absent_key, pending_read, remember_absent=not _has_budget_windows(budget_limits))
+    return budget_limits
+
+
 async def _increment_spend_counters_batched(
     token: str | None,
     team_id: str | None,
@@ -3666,7 +3714,68 @@ async def _increment_spend_counters_batched(
 
     cost: Final[float] = response_cost
 
-    async def _key_scope(key_token: str) -> tuple[PendingSpendIncrement | BaseException, ...]:
+    async def _window_increment(
+        entity_type: Litellm_EntityType, entity_id: str, window: object
+    ) -> PendingSpendIncrement | None:
+        duration: Final = (
+            window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
+        )
+        window_reset_at: Final = (
+            window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
+        )
+        window_counter: Final = f"spend:{entity_type.value}:{entity_id}:window:{duration}"
+        window_start: Final = get_budget_window_start(window)
+        pending_window: Final = (
+            await _prepare_window_spend_counter_increment(
+                counter_key=window_counter,
+                entity_type=entity_type.value.capitalize(),
+                entity_id=entity_id,
+                window_duration=duration,
+                window_start=window_start,
+                increment=cost,
+            )
+            if window_counter not in reserved_counter_keys
+            else None
+        )
+        await _enqueue_window_spend_row_update(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            reset_at=window_reset_at,
+            window_duration=duration,
+            window_start=window_start,
+            increment=cost,
+            request_started_at=request_started_at,
+        )
+        return pending_window
+
+    async def _window_increments(
+        entity_type: Litellm_EntityType, entity_id: str, budget_limits: object
+    ) -> tuple[PendingSpendIncrement | BaseException, ...]:
+        if not isinstance(budget_limits, list):
+            return ()
+        window_pending: Final = await asyncio.gather(
+            *(_window_increment(entity_type, entity_id, window) for window in budget_limits), return_exceptions=True
+        )
+        return tuple(item for item in window_pending if item is not None)
+
+    async def _cached_window_increments(
+        entity_type: Litellm_EntityType, entity_id: str, cache_key: str
+    ) -> tuple[_SpendScopeItem, ...]:
+        cached: Final[object] = _UNTYPED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+        if cached is None:
+            return (_UncachedBudgetWindows(entity_type=entity_type, entity_id=entity_id),)
+        return await _window_increments(entity_type, entity_id, _cached_budget_limits(cached))
+
+    async def _stored_window_increments(
+        uncached: _UncachedBudgetWindows,
+    ) -> tuple[PendingSpendIncrement | BaseException, ...]:
+        return await _window_increments(
+            uncached.entity_type,
+            uncached.entity_id,
+            await _stored_budget_limits(uncached.entity_type, uncached.entity_id),
+        )
+
+    async def _key_scope(key_token: str) -> tuple[_SpendScopeItem, ...]:
         # key_token arrives pre-hashed from metadata["user_api_key"] (auth flow
         # hashes raw "sk-..." keys before they reach the callback). The
         # startswith("sk-") check is a safety net matching update_cache —
@@ -3689,52 +3798,9 @@ async def _increment_spend_counters_batched(
             )
         )
 
-        async def _key_window_increment(window: object) -> PendingSpendIncrement | None:
-            duration = (
-                window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
-            )
-            key_window_reset_at = (
-                window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
-            )
-            key_window_counter: Final = f"spend:key:{hashed_token}:window:{duration}"
-            key_window_start = get_budget_window_start(window)
-            pending_window: Final = (
-                await _prepare_window_spend_counter_increment(
-                    counter_key=key_window_counter,
-                    entity_type="Key",
-                    entity_id=hashed_token,
-                    window_duration=duration,
-                    window_start=key_window_start,
-                    increment=cost,
-                )
-                if key_window_counter not in reserved_counter_keys
-                else None
-            )
-            await _enqueue_window_spend_row_update(
-                entity_type=Litellm_EntityType.KEY,
-                entity_id=hashed_token,
-                reset_at=key_window_reset_at,
-                window_duration=duration,
-                window_start=key_window_start,
-                increment=cost,
-                request_started_at=request_started_at,
-            )
-            return pending_window
+        return key_pending + await _cached_window_increments(Litellm_EntityType.KEY, hashed_token, hashed_token)
 
-        key_obj: Final[object] = _UNTYPED_VALUE.validate_python(
-            await user_api_key_cache.async_get_cache(key=hashed_token)
-        )
-        if key_obj is None:
-            return key_pending
-        key_budget_limits: Final = _cached_budget_limits(key_obj)
-        if not isinstance(key_budget_limits, list):
-            return key_pending
-        window_pending: Final = await asyncio.gather(
-            *(_key_window_increment(window) for window in key_budget_limits), return_exceptions=True
-        )
-        return key_pending + tuple(item for item in window_pending if item is not None)
-
-    async def _team_scope(scope_team_id: str) -> tuple[PendingSpendIncrement | BaseException, ...]:
+    async def _team_scope(scope_team_id: str) -> tuple[_SpendScopeItem, ...]:
         team_counter_key: Final = f"spend:team:{scope_team_id}"
         team_pending: Final[tuple[PendingSpendIncrement, ...]] = (
             ()
@@ -3748,50 +3814,9 @@ async def _increment_spend_counters_batched(
             )
         )
 
-        async def _team_window_increment(window: object) -> PendingSpendIncrement | None:
-            duration = (
-                window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
-            )
-            team_window_reset_at = (
-                window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
-            )
-            team_window_counter: Final = f"spend:team:{scope_team_id}:window:{duration}"
-            team_window_start = get_budget_window_start(window)
-            pending_window: Final = (
-                await _prepare_window_spend_counter_increment(
-                    counter_key=team_window_counter,
-                    entity_type="Team",
-                    entity_id=scope_team_id,
-                    window_duration=duration,
-                    window_start=team_window_start,
-                    increment=cost,
-                )
-                if team_window_counter not in reserved_counter_keys
-                else None
-            )
-            await _enqueue_window_spend_row_update(
-                entity_type=Litellm_EntityType.TEAM,
-                entity_id=scope_team_id,
-                reset_at=team_window_reset_at,
-                window_duration=duration,
-                window_start=team_window_start,
-                increment=cost,
-                request_started_at=request_started_at,
-            )
-            return pending_window
-
-        team_obj: Final[object] = _UNTYPED_VALUE.validate_python(
-            await user_api_key_cache.async_get_cache(key=f"team_id:{scope_team_id}")
+        return team_pending + await _cached_window_increments(
+            Litellm_EntityType.TEAM, scope_team_id, f"team_id:{scope_team_id}"
         )
-        if team_obj is None:
-            return team_pending
-        team_budget_limits: Final = _cached_budget_limits(team_obj)
-        if not isinstance(team_budget_limits, list):
-            return team_pending
-        window_pending: Final = await asyncio.gather(
-            *(_team_window_increment(window) for window in team_budget_limits), return_exceptions=True
-        )
-        return team_pending + tuple(item for item in window_pending if item is not None)
 
     async def _team_member_scope(
         scope_user_id: str, scope_team_id: str
@@ -3862,27 +3887,54 @@ async def _increment_spend_counters_batched(
     # return_exceptions so a failing scope does not leave its siblings running
     # as orphaned tasks that race the caller's reservation-counter invalidation;
     # all scopes settle, then the first error propagates as before.
-    scope_results: Final = await asyncio.gather(*scope_coros, return_exceptions=True)
-    scope_errors: Final = tuple(
-        item
-        for scope in scope_results
-        for item in (scope if isinstance(scope, tuple) else (scope,))
-        if isinstance(item, BaseException)
+    scope_items: Final = tuple(_flatten_spend_scopes(await asyncio.gather(*scope_coros, return_exceptions=True)))
+    uncached_windows: Final = tuple(item for item in scope_items if isinstance(item, _UncachedBudgetWindows))
+    await _apply_spend_counter_increments(
+        pending=reservation_update.pending
+        + tuple(item for item in scope_items if isinstance(item, PendingSpendIncrement))
     )
-    pending: Final = tuple(
-        item
-        for scope in scope_results
-        if not isinstance(scope, BaseException)
-        for item in scope
-        if not isinstance(item, BaseException)
+    stored_window_items: Final = (
+        tuple(
+            _flatten_spend_scopes(
+                await asyncio.gather(
+                    *(_stored_window_increments(uncached) for uncached in uncached_windows), return_exceptions=True
+                )
+            )
+        )
+        if uncached_windows
+        else ()
     )
-    await _apply_spend_counter_increments(pending=reservation_update.pending + pending)
+    stored_window_pending: Final = tuple(
+        item for item in stored_window_items if isinstance(item, PendingSpendIncrement)
+    )
+    if stored_window_pending:
+        await _apply_spend_counter_increments(pending=stored_window_pending)
     stamp_budget_reservation_actual_cost(budget_reservation=budget_reservation, actual_cost=response_cost)
+    scope_errors: Final = tuple(item for item in scope_items + stored_window_items if isinstance(item, BaseException))
     if scope_errors:
         raise scope_errors[0]
 
     if budget_reservation is not None:
         budget_reservation["finalized"] = True
+
+
+@dataclass(frozen=True, slots=True)
+class _UncachedBudgetWindows:
+    entity_type: Litellm_EntityType
+    entity_id: str
+
+
+_SpendScopeItem: TypeAlias = PendingSpendIncrement | BaseException | _UncachedBudgetWindows
+
+
+def _flatten_spend_scopes(
+    scope_results: Sequence[tuple[_SpendScopeItem, ...] | BaseException],
+) -> Iterator[_SpendScopeItem]:
+    for scope in scope_results:
+        if isinstance(scope, BaseException):
+            yield scope
+            continue
+        yield from scope
 
 
 @dataclass(frozen=True, slots=True)
@@ -5670,6 +5722,14 @@ def _reload_settings_store(section: Section, store: SettingsStore, section_confi
         store["pass_through_endpoints"] = serving_pass_throughs
 
 
+def _general_settings_row_is_readable(row: _ConfigParamValueRow | None) -> bool:
+    return row is None or row.param_value is None or isinstance(row.param_value, Mapping)
+
+
+def _db_managed_general_settings_keys() -> frozenset[str]:
+    return frozenset((*ConfigGeneralSettings.model_fields, *_CLEANUP_SCHEDULE_KEYS, "allowed_ips", "email_settings"))
+
+
 def _bind_general_settings_store(settings: SettingsStore) -> None:
     global general_settings
     general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
@@ -5820,7 +5880,9 @@ class ProxyConfig:
         # whether an existing request predates the prices it just fetched, and re-serving one
         # costs a single fetch where skipping one leaves it priced wrong indefinitely
         self.model_cost_map_applied_revision: int = 0
-        self.settings: Final[SettingsStore] = SettingsStore("general_settings")
+        self.settings: Final[SettingsStore] = SettingsStore(
+            "general_settings", managed_db_keys=_db_managed_general_settings_keys()
+        )
         self.router_settings: Final[SettingsStore] = SettingsStore("router_settings")
         self.litellm_settings: Final[SettingsStore] = SettingsStore("litellm_settings")
         self.environment_variables: Final[SettingsStore] = SettingsStore("environment_variables")
@@ -5831,6 +5893,8 @@ class ProxyConfig:
         self._db_environment_keys: frozenset[str] = frozenset()
         self._sso_environment_removals: frozenset[str] = frozenset()
         self._warned_shadowed_keys: frozenset[tuple[Section, str]] = frozenset()
+        self._warned_unmanaged_keys: frozenset[str] = frozenset()
+        self._warned_unreadable_db_general_settings: bool = False
         self._db_config_callback_entries: Mapping[tuple[str, str], _DbCallbackRegistration] = MappingProxyType({})
         self._settings_stores: Final[Mapping[Section, SettingsStore]] = MappingProxyType(
             {
@@ -8354,15 +8418,20 @@ class ProxyConfig:
             general_settings.get("maximum_spend_logs_retention_interval", "1d"),
         )
 
-    async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | None) -> None:
+    async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | str | None) -> None:
         global general_settings
         if db_general_settings is None:
             return
+        if not isinstance(db_general_settings, Mapping):
+            self._warn_about_unreadable_db_general_settings()
+            return
+        self._warned_unreadable_db_general_settings = False
         if not isinstance(general_settings, SettingsStore):
             self.settings.load_yaml(_as_settings_mapping(general_settings))
         cache_size_was_db: Final = self.settings.source("user_api_key_cache_max_size") == "db"
         previous_cleanup_schedule: Final = self._resolved_cleanup_schedule()
         self.settings.apply_db_row("general_settings", db_general_settings)
+        self._warn_about_unmanaged_db_settings()
         _bind_general_settings_store(self.settings)
         await self._apply_general_settings_side_effects(
             db_general_settings,
@@ -8580,6 +8649,7 @@ class ProxyConfig:
                 )
 
         self._warn_about_shadowed_db_settings()
+        self._warn_about_unmanaged_db_settings()
         return self._config_with_resolved_settings(config)
 
     async def _apply_db_environment_variables_row(
@@ -8637,6 +8707,30 @@ class ProxyConfig:
                 "%s", config_ownership_message(section=section, key=key, shadows_db_value=True)
             )
         self._warned_shadowed_keys = shadowed
+
+    def _warn_about_unmanaged_db_settings(self) -> None:
+        unmanaged: Final = frozenset(
+            key for key in self.settings.unmanaged_db_keys() if key not in _GENERAL_SETTINGS_UI_LITELLM_FIELDS
+        )
+        for key in sorted(unmanaged - self._warned_unmanaged_keys):
+            verbose_proxy_logger.warning(
+                "general_settings.%s is stored in the database, but the proxy does not apply that stored value, so it "
+                "is ignored. %s",
+                key,
+                "The config file's value applies. Remove the stored copy with POST /config/field/delete."
+                if self.settings.owned_by_config(key)
+                else "Set it in the config file to use it, or remove it with POST /config/field/delete.",
+            )
+        self._warned_unmanaged_keys = unmanaged
+
+    def _warn_about_unreadable_db_general_settings(self) -> None:
+        if self._warned_unreadable_db_general_settings:
+            return
+        verbose_proxy_logger.warning(
+            "general_settings is stored in the database as something other than a JSON object, so the proxy "
+            "ignores every stored general setting."
+        )
+        self._warned_unreadable_db_general_settings = True
 
     def _prepared_db_settings_values(self, section: Section, value: object) -> Mapping[str, SettingsJsonValue]:
         scrubbed: Final = _scrub_db_overlay_remote_module_loads(section=section, db_value=value)
@@ -8805,7 +8899,10 @@ class ProxyConfig:
                 )
 
             # initialize vector stores, guardrails, etc. table in db
-            await self._init_non_llm_objects_in_db(prisma_client=prisma_client)
+            await self._init_non_llm_objects_in_db(
+                prisma_client=prisma_client,
+                refresh_pass_through_endpoints=_general_settings_row_is_readable(db_general_settings),
+            )
 
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - %s", e)
@@ -8874,7 +8971,9 @@ class ProxyConfig:
         except Exception as e:  # noqa: BLE001  # best-effort: a failing stop must not break proxy shutdown
             verbose_proxy_logger.error("Error stopping auth cache invalidation subscriber: %s", e)
 
-    async def _init_non_llm_objects_in_db(self, prisma_client: PrismaClient):
+    async def _init_non_llm_objects_in_db(
+        self, prisma_client: PrismaClient, *, refresh_pass_through_endpoints: bool = True
+    ):
         """
         Use this to read non-llm objects from the db and initialize them
 
@@ -8898,7 +8997,7 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="agents"):
             await self._init_agents_in_db(prisma_client=prisma_client)
 
-        if self._should_load_db_object(object_type="pass_through_endpoints"):
+        if refresh_pass_through_endpoints and self._should_load_db_object(object_type="pass_through_endpoints"):
             await self._init_pass_through_endpoints_in_db()
 
         if self._should_load_db_object(object_type="prompts"):
@@ -14840,6 +14939,7 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.responses.litellm_completion_transformation.count_request import (
     ChatCountBridgeError,
     chat_count_request,
@@ -21058,53 +21158,56 @@ async def delete_config_general_settings(
     if data.field_name in _GENERAL_SETTINGS_UI_LITELLM_FIELDS:
         return await _reset_general_settings_ui_litellm_field(data.field_name, user_api_key_dict)
 
-    if data.field_name not in ConfigGeneralSettings.model_fields:
+    config_table: Final[TableActions[_ConfigParamValueRow]] = _config_param_table(prisma_client)
+    stored_row: Final = await config_table.find_first(where={"param_name": "general_settings"})
+    stored: Final = (
+        _SETTINGS_MAPPING.validate_python(stored_row.param_value)
+        if stored_row is not None and isinstance(stored_row.param_value, Mapping)
+        else None
+    )
+
+    if not _general_settings_row_is_readable(stored_row):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "general_settings is stored in the database as something other than a JSON object, so no "
+                "field can be removed from it"
+            },
+        )
+
+    if data.field_name not in ConfigGeneralSettings.model_fields and (stored is None or data.field_name not in stored):
         raise HTTPException(
             status_code=400,
             detail={"error": f"Invalid field={data.field_name} passed in."},
         )
 
-    proxy_config.reject_config_owned_deletes(section_name="general_settings", keys=(data.field_name,))
+    if data.field_name in _db_managed_general_settings_keys():
+        proxy_config.reject_config_owned_deletes(section_name="general_settings", keys=(data.field_name,))
 
-    ## get general settings from db
-    db_general_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
-        where={"param_name": "general_settings"}
-    )
-    ### pop the value
-
-    if db_general_settings is None or db_general_settings.param_value is None:
+    if stored is None:
         raise HTTPException(
             status_code=400,
             detail={"error": f"Field name={data.field_name} not in config"},
         )
-    else:
-        general_settings = dict(db_general_settings.param_value)
 
-    before_general_settings: Final = copy.deepcopy(general_settings)
-
-    ## update db
-
-    general_settings.pop(data.field_name, None)
-
+    remaining: Final = {key: value for key, value in stored.items() if key != data.field_name}
     response: Final = await ConfigRepository(prisma_client).table.upsert(
         where={"param_name": "general_settings"},
         data={
             "create": {
                 "param_name": "general_settings",
-                "param_value": json.dumps(general_settings),
+                "param_value": json.dumps(remaining),
             },
-            "update": {"param_value": json.dumps(general_settings)},
+            "update": {"param_value": json.dumps(remaining)},
         },
     )
     await invalidate_config_param("general_settings")
-    proxy_config.settings.apply_db_row("general_settings", general_settings)
+    proxy_config.settings.apply_db_row("general_settings", remaining)
     if is_resource_list("general_settings", data.field_name):
-        stored_endpoints: Final = general_settings.get("pass_through_endpoints")
+        stored_endpoints: Final = remaining.get("pass_through_endpoints")
         await proxy_config.serve_pass_through_endpoints(stored_endpoints if isinstance(stored_endpoints, list) else ())
     asyncio.create_task(
-        create_config_audit_log(
-            "general_settings", "deleted", before_general_settings, general_settings, user_api_key_dict
-        )
+        create_config_audit_log("general_settings", "deleted", dict(stored), remaining, user_api_key_dict)
     )
 
     return response
