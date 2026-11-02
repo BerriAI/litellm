@@ -652,3 +652,39 @@ def test_gemini_embedding(respx_mock: respx.MockRouter) -> None:
     expected_prompt_tokens: Final = litellm.token_counter(model="gemini/gemini-embedding-001", text="Hello, world!")
     assert response.usage.prompt_tokens == expected_prompt_tokens
     assert response.usage.total_tokens == expected_prompt_tokens
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_batch_embedding_usage_comes_from_usage_metadata(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "embeddings": [{"values": [0.1, 0.2]}, {"values": [0.3, 0.4]}],
+                "usageMetadata": {
+                    "promptTokenCount": 262,
+                    "promptTokenDetails": [
+                        {"modality": "TEXT", "tokenCount": 4},
+                        {"modality": "IMAGE", "tokenCount": 258},
+                    ],
+                },
+            },
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="gemini/gemini-embedding-2",
+        input=["a red apple", IMAGE_DATA_URI],
+        api_key="gemini-test-key",
+    )
+
+    assert response.usage.prompt_tokens == 262
+    assert response.usage.total_tokens == 262
+    assert response.usage.prompt_tokens_details.text_tokens == 4
+    assert response.usage.prompt_tokens_details.image_tokens == 258
+    prices: Final = litellm.model_cost["gemini/gemini-embedding-2"]
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        4 * prices["input_cost_per_token"] + 258 * prices["input_cost_per_image_token"]
+    )
