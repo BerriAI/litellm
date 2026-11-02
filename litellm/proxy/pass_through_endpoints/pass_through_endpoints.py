@@ -115,6 +115,7 @@ from litellm.proxy.common_request_processing import (
     open_sse_before_first_byte,
     resolve_litellm_call_id,
 )
+from litellm.proxy.common_utils.callback_utils import strip_callback_config
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -897,13 +898,52 @@ async def _inherit_auth_guardrails(
     )
     metadata: Final = parsed_body["metadata"]
     merged: Final = (as_str_mapping(metadata) or {}).get("guardrails")
+    if not isinstance(merged, list):
+        return None
     entries: Final = merged_guardrail_entries(
-        _GUARDRAIL_ENTRIES.validate_python(merged) if isinstance(merged, list) else (),
-        _GUARDRAIL_ENTRIES.validate_python(client_named) if isinstance(client_named, list) else (),
+        _GUARDRAIL_ENTRIES.validate_python(merged), _client_named_guardrail_entries(client_named)
     )
     if entries and isinstance(metadata, dict):
         metadata["guardrails"] = entries
-    return entries if entries and _named_guardrail_runs_post_call(parsed_body, entries) else None
+    admin_scoped_body: Final = {
+        **parsed_body,
+        "metadata": {**(as_str_mapping(metadata) or {}), **_admin_guardrail_metadata(user_api_key_dict)},
+    }
+    return entries if entries and _named_guardrail_runs_post_call(admin_scoped_body, entries) else None
+
+
+def _client_named_guardrail_entries(client_named: object) -> Sequence[object]:
+    """The guardrails ``metadata.guardrails`` names: its entries, or the keys of the dict form the guardrails read"""
+    if isinstance(client_named, list):
+        return _GUARDRAIL_ENTRIES.validate_python(client_named)
+    return tuple(as_str_mapping(client_named) or ())
+
+
+def _admin_guardrail_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
+    """The key and team metadata ``should_run_guardrail`` reads a global guardrail opt-out from, as the native routes set it"""
+    return MappingProxyType(
+        {
+            "user_api_key_metadata": strip_callback_config(user_api_key_dict.metadata),
+            "user_api_key_team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
+        }
+    )
+
+
+def _post_call_hook_data(
+    parsed_body: Mapping[str, object] | None,
+    guardrails: Sequence[object],
+    logging_obj: LiteLLMLoggingObj,
+    admin_metadata: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: the guardrails record their results in this request payload
+    """The body with what the post-call guardrails read and the kwargs split stripped: ``metadata`` naming the guardrails,
+    which ``should_run_guardrail`` checks, and the logging object, which unified (apply_guardrail) guardrails resolve a
+    pass-through response's call type from when the route has no API_ROUTE_TO_CALL_TYPES entry"""
+    body: Final = parsed_body or {}
+    return {
+        **body,
+        "metadata": {**(as_str_mapping(body.get("metadata")) or {}), "guardrails": guardrails, **admin_metadata},
+        "litellm_logging_obj": logging_obj,
+    }
 
 
 def _named_guardrail_runs_post_call(data: Mapping[str, object], entries: Sequence[object]) -> bool:
@@ -1987,26 +2027,18 @@ async def pass_through_request(
         )
 
         if response.status_code < 400 and response_body is not None and post_call_guardrails:
-            # Build an enriched data dict: _parsed_body has been stripped of
-            # `metadata` by both pre_call_hook and _init_kwargs_for_pass_through_endpoint,
-            # so we re-attach the configured guardrails here so should_run_guardrail
-            # sees them.
-            hook_data: Final = dict(_parsed_body or {})
-            existing_metadata = hook_data.get("metadata")
-            if not isinstance(existing_metadata, dict):
-                existing_metadata = {}
-            hook_data["metadata"] = {
-                **existing_metadata,
-                "guardrails": post_call_guardrails,
-            }
-            # The kwargs split popped the logging object off _parsed_body; unified (apply_guardrail) guardrails
-            # resolve a pass-through response's call type from it when the route has no API_ROUTE_TO_CALL_TYPES entry.
-            hook_data["litellm_logging_obj"] = logging_obj
+            hook_data: Final = _post_call_hook_data(
+                cast(dict[str, object] | None, _parsed_body),  # cast-ok: json
+                post_call_guardrails,
+                logging_obj,
+                _admin_guardrail_metadata(user_api_key_dict) if inherit_auth_guardrails else MappingProxyType({}),
+            )
             post_call_guardrail_data = hook_data
             response_body = await proxy_logging_obj.post_call_success_hook(
                 data=hook_data,
                 user_api_key_dict=user_api_key_dict,
                 response=response_body,
+                merge_model_level_guardrails=not inherit_auth_guardrails,
             )
             if isinstance(response_body, dict):
                 content = json.dumps(response_body).encode("utf-8")

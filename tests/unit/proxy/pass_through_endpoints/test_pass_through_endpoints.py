@@ -13369,6 +13369,79 @@ class TestInheritAuthGuardrails:
         assert merged["metadata"]["guardrails"] == ["key-guard", "model-guard"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("settings", [{}, True])
+    async def test_guardrail_a_client_names_in_the_dict_form_stays_after_the_keys(self, settings: object):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
+
+        pre_call, _ = await self._run(
+            {**self._chat_body(), "metadata": {"guardrails": {"client-guard": settings}}},
+            inherit=True,
+            user_api_key_dict=auth,
+            guardrails=(self._guardrail("key-guard", GuardrailEventHooks.pre_call),),
+        )
+
+        assert pre_call[0]["metadata"]["guardrails"] == ["key-guard", "client-guard"]
+
+    @pytest.mark.asyncio
+    async def test_dict_form_stays_as_sent_for_a_key_without_guardrails(self):
+        pre_call, post_call = await self._run(
+            {**self._chat_body(), "metadata": {"guardrails": {"client-guard": {}}}},
+            inherit=True,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            guardrails=(self._guardrail("client-guard", GuardrailEventHooks.post_call),),
+        )
+
+        assert pre_call[0]["metadata"]["guardrails"] == {"client-guard": {}}
+        post_call.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_post_call_pass_reads_opt_outs_from_the_key_and_team_not_the_body(self):
+        auth: Final = UserAPIKeyAuth(
+            api_key="sk-test",
+            metadata={"guardrails": ["key-guard"], "disable_global_guardrails": True},
+            team_metadata={"opted_out_global_guardrails": ["global-post"]},
+        )
+        forged: Final = {"user_api_key_metadata": {"disable_global_guardrails": False}}
+
+        _, post_call = await self._run(
+            {**self._chat_body(), "metadata": forged},
+            inherit=True,
+            user_api_key_dict=auth,
+            guardrails=(self._guardrail("key-guard", GuardrailEventHooks.post_call),),
+        )
+
+        metadata: Final = post_call.call_args.kwargs["data"]["metadata"]
+        assert metadata["user_api_key_metadata"]["disable_global_guardrails"] is True
+        assert metadata["user_api_key_team_metadata"] == {"opted_out_global_guardrails": ["global-post"]}
+
+    @pytest.mark.asyncio
+    async def test_inherited_post_call_pass_skips_model_level_guardrails(self):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
+
+        _, post_call = await self._run(
+            self._chat_body(),
+            inherit=True,
+            user_api_key_dict=auth,
+            guardrails=(self._guardrail("key-guard", GuardrailEventHooks.post_call),),
+        )
+
+        assert post_call.call_args.kwargs["merge_model_level_guardrails"] is False
+
+    @pytest.mark.asyncio
+    async def test_named_global_guardrail_the_key_opted_out_of_does_not_start_the_post_call_pass(self):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"opted_out_global_guardrails": ["global-post"]})
+
+        response, _, post_call = await self._run_with_response(
+            {**self._chat_body(), "metadata": {"guardrails": ["global-post"]}},
+            inherit=True,
+            user_api_key_dict=auth,
+            guardrails=(self._guardrail("global-post", GuardrailEventHooks.post_call, default_on=True),),
+        )
+
+        post_call.assert_not_awaited()
+        assert response.body == b'{\n  "id":"chatcmpl-1"\n}'
+
+    @pytest.mark.asyncio
     async def test_pre_call_only_guardrails_relay_the_response_untouched(self):
         auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
 

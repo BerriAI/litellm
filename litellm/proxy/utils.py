@@ -4343,6 +4343,7 @@ class ProxyLogging:
         data: dict,
         response: LLMResponseTypes,
         user_api_key_dict: UserAPIKeyAuth,
+        merge_model_level_guardrails: bool = True,
     ):
         """
         Allow user to modify outgoing data
@@ -4352,6 +4353,9 @@ class ProxyLogging:
         2. /embeddings
         3. /image/generation
         4. /files
+
+        ``merge_model_level_guardrails`` is off for a request that never reaches a router deployment, so the guardrails
+        of a model that merely shares the body's ``model`` name don't run on it.
         """
 
         from litellm.proxy.proxy_server import llm_router
@@ -4369,7 +4373,11 @@ class ProxyLogging:
         guardrail_callbacks, other_callbacks = _partition_post_call_callbacks()
         try:
             # Merge model-level guardrails before checking which guardrails to run
-            guardrail_data: Final = check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
+            guardrail_data: Final = (
+                check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
+                if merge_model_level_guardrails
+                else data
+            )
 
             parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = tuple(
                 callback
