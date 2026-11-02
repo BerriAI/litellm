@@ -301,28 +301,42 @@ export const getRequestLogsTableColumns = ({
     enableSorting: true,
     cell: ({ row }) => {
       const log = row.original;
-      const provider = log.custom_llm_provider;
       const sessionModels = log.session_models ?? [];
-      const modelNames = sessionModels.length > 0 ? sessionModels : [log.model ?? ""];
-      const modelLabel = log.session_models_truncated ? `${modelNames.join(", ")}, ...` : modelNames.join(", ");
-      const isSingleModel = modelNames.length === 1;
+      const latestModel = log.model || sessionModels[0] || "";
+      const otherModels = sessionModels.filter((model) => model !== latestModel);
+      const models = [latestModel, ...otherModels].filter((model) => model !== "");
+      if (models.length === 0) return <span className="text-muted-foreground">-</span>;
       return (
-        <div className="flex items-center space-x-2">
-          {provider && isSingleModel && (
-            <img
-              src={getLogoUrl(log, provider)}
-              alt=""
-              className="w-4 h-4"
-              onError={(event) => {
-                event.currentTarget.style.display = "none";
-              }}
-            />
-          )}
+        <div className="flex min-w-0 items-center">
           <CellTooltip
-            content={modelLabel}
+            content={
+              <div className="flex max-w-[280px] flex-col gap-0.5">
+                {models.map((model) => (
+                  <span key={model}>{model}</span>
+                ))}
+                {log.session_models_truncated === true && (
+                  <span className="text-muted-foreground">More models not shown</span>
+                )}
+              </div>
+            }
             trigger={
-              <span className={isSingleModel ? "max-w-[15ch] truncate block" : "min-w-0 truncate block"}>
-                {modelLabel}
+              <span className="inline-flex min-w-0 items-center gap-1.5">
+                {log.custom_llm_provider && (
+                  <img
+                    src={getLogoUrl(log, log.custom_llm_provider)}
+                    alt=""
+                    className="w-4 h-4 shrink-0"
+                    onError={(event) => {
+                      event.currentTarget.style.display = "none";
+                    }}
+                  />
+                )}
+                <span className="max-w-[22ch] truncate">{latestModel}</span>
+                {otherModels.length > 0 && (
+                  <span className="shrink-0 rounded-full border border-border px-1 text-[10px] leading-4 text-muted-foreground">
+                    +{otherModels.length}
+                  </span>
+                )}
               </span>
             }
           />
