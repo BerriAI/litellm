@@ -262,6 +262,21 @@ async def test_post_call_scan_still_reads_every_string_a_reply_carries():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"candidates": [{"content": {"parts": [{"functionCall": {"args": {"id": "alice@example.com"}}}]}}]},
+        {"content": [{"input": {"id": "alice@example.com", "message": {"role": "alice@example.com"}}}]},
+        {"choices": [{"message": {"tool_calls": [{"function": {"nested": {"type": "alice@example.com"}}}]}}]},
+        {"id": "alice@example.com", "result": {"status": "alice@example.com"}},
+    ],
+)
+async def test_post_call_scan_reads_a_field_named_like_the_envelope_in_what_the_model_or_api_wrote(response):
+    assert all("alice@example.com" in text for text in await _scanned_response_texts(response))
+    assert await _scanned_response_texts(response) != ()
+
+
+@pytest.mark.asyncio
 async def test_post_call_scan_skips_a_reply_with_no_text():
     response: Final = {"object": "list", "data": [{"object": "embedding", "embedding": [0.4111111111111111]}]}
 
