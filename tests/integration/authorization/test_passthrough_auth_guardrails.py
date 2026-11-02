@@ -182,6 +182,16 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                     ],
                     "guardrails": [
                         {
+                            "guardrail_name": GLOBAL_POST_CALL,
+                            "litellm_params": {
+                                "guardrail": "lakera_v2",
+                                "mode": "post_call",
+                                "default_on": True,
+                                "api_base": post_call_vendor.url,
+                                "api_key": "synthetic-guardrail-key",
+                            },
+                        },
+                        {
                             "guardrail_name": GUARDRAIL,
                             "litellm_params": {
                                 "guardrail": "generic_guardrail_api",
@@ -218,16 +228,6 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                                 "mode": "post_call",
                                 "default_on": False,
                                 "api_base": model_post_call_vendor.url,
-                                "api_key": "synthetic-guardrail-key",
-                            },
-                        },
-                        {
-                            "guardrail_name": GLOBAL_POST_CALL,
-                            "litellm_params": {
-                                "guardrail": "lakera_v2",
-                                "mode": "post_call",
-                                "default_on": True,
-                                "api_base": post_call_vendor.url,
                                 "api_key": "synthetic-guardrail-key",
                             },
                         },
