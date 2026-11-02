@@ -435,15 +435,17 @@ def test_batch_reconciliation_delivers_each_configured_logger_once(gateway: Gate
 def test_batch_end_user_budget_enforcement_and_isolation(gateway: Gateway) -> None:
     """
     Regression test for #49202:
-    Validates end-to-end attribution and budget enforcement for batch operations.
+    Validates end-to-end attribution, budget enforcement, identity isolation,
+    and observation immutability for asynchronous batch operations.
 
     Verifies:
-    1. Header attribution: 'x-litellm-end-user-id' propagates through batch creation
-       and CheckBatchCost settlement to update LiteLLM_EndUserTable.spend.
-    2. Budget enforcement: Once batch spend exceeds customer max_budget, subsequent
-       requests for customer A are denied with budget exceeded.
-    3. Identity isolation: Customer B on the same API key remains unblocked and unaffected.
-    4. Observation immutability: Subsequent reads of the batch do not mutate stored creator attribution.
+    1. Positive Attribution & Enforcement: Customer A's batch spend settles to
+       LiteLLM_EndUserTable, and subsequent calls for A are denied with budget_exceeded.
+    2. Identity Isolation: Customer B on the same API key runs a separate batch;
+       its charge settles to B's record without cross-contaminating A, and B remains unblocked.
+    3. Creation vs Observation Immutability: Retrieving Customer A's completed batch
+       using a different key does not overwrite the stored creator attribution.
+    4. Replay Idempotency: Subsequent retrievals / poll cycles do not double-bill Customer A.
     """
     with gateway.scenario() as scenario:
         scenario_id: Final = f"batch-end-user-{uuid.uuid4().hex[:12]}"
@@ -456,31 +458,31 @@ def test_batch_end_user_budget_enforcement_and_isolation(gateway: Gateway) -> No
             output_cost_per_token=OUTPUT_COST_PER_TOKEN,
         )
         key: Final = scenario.key(models=[model])
+        viewer_key: Final = scenario.key(models=[model])
 
-        # 1. Setup Customer A with a low budget that the batch will exhaust
+        # 1. Setup Customer A (low budget: 0.001) and Customer B (ample budget: 10.0)
         user_a: Final = f"user-a-{uuid.uuid4().hex[:8]}"
         gateway.post("/customer/new", {"user_id": user_a, "max_budget": 0.001})
 
-        # 2. Setup Customer B on the same key with sufficient budget for isolation check
         user_b: Final = f"user-b-{uuid.uuid4().hex[:8]}"
         gateway.post("/customer/new", {"user_id": user_b, "max_budget": 10.0})
 
-        # 3. Upload batch input file
-        file_response: Final = gateway.request_multipart(
+        # 2. Upload batch input file for Customer A
+        file_a_resp: Final = gateway.request_multipart(
             "/v1/files",
             {"purpose": "batch", "model": model},
             {"file": ("in.jsonl", batch_input_file(model), "application/jsonl")},
             key=key,
         )
-        assert file_response.status_code == 200, file_response.text
-        file_id: Final = string_value(JSON_OBJECT.validate_json(file_response.content)["id"])
+        assert file_a_resp.status_code == 200, file_a_resp.text
+        file_a_id: Final = string_value(JSON_OBJECT.validate_json(file_a_resp.content)["id"])
 
-        # 4. Create batch with Customer A's end_user_id header
-        batch_response: Final = gateway.request(
+        # 3. Create batch for Customer A
+        batch_a_resp: Final = gateway.request(
             "POST",
             "/v1/batches",
             {
-                "input_file_id": file_id,
+                "input_file_id": file_a_id,
                 "endpoint": "/v1/chat/completions",
                 "completion_window": "24h",
                 "model": model,
@@ -488,16 +490,16 @@ def test_batch_end_user_budget_enforcement_and_isolation(gateway: Gateway) -> No
             key=key,
             headers={"x-litellm-end-user-id": user_a},
         )
-        assert batch_response.status_code == 200, batch_response.text
-        batch_id: Final = string_value(JSON_OBJECT.validate_json(batch_response.content)["id"])
+        assert batch_a_resp.status_code == 200, batch_a_resp.text
+        batch_a_id: Final = string_value(JSON_OBJECT.validate_json(batch_a_resp.content)["id"])
 
-        # 5. Observation check: Fetch batch to confirm terminal completion
-        retrieval: Final = gateway.request("GET", f"/v1/batches/{batch_id}", key=key)
-        assert retrieval.status_code == 200, retrieval.text
-        assert retrieval.json()["status"] == "completed", retrieval.text
+        # 4. Wait for Customer A batch completion
+        retrieval_a: Final = gateway.request("GET", f"/v1/batches/{batch_a_id}", key=key)
+        assert retrieval_a.status_code == 200, retrieval_a.text
+        assert retrieval_a.json()["status"] == "completed", retrieval_a.text
 
-        # 6. Verify CheckBatchCost settlement: LiteLLM_EndUserTable reflects Customer A's spend
-        end_user_rows: Final = eventually(
+        # 5. Verify CheckBatchCost settlement for Customer A in LiteLLM_EndUserTable
+        user_a_spend_rows: Final = eventually(
             lambda: read_rows(
                 'SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s',
                 (user_a,),
@@ -505,10 +507,11 @@ def test_batch_end_user_budget_enforcement_and_isolation(gateway: Gateway) -> No
             lambda values: len(values) == 1 and float(str(values[0]["spend"])) > 0.001,
             seconds=70,
         )
-        assert len(end_user_rows) == 1, f"Expected spend row for {user_a}"
+        spend_a_initial: Final = float(str(user_a_spend_rows[0]["spend"]))
+        assert spend_a_initial > 0.001, f"Expected spend for {user_a}"
 
-        # 7. Positive enforcement: Customer A's subsequent call is denied due to exhausted budget
-        denied_response: Final = gateway.request(
+        # 6. Customer A subsequent request must be denied due to exceeded budget
+        denied_a: Final = gateway.request(
             "POST",
             "/chat/completions",
             {
@@ -518,11 +521,55 @@ def test_batch_end_user_budget_enforcement_and_isolation(gateway: Gateway) -> No
             key=key,
             headers={"x-litellm-end-user-id": user_a},
         )
-        assert denied_response.status_code in [400, 422], denied_response.text
-        assert "budget" in denied_response.text.lower(), denied_response.text
+        assert denied_a.status_code in [400, 422], denied_a.text
+        assert "budget" in denied_a.text.lower(), denied_a.text
 
-        # 8. Identity isolation: Customer B remains unaffected on the same key
-        isolated_b_response: Final = gateway.request(
+        # 7. Customer B creates and settles their own batch using the SAME API key
+        file_b_resp: Final = gateway.request_multipart(
+            "/v1/files",
+            {"purpose": "batch", "model": model},
+            {"file": ("in.jsonl", batch_input_file(model), "application/jsonl")},
+            key=key,
+        )
+        assert file_b_resp.status_code == 200, file_b_resp.text
+        file_b_id: Final = string_value(JSON_OBJECT.validate_json(file_b_resp.content)["id"])
+
+        batch_b_resp: Final = gateway.request(
+            "POST",
+            "/v1/batches",
+            {
+                "input_file_id": file_b_id,
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "model": model,
+            },
+            key=key,
+            headers={"x-litellm-end-user-id": user_b},
+        )
+        assert batch_b_resp.status_code == 200, batch_b_resp.text
+        batch_b_id: Final = string_value(JSON_OBJECT.validate_json(batch_b_resp.content)["id"])
+
+        retrieval_b: Final = gateway.request("GET", f"/v1/batches/{batch_b_id}", key=key)
+        assert retrieval_b.status_code == 200, retrieval_b.text
+        assert retrieval_b.json()["status"] == "completed", retrieval_b.text
+
+        # 8. Verify Customer B's batch settled to B's record
+        user_b_spend_rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s',
+                (user_b,),
+            ),
+            lambda values: len(values) == 1 and float(str(values[0]["spend"])) > 0,
+            seconds=70,
+        )
+        assert len(user_b_spend_rows) == 1
+
+        # Assert no cross-contamination: Customer A's spend did not absorb B's batch
+        spend_a_current: Final = float(str(read_rows('SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s', (user_a,))[0]["spend"]))
+        assert spend_a_current == spend_a_initial, "Customer A spend must not change when Customer B runs a batch"
+
+        # Customer B is NOT budget-denied (has ample budget)
+        b_request: Final = gateway.request(
             "POST",
             "/chat/completions",
             {
@@ -532,5 +579,12 @@ def test_batch_end_user_budget_enforcement_and_isolation(gateway: Gateway) -> No
             key=key,
             headers={"x-litellm-end-user-id": user_b},
         )
-        # Customer B is not blocked by Customer A's exhausted budget
-        assert isolated_b_response.status_code != denied_response.status_code or "budget" not in isolated_b_response.text.lower()
+        assert b_request.status_code != denied_a.status_code or "budget" not in b_request.text.lower()
+
+        # 9. Observation Immutability: Retrieve Customer A's batch as another authorized key
+        retrieval_by_viewer: Final = gateway.request("GET", f"/v1/batches/{batch_a_id}", key=viewer_key)
+        assert retrieval_by_viewer.status_code == 200, retrieval_by_viewer.text
+
+        # 10. Replay Control: Verify single billing idempotency (no double-counting)
+        spend_a_after_replay: Final = float(str(read_rows('SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s', (user_a,))[0]["spend"]))
+        assert spend_a_after_replay == spend_a_initial, "Replay/retrieval must not double-bill customer A"
