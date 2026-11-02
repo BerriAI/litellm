@@ -168,13 +168,14 @@ class SpendCounterReseed:
         requests that read the counter cold before that add landed. A request joins an add that started after its read
         came back and gets its result, and starts or joins another add when that one fails or is cancelled. When an add
         landed after its read went out, or one that started before its read came back finishes, the request re-reads
-        the counter and adds again only if the counter is gone. A request waits on other requests' adds and on a
-        re-read for at most ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS`` in all and then adds its own. A request on another
-        event loop than the add in flight, one that finds the Redis circuit breaker not closed, and each other process,
-        still add their own cached spend."""
+        the counter and adds again only if the counter is gone. A request waits on other requests' adds for at most
+        ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS`` in all, has that long again to finish a re-read, and then adds its own.
+        A request on another event loop than the add in flight, one that finds the Redis circuit breaker not closed, and
+        each other process, still add their own cached spend."""
         seed: Final = _cached_spend_seed(spend_counter_cache, counter_key)
         loop: Final = asyncio.get_running_loop()
         join_by: Final = loop.time() + SPEND_COUNTER_COLD_SEED_JOIN_SECONDS
+        re_read_by: Final = join_by + SPEND_COUNTER_COLD_SEED_JOIN_SECONDS
 
         async def add_unless_covered(cold: SpendCounterRead) -> float | None:
             in_flight: Final = seed.in_flight
@@ -186,7 +187,7 @@ class SpendCounterReseed:
                 forget_spend_counter(counter_key)
                 sent_at: Final = spend_counter_tick()
                 try:
-                    warm: Final = await asyncio.wait_for(is_warm(), timeout=max(0.0, join_by - loop.time()))
+                    warm: Final = await asyncio.wait_for(is_warm(), timeout=max(0.0, re_read_by - loop.time()))
                 except asyncio.TimeoutError:
                     return await seed.run(add)
                 if warm:

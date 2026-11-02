@@ -25,7 +25,7 @@ import asyncio
 import threading
 from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Final, Literal, cast
+from typing import ClassVar, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
@@ -2824,6 +2824,35 @@ async def test_a_request_that_read_the_counter_while_a_seed_was_in_flight_does_n
     during: Final = asyncio.ensure_future(_cold_start(redis, counter))
     for _ in range(10):
         await asyncio.sleep(0)
+    redis.releases[0].set()
+    await asyncio.gather(first, during)
+
+    assert redis.values[counter] == 6.0
+
+
+class _SlowGetRedis(_HeldIncrementRedis):
+    """Also takes ``SECONDS`` to answer a GET."""
+
+    SECONDS: ClassVar[float] = 0.2
+
+    async def async_get_cache(self, key: str, **_: object) -> float | None:
+        await asyncio.sleep(self.SECONDS)
+        return await super().async_get_cache(key)
+
+
+@pytest.mark.asyncio
+async def test_a_seed_that_lands_late_in_the_wait_leaves_time_to_re_read_the_counter_instead_of_adding_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = "spend:end_user:late-landing-seed"
+    monkeypatch.setattr(spend_counter_reseed, "SPEND_COUNTER_COLD_SEED_JOIN_SECONDS", 0.5)
+    redis: Final = _SlowGetRedis(held_increments=1)
+    _process(monkeypatch, redis, cached_spend=6.0)
+
+    first: Final = asyncio.ensure_future(_cold_start(redis, counter))
+    await redis.arrived[0].wait()
+    during: Final = asyncio.ensure_future(_cold_start(redis, counter))
+    await asyncio.sleep(0.4)
     redis.releases[0].set()
     await asyncio.gather(first, during)
 
