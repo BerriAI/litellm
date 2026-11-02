@@ -171,6 +171,8 @@ def codex_shared_cache() -> _SharedCache:
 
 
 def _may_call_litellm_responses(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    if not RouteChecks.is_allowed_on_proxy(_LITELLM_RESPONSES_PATH):
+        return False
     try:
         _ = RouteChecks.should_call_route(route=_LITELLM_RESPONSES_PATH, valid_token=user_api_key_dict)
         if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:

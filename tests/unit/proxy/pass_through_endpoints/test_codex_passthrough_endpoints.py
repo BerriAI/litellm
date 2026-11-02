@@ -791,6 +791,47 @@ def test_admin_only_v1_responses_keeps_litellm_models_to_proxy_admins_on_native_
     assert provider.called is through_litellm
     assert chatgpt.called is not through_litellm
 
+
+@pytest.mark.parametrize(
+    ("allowed_routes", "through_litellm"),
+    [
+        pytest.param(["/backend-api/codex/models", "/backend-api/codex/responses"], False, id="native routes only"),
+        pytest.param(
+            ["/backend-api/codex/models", "/backend-api/codex/responses", "/v1/responses"],
+            True,
+            id="v1 responses allowed too",
+        ),
+    ],
+)
+def test_proxy_allowed_routes_keep_litellm_models_off_native_routes_unless_v1_responses_is_allowed(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    mixed_router: Router,
+    restricted_key: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+    allowed_routes: list[str],
+    through_litellm: bool,
+) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {"allowed_routes": allowed_routes})
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    _account_catalog(respx_mock)
+    provider: Final = _open_weights_provider(respx_mock)
+    chatgpt: Final = _chatgpt_responses(respx_mock)
+    key: Final = restricted_key(["chatgpt-native", "open-weights"])
+    catalog: Final = client.get(
+        "/backend-api/codex/models?client_version=1.0.0", headers={**_ACCOUNT_HEADERS, "x-litellm-api-key": key}
+    )
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={"model": "open-weights", "input": "Hello", "stream": True},
+        headers={**_ACCOUNT_HEADERS, "x-litellm-api-key": key},
+    )
+    assert (catalog.status_code, response.status_code) == (200, 200), response.text
+    assert ("open-weights" in [model["slug"] for model in catalog.json()["models"]]) is through_litellm
+    assert provider.called is through_litellm
+    assert chatgpt.called is not through_litellm
+
+
 _USER_TURN: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]}
 _ASSISTANT_TURN: Final = {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Hi"}]}
 _FIREWORKS_REASONING: Final = {

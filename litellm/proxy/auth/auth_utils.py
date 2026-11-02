@@ -821,7 +821,7 @@ async def pre_db_read_auth_checks(
     Raises:
     - HTTPException if request fails initial auth checks
     """
-    from litellm.proxy.proxy_server import general_settings, llm_router, premium_user
+    from litellm.proxy.proxy_server import general_settings, llm_router
 
     # Check 1. request size
     await check_if_request_size_is_safe(request=request)
@@ -849,19 +849,12 @@ async def pre_db_read_auth_checks(
         )
 
     # Check 4. Check if request route is an allowed route on the proxy
-    if "allowed_routes" in general_settings:
-        _allowed_routes: Final = general_settings["allowed_routes"]
-        if premium_user is not True:
-            verbose_proxy_logger.error(
-                "Trying to set allowed_routes. This is an Enterprise feature. %s",
-                CommonProxyErrors.not_premium_user.value,
-            )
-        if route not in _allowed_routes:
-            verbose_proxy_logger.error("Route %s not in allowed_routes=%s", route, _allowed_routes)
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access forbidden: Route {route} not allowed",
-            )
+    if not RouteChecks.is_allowed_on_proxy(route):
+        verbose_proxy_logger.error("Route %s not in allowed_routes=%s", route, general_settings["allowed_routes"])
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access forbidden: Route {route} not allowed",
+        )
 
 
 def route_in_additonal_public_routes(current_route: str):
