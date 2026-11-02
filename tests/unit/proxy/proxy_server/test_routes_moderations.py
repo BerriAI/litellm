@@ -7,12 +7,16 @@ Pins (PR2):
 
 from __future__ import annotations
 
-from typing import Final
+import contextlib
+from typing import TYPE_CHECKING, Callable, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from litellm.proxy import proxy_server
+
+if TYPE_CHECKING:
+    from fastapi.testclient import TestClient
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -112,7 +116,11 @@ def test_moderation_error(client, auth_as, moderation_pipeline_raises, path):
     assert len(response.content) > 0
 
 
-def test_a_provider_rejection_logs_the_moderation_call_type(client, auth_as, failed_spend_row):
+def test_a_provider_rejection_logs_the_moderation_call_type(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[object]],
+    failed_spend_row: Callable[[], tuple[str, str]],
+) -> None:
     with auth_as():
         response: Final = client.post("/v1/moderations", json={"model": "omni-moderation", "input": ["one", "two"]})
     assert response.status_code == 400, response.text

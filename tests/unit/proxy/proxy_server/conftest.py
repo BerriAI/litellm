@@ -17,6 +17,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 if TYPE_CHECKING:
+    import respx
+
     from litellm import Router
 
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
@@ -566,7 +568,9 @@ def openai_only_router(monkeypatch: pytest.MonkeyPatch) -> Router:
 
 
 @pytest.fixture
-def failed_spend_row(monkeypatch: pytest.MonkeyPatch, respx_mock: Any) -> Iterator[Callable[[], tuple[str, str]]]:
+def failed_spend_row(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> Iterator[Callable[[], tuple[str, str]]]:
     """Route tts-1, whisper-1 and omni-moderation to an OpenAI deployment whose provider answers 400,
     and return a reader for the (status, call_type) of the spend row the failure wrote."""
     import litellm
