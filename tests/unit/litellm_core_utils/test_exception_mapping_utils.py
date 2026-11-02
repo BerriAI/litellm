@@ -16,10 +16,10 @@ from litellm.exceptions import GuardrailRaisedException
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     _get_body_error_code,
+    _get_error_message_with_request_id,
     _get_response_headers,
     exception_type,
     extract_and_raise_litellm_exception,
-    get_error_message,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -586,7 +586,7 @@ class _FakeErrorObj:
             self.request_id = request_id
 
 
-def test_get_error_message_appends_top_level_request_id():
+def test_error_message_with_request_id_appends_top_level_request_id():
     """DashScope/Bailian returns `request_id` as a top-level sibling of
     `error` in the response body. Extracting only `error.message` dropped it
     from the final error text (issue #47839)."""
@@ -602,39 +602,39 @@ def test_get_error_message_appends_top_level_request_id():
         }
     )
 
-    assert get_error_message(error_obj=error_obj) == (
+    assert _get_error_message_with_request_id(error_obj=error_obj) == (
         "Incorrect API key provided. (request_id: 343604ce-3795-9363-8be6-f4aa3f4613ee)"
     )
 
 
-def test_get_error_message_appends_request_id_for_flat_body():
+def test_error_message_with_request_id_appends_request_id_for_flat_body():
     error_obj = _FakeErrorObj(body={"message": "Something went wrong", "request_id": "req_flat_123"})
 
-    assert get_error_message(error_obj=error_obj) == "Something went wrong (request_id: req_flat_123)"
+    assert _get_error_message_with_request_id(error_obj=error_obj) == "Something went wrong (request_id: req_flat_123)"
 
 
-def test_get_error_message_appends_nested_error_request_id():
+def test_error_message_with_request_id_appends_nested_error_request_id():
     error_obj = _FakeErrorObj(body={"error": {"message": "Bad request", "request_id": "req_nested_456"}})
 
-    assert get_error_message(error_obj=error_obj) == "Bad request (request_id: req_nested_456)"
+    assert _get_error_message_with_request_id(error_obj=error_obj) == "Bad request (request_id: req_nested_456)"
 
 
-def test_get_error_message_with_non_dict_body_returns_none():
+def test_error_message_with_request_id_with_non_dict_body_returns_none():
     error_obj = _FakeErrorObj(body="not-a-dict")
 
-    assert get_error_message(error_obj=error_obj) is None
+    assert _get_error_message_with_request_id(error_obj=error_obj) is None
 
 
-def test_get_error_message_without_request_id_is_unchanged():
+def test_error_message_with_request_id_without_request_id_is_unchanged():
     error_obj = _FakeErrorObj(body={"error": {"message": "Plain error", "code": "some_code"}})
 
-    assert get_error_message(error_obj=error_obj) == "Plain error"
+    assert _get_error_message_with_request_id(error_obj=error_obj) == "Plain error"
 
 
-def test_get_error_message_does_not_duplicate_request_id():
+def test_error_message_with_request_id_does_not_duplicate_request_id():
     error_obj = _FakeErrorObj(body={"message": "Failed (request_id: req_dup_1)", "request_id": "req_dup_1"})
 
-    assert get_error_message(error_obj=error_obj) == "Failed (request_id: req_dup_1)"
+    assert _get_error_message_with_request_id(error_obj=error_obj) == "Failed (request_id: req_dup_1)"
 
 
 def test_dashscope_auth_error_message_includes_provider_request_id():
