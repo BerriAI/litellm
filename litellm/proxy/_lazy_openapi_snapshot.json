@@ -15632,6 +15632,205 @@
           "title": "ApplyGuardrailResponse",
           "type": "object"
         },
+        "ArkConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "dlp": {
+              "default": "redact",
+              "enum": [
+                "off",
+                "block",
+                "redact"
+              ],
+              "title": "Dlp",
+              "type": "string"
+            },
+            "dlp_mode": {
+              "default": "balanced",
+              "enum": [
+                "strict",
+                "balanced",
+                "recall"
+              ],
+              "title": "Dlp Mode",
+              "type": "string"
+            },
+            "dlp_sources": {
+              "default": [
+                "user_input",
+                "tool_call",
+                "tool_result"
+              ],
+              "items": {
+                "enum": [
+                  "user_input",
+                  "tool_call",
+                  "tool_result"
+                ],
+                "type": "string"
+              },
+              "title": "Dlp Sources",
+              "type": "array"
+            },
+            "max_findings": {
+              "default": 10000,
+              "exclusiveMinimum": 0.0,
+              "title": "Max Findings",
+              "type": "integer"
+            },
+            "max_input_bytes": {
+              "default": 1048576,
+              "exclusiveMinimum": 0.0,
+              "title": "Max Input Bytes",
+              "type": "integer"
+            },
+            "max_queued": {
+              "default": 8,
+              "minimum": 0.0,
+              "title": "Max Queued",
+              "type": "integer"
+            },
+            "native_pi": {
+              "default": true,
+              "title": "Native Pi",
+              "type": "boolean"
+            },
+            "pi_sources": {
+              "default": [
+                "user_input",
+                "tool_result"
+              ],
+              "items": {
+                "enum": [
+                  "user_input",
+                  "tool_call",
+                  "tool_result"
+                ],
+                "type": "string"
+              },
+              "title": "Pi Sources",
+              "type": "array"
+            },
+            "pii": {
+              "default": "redact",
+              "enum": [
+                "off",
+                "block",
+                "redact"
+              ],
+              "title": "Pii",
+              "type": "string"
+            },
+            "pii_mode": {
+              "default": "balanced",
+              "enum": [
+                "strict",
+                "balanced",
+                "recall"
+              ],
+              "title": "Pii Mode",
+              "type": "string"
+            },
+            "pii_sources": {
+              "default": [
+                "user_input",
+                "tool_call",
+                "tool_result"
+              ],
+              "items": {
+                "enum": [
+                  "user_input",
+                  "tool_call",
+                  "tool_result"
+                ],
+                "type": "string"
+              },
+              "title": "Pii Sources",
+              "type": "array"
+            },
+            "queue_timeout": {
+              "default": 0.5,
+              "exclusiveMinimum": 0.0,
+              "title": "Queue Timeout",
+              "type": "number"
+            },
+            "rules": {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "title": "Rules",
+              "type": "object"
+            },
+            "wolf": {
+              "$ref": "#/components/schemas/ArkWolfConfig"
+            }
+          },
+          "title": "ArkConfig",
+          "type": "object"
+        },
+        "ArkWolfConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "backend": {
+              "default": "off",
+              "enum": [
+                "off",
+                "local",
+                "api"
+              ],
+              "title": "Backend",
+              "type": "string"
+            },
+            "batch_size": {
+              "default": 1,
+              "minimum": 1.0,
+              "title": "Batch Size",
+              "type": "integer"
+            },
+            "bundle_dir": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bundle Dir"
+            },
+            "overlap_tokens": {
+              "default": 0,
+              "minimum": 0.0,
+              "title": "Overlap Tokens",
+              "type": "integer"
+            },
+            "precision": {
+              "default": "fp16",
+              "enum": [
+                "auto",
+                "fp16",
+                "int8_int4"
+              ],
+              "title": "Precision",
+              "type": "string"
+            },
+            "threshold": {
+              "default": 0.8,
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Threshold",
+              "type": "number"
+            },
+            "window_tokens": {
+              "default": 256,
+              "minimum": 3.0,
+              "title": "Window Tokens",
+              "type": "integer"
+            }
+          },
+          "title": "ArkWolfConfig",
+          "type": "object"
+        },
         "BaseLitellmParams": {
           "additionalProperties": true,
           "properties": {
@@ -17545,6 +17744,17 @@
               ],
               "description": "Application ID for Noma Security. Defaults to 'litellm' if not provided",
               "title": "Application Id"
+            },
+            "ark": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ArkConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Patronus Ark local checks and Wolf Defender settings"
             },
             "assertions": {
               "anyOf": [

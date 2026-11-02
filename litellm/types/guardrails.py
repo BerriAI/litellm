@@ -50,6 +50,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
 from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import (
     OvalixGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.patronus_ark import PatronusArkConfigModel
 from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
     PromptGuardConfigModel,
 )
@@ -150,6 +151,7 @@ class SupportedGuardrailIntegrations(Enum):
     RUBRIK = "rubrik"
     VIGIL_GUARD = "vigil_guard"
     REPELLOAI = "repelloai"
+    PATRONUS_ARK = "patronus_ark"
     SINGULR = "singulr"
     HEADROOM = "headroom"
     COMPRESR = "compresr"
@@ -1422,6 +1424,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     RecoConfigModel,
     Agent365GuardrailConfigModel,
     WingbackGuardrailConfigModel,
+    PatronusArkConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     decision_model: str | None = Field(
