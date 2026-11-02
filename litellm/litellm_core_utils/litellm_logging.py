@@ -211,7 +211,7 @@ from litellm.types.utils import (
     batch_chat_usage,
 )
 from litellm.types.videos.main import VideoObject
-from litellm.utils import get_base_model_from_metadata, print_verbose
+from litellm.utils import get_base_model_from_metadata, get_model_info_for_pricing, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
@@ -7114,7 +7114,7 @@ class StandardLoggingPayloadSetup:
             model_cost_information = StandardLoggingModelInformation(model_map_key="", model_map_value=None)
         else:
             try:
-                _model_cost_information: Final = litellm.get_model_info(
+                _model_cost_information: Final = get_model_info_for_pricing(
                     model=pricing_model_name or model_cost_name,
                     custom_llm_provider=custom_llm_provider,
                     api_base=api_base,

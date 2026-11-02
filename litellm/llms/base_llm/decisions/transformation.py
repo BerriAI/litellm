@@ -60,6 +60,7 @@ from litellm.types.decisions import (
     systemone_choice_key,
 )
 from litellm.types.utils import is_decisions_model_mode
+from litellm.utils import get_model_info_helper
 
 _PAYLOAD_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
 _SYSTEMONE_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(DecisionsResponse)
@@ -500,7 +501,9 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
 
 def catalog_mode(model: str, custom_llm_provider: str) -> str | None:
     try:
-        key: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)["key"]
+        key: Final = get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider, catalog_only=True)[
+            "key"
+        ]
     except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which the catalog does not list
         return None
     entry: Final = GetModelCostMap.loaded_model_cost_map().get(key)
@@ -510,7 +513,9 @@ def catalog_mode(model: str, custom_llm_provider: str) -> str | None:
 
 def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
     try:
-        model_mode: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get("mode")
+        model_mode: Final = get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider, catalog_only=True
+        ).get("mode")
     except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which has no mode
         return False
     return is_decisions_model_mode(model_mode)
