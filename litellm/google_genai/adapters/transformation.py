@@ -1,5 +1,7 @@
 import json
+from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from enum import Enum
 from itertools import chain, count, groupby
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypeVar, cast
@@ -58,12 +60,6 @@ class _GenAIFunctionCall(TypedDict):
     id: NotRequired[ReadOnly[str]]
     name: ReadOnly[str]
     args: ReadOnly[Mapping[str, object]]
-
-
-class _PendingToolCall(NamedTuple):
-    call_id: str
-    explicit_id: str | None
-    default_id: str
 
 
 class _GenAIPart(TypedDict, total=False):
@@ -294,14 +290,68 @@ def _genai_content_entries(content: object) -> Iterator[_ContentEntry]:
     )
 
 
+class _PendingQueueKind(Enum):
+    EXPLICIT = "explicit"
+    OMITTED = "omitted"
+    DEFAULT = "default"
+
+
+class _PendingToolCalls:
+    # Each call is queued under its own ID (or as ID-less) and under its function name, so a response
+    # resolves in O(1) without scanning every unanswered call. Matching through one queue leaves a stale
+    # entry in the other; _unmatched lets _pop skip those lazily instead of removing them eagerly.
+    def __init__(self) -> None:
+        self._unmatched: Final = set[str]()
+        self._queues: Final = defaultdict[tuple[_PendingQueueKind, str], deque[str]](deque)
+
+    def clear(self) -> None:
+        self._unmatched.clear()
+        self._queues.clear()
+
+    def add(self, call_id: str, explicit_id: str | None, default_id: str) -> None:
+        self._unmatched.add(call_id)
+        self._queues[_PendingQueueKind.DEFAULT, default_id].append(call_id)
+        bucket: Final = _PendingQueueKind.EXPLICIT if explicit_id is not None else _PendingQueueKind.OMITTED
+        self._queues[bucket, explicit_id if explicit_id is not None else default_id].append(call_id)
+
+    def _claim(self, call_id: str) -> str | None:
+        if call_id not in self._unmatched:
+            return None
+        self._unmatched.remove(call_id)
+        return call_id
+
+    def _pop(self, kind: _PendingQueueKind, key: str) -> str | None:
+        queue: Final = self._queues.get((kind, key))
+        while queue:
+            if (claimed := self._claim(queue.popleft())) is not None:
+                return claimed
+        return None
+
+    def resolve(self, response: _GenAIFunctionResponse) -> str:
+        explicit_id: Final = response.get("id") or None
+        default_id: Final = _default_tool_call_id(response.get("name"))
+        if explicit_id is not None:
+            # A client ID can coincide with a suffix generated for another call, so the client's own call wins.
+            return self._pop(_PendingQueueKind.EXPLICIT, explicit_id) or self._claim(explicit_id) or explicit_id
+        # ID-less calls go first so that calls with an ID stay available to the responses echoing it.
+        return (
+            self._pop(_PendingQueueKind.OMITTED, default_id)
+            or self._pop(_PendingQueueKind.DEFAULT, default_id)
+            or default_id
+        )
+
+
 def _reconcile_tool_call_ids(contents: Iterable[object]) -> Iterator[AllMessageValues]:
     # Providers such as Anthropic and OpenAI reject a request whose tool call IDs repeat, but Gemini
     # clients may omit functionCall.id / functionResponse.id or reuse the same ID in later turns.
     used_ids: Final = set[str]()
-    pending: Final = list[_PendingToolCall]()
+    # used_ids only grows, so resuming each base ID's suffix counter never skips a free suffix and keeps
+    # repeated tool calls from rescanning every earlier suffix.
+    suffix_counters: Final = defaultdict[str, Iterator[int]](lambda: count(2))
+    pending: Final = _PendingToolCalls()
 
     def next_unique_id(base_id: str) -> str:
-        candidates: Final = chain((base_id,), (f"{base_id}_{n}" for n in count(2)))
+        candidates: Final = (f"{base_id}_{n}" for n in suffix_counters[base_id]) if base_id in used_ids else (base_id,)
         unique_id: Final = next(candidate for candidate in candidates if candidate not in used_ids)
         used_ids.add(unique_id)
         return unique_id
@@ -310,33 +360,8 @@ def _reconcile_tool_call_ids(contents: Iterable[object]) -> Iterator[AllMessageV
         default_id: Final = _default_tool_call_id(call["function"].get("name"))
         explicit_id: Final = call["id"] or None
         call_id: Final = next_unique_id(explicit_id or default_id)
-        pending.append(_PendingToolCall(call_id=call_id, explicit_id=explicit_id, default_id=default_id))
+        pending.add(call_id=call_id, explicit_id=explicit_id, default_id=default_id)
         return ChatCompletionAssistantToolCall(id=call_id, type=call["type"], function=call["function"])
-
-    def pop_pending(*predicates: Callable[[_PendingToolCall], bool]) -> str | None:
-        for predicate in predicates:
-            for index, item in enumerate(pending):
-                if predicate(item):
-                    return pending.pop(index).call_id
-        return None
-
-    def resolve_response_id(response: _GenAIFunctionResponse) -> str:
-        explicit_id: Final = response.get("id") or None
-        default_id: Final = _default_tool_call_id(response.get("name"))
-        if explicit_id is not None:
-            # A client ID can coincide with a suffix generated for another call, so the client's own call wins.
-            return (
-                pop_pending(lambda item: item.explicit_id == explicit_id, lambda item: item.call_id == explicit_id)
-                or explicit_id
-            )
-        # ID-less calls go first so that calls with an ID stay available to the responses echoing it.
-        return (
-            pop_pending(
-                lambda item: item.explicit_id is None and item.default_id == default_id,
-                lambda item: item.default_id == default_id,
-            )
-            or default_id
-        )
 
     entries: Final = chain.from_iterable(_genai_content_entries(content) for content in contents)
     # Consecutive model contents form one turn (e.g. streamed parallel calls recorded chunk by chunk),
@@ -354,7 +379,7 @@ def _reconcile_tool_call_ids(contents: Iterable[object]) -> Iterator[AllMessageV
             elif message["role"] == "tool" and response is not None:
                 yield ChatCompletionToolMessage(
                     role="tool",
-                    tool_call_id=resolve_response_id(response),
+                    tool_call_id=pending.resolve(response),
                     content=message["content"],
                 )
             else:
