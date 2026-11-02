@@ -4343,7 +4343,7 @@ class ProxyLogging:
         data: dict,
         response: LLMResponseTypes,
         user_api_key_dict: UserAPIKeyAuth,
-        merge_model_level_guardrails: bool = True,
+        guardrails_only: bool = False,
     ):
         """
         Allow user to modify outgoing data
@@ -4354,8 +4354,9 @@ class ProxyLogging:
         3. /image/generation
         4. /files
 
-        ``merge_model_level_guardrails`` is off for a request that never reaches a router deployment, so the guardrails
-        of a model that merely shares the body's ``model`` name don't run on it.
+        ``guardrails_only`` is for a relayed response that never reached a router deployment and isn't in the shape the
+        other hooks expect: only the guardrails the request selected run, not the guardrails of a model that merely
+        shares the body's ``model`` name, nor the callbacks that aren't guardrails.
         """
 
         from litellm.proxy.proxy_server import llm_router
@@ -4374,9 +4375,7 @@ class ProxyLogging:
         try:
             # Merge model-level guardrails before checking which guardrails to run
             guardrail_data: Final = (
-                check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
-                if merge_model_level_guardrails
-                else data
+                data if guardrails_only else check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
             )
 
             parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = tuple(
@@ -4445,7 +4444,7 @@ class ProxyLogging:
             ############ Handle CustomLogger ###############################
             #################################################################
 
-            for callback in other_callbacks:
+            for callback in () if guardrails_only else other_callbacks:
                 callback_response: LLMResponseTypes | None = await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response
                 )

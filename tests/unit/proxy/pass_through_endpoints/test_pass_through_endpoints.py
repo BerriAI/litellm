@@ -13461,7 +13461,7 @@ class TestInheritAuthGuardrails:
         assert metadata["user_api_key_team_metadata"] == {"opted_out_global_guardrails": ["global-post"]}
 
     @pytest.mark.asyncio
-    async def test_inherited_post_call_pass_skips_model_level_guardrails(self):
+    async def test_inherited_post_call_pass_runs_only_the_guardrails_the_request_selected(self):
         auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
 
         _, post_call = await self._run(
@@ -13471,7 +13471,7 @@ class TestInheritAuthGuardrails:
             guardrails=(self._guardrail("key-guard", GuardrailEventHooks.post_call),),
         )
 
-        assert post_call.call_args.kwargs["merge_model_level_guardrails"] is False
+        assert post_call.call_args.kwargs["guardrails_only"] is True
 
     @pytest.mark.asyncio
     async def test_named_global_guardrail_the_key_opted_out_of_does_not_start_the_post_call_pass(self):

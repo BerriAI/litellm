@@ -2162,7 +2162,7 @@ async def pass_through_request(
                 data=hook_data,
                 user_api_key_dict=user_api_key_dict,
                 response=response_body,
-                merge_model_level_guardrails=not inherit_auth_guardrails,
+                guardrails_only=inherit_auth_guardrails,
             )
             if isinstance(response_body, dict):
                 content = json.dumps(response_body).encode("utf-8")
