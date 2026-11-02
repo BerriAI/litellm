@@ -7327,6 +7327,7 @@ def get_model_info_helper(
                 output_cost_per_second_4k=_model_info.get("output_cost_per_second_4k", None),
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
+                input_cost_per_pixel=_model_info.get("input_cost_per_pixel", None),
                 output_cost_per_pixel=_model_info.get("output_cost_per_pixel", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_image_token_batches=_model_info.get("output_cost_per_image_token_batches", None),
@@ -7531,6 +7532,11 @@ def get_model_info(
             "supported_openai_params": ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"]
         }
     """
+    from litellm.litellm_core_utils.llm_cost_calc.pricing_context import retained_model_info
+
+    retained: Final = retained_model_info(model, custom_llm_provider)
+    if retained is not None:
+        return retained
     # api_key is a per-caller credential, not part of the model identity, so it is
     # kept out of the cache key; explicit keys are resolved without the cache.
     if api_key is not None:

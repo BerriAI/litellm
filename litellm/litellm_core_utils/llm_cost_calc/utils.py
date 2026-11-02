@@ -149,6 +149,19 @@ def _requested_image_size(optional_params: Mapping[str, object] | None) -> str |
     return value.replace("*", "x") if value is not None and _IMAGE_SIZE_PATTERN.fullmatch(value) else None
 
 
+def image_response_size_and_quality(
+    response: ImageResponse,
+    optional_params: Mapping[str, object] | None = None,
+    *,
+    size: str | None = None,
+    quality: str | None = None,
+) -> tuple[str, str]:
+    return (
+        size or response.size or _requested_image_size(optional_params) or "1024-x-1024",
+        quality or response.quality or _requested_image_param(optional_params, "quality") or "standard",
+    )
+
+
 def get_web_search_requests(server_tool_use: object) -> int | None:
     """
     Tolerantly read ``web_search_requests`` from a ``server_tool_use`` value
@@ -2187,11 +2200,8 @@ class CostCalculatorUtils:
             cost_calculator as vertex_ai_image_cost_calculator,
         )
 
-        resolved_size: Final = (
-            size or completion_response.size or _requested_image_size(optional_params) or "1024-x-1024"
-        )
-        resolved_quality: Final = (
-            quality or completion_response.quality or _requested_image_param(optional_params, "quality") or "standard"
+        resolved_size, resolved_quality = image_response_size_and_quality(
+            completion_response, optional_params, size=size, quality=quality
         )
         resolved_n: Final = n if n is not None else (len(completion_response.data) if completion_response.data else 0)
         pricing: Final = deployment_pricing(model_info)
