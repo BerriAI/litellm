@@ -1,6 +1,6 @@
 from asyncio import Future
 from collections.abc import Mapping, Sequence
-from typing import Never, final
+from typing import Literal, Never, NotRequired, TypedDict, final
 
 import httpx
 from pydantic import JsonValue
@@ -218,6 +218,8 @@ __all__ = [
     "NativeDiagnosticProcessor",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
+    "RouterCall",
+    "RouterCoreHandle",
     "RustBridgeDeclined",
     "RustUpstreamError",
     "TokenCounter",
@@ -325,3 +327,184 @@ class NativeCacheHandle:
     def ping(self) -> Future[bool]: ...
     def disconnect(self) -> Future[None]: ...
     def delete(self, keys: Sequence[str]) -> Future[None]: ...
+
+# The FailureKind names an attempt outcome's `kind` takes (router-core `FailureKind`).
+_FailureKind = Literal[
+    "RateLimitError",
+    "ContextWindowExceededError",
+    "ContentPolicyViolationError",
+    "AuthenticationError",
+    "PermissionDeniedError",
+    "NotFoundError",
+    "BadRequestError",
+    "Timeout",
+    "APIConnectionError",
+    "InternalServerError",
+    "ServiceUnavailableError",
+    "GuardrailIntervention",
+    "Declined",
+    "CallerCredentialError",
+    "APIError",
+]
+
+class _AttemptStep(TypedDict):
+    kind: Literal["attempt"]
+    deployment_id: str
+    # The deployment as a `model_list` entry, with its id in `model_info`.
+    deployment: dict[str, JsonValue]
+    # The name this attempt serves: the requested model or the fallback target.
+    model: str
+    model_group: str
+    target_order: int | None
+    candidate_ids: list[str]
+    retry: int
+    fallback_depth: int
+    fallback_level: int
+    timeout: float | None
+
+class _SleepStep(TypedDict):
+    kind: Literal["sleep"]
+    seconds: float
+
+class _AllowFallbackStep(TypedDict):
+    kind: Literal["allow_fallback"]
+    target: str
+
+class _SelectStep(TypedDict):
+    kind: Literal["select"]
+    stage: Literal["plugins", "strategy"]
+    strategy: str | None
+    model_group: str
+    candidates: list[str]
+
+# One RouterCache op against the router's DualCache. `key` is set for every op but `batch_get`,
+# which sets `keys`; `value` is the JSON to store (`set`) or the amount (`increment`); `ttl` is
+# in seconds. Outcomes: get -> the JSON value or None; batch_get -> one JSON value or None per
+# key, in order; increment -> the new int or float; set and delete -> None.
+class _CacheStep(TypedDict):
+    kind: Literal["cache"]
+    op: Literal["get", "set", "increment", "batch_get", "delete"]
+    key: str | None
+    keys: list[str] | None
+    value: JsonValue
+    ttl: float | None
+
+class _DoneStep(TypedDict):
+    kind: Literal["done"]
+    deployment_id: str
+    model_group: str
+    attempted_retries: int
+    attempted_fallbacks: int
+    total_tokens: int
+
+class _FailedStep(TypedDict):
+    kind: Literal["failed"]
+    error: str
+    error_kind: Literal["config", "unknown_model", "no_healthy_deployments", "attempt", "cache", "retired"]
+    attempt_failed: bool
+    status: int | None
+    failure_kind: _FailureKind | None
+
+# The end of a `RouterCoreHandle.select`.
+class _SelectedStep(TypedDict):
+    kind: Literal["done"]
+    deployment_id: str
+    model_group: str
+
+# The end of a `RouterCoreHandle.healthy`.
+class _HealthyStep(TypedDict):
+    kind: Literal["done"]
+    deployment_ids: list[str]
+
+# The end of a `RouterCoreHandle.report_failure`.
+class _ReportedStep(TypedDict):
+    kind: Literal["done"]
+    cooled: bool
+
+# `RouterCoreHandle.resolve`: what a name resolves to.
+class _Resolution(TypedDict):
+    model_group: str
+    kind: str
+    ids: list[str]
+
+_RouterStep = _AttemptStep | _SleepStep | _AllowFallbackStep | _SelectStep | _CacheStep | _DoneStep | _FailedStep
+
+class _AttemptSucceeded(TypedDict):
+    ok: Literal[True]
+    total_tokens: NotRequired[int]
+
+class _AttemptFailed(TypedDict):
+    ok: Literal[False]
+    kind: _FailureKind
+    status: NotRequired[int | None]
+    retry_after: NotRequired[float | None]
+    num_retries: NotRequired[int | None]
+    detail: NotRequired[str | None]
+
+# Each document is a mapping or its JSON text.
+_Document = Mapping[str, object] | str
+
+@final
+class RouterCoreHandle:
+    def __new__(cls, config: _Document, dynamic: _Document) -> RouterCoreHandle: ...
+    def start(self, op: str, request: _Document) -> RouterCall: ...
+    # Driven like `start`; its `done` step is a `_SelectedStep`.
+    def select(self, model: str, request: _Document) -> RouterCall: ...
+    # Driven like `select`; its `done` step is a `_HealthyStep`.
+    def healthy(self, model: str, request: _Document) -> RouterCall: ...
+    # `{"upsert": [deployments], "delete": [ids], "settings": {dynamic document}}`.
+    def apply(self, changes: _Document) -> int: ...
+    def registry_version(self) -> int: ...
+    # A failure the router did not see itself, driven like `start`: cache steps, then a
+    # `_ReportedStep`.
+    def report_failure(
+        self,
+        id: str,
+        failure: Mapping[str, object],
+        deployment_cooldown: bool = False,
+        count_only: bool = False,
+        requested_group: str | None = None,
+        cooldown_time: float | None = None,
+        uncounted: bool = False,
+    ) -> RouterCall: ...
+    # A success a logging callback saw, driven like `report_failure`; `done` carries `key`.
+    def report_success(self, id: str, total_tokens: float, requests: float) -> RouterCall: ...
+    # Count a success against any id, driven like `report_failure`; `done` carries `key`.
+    def count_success(self, id: str) -> RouterCall: ...
+    # [(id, tpm_key, rpm_key)] for this minute, or None for a group with no deployment.
+    def usage_keys(self, model_group: str) -> list[tuple[str, str, str]] | None: ...
+    # Every deployment as a `model_list` entry, in config order.
+    def deployments(self) -> list[dict[str, JsonValue]]: ...
+    def deployment(self, id: str) -> dict[str, JsonValue] | None: ...
+    def resolve(self, name: str, specific_deployment: bool = False) -> _Resolution | None: ...
+    def routable(self, model: str, request: _Document) -> list[dict[str, JsonValue]]: ...
+    # `_get_routing_context` for a pick of `model`: (strategy, scope, group).
+    def routing_context(self, model: str, routing_strategy: str | None = None) -> tuple[str, str, str | None]: ...
+    def retire(self) -> None: ...
+    # A stream that failed before content: what may still take over it, and the retry budget for
+    # a failure of `kind`: {"can_retry", "can_fall_back", "refusal_fallback": bool,
+    # "retry_budget": int | None, "policy_applies": bool}.
+    def stream_policy(
+        self, request: _Document, origin: _Document, kind: str | None = None
+    ) -> dict[str, bool | int | None]: ...
+    # The same-group retry and the fallback walk for such a stream, driven like `start`.
+    def retry_stream(
+        self, op: str, request: _Document, origin: _Document, failure: Mapping[str, object]
+    ) -> RouterCall: ...
+    def fallback_stream(
+        self, op: str, request: _Document, origin: _Document, failure: Mapping[str, object]
+    ) -> RouterCall: ...
+    def retry_policy_retries(self, failure: Mapping[str, object], model_group: str | None = None) -> int | None: ...
+    def allowed_fails_for(self, failure: Mapping[str, object]) -> int | None: ...
+    def should_retry(
+        self, failure: Mapping[str, object], counts: tuple[int, int], fallbacks: tuple[bool, bool, bool]
+    ) -> bool: ...
+
+@final
+class RouterCall:
+    # attempt: _AttemptSucceeded | _AttemptFailed; sleep: None; allow_fallback: bool;
+    # select: the remaining candidate ids, pick first; cache: see _CacheStep; first call: None.
+    # A call from `select` steps through select and cache only, and ends in _SelectedStep or failed.
+    def next(
+        self, outcome: _AttemptSucceeded | _AttemptFailed | bool | Sequence[str] | JsonValue | None
+    ) -> _RouterStep | _SelectedStep | _HealthyStep | _ReportedStep: ...
