@@ -32,6 +32,12 @@ pub trait CredentialSource: Send + Sync + 'static {
     fn fetch(&self) -> SourceFuture<'_>;
 }
 
+impl CredentialSource for Arc<dyn CredentialSource> {
+    fn fetch(&self) -> SourceFuture<'_> {
+        (**self).fetch()
+    }
+}
+
 #[derive(Clone)]
 enum Latest {
     Pending,

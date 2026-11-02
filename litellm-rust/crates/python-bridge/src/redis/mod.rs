@@ -1,4 +1,5 @@
 mod client;
+mod credentials;
 mod events;
 pub(crate) use client::native_redis_breaker_states;
 mod policy;
