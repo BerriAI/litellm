@@ -343,12 +343,12 @@ def _configured_window(row: CodexCatalogRow, stock_model: CodexStockModel) -> Ma
     or nothing, which keeps `stock_model`'s own.
 
     A request to the row can route to any of its deployments, so the window is the smallest one of them
-    takes: its `max_input_tokens` where the operator set one, Codex's own window where not. A limit set
-    on only some deployments can therefore lower the window but never raise it. The window never goes
-    past `stock_model`'s `max_context_window`, the most Codex lets its own `model_context_window`
+    takes: its `max_input_tokens` where the operator set a positive one, Codex's own window where not. A
+    limit set on only some deployments can therefore lower the window but never raise it. The window never
+    goes past `stock_model`'s `max_context_window`, the most Codex lets its own `model_context_window`
     setting raise that model to."""
     per_deployment: Final = row.configured_max_input_tokens
-    declared: Final = tuple(limit for limit in per_deployment if limit is not None)
+    declared: Final = tuple(limit for limit in per_deployment if limit is not None and limit > 0)
     unset_window: Final = () if len(declared) == len(per_deployment) else (stock_model.context_window,)
     if not declared or None in unset_window:
         return MappingProxyType({})

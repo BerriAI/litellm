@@ -252,6 +252,9 @@ _WIDE_STOCK = MappingProxyType(
         ((100000, None), 100000),
         ((None,), 272000),
         ((), 272000),
+        ((0,), 272000),
+        ((-5, 400000), 272000),
+        ((0, 100000), 100000),
     ],
 )
 @pytest.mark.parametrize("alias_defaults", ["codex", "deployment"])
