@@ -13,11 +13,11 @@ import copy
 import itertools
 import os
 import re
-from collections.abc import Callable, Container, Iterable, Mapping, Sequence
+from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar, cast
 from urllib.parse import urlparse
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     tool_call_ids_answered_by_client,
     tool_call_ids_answered_in,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import string_field
 from litellm.llms.anthropic.common_utils import (
     is_claude_code_one_shot_subagent_request,
     supports_anthropic_cache_control,
@@ -72,7 +73,7 @@ MAX_CACHE_CONTROL_BLOCKS: Final = 4
 
 CACHE_BREAKPOINT_KEYS: Final = ("cache_control", "prompt_cache_breakpoint")
 OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION: Final = (5, 6)
-_GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
+_GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+)|-(0|[1-9]\d?)(?![\da-z]))?")
 _FINE_TUNED_BASE_PATTERN: Final = re.compile(r"^ft:([^:]+)")
 _O_SERIES_PATTERN: Final = re.compile(r"^o\d+(?:-|$)")
 OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
@@ -128,7 +129,7 @@ def _message_mark_reaches_provider(fields: Mapping[str, object]) -> bool:
         return False
     return (
         not isinstance(fields.get("content"), list)
-        or fields.get("role") in _ROLES_SENDING_MESSAGE_MARK_WITH_LIST_CONTENT
+        or string_field(fields, "role") in _ROLES_SENDING_MESSAGE_MARK_WITH_LIST_CONTENT
     )
 
 
@@ -334,6 +335,30 @@ def openai_prompt_cache_breakpoint_support(model: str, custom_llm_provider: str 
     return _named_model_breakpoint_support(model)
 
 
+class _DeclaredBaseModels(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+
+    base_model: object = None
+    model_info: object = None
+
+    def names(self) -> tuple[str, ...]:
+        model_info: Final = _validated_object_mapping(self.model_info) or {}
+        candidates: Final = (self.base_model, model_info.get("base_model"))
+        return tuple(name for name in candidates if isinstance(name, str) and name)
+
+
+def deployment_prompt_cache_breakpoint_support(
+    model: str, custom_llm_provider: str, litellm_params: object
+) -> bool | None:
+    """``openai_prompt_cache_breakpoint_support`` for a deployment, read from its declared base model first."""
+    declared: Final = _DeclaredBaseModels.model_validate(litellm_params)
+    supports: Final = (
+        openai_prompt_cache_breakpoint_support(name, custom_llm_provider)
+        for name in dict.fromkeys((*declared.names(), model))
+    )
+    return next((support for support in supports if support is not None), None)
+
+
 def _named_model_breakpoint_support(model: str) -> bool | None:
     bare_model: Final = model.rsplit("/", 1)[-1].lower()
     if _O_SERIES_PATTERN.match(bare_model) is not None:
@@ -341,7 +366,7 @@ def _named_model_breakpoint_support(model: str) -> bool | None:
     version_match: Final = _GPT_VERSION_PATTERN.match(bare_model)
     if version_match is None:
         return None
-    version: Final = (int(version_match.group(1)), int(version_match.group(2) or 0))
+    version: Final = (int(version_match.group(1)), int(version_match.group(2) or version_match.group(3) or 0))
     return version >= OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION
 
 
@@ -445,22 +470,41 @@ def _as_object_list(value: object | None) -> list[object] | None:
     return _validated_object_list(value)
 
 
-def _tool_call_carries_cache_breakpoint(tool_call: object, message: object, answered_tool_ids: Container[str]) -> bool:
+def _server_tool_call_id(tool_call: object) -> str | None:
+    tool_call_id: Final = _attribute_or_key(tool_call, "id")
+    if isinstance(tool_call_id, str) and tool_call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
+        return tool_call_id
+    return None
+
+
+def _tool_call_carries_cache_breakpoint(tool_call: object, client_tool_call_ids: Container[str]) -> bool:
     if _attribute_or_key(tool_call, "cache_control") is None:
         return False
+    server_tool_call_id: Final = _server_tool_call_id(tool_call)
+    return server_tool_call_id is None or server_tool_call_id in client_tool_call_ids
 
-    return not tool_call_is_rebuilt_as_server_tool_use(
-        _attribute_or_key(tool_call, "id"), _attribute_or_key(message, "provider_specific_fields"), answered_tool_ids
+
+def _server_tool_call_ids_without_a_kept_result(message: object) -> Iterator[str]:
+    provider_specific_fields: Final = _attribute_or_key(message, "provider_specific_fields")
+    tool_calls: Final = _as_object_list(_attribute_or_key(message, "tool_calls")) or ()
+    return (
+        tool_call_id
+        for tool_call in tool_calls
+        if (tool_call_id := _server_tool_call_id(tool_call)) is not None
+        and not tool_call_is_rebuilt_as_server_tool_use(tool_call_id, provider_specific_fields)
     )
 
 
-def _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(
+def _client_tool_call_ids_when_a_server_tool_call_is_marked(
     messages: Sequence[object], model: str | None = None, custom_llm_provider: str | None = None
 ) -> frozenset[str]:
     if not _marks_a_server_tool_call(messages):
         return frozenset()
     if model is not None and not _builds_anthropic_messages(model, custom_llm_provider):
-        return tool_call_ids_answered_in(messages)
+        server_calls_sent_as_client_calls: Final = itertools.chain.from_iterable(
+            map(_server_tool_call_ids_without_a_kept_result, messages)
+        )
+        return tool_call_ids_answered_in(messages) | frozenset(server_calls_sent_as_client_calls)
     return tool_call_ids_answered_by_client(messages, _keeps_mid_conversation_system(model, custom_llm_provider))
 
 
@@ -517,12 +561,7 @@ def _model_info_flags_mid_conversation_system(model: str, custom_llm_provider: s
 
 
 def _is_marked_server_tool_call(tool_call: object) -> bool:
-    tool_call_id: Final = _attribute_or_key(tool_call, "id")
-    return (
-        isinstance(tool_call_id, str)
-        and tool_call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
-        and _attribute_or_key(tool_call, "cache_control") is not None
-    )
+    return _server_tool_call_id(tool_call) is not None and _attribute_or_key(tool_call, "cache_control") is not None
 
 
 def _tool_carries_cache_breakpoint(tool: object) -> bool:
@@ -668,7 +707,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         reserved_blocks: Final = AnthropicCacheControlHook._blocks_reserved_outside_messages(
             remaining_points, external_breakpoints, openai_dialect
         )
-        answered_tool_ids: Final = _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(
+        answered_tool_ids: Final = _client_tool_call_ids_when_a_server_tool_call_is_marked(
             processed_messages, model, custom_llm_provider
         )
         breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(
@@ -757,7 +796,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
         message_list: Final = tuple(messages)
         client_answers: Final = (
-            _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(message_list)
+            _client_tool_call_ids_when_a_server_tool_call_is_marked(message_list)
             if answered_tool_ids is None
             else answered_tool_ids
         )
@@ -849,7 +888,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         so earlier points win when slots are scarce.
         """
         client_answers: Final = (
-            _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(messages)
+            _client_tool_call_ids_when_a_server_tool_call_is_marked(messages)
             if answered_tool_ids is None
             else answered_tool_ids
         )
@@ -939,11 +978,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         content_count: Final = sum(1 for block in content if _carries_cache_breakpoint(block)) if content else 0
         tool_calls: Final = _as_object_list(_attribute_or_key(message, "tool_calls"))
         tool_call_count: Final = (
-            sum(
-                1
-                for tool_call in tool_calls
-                if _tool_call_carries_cache_breakpoint(tool_call, message, answered_tool_ids)
-            )
+            sum(1 for tool_call in tool_calls if _tool_call_carries_cache_breakpoint(tool_call, answered_tool_ids))
             if tool_calls
             else 0
         )

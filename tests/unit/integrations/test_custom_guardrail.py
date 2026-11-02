@@ -4,6 +4,8 @@ import datetime as dt
 import json
 import pickle
 import threading
+import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 from unittest.mock import AsyncMock
 
@@ -3799,6 +3801,24 @@ def test_default_on_guardrail() -> None:
             GuardrailEventHooks.pre_call,
         )
         is True
+    )
+
+
+def test_merged_guardrail_entries_stays_close_to_a_plain_dedup_on_a_large_list():
+    from litellm.integrations.custom_guardrail import merged_guardrail_entries
+
+    names: Final = [f"g{index}" for index in range(300_000)]
+
+    def _best_cpu_seconds(run: Callable[[], object]) -> float:
+        def _timed() -> float:
+            started: Final = time.process_time()
+            run()
+            return time.process_time() - started
+
+        return min(_timed() for _ in range(3))
+
+    assert _best_cpu_seconds(lambda: merged_guardrail_entries(names)) < 25 * _best_cpu_seconds(
+        lambda: list(dict.fromkeys(names))
     )
 
 

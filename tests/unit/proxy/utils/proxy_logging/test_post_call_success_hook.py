@@ -60,6 +60,27 @@ async def test_post_call_success_hook_runs_other_callback_and_replaces_response(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("merge", "guardrails_seen"), [(True, ["key-guard", "model-guard"]), (False, ["key-guard"])])
+async def test_post_call_success_hook_merges_model_level_guardrails_unless_told_not_to(
+    proxy_logging, make_user_api_key_auth, monkeypatch, merge, guardrails_seen
+):
+    router = MagicMock()
+    router.registry.return_value.deployments.return_value = [{"litellm_params": {"guardrails": ["model-guard"]}}]
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    g = _make_guardrail(should_run=False)
+    monkeypatch.setattr(litellm, "callbacks", [g])
+
+    await proxy_logging.post_call_success_hook(
+        data={"model": "alias", "metadata": {"guardrails": ["key-guard"]}},
+        response=MagicMock(),
+        user_api_key_dict=make_user_api_key_auth(),
+        merge_model_level_guardrails=merge,
+    )
+
+    assert g.should_run_guardrail.call_args.kwargs["data"]["metadata"]["guardrails"] == guardrails_seen
+
+
+@pytest.mark.asyncio
 async def test_post_call_success_hook_guardrail_should_not_run_skipped(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):

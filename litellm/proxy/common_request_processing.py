@@ -137,6 +137,7 @@ from litellm.proxy.route_llm_request import (
     route_request,
 )
 from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost, prepare_response_cost
+from litellm.proxy.spend_tracking.usage_capture import capture_proxy_response
 from litellm.proxy.telemetry.request_context import bind_call_id as bind_telemetry_call_id
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     ProxyLogging,
@@ -3365,6 +3366,9 @@ class ProxyBaseLLMRequestProcessing:
                         _REQUEST_FIELDS.validate_python(request_metadata_bucket), logging_obj
                     )
                 ),
+            )
+            await capture_proxy_response(
+                logging_obj, response, background=_REQUEST_FIELDS.validate_python(self.data).get("background") is True
             )
         except (Exception, asyncio.CancelledError) as exc:
             _exception_raised = True

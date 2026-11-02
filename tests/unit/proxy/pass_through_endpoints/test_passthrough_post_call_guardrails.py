@@ -130,6 +130,29 @@ class TestPassthroughPostCallGuardrails:
         call_kwargs = mock_proxy_logging.post_call_success_hook.call_args
         assert call_kwargs.kwargs["response"] == _GEMINI_RESPONSE
 
+    @patch(_COLLECT, return_value=["rubrik"])
+    async def test_configured_endpoint_keeps_model_guardrails_and_reads_no_key_opt_outs(
+        self,
+        mock_collect,
+    ):
+        mock_proxy_logging = MagicMock()
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_success_hook = AsyncMock(return_value=_GEMINI_RESPONSE)
+        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        with _common_patches(mock_proxy_logging, _make_httpx_response(_GEMINI_RESPONSE)):
+            await pass_through_request(
+                request=_make_mock_request(),
+                target="https://example.com/v1/generateContent",
+                custom_headers={"Content-Type": "application/json"},
+                user_api_key_dict=_make_user_api_key_dict(),
+                stream=False,
+            )
+
+        call_kwargs = mock_proxy_logging.post_call_success_hook.call_args.kwargs
+        assert call_kwargs["merge_model_level_guardrails"] is True
+        assert call_kwargs["data"]["metadata"].keys() == {"guardrails"}
+
     @patch(_COLLECT, return_value=[])
     async def test_post_call_success_hook_skipped_when_no_guardrails(
         self,
@@ -216,7 +239,7 @@ class TestPassthroughPostCallGuardrails:
         block path dropping it."""
         mock_response = _make_httpx_response(_GEMINI_RESPONSE)
 
-        def _block(*, data, user_api_key_dict, response):
+        def _block(*, data, user_api_key_dict, response, merge_model_level_guardrails):
             metadata = data.setdefault("metadata", {})
             metadata.setdefault("standard_logging_guardrail_information", []).append(
                 {"guardrail_name": "rubrik", "guardrail_status": "guardrail_intervened"}
