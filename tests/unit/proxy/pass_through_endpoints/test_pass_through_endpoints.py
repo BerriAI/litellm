@@ -88,6 +88,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, _merge_guardrails_with_existing, hash_token
 from litellm.types import utils as types_utils
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 from litellm.types.utils import CallTypes
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
@@ -13426,6 +13427,42 @@ class TestInheritAuthGuardrails:
         )
 
         assert pre_call[0]["metadata"]["guardrails"] == ["key-guard", "client-guard"]
+
+    @staticmethod
+    def _body_with_policy_pipeline(mode: str) -> dict[str, object]:
+        pipeline: Final = GuardrailPipeline(mode=mode, steps=[PipelineStep(guardrail="step-guard")])
+        return {
+            **TestInheritAuthGuardrails._chat_body(),
+            "metadata": {
+                "_guardrail_pipelines": [("policy", pipeline)],
+                "_pipeline_managed_guardrails": {"step-guard"},
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_post_call_policy_pipeline_starts_the_post_call_pass_with_its_state(self):
+        _, post_call = await self._run(
+            self._body_with_policy_pipeline("post_call"),
+            inherit=True,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+        post_call.assert_awaited_once()
+        metadata: Final = post_call.await_args.kwargs["data"]["metadata"]
+        assert metadata["_pipeline_managed_guardrails"] == {"step-guard"}
+        assert [policy for policy, _ in metadata["_guardrail_pipelines"]] == ["policy"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("mode", "inherit"), [("pre_call", True), ("post_call", False)])
+    async def test_policy_pipeline_leaves_the_response_alone_without_a_post_call_run(self, mode: str, inherit: bool):
+        response, _, post_call = await self._run_with_response(
+            self._body_with_policy_pipeline(mode),
+            inherit=inherit,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+        post_call.assert_not_awaited()
+        assert response.body == b'{\n  "id":"chatcmpl-1"\n}'
 
     @pytest.mark.asyncio
     async def test_dict_form_stays_as_sent_for_a_key_without_guardrails(self):

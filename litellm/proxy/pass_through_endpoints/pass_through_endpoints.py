@@ -163,7 +163,7 @@ from litellm.proxy.route_priority import (
     configured_pass_through_routes_first,
     shadowed_by_builtin_claim,
 )
-from litellm.proxy.utils import normalize_route_for_root_path
+from litellm.proxy.utils import normalize_route_for_root_path, pipeline_managed_guardrail_names
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types import utils as types_utils
@@ -210,6 +210,7 @@ _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
 _DECODED_JSON: Final = TypeAdapter(object)
 _GUARDRAIL_ENTRIES: Final = TypeAdapter(list[object])
 _RESPONSE_HEADERS: Final = TypeAdapter(Mapping[str, str])
+_POLICY_PIPELINE_FIELDS: Final = ("_guardrail_pipelines", "_pipeline_managed_guardrails")
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
 _GUARDRAIL_HEADER_METADATA_FIELDS: Final = frozenset(
@@ -1000,7 +1001,7 @@ async def _inherit_auth_guardrails(
     The endpoint's configured guardrails win. Without any, and with ``inherit`` and a JSON body, the key, team,
     project, policy and request-body guardrails are merged into ``parsed_body["metadata"]`` for the pre-call hook,
     with the ones the client named in ``metadata.guardrails`` kept after them, and returned only when at least one
-    of them runs post_call, so the response is relayed untouched otherwise.
+    of them runs post_call.
     """
     if configured_guardrails or not inherit or not parsed_body:
         return configured_guardrails
@@ -1045,21 +1046,42 @@ def _admin_guardrail_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str,
     )
 
 
+def _policy_pipeline_metadata(kwargs: Mapping[str, object], inherited: bool) -> Mapping[str, object]:
+    """The policy pipelines resolved for a request that inherits auth guardrails, from the logging metadata that
+    request setup moved the body's ``metadata`` into"""
+    if not inherited:
+        return MappingProxyType({})
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
+    metadata: Final = as_str_mapping(litellm_params.get("metadata")) or {}
+    return {field: metadata[field] for field in _POLICY_PIPELINE_FIELDS if field in metadata}
+
+
+def _starts_post_call_pass(guardrails: Sequence[object] | None, policy_pipelines: Mapping[str, object]) -> bool:
+    return bool(guardrails) or bool(pipeline_managed_guardrail_names({"metadata": dict(policy_pipelines)}, "post_call"))
+
+
 def _post_call_hook_data(
     parsed_body: Mapping[str, object] | None,
-    guardrails: Sequence[object],
+    guardrails: Sequence[object] | None,
     logging_obj: LiteLLMLoggingObj,
     user_api_key_dict: UserAPIKeyAuth,
+    policy_pipelines: Mapping[str, object],
     inherited: bool,
 ) -> dict[str, object]:  # mutable-ok: the guardrails record their results in this request payload
     """The body with what the post-call guardrails read and the kwargs split stripped: ``metadata`` naming the guardrails,
-    which ``should_run_guardrail`` checks, and the logging object, which unified (apply_guardrail) guardrails resolve a
-    pass-through response's call type from when the route has no API_ROUTE_TO_CALL_TYPES entry"""
+    which ``should_run_guardrail`` checks, the policy pipelines to run, and the logging object, which unified
+    (apply_guardrail) guardrails resolve a pass-through response's call type from when the route has no
+    API_ROUTE_TO_CALL_TYPES entry"""
     body: Final = parsed_body or {}
     admin_metadata: Final = _admin_guardrail_metadata(user_api_key_dict) if inherited else MappingProxyType({})
     return {
         **body,
-        "metadata": {**(as_str_mapping(body.get("metadata")) or {}), "guardrails": guardrails, **admin_metadata},
+        "metadata": {
+            **(as_str_mapping(body.get("metadata")) or {}),
+            **policy_pipelines,
+            "guardrails": guardrails or (),
+            **admin_metadata,
+        },
         "litellm_logging_obj": logging_obj,
     }
 
@@ -2219,10 +2241,23 @@ async def pass_through_request(
             kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
         )
 
-        if response.status_code < 400 and response_body is not None and post_call_guardrails:
+        policy_pipelines: Final = _policy_pipeline_metadata(
+            cast(dict[str, object], kwargs),  # cast-ok: the logging fields init_kwargs built above
+            inherit_auth_guardrails,
+        )
+        if (
+            response.status_code < 400
+            and response_body is not None
+            and _starts_post_call_pass(post_call_guardrails, policy_pipelines)
+        ):
             json_body: Final = cast(dict[str, object] | None, _parsed_body)  # cast-ok: json
             hook_data: Final = _post_call_hook_data(
-                json_body, post_call_guardrails, logging_obj, user_api_key_dict, inherit_auth_guardrails
+                json_body,
+                post_call_guardrails,
+                logging_obj,
+                user_api_key_dict,
+                policy_pipelines,
+                inherit_auth_guardrails,
             )
             post_call_guardrail_data = hook_data
             response_body = await _run_post_call_guardrails_keeping_the_charge(
