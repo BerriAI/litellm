@@ -5,14 +5,270 @@ Test to verify the Google GenAI generate_content adapter functionality
 
 import json
 import unittest
-from typing import Final
+from copy import deepcopy
+from typing import Final, Literal
 
+import httpx
 import pytest
+import respx
 
 import litellm
+import litellm.google_genai.main as google_genai_main
+from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
 from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 from litellm.google_genai.main import agenerate_content
 from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
+from litellm.types.router import GenericLiteLLMParams
+
+
+@pytest.mark.parametrize("carrier", ["generic", "kwargs"])
+@pytest.mark.parametrize("effort", ["high", {"effort": "high"}], ids=["string", "object"])
+def test_explicit_reasoning_effort_survives_completion_adapter(
+    carrier: Literal["generic", "kwargs"], effort: str | dict[str, str]
+) -> None:
+    params: Final = GenericLiteLLMParams(**({"reasoning_effort": effort} if carrier == "generic" else {}))
+    extra_kwargs: Final = {"reasoning_effort": effort} if carrier == "kwargs" else {}
+    result: Final = GenerateContentToCompletionHandler._prepare_completion_kwargs(
+        model="openai/adapter-test-model",
+        contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+        config={"temperature": 0.0},
+        litellm_params=params,
+        extra_kwargs=extra_kwargs,
+    )
+    assert result["reasoning_effort"] == effort
+    assert type(result["reasoning_effort"]) is type(effort)
+    assert result["temperature"] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "is_async", "stream"),
+    [
+        ("generate_content", False, False),
+        ("agenerate_content", True, False),
+        ("generate_content_stream", False, True),
+        ("agenerate_content_stream", True, True),
+    ],
+)
+@pytest.mark.parametrize(
+    "effort",
+    ["high", {"effort": "high"}, {"effort": "high", "summary": "detailed"}, None],
+    ids=["string", "object", "summary", "null"],
+)
+@pytest.mark.asyncio
+async def test_public_generate_content_preserves_explicit_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch, entrypoint: str, is_async: bool, stream: bool, effort: str | dict[str, str] | None
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    config: Final = {"temperature": 0.0}
+    contents: Final = [{"role": "user", "parts": [{"text": "Hello"}]}]
+    before: Final = deepcopy((contents, config, effort))
+    upstream_body: Final = {
+        "id": "chatcmpl-effort",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "adapter-test-model",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Hello"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    upstream_chunk: Final = {
+        "id": "chatcmpl-effort",
+        "object": "chat.completion.chunk",
+        "created": 1234567890,
+        "model": "adapter-test-model",
+        "choices": [{"index": 0, "finish_reason": "stop", "delta": {"content": "Hello"}}],
+    }
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://upstream.test/v1/chat/completions").mock(
+            return_value=(
+                httpx.Response(
+                    200,
+                    text=f"data: {json.dumps(upstream_chunk)}\n\ndata: [DONE]\n\n",
+                    headers={"content-type": "text/event-stream"},
+                )
+                if stream
+                else httpx.Response(200, json=upstream_body)
+            )
+        )
+        call: Final = getattr(google_genai_main, entrypoint)
+        response: Final = call(
+            model="openai/adapter-test-model",
+            contents=contents,
+            config=config,
+            api_base="https://upstream.test/v1",
+            api_key="unit-test",
+            reasoning_effort=effort,
+        )
+        result: Final = await response if is_async else response
+        output: Final = (
+            tuple([json.loads(chunk.removeprefix(b"data: ").strip()) async for chunk in result])
+            if stream
+            else (result,)
+        )
+    assert len(route.calls) == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "adapter-test-model",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "temperature": 0.0,
+        **({"reasoning_effort": effort} if effort is not None else {}),
+        **({"stream": True, "stream_options": {"include_usage": True}} if stream else {}),
+    }
+    assert output[0]["candidates"][0]["content"]["parts"] == [{"text": "Hello"}]
+    assert (contents, config, effort) == before
+
+
+@pytest.mark.parametrize(
+    "config",
+    [None, {"temperature": None}, {"temperature": 0.0}, {"temperature": 0.7}, {"temperature": 1.0}],
+    ids=["missing", "null", "zero", "positive", "one"],
+)
+@pytest.mark.parametrize("carrier", ["generic", "kwargs"])
+@pytest.mark.parametrize("effort", ["high", {"effort": "high", "summary": "detailed"}], ids=["string", "summary"])
+def test_explicit_effort_does_not_change_config_or_forward_unrelated_extras(
+    config: dict[str, object] | None, carrier: Literal["generic", "kwargs"], effort: str | dict[str, str]
+) -> None:
+    supplied: Final = {"reasoning_effort": effort, "unrelated_adapter_extra": "sentinel"}
+    params: Final = GenericLiteLLMParams(**supplied) if carrier == "generic" else GenericLiteLLMParams()
+    extras: Final = supplied if carrier == "kwargs" else {}
+    before: Final = deepcopy((config, params.model_dump(), extras))
+    result: Final = GenerateContentToCompletionHandler._prepare_completion_kwargs(
+        model="openai/adapter-test-model",
+        contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+        config=config,
+        litellm_params=params,
+        extra_kwargs=extras,
+    )
+    assert dict(result) == {
+        "model": "openai/adapter-test-model",
+        "messages": [{"role": "user", "content": "Hello"}],
+        **(config or {}),
+        **GenericLiteLLMParams().model_dump(exclude_none=True),
+        "reasoning_effort": effort,
+    }
+    assert result.get("reasoning_effort") is effort
+    assert (config, params.model_dump(), extras) == before
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        None,
+        {"temperature": None},
+        {"temperature": 0.0},
+        {"temperature": 0.7},
+        {"temperature": 1.0},
+        {"thinkingConfig": {"thinkingLevel": "HIGH", "thinkingBudget": 1024}},
+    ],
+    ids=["missing", "null", "zero", "positive", "one", "native-thinking"],
+)
+def test_completion_adapter_does_not_invent_reasoning_effort(config: dict[str, object] | None) -> None:
+    result: Final = GenerateContentToCompletionHandler._prepare_completion_kwargs(
+        model="openai/adapter-test-model",
+        contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+        config=config,
+    )
+    assert dict(result) == {
+        "model": "openai/adapter-test-model",
+        "messages": [{"role": "user", "content": "Hello"}],
+        **({"temperature": config["temperature"]} if config and "temperature" in config else {}),
+    }
+
+
+@pytest.mark.parametrize(("direct", "generic"), [(None, "high"), ("high", None), (None, None)])
+def test_null_reasoning_effort_does_not_override_an_explicit_value(direct: str | None, generic: str | None) -> None:
+    result: Final = GenerateContentToCompletionHandler._prepare_completion_kwargs(
+        model="openai/adapter-test-model",
+        contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+        litellm_params=GenericLiteLLMParams(reasoning_effort=generic),
+        extra_kwargs={"reasoning_effort": direct},
+    )
+    assert dict(result) == {
+        "model": "openai/adapter-test-model",
+        "messages": [{"role": "user", "content": "Hello"}],
+        **GenericLiteLLMParams().model_dump(exclude_none=True),
+        **({"reasoning_effort": direct or generic} if direct or generic else {}),
+    }
+
+
+@pytest.mark.parametrize(
+    ("direct", "generic"),
+    [
+        ("low", "high"),
+        ({"effort": "low"}, {"effort": "high"}),
+        ("high", {"effort": "high"}),
+        (False, 0),
+        ({"effort": False}, {"effort": 0}),
+    ],
+    ids=["strings", "objects", "string-object", "bool-int", "nested-bool-int"],
+)
+def test_conflicting_reasoning_effort_is_rejected_without_changing_inputs(direct: object, generic: object) -> None:
+    params: Final = GenericLiteLLMParams(reasoning_effort=generic)
+    extras: Final = {"reasoning_effort": direct}
+    before: Final = deepcopy((params.model_dump(), extras))
+    with pytest.raises(ValueError, match=r"^Conflicting reasoning_effort in kwargs and litellm_params$"):
+        GenerateContentToCompletionHandler._prepare_completion_kwargs(
+            model="openai/adapter-test-model",
+            contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+            litellm_params=params,
+            extra_kwargs=extras,
+        )
+    assert (params.model_dump(), extras) == before
+
+
+@pytest.mark.parametrize("async_mode", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_conflicting_reasoning_effort_never_reaches_upstream(
+    monkeypatch: pytest.MonkeyPatch, async_mode: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    params: Final = GenericLiteLLMParams(
+        api_base="https://upstream.test/v1",
+        api_key="unit-test",
+        reasoning_effort="high",
+    )
+
+    async def conflicting_call() -> None:
+        response: Final = GenerateContentToCompletionHandler.generate_content_handler(
+            model="openai/adapter-test-model",
+            contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+            litellm_params=params,
+            reasoning_effort="low",
+            _is_async=async_mode,
+        )
+        if async_mode:
+            await response
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("https://upstream.test/v1/chat/completions").mock(return_value=httpx.Response(500))
+        with pytest.raises(ValueError, match=r"^Conflicting reasoning_effort in kwargs and litellm_params$"):
+            await conflicting_call()
+    assert len(route.calls) == 0
+
+
+@pytest.mark.parametrize("carrier", ["generic", "kwargs"])
+@pytest.mark.parametrize("effort", ["", 0, False, {}, {"effort": 0}], ids=["empty", "zero", "false", "object", "bad-effort"])
+def test_single_invalid_reasoning_effort_is_left_for_the_completion_validator(
+    carrier: Literal["generic", "kwargs"], effort: object
+) -> None:
+    result: Final = GenerateContentToCompletionHandler._prepare_completion_kwargs(
+        model="openai/adapter-test-model",
+        contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+        litellm_params=GenericLiteLLMParams(**({"reasoning_effort": effort} if carrier == "generic" else {})),
+        extra_kwargs={"reasoning_effort": effort} if carrier == "kwargs" else {},
+    )
+    assert result.get("reasoning_effort") is effort
+
+
+@pytest.mark.parametrize("generic_api_base", [None, "https://generic.test/v1"])
+def test_preserving_reasoning_effort_keeps_declared_generic_merge_precedence(generic_api_base: str | None) -> None:
+    result: Final = GoogleGenAIAdapter()._add_generic_litellm_params_to_request(
+        {"api_base": "https://translated.test/v1"},
+        GenericLiteLLMParams(api_base=generic_api_base, reasoning_effort="high", unrelated_adapter_extra="sentinel"),
+    )
+    assert result == {
+        **GenericLiteLLMParams().model_dump(exclude_none=True),
+        "api_base": generic_api_base or "https://translated.test/v1",
+        "reasoning_effort": "high",
+    }
 
 
 @pytest.mark.parametrize(("data_key", "mime_key"), [("inline_data", "mime_type"), ("inlineData", "mimeType")])
