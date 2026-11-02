@@ -15411,8 +15411,8 @@ def _native_responses_count(
     )
 
 
-def _inference_api_base(
-    deployment: _TokenCountDeployment, responses_request: Mapping[str, object] | None
+def _deployment_api_base(
+    deployment: _TokenCountDeployment, responses_request: Mapping[str, object] | None = None
 ) -> str | None:
     return _non_empty_str(
         _inference_params(deployment.get("litellm_params", {}), responses_request or {}).get("api_base")
@@ -15427,7 +15427,7 @@ def _deployment_provider(
         return litellm.get_llm_provider(
             model=_non_empty_str(params.get("model")) or request_model,
             custom_llm_provider=_non_empty_str(params.get("custom_llm_provider")),
-            api_base=_inference_api_base(deployment, responses_request),
+            api_base=_deployment_api_base(deployment, responses_request),
         )[1]
     except litellm.BadRequestError:
         return None
@@ -15629,7 +15629,7 @@ async def _count_request_tokens(
         else await chat_count_request(
             model_to_use,
             custom_llm_provider,
-            _inference_api_base(deployment_view, routed_request),
+            _deployment_api_base(deployment_view, routed_request),
             routed_request,
             _count_drop_policy(routed_deployment, routed_request),
         )
