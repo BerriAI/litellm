@@ -139,6 +139,7 @@ def mock_prisma_client() -> MagicMock:
     client.db.is_connected = MagicMock(return_value=False)
     client.db.connect = AsyncMock()
     client.db.disconnect = AsyncMock()
+    client.db.stop_token_refresh_task = AsyncMock()
     client.db.query_raw = AsyncMock(return_value=[{"?column?": 1}])
     client.db.execute_raw = AsyncMock()
     client.db.tx = MagicMock()

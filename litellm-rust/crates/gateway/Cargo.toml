@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-secret-value.workspace = true
 axum.workspace = true
 envy = "0.4.2"
 http-body-util = "0.1"
@@ -17,7 +18,6 @@ thiserror.workspace = true
 futures-util.workspace = true
 litellm-gateway-auth.workspace = true
 litellm-gateway-ui.workspace = true
-litellm-auth-types.workspace = true
 litellm-config.workspace = true
 litellm-error.workspace = true
 litellm-circuit-breaker.workspace = true

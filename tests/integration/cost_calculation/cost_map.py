@@ -26,6 +26,12 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "input_cost_per_token_above_128k_tokens": 2.2e-07,
         "output_cost_per_token_above_128k_tokens": 8.8e-07,
     },
+    "gateway-reported-cost-fixture": {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3e-06,
+    },
     "openrouter/anthropic/claude-sonnet-5": {
         "litellm_provider": "openrouter",
         "mode": "chat",
@@ -151,7 +157,7 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
     "openrouter/typesafe/jev-1.13": {
         "litellm_provider": "openrouter",
         "mode": "evaluation",
-        "input_cost_per_token": 0.0,
+        "input_cost_per_token": 4.2e-08,
         "output_cost_per_token": 0.0,
     },
     "perplexity/pplx-decider-v1-27b": {

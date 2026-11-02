@@ -1,5 +1,6 @@
 from typing import Literal
 
+from pydantic import AliasPath, BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
 
@@ -98,3 +99,15 @@ class CohereV2ChatResponse(TypedDict):
     message: CohereV2ChatResponseMessage
     usage: CohereV2ChatResponseUsage
     logprobs: CohereV2ChatResponseLogProbs
+
+
+class CohereV2StreamedToolCall(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str | None = Field(default=None, validation_alias=AliasPath("delta", "message", "tool_calls", "id"))
+    name: str | None = Field(
+        default=None, validation_alias=AliasPath("delta", "message", "tool_calls", "function", "name")
+    )
+    arguments: str = Field(
+        default="", validation_alias=AliasPath("delta", "message", "tool_calls", "function", "arguments")
+    )

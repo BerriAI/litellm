@@ -3,7 +3,7 @@ import builtins
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from itertools import chain, groupby
+from itertools import chain, groupby, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, Protocol, TypeAlias, TypedDict, TypeVar, Union, cast
 
@@ -12,9 +12,22 @@ from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.core_helpers import (
+    PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS,
+    UPSTREAM_USAGE_COST,
+    chunk_usage,
+    finite_cost,
+    provider_reported_usage_cost,
+    stamp_litellm_bill_on_usage,
+)
+from litellm.litellm_core_utils.hidden_params import (
+    HIDDEN_PARAMS_ATTR,
+    get_hidden_params,
+    set_hidden_param,
+    set_hidden_params,
+)
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import BEDROCK_TRACE_FIELDS, object_items, object_mapping
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import partition_annotations
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
 )
@@ -252,7 +265,7 @@ def apply_grounding_request_counts(
 
 
 class ChunkProcessor:
-    def __init__(self, chunks: list, messages: Sequence | None = None):
+    def __init__(self, chunks: list, messages: Sequence[object] | None = None):
         self.chunks = self._sort_chunks(chunks)
         self.messages = messages
         self.first_chunk = chunks[0]
@@ -314,6 +327,20 @@ class ChunkProcessor:
         return next(
             (model for model in models if model != first_chunk_model),
             models[0] if models else None,
+        )
+
+    @staticmethod
+    def _get_upstream_provider(chunks: Sequence[object]) -> str | None:
+        def _provider_from_chunk(chunk: object) -> str | None:
+            hidden_params: Final = get_hidden_params(chunk)
+            if hidden_params is None:
+                return None
+            provider: Final[object] = hidden_params.get("upstream_provider")
+            return provider if isinstance(provider, str) and provider else None
+
+        return next(
+            (provider for chunk in chunks if (provider := _provider_from_chunk(chunk)) is not None),
+            None,
         )
 
     @staticmethod
@@ -386,6 +413,30 @@ class ChunkProcessor:
                 return "assistant"
 
     @staticmethod
+    def _finish_reason_of_chunks(chunks: Sequence["_BaseChunk"], unreported: str = "stop") -> object:
+        finish_reason = unreported
+        for chunk in chunks:
+            if "choices" in chunk and len(chunk["choices"]) > 0:
+                chunk_finish_reason = None
+                if hasattr(chunk["choices"][0], "finish_reason"):
+                    chunk_finish_reason = chunk["choices"][0].finish_reason
+                elif "finish_reason" in chunk["choices"][0]:
+                    chunk_finish_reason = _CHOICE_FIELD_VALUE.validate_python(chunk["choices"][0]["finish_reason"])
+                if chunk_finish_reason is not None:
+                    finish_reason = chunk_finish_reason
+        return finish_reason
+
+    @staticmethod
+    def build_base_choice(index: int, chunks: Sequence["_BaseChunk"]) -> Choices:
+        return Choices(
+            index=index,
+            finish_reason=ChunkProcessor._finish_reason_of_chunks(
+                chunks, unreported="tool_calls" if _carries_tool_calls(chunks) else "stop"
+            ),
+            message={"role": ChunkProcessor._get_role_from_chunks(chunks), "content": ""},
+        )
+
+    @staticmethod
     def _get_model_from_chunks(chunks: Sequence["_BaseChunk"], first_chunk_model: str) -> str:
         """
         Get the actual model from chunks, preferring a model that differs from the first chunk.
@@ -409,7 +460,11 @@ class ChunkProcessor:
             None,
         )
 
-    def build_base_response(self, chunks: Sequence["_BaseChunk"]) -> ModelResponse:
+    def build_base_response(
+        self,
+        chunks: Sequence["_BaseChunk"],
+        choice_streams: Sequence[tuple[int, Sequence["_BaseChunk"]]],
+    ) -> ModelResponse:
         chunk = self.first_chunk
         id: Final = ChunkProcessor._get_chunk_id(chunks)
         object: Final = chunk["object"]
@@ -421,16 +476,7 @@ class ChunkProcessor:
         service_tier: Final = ChunkProcessor._get_service_tier_from_chunks(chunks)
 
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
-        finish_reason = "stop"
-        for chunk in chunks:
-            if "choices" in chunk and len(chunk["choices"]) > 0:
-                chunk_finish_reason = None
-                if hasattr(chunk["choices"][0], "finish_reason"):
-                    chunk_finish_reason = chunk["choices"][0].finish_reason
-                elif "finish_reason" in chunk["choices"][0]:
-                    chunk_finish_reason = _CHOICE_FIELD_VALUE.validate_python(chunk["choices"][0]["finish_reason"])
-                if chunk_finish_reason is not None:
-                    finish_reason = chunk_finish_reason
+        finish_reason: Final = ChunkProcessor._finish_reason_of_chunks(chunks)
 
         # Initialize the response dictionary
         response = ModelResponse(
@@ -450,13 +496,17 @@ class ChunkProcessor:
                     if service_tier is not None
                     else MappingProxyType({})
                 ),
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": role, "content": ""},
-                        "finish_reason": finish_reason,
-                    }
-                ],
+                "choices": (
+                    [ChunkProcessor.build_base_choice(index, choice_chunks) for index, choice_chunks in choice_streams]
+                    if len(choice_streams) > 1
+                    else [
+                        {
+                            "index": 0,
+                            "message": {"role": role, "content": ""},
+                            "finish_reason": finish_reason,
+                        }
+                    ]
+                ),
                 "usage": {
                     "prompt_tokens": 0,  # Modify as needed
                     "completion_tokens": 0,  # Modify as needed
@@ -470,10 +520,22 @@ class ChunkProcessor:
             chunks,
             first_chunk_model,
         )
-        if provider_response_model is not None:
-            response._hidden_params = dict(  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params setter
-                response._hidden_params,  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params getter
-                provider_response_model=provider_response_model,
+        upstream_provider: Final = self._get_upstream_provider(chunks)
+        provider_hidden_params: Final[Mapping[str, str]] = MappingProxyType(
+            {
+                key: value
+                for key, value in (
+                    ("provider_response_model", provider_response_model),
+                    ("upstream_provider", upstream_provider),
+                )
+                if value is not None
+            }
+        )
+        if provider_hidden_params:
+            response_hidden_params: Final[Mapping[str, builtins.object]] = get_hidden_params(response) or {}
+            set_hidden_params(
+                response,
+                dict(response_hidden_params, **provider_hidden_params),
             )
         return response
 
@@ -985,7 +1047,9 @@ class ChunkProcessor:
                     prompt_tokens_details, cache_creation_token_details
                 )
 
-                if usage_chunk_dict["cost"] is not None:
+                if Usage.dropped_non_finite_cost(usage_chunk):
+                    cost = None
+                elif usage_chunk_dict["cost"] is not None:
                     cost = usage_chunk_dict["cost"]
 
         prompt_tokens_details = attach_cache_creation_token_details(prompt_tokens_details, cache_creation_token_details)
@@ -1352,18 +1416,11 @@ def stream_chunk_builder_text_completion(
     return TextCompletionResponse(**response)
 
 
-_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value})
-
-
 def _logged_provider(logging_obj: Optional["Logging"]) -> object:
     if logging_obj is None:
         return None
     provider: Final[object] = logging_obj.model_call_details.get("custom_llm_provider")
     return provider
-
-
-def _reported_cost_is_priced_by_calculator(logging_obj: Optional["Logging"]) -> bool:
-    return _logged_provider(logging_obj) in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS
 
 
 def _stream_builder_response_cost(
@@ -1376,9 +1433,6 @@ def _stream_builder_response_cost(
             for chunk in reversed(chunks)
         )
         return next((cost for cost in reported if cost is not None), None)
-    usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
-    if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(logging_obj):
-        return float(usage_cost)
     if logging_obj is not None:
         return None
     provider_hint: Final = response._hidden_params.get(  # pyright: ignore[reportPrivateUsage]  # no public accessor
@@ -1422,16 +1476,26 @@ def _set_stream_builder_response_cost(
     _set_hidden_response_cost(response, response_cost)
 
 
+def _carry_upstream_usage_cost(response: ModelResponse, chunks: Sequence[object]) -> None:
+    chunk_hidden_params: Final = (get_hidden_params(chunk) for chunk in reversed(chunks))
+    stamped: Final = (hidden for hidden in chunk_hidden_params if hidden is not None and UPSTREAM_USAGE_COST in hidden)
+    for hidden in stamped:
+        set_hidden_param(response, UPSTREAM_USAGE_COST, hidden[UPSTREAM_USAGE_COST])
+        return
+
+
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     if logging_obj is None:
         return
-    if isinstance(getattr(usage, "cost", None), (int, float)):
+    if _logged_provider(logging_obj) in PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS and (
+        finite_cost(getattr(usage, "cost", None)) is not None
+    ):
         return
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
-    if not isinstance(computed_cost, (int, float)) or computed_cost <= 0:
+    if isinstance(computed_cost, bool) or not isinstance(computed_cost, (int, float)) or computed_cost < 0:
         return
-    setattr(usage, "cost", computed_cost)
-    _set_hidden_response_cost(response, float(computed_cost))
+    if computed_cost > 0 or isinstance(getattr(usage, "cost", None), (int, float)):
+        stamp_litellm_bill_on_usage(response, usage, float(computed_cost))
 
 
 def _field_of(value: object, name: str) -> object:
@@ -1445,11 +1509,20 @@ def _delta_reasoning_items(delta: object) -> Sequence[object]:
     return cast(Sequence[object], items) if isinstance(items, list) else ()  # cast-ok: items forwarded verbatim
 
 
-def _chunk_reasoning_items(chunk: object) -> Sequence[object]:
+def _chunk_first_delta(chunk: object) -> object:
     choices: Final = _field_of(chunk, "choices")
     if not isinstance(choices, list) or not choices:
-        return ()
-    return _delta_reasoning_items(_field_of(cast(Sequence[object], choices)[0], "delta"))  # cast-ok: untyped chunk
+        return None
+    return _field_of(cast(Sequence[object], choices)[0], "delta")  # cast-ok: untyped chunk
+
+
+def _chunk_reasoning_items(chunk: object) -> Sequence[object]:
+    return _delta_reasoning_items(_chunk_first_delta(chunk))
+
+
+def _chunk_refusal(chunk: object) -> str:
+    refusal: Final = _field_of(_chunk_first_delta(chunk), "refusal")
+    return refusal if isinstance(refusal, str) else ""
 
 
 _NON_TEXT_DELTA_FIELDS: Final = (
@@ -1462,6 +1535,7 @@ _NON_TEXT_DELTA_FIELDS: Final = (
     "audio",
     "images",
     "provider_specific_fields",
+    "refusal",
 )
 
 
@@ -1515,11 +1589,191 @@ def _bedrock_trace_fields(chunk: object) -> Mapping[str, object]:
     return {field: fields[field] for field in BEDROCK_TRACE_FIELDS if field in fields}
 
 
+def _stream_choice_index(choice: object) -> int:
+    index: Final = _field_of(choice, "index")
+    return index if isinstance(index, int) else 0
+
+
+def _carries_tool_calls(chunks: Sequence[_BaseChunk]) -> bool:
+    return any(
+        "tool_calls" in choice["delta"] and choice["delta"]["tool_calls"]
+        for choice in chain.from_iterable(chunk.get("choices") or () for chunk in chunks)
+    )
+
+
+def _choice_streams(chunks: Sequence[_BaseChunk]) -> tuple[tuple[int, Sequence[_BaseChunk]], ...]:
+    indices: Final = sorted(
+        frozenset(map(_stream_choice_index, chain.from_iterable(chunk.get("choices") or () for chunk in chunks)))
+    )
+    if len(indices) <= 1:
+        return ((0, chunks),)
+    return tuple((index, _narrowed_to_choice(chunks, index)) for index in indices)
+
+
+def _narrowed_to_choice(chunks: Sequence[_BaseChunk], index: int) -> tuple[_BaseChunk, ...]:
+    return tuple(
+        _BaseChunk(choices=[choice for choice in chunk.get("choices") or () if _stream_choice_index(choice) == index])
+        for chunk in chunks
+    )
+
+
+def _simple_text(chunks: Sequence[_BaseChunk]) -> str | None:
+    choices_per_chunk: Final = tuple(chunk["choices"] for chunk in chunks if chunk.get("choices"))
+    parts: Final = tuple(takewhile(lambda part: part is not None, map(_simple_text_part, choices_per_chunk)))
+    return "".join(filter(None, parts)) if len(parts) == len(choices_per_chunk) else None
+
+
+def _assembled_message_fields(processor: ChunkProcessor, chunks: Sequence) -> Iterator[tuple[str, object]]:
+    tool_call_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if any(
+            "tool_calls" in choice["delta"] and choice["delta"]["tool_calls"] is not None
+            for choice in chunk.get("choices") or ()
+        )
+    ]
+
+    if tool_call_chunks:
+        tool_calls_list: Final = processor.get_combined_tool_content(tool_call_chunks)
+        yield "content", None
+        yield "tool_calls", tool_calls_list
+
+    function_call_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "function_call" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["function_call"] is not None
+    ]
+
+    if function_call_chunks:
+        yield "content", None
+        yield "function_call", processor.get_combined_function_call_content(function_call_chunks)
+
+    content_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "content" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["content"] is not None
+    ]
+
+    if content_chunks:
+        yield "content", processor.get_combined_content(content_chunks)
+
+    thinking_blocks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "thinking_blocks" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["thinking_blocks"] is not None
+    ]
+
+    if thinking_blocks:
+        yield "thinking_blocks", processor.get_combined_thinking_content(thinking_blocks)
+
+    reasoning_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "reasoning_content" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["reasoning_content"] is not None
+    ]
+
+    if reasoning_chunks:
+        yield "reasoning_content", processor.get_combined_reasoning_content(reasoning_chunks)
+
+    typed_chunks: Final = cast(Sequence[object], chunks)  # cast-ok: chunks are untyped upstream
+    combined_refusal: Final = "".join(_chunk_refusal(chunk) for chunk in typed_chunks)
+    if combined_refusal:
+        yield "refusal", combined_refusal
+    reasoning_items: Final = tuple(chain.from_iterable(_chunk_reasoning_items(chunk) for chunk in typed_chunks))
+    if reasoning_items:
+        yield "reasoning_items", list(reasoning_items)
+
+    annotation_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "annotations" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["annotations"] is not None
+    ]
+
+    message_annotations, provider_annotations = (
+        partition_annotations(
+            list(chain.from_iterable(chunk["choices"][0]["delta"]["annotations"] for chunk in annotation_chunks))
+        )
+        if annotation_chunks
+        else (None, ())
+    )
+    if message_annotations is not None:
+        yield "annotations", message_annotations
+
+    audio_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "audio" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["audio"] is not None
+    ]
+
+    if audio_chunks:
+        yield "audio", processor.get_combined_audio_content(audio_chunks)
+
+    # Handle image chunks from models like gemini-2.5-flash-image
+    # See: https://github.com/BerriAI/litellm/issues/19478
+    image_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "images" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["images"] is not None
+    ]
+
+    if image_chunks:
+        # Images come complete in a single chunk, collect all images from all chunks
+        all_images: Final = []
+        for chunk in image_chunks:
+            all_images.extend(chunk["choices"][0]["delta"]["images"])
+        yield "images", all_images
+
+    # Combine provider_specific_fields from streaming chunks (e.g., web_search_results, citations)
+    # See: https://github.com/BerriAI/litellm/issues/17737
+    provider_specific_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "provider_specific_fields" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["provider_specific_fields"] is not None
+    ]
+
+    provider_field_dicts: Final = tuple(
+        fields
+        for chunk in provider_specific_chunks
+        for fields in (chunk["choices"][0]["delta"]["provider_specific_fields"],)
+        if isinstance(fields, dict)
+    )
+    streamed_citations: Final = tuple(
+        fields["citation"] for fields in provider_field_dicts if fields.get("citation") is not None
+    )
+    citation_fields: Final = {"citations": _joined_streamed_citations(streamed_citations)} if streamed_citations else {}
+    provider_annotation_fields: Final = {"annotations": list(provider_annotations)} if provider_annotations else {}
+    combined_provider_fields: Final = {
+        key: value
+        for fields in (provider_annotation_fields, citation_fields, *provider_field_dicts)
+        for key, value in fields.items()
+        if key != "citation"
+    }
+
+    if combined_provider_fields:
+        yield "provider_specific_fields", combined_provider_fields
+
+
 def stream_chunk_builder(
     chunks: list,
     messages: Sequence | None = None,
-    start_time=None,
-    end_time=None,
+    start_time: object = None,
+    end_time: object = None,
     logging_obj: Optional["Logging"] = None,
     count_prompt_tokens: Callable[[], int] | None = None,
 ) -> ModelResponse | TextCompletionResponse | None:
@@ -1556,26 +1810,15 @@ def stream_chunk_builder(
         usage_model: Final = usage_tokenizer_model(
             model, get_base_model_from_metadata(logging_obj.model_call_details) if logging_obj is not None else None
         )
-        # Initialize the response dictionary
-        response: Final = processor.build_base_response(chunks)
+        choice_streams: Final = _choice_streams(chunks)
+        response: Final = processor.build_base_response(chunks, choice_streams)
+        rebuilt_choices: Final = tuple(zip(response.choices, (choice_chunks for _, choice_chunks in choice_streams)))
 
-        # Fast path for the common text-only streaming case:
-        # avoid repeated multi-pass list scans over chunks.
-        simple_content_parts: Final[list[str]] = []
-        is_simple_text_stream = True
-        for chunk in chunks:
-            if not chunk.get("choices"):
-                continue
-
-            if (part := _simple_text_part(chunk["choices"])) is None:
-                is_simple_text_stream = False
-                break
-            if part:
-                simple_content_parts.append(part)
-
-        if is_simple_text_stream:
-            if simple_content_parts:
-                response["choices"][0]["message"]["content"] = "".join(simple_content_parts)
+        simple_texts: Final = tuple(_simple_text(choice_chunks) for _, choice_chunks in choice_streams)
+        if None not in simple_texts:
+            for (choice, _), simple_text in zip(rebuilt_choices, simple_texts):
+                if simple_text:
+                    choice.message.content = simple_text
             completion_output = get_content_from_model_response(response)
             usage = processor.calculate_usage(
                 chunks=chunks,
@@ -1604,6 +1847,7 @@ def stream_chunk_builder(
                 response,
                 logging_obj,
             )
+            _carry_upstream_usage_cost(response, chunks)  # pyright: ignore[reportUnknownArgumentType]  # chunks is an untyped list param
             _stamp_streaming_usage_cost(usage, response, logging_obj)
             _set_stream_builder_response_cost(
                 response,
@@ -1614,155 +1858,9 @@ def stream_chunk_builder(
             processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
             return response
 
-        tool_call_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if any(
-                "tool_calls" in choice["delta"] and choice["delta"]["tool_calls"] is not None
-                for choice in chunk.get("choices") or ()
-            )
-        ]
-
-        if len(tool_call_chunks) > 0:
-            tool_calls_list: Final = processor.get_combined_tool_content(tool_call_chunks)
-            _choice = response.choices[0]
-            _choice.message.content = None
-            _choice.message.tool_calls = tool_calls_list
-
-        function_call_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "function_call" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["function_call"] is not None
-        ]
-
-        if len(function_call_chunks) > 0:
-            _choice = response.choices[0]
-            _choice.message.content = None
-            _choice.message.function_call = processor.get_combined_function_call_content(function_call_chunks)
-
-        content_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "content" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["content"] is not None
-        ]
-
-        if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = processor.get_combined_content(content_chunks)
-
-        thinking_blocks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "thinking_blocks" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["thinking_blocks"] is not None
-        ]
-
-        if len(thinking_blocks) > 0:
-            response["choices"][0]["message"]["thinking_blocks"] = processor.get_combined_thinking_content(
-                thinking_blocks
-            )
-
-        reasoning_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "reasoning_content" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["reasoning_content"] is not None
-        ]
-
-        if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"]["reasoning_content"] = processor.get_combined_reasoning_content(
-                reasoning_chunks
-            )
-
-        typed_chunks: Final = cast(Sequence[object], chunks)  # cast-ok: chunks are untyped upstream
-        reasoning_items: Final = tuple(chain.from_iterable(_chunk_reasoning_items(chunk) for chunk in typed_chunks))
-        if reasoning_items:
-            response["choices"][0]["message"]["reasoning_items"] = list(reasoning_items)
-
-        annotation_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "annotations" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["annotations"] is not None
-        ]
-
-        if len(annotation_chunks) > 0:
-            # Merge annotations from ALL chunks — providers may spread
-            # them across multiple streaming chunks or send them only in
-            # the final chunk.
-            all_annotations: Final[list] = []
-            for ac in annotation_chunks:
-                all_annotations.extend(ac["choices"][0]["delta"]["annotations"])
-            response["choices"][0]["message"]["annotations"] = all_annotations
-
-        audio_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "audio" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["audio"] is not None
-        ]
-
-        if len(audio_chunks) > 0:
-            _choice = response.choices[0]
-            _choice.message.audio = processor.get_combined_audio_content(audio_chunks)
-
-        # Handle image chunks from models like gemini-2.5-flash-image
-        # See: https://github.com/BerriAI/litellm/issues/19478
-        image_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "images" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["images"] is not None
-        ]
-
-        if len(image_chunks) > 0:
-            # Images come complete in a single chunk, collect all images from all chunks
-            all_images: Final = []
-            for chunk in image_chunks:
-                all_images.extend(chunk["choices"][0]["delta"]["images"])
-            response["choices"][0]["message"]["images"] = all_images
-
-        # Combine provider_specific_fields from streaming chunks (e.g., web_search_results, citations)
-        # See: https://github.com/BerriAI/litellm/issues/17737
-        provider_specific_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "provider_specific_fields" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["provider_specific_fields"] is not None
-        ]
-
-        if len(provider_specific_chunks) > 0:
-            provider_field_dicts: Final = tuple(
-                fields
-                for chunk in provider_specific_chunks
-                for fields in (chunk["choices"][0]["delta"]["provider_specific_fields"],)
-                if isinstance(fields, dict)
-            )
-            streamed_citations: Final = tuple(
-                fields["citation"] for fields in provider_field_dicts if fields.get("citation") is not None
-            )
-            citation_fields: Final = (
-                {"citations": _joined_streamed_citations(streamed_citations)} if streamed_citations else {}
-            )
-            combined_provider_fields: Final = {
-                key: value
-                for fields in (citation_fields, *provider_field_dicts)
-                for key, value in fields.items()
-                if key != "citation"
-            }
-
-            if combined_provider_fields:
-                _choice = response.choices[0]
-                _choice.message.provider_specific_fields = combined_provider_fields
+        for choice, choice_chunks in rebuilt_choices:
+            for field, value in _assembled_message_fields(processor, choice_chunks):
+                choice.message[field] = value
 
         completion_output = get_content_from_model_response(response)
 
@@ -1792,6 +1890,7 @@ def stream_chunk_builder(
                 )
                 break
 
+        _carry_upstream_usage_cost(response, chunks)  # pyright: ignore[reportUnknownArgumentType]  # chunks is an untyped list param
         _stamp_streaming_usage_cost(usage, response, logging_obj)
         _set_stream_builder_response_cost(
             response,
