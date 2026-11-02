@@ -1782,6 +1782,23 @@ class TestGeminiContents:
             == GEMINI_INSPECTION_MESSAGES
         )
 
+    @pytest.mark.parametrize("field", ["functionResponse", "function_response"])
+    def test_gemini_function_response_is_read_as_a_tool_turn(self, field: str):
+        data: Final = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": "hi"}, {field: {"name": "lookup", "response": {"card": "4111"}}}],
+                },
+                {"role": "model", "parts": [{"functionCall": {"name": "lookup", "args": {"card": "5555"}}}]},
+            ]
+        }
+
+        assert _build_lakera_inspection_messages(data, call_type="pass_through_endpoint") == [
+            {"role": "user", "content": "hi"},
+            {"role": "tool", "content": '{"card": "4111"}'},
+        ]
+
     def test_reads_a_single_contents_object_with_a_single_parts_object(self):
         data: Final = {"contents": {"role": "user", "parts": {"text": "hello world"}}}
         assert _build_lakera_inspection_messages(data, call_type="pass_through_endpoint") == [
