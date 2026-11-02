@@ -721,6 +721,12 @@ ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = get_env_int("ANTHROPIC_ME
 # client disconnects, so it can bill the provider's terminal usage. 0 disables
 # the drain: the request is billed on the chunks the client already received.
 CHAT_COMPLETIONS_MAX_DETACHED_STREAM_DRAINS: Final = get_env_int("CHAT_COMPLETIONS_MAX_DETACHED_STREAM_DRAINS", 100)
+# Wall-clock limit on one such drain. On expiry the request is billed on the chunks
+# read so far and the provider stream is closed, so a stalled upstream can't hold
+# a drain slot, its buffered chunks or the request's concurrency slot forever.
+CHAT_COMPLETIONS_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS: Final = get_env_float(
+    "CHAT_COMPLETIONS_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS", 600.0
+)
 LOGGING_WORKER_CONCURRENCY: Final = get_env_int("LOGGING_WORKER_CONCURRENCY", 100)  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = get_env_int("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000)
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = get_env_float("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)

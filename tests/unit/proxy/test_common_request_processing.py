@@ -9245,23 +9245,27 @@ class _ProviderWithLateUsage(litellm.CustomLLM):
         super().__init__()
         self.tail: Final = asyncio.Event()
         self.tail_streamed = False
+        self.stream_closed = False
         self.fail_after_tail: Final = fail_after_tail
 
     async def astreaming(self, *args, **kwargs):
-        for word in ("Once ", "upon ", "a "):
-            yield _generic_chunk(word)
-        await self.tail.wait()
-        self.tail_streamed = True
-        if self.fail_after_tail:
-            raise litellm.InternalServerError(message="provider dropped", llm_provider="late", model="m")
-        for word in ("time ", "there ", "was "):
-            yield _generic_chunk(word)
-        yield {
-            **_generic_chunk(""),
-            "is_finished": True,
-            "finish_reason": "stop",
-            "usage": {"prompt_tokens": 50, "completion_tokens": 2000, "total_tokens": 2050},
-        }
+        try:
+            for word in ("Once ", "upon ", "a "):
+                yield _generic_chunk(word)
+            await self.tail.wait()
+            self.tail_streamed = True
+            if self.fail_after_tail:
+                raise litellm.InternalServerError(message="provider dropped", llm_provider="late", model="m")
+            for word in ("time ", "there ", "was "):
+                yield _generic_chunk(word)
+            yield {
+                **_generic_chunk(""),
+                "is_finished": True,
+                "finish_reason": "stop",
+                "usage": {"prompt_tokens": 50, "completion_tokens": 2000, "total_tokens": 2050},
+            }
+        finally:
+            self.stream_closed = True
 
 
 def _generic_chunk(text: str) -> dict:
@@ -9286,7 +9290,9 @@ class TestStreamingDisconnectDrainsProviderUsage:
     usage instead of an estimate from the few chunks the client received.
     """
 
-    async def _disconnect_mid_read(self, monkeypatch, provider: _ProviderWithLateUsage, recorder, use_router: bool):
+    async def _disconnect_mid_read(
+        self, monkeypatch, provider: _ProviderWithLateUsage, recorder, use_router: bool, release_tail: bool = True
+    ):
         from litellm.proxy.common_request_processing import arm_disconnect_drain
 
         monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "late", "custom_handler": provider}])
@@ -9314,7 +9320,8 @@ class TestStreamingDisconnectDrainsProviderUsage:
             stream_completed=False,
             client_disconnected=True,
         )
-        provider.tail.set()
+        if release_tail:
+            provider.tail.set()
         await asyncio.wait_for(recorder.logged.wait(), timeout=5)
         await asyncio.sleep(0.2)
         return delivered
@@ -9355,6 +9362,24 @@ class TestStreamingDisconnectDrainsProviderUsage:
         logged: Final = recorder.success_events[0]["kwargs"]["standard_logging_object"]
         assert 0 < logged["completion_tokens"] < 2000
         assert provider.tail_streamed is False, "the provider stream kept running past the drain cap"
+
+    @pytest.mark.asyncio
+    async def test_drain_past_its_time_limit_bills_what_was_read_and_closes_the_provider(self, monkeypatch):
+        import litellm.proxy.common_request_processing as common_request_processing
+
+        monkeypatch.setattr(common_request_processing, "CHAT_COMPLETIONS_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS", 0.2)
+        monkeypatch.setattr(common_request_processing, "_DETACHED_STREAM_DRAINS", set())
+        provider: Final = _ProviderWithLateUsage()
+        recorder: Final = _RecordingSuccessLogger()
+
+        await self._disconnect_mid_read(monkeypatch, provider, recorder, use_router=False, release_tail=False)
+
+        assert len(recorder.success_events) == 1
+        logged: Final = recorder.success_events[0]["kwargs"]["standard_logging_object"]
+        assert 0 < logged["completion_tokens"] < 2000
+        assert provider.tail_streamed is False
+        assert provider.stream_closed is True, "the stalled provider read was left running past the drain limit"
+        assert common_request_processing._DETACHED_STREAM_DRAINS == set()
 
     @pytest.mark.asyncio
     async def test_provider_error_after_disconnect_logs_a_failure_not_a_success(self, monkeypatch):

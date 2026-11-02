@@ -38,6 +38,7 @@ from litellm._logging import redact_internal_details_from_client_message, verbos
 from litellm._uuid import uuid
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.constants import (
+    CHAT_COMPLETIONS_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS,
     CHAT_COMPLETIONS_MAX_DETACHED_STREAM_DRAINS,
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -591,6 +592,7 @@ class _DisconnectedStream:
     response: object
     logging_obj: LiteLLMLoggingObj | None
     fire_deferred_logging: Callable[[], None]
+    bill_partial_spend: Callable[[], Awaitable[bool]]
     user_api_key_dict: UserAPIKeyAuth | None
     proxy_logging_obj: "ProxyLogging | None"
 
@@ -602,9 +604,23 @@ async def _bill_drained_stream_after_disconnect(stream: CustomStreamWrapper, dis
     client disconnects, and its usage only arrives on the final chunk. Reading
     the stream to its end runs its normal end-of-stream logging with that usage,
     or its failure logging (with the partial usage) when the provider errors.
+    A drain still running at the time limit bills the chunks it has read and
+    closes the provider stream instead.
     """
     try:
-        drained: Final = await _read_stream_to_end(stream)
+        drained: Final = await asyncio.wait_for(
+            _read_stream_to_end(stream), timeout=CHAT_COMPLETIONS_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        verbose_proxy_logger.warning(
+            "Detached stream drain hit its %ss limit; billing the %d chunks read so far",
+            CHAT_COMPLETIONS_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS,
+            len(stream.chunks),
+        )
+        with anyio.CancelScope(shield=True):
+            await disconnected.bill_partial_spend()
+            await _settle_detached_stream(disconnected, drained=False)
+        return
     except BaseException:
         with anyio.CancelScope(shield=True):
             await _settle_detached_stream(disconnected, drained=False)
@@ -4640,6 +4656,9 @@ class ProxyBaseLLMRequestProcessing:
                             response=response,
                             logging_obj=logging_obj,
                             fire_deferred_logging=fire_deferred_logging,
+                            bill_partial_spend=partial(
+                                _bill_partial_streamed_spend_on_disconnect, request_data, response
+                            ),
                             user_api_key_dict=user_api_key_dict,
                             proxy_logging_obj=proxy_logging_obj,
                         ),
