@@ -1,3 +1,5 @@
+import pytest
+
 import litellm
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
@@ -180,10 +182,85 @@ def test_deepseek_anthropic_messages_preserves_thinking_and_sanitizes_custom_too
     )
 
     assert request["messages"] == messages
-    assert request["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert request["thinking"] == {"type": "enabled"}
     assert request["tools"][0] == {
         "name": "get_weather",
         "description": "Get weather",
         "input_schema": {"type": "object"},
     }
     assert request["tools"][1]["type"] == "web_search_20260209"
+
+
+def test_deepseek_anthropic_messages_drops_budget_tokens_and_warns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = DeepSeekAnthropicMessagesConfig()
+    warned: list[tuple[object, str]] = []
+
+    def mock_warn(thinking: object, model: str) -> None:
+        warned.append((thinking, model))
+
+    monkeypatch.setattr(
+        "litellm.llms.deepseek.messages.transformation._warn_on_dropped_budget",
+        mock_warn,
+    )
+
+    request = config.transform_anthropic_messages_request(
+        model="deepseek-reasoner",
+        messages=[{"role": "user", "content": "solve math"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 4000,
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert request["thinking"] == {"type": "enabled"}
+    assert len(warned) == 1
+    assert warned[0][1] == "deepseek-reasoner"
+
+
+def test_deepseek_anthropic_messages_maps_effort_and_adaptive_thinking() -> None:
+    config = DeepSeekAnthropicMessagesConfig()
+
+    # 1. output_config with effort: low maps to thinking enabled without budget_tokens
+    req_effort = config.transform_anthropic_messages_request(
+        model="deepseek-reasoner",
+        messages=[{"role": "user", "content": "solve math"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 4000,
+            "output_config": {"effort": "low"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert req_effort["thinking"] == {"type": "enabled"}
+    assert "output_config" not in req_effort
+
+    # 2. adaptive thinking maps to thinking enabled without budget_tokens
+    req_adaptive = config.transform_anthropic_messages_request(
+        model="deepseek-reasoner",
+        messages=[{"role": "user", "content": "solve math"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 4000,
+            "thinking": {"type": "adaptive"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert req_adaptive["thinking"] == {"type": "enabled"}
+    assert "budget_tokens" not in req_adaptive["thinking"]
+
+    # 3. disabled thinking is preserved as disabled
+    req_disabled = config.transform_anthropic_messages_request(
+        model="deepseek-reasoner",
+        messages=[{"role": "user", "content": "solve math"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 4000,
+            "thinking": {"type": "disabled"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert req_disabled["thinking"] == {"type": "disabled"}

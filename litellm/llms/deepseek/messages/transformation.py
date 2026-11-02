@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.llms.deepseek.chat.transformation import _warn_on_dropped_budget
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
@@ -122,6 +123,17 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
 
         return [_sanitized_tool(tool) for tool in _TOOL_LIST.validate_python(tools)]
 
+    @staticmethod
+    def _sanitize_thinking_for_deepseek(anthropic_messages_request: dict, model: str) -> None:
+        thinking_value: Final = anthropic_messages_request.get("thinking")
+        if isinstance(thinking_value, dict):
+            if thinking_value.get("type") in ("enabled", "disabled"):
+                _warn_on_dropped_budget(thinking_value, model)
+                anthropic_messages_request["thinking"] = {"type": thinking_value["type"]}
+            elif thinking_value.get("type") == "adaptive":
+                anthropic_messages_request["thinking"] = {"type": "enabled"}
+        anthropic_messages_request.pop("output_config", None)
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -137,6 +149,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
+        self._sanitize_thinking_for_deepseek(anthropic_messages_request, model)
         if "tools" in anthropic_messages_request:
             anthropic_messages_request["tools"] = self._sanitize_tools_for_deepseek(anthropic_messages_request["tools"])
         return anthropic_messages_request
