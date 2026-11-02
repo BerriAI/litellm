@@ -6986,9 +6986,9 @@ def _joined_token_ids(choices: Sequence[Mapping[str, object]]) -> tuple[int, ...
     return tuple(chain.from_iterable(_TOKEN_IDS.validate_python(choice.get("token_ids")) or () for choice in choices))
 
 
-def _hosted_vllm_stream_choices(
+def _hosted_vllm_stream(
     logging_obj: Logging, upstream_choices: Sequence[Mapping[str, object]]
-) -> tuple[dict[str, object], ...]:
+) -> CustomStreamWrapper:
     sse_lines: Final = (
         *(
             "data: " + json.dumps({"id": "chatcmpl-1", "object": "chat.completion.chunk", "model": "m", "choices": [c]})
@@ -6999,12 +6999,15 @@ def _hosted_vllm_stream_choices(
     completion_stream: Final = HostedVLLMChatConfig().get_model_response_iterator(
         streaming_response=iter(sse_lines), sync_stream=True, json_mode=False
     )
-    return tuple(
-        chunk.choices[0].model_dump()
-        for chunk in CustomStreamWrapper(
-            completion_stream=completion_stream, model="m", custom_llm_provider="hosted_vllm", logging_obj=logging_obj
-        )
+    return CustomStreamWrapper(
+        completion_stream=completion_stream, model="m", custom_llm_provider="hosted_vllm", logging_obj=logging_obj
     )
+
+
+def _hosted_vllm_stream_choices(
+    logging_obj: Logging, upstream_choices: Sequence[Mapping[str, object]]
+) -> tuple[dict[str, object], ...]:
+    return tuple(chunk.choices[0].model_dump() for chunk in _hosted_vllm_stream(logging_obj, upstream_choices))
 
 
 @pytest.mark.parametrize("stop_reason", [",5", 151645])
@@ -7072,6 +7075,37 @@ def test_hosted_vllm_stream_keeps_held_back_token_ids_on_their_own_choice(loggin
         (0, [17]),
         (1, [18]),
     ]
+
+
+def _rejects_a_two(text: str) -> bool:
+    return "2" not in text
+
+
+def _choices_sent_before_rule_failure(stream: CustomStreamWrapper) -> Iterator[dict[str, object]]:
+    try:
+        yield from (chunk.choices[0].model_dump() for chunk in stream)
+    except MidStreamFallbackError:
+        return
+
+
+def test_hosted_vllm_stream_sends_no_token_ids_ahead_of_a_failing_post_call_rule(
+    logging_obj: Logging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "post_call_rules", [_rejects_a_two])
+    stream: Final = _hosted_vllm_stream(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": None, "token_ids": [16]},
+            {"index": 0, "delta": {"content": "1"}, "finish_reason": None, "token_ids": [11, 17]},
+            {"index": 0, "delta": {"content": ",2"}, "finish_reason": "stop", "stop_reason": None, "token_ids": [20]},
+        ),
+    )
+
+    assert [
+        (_DELTA.validate_python(choice["delta"]).get("content"), choice.get("token_ids"))
+        for choice in _choices_sent_before_rule_failure(stream)
+    ] == [("", None), ("1", None)]
 
 
 def _held_back_stop_string_stream(token_ids: Mapping[str, None]) -> tuple[Mapping[str, object], ...]:

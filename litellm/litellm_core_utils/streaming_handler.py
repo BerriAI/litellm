@@ -42,7 +42,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_items
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
-from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
+from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject, drop_token_ids
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -193,6 +193,14 @@ def _choice_fields_chunk(
     model_response.choices[0].index = upstream_index  # rebind-ok: chunks are built in place here
     _apply_choice_fields(model_response.choices[0], fields)
     return model_response
+
+
+def _without_token_ids_under_post_call_rules(chunk: ModelResponseStream | None) -> ModelResponseStream | None:
+    if chunk is None or not litellm.post_call_rules:
+        return chunk
+    for choice in chunk.choices:
+        drop_token_ids(choice)
+    return chunk
 
 
 def _holds_only_scalars(fields: Iterable[tuple[str, object]]) -> bool:
@@ -1248,8 +1256,10 @@ class CustomStreamWrapper:
         )
 
         is_chunk_non_empty: Final = self.is_chunk_non_empty(completion_obj, model_response, response_obj)
-        upstream_chunk_choice_fields: Final[Mapping[str, object]] = response_obj.get(
-            "chunk_choice_fields", _NO_UPSTREAM_CHOICE_FIELDS
+        upstream_chunk_choice_fields: Final[Mapping[str, object]] = (
+            _NO_UPSTREAM_CHOICE_FIELDS
+            if litellm.post_call_rules
+            else response_obj.get("chunk_choice_fields", _NO_UPSTREAM_CHOICE_FIELDS)
         )
         chunk_choice_fields: Final = self._take_carried_chunk_choice_fields(response_obj, upstream_chunk_choice_fields)
         sibling_finish_reason: Final[str | None] = response_obj.get("sibling_finish_reason")
@@ -1810,7 +1820,7 @@ class CustomStreamWrapper:
                 completion_obj=completion_obj,
             )
             if isinstance(dispatch_result, _ProviderChunkEarlyReturn):
-                return dispatch_result.value
+                return _without_token_ids_under_post_call_rules(dispatch_result.value)
             response_obj = dispatch_result.response_obj
 
             model_response.model = self._served_openrouter_model() or self.model
@@ -1900,7 +1910,7 @@ class CustomStreamWrapper:
                 response_obj=response_obj,
                 plain_delta_created=plain_delta_created,
             )
-            return result
+            return _without_token_ids_under_post_call_rules(result)
 
         except StopIteration:
             raise StopIteration
