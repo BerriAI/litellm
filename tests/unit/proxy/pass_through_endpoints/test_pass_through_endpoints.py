@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import sys
-import time
 import uuid
 import zlib
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
@@ -13726,21 +13725,15 @@ class TestGuardrailResponseHeaders:
         assert h11.Response(status_code=200, headers=[*headers.items()]).status_code == 200
 
     def test_guardrail_header_past_the_size_budget_is_left_out_without_scanning_its_characters(self):
-        names: Final = [f"g{index}" for index in range(300_000)]
+        names: Final = [f"g{index}" for index in range(2_000)]
 
-        def _best_cpu_seconds(run: Callable[[], object]) -> float:
-            def _timed() -> float:
-                started: Final = time.process_time()
-                run()
-                return time.process_time() - started
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._is_sendable_header_value"
+        ) as is_sendable:
+            headers: Final = _guardrail_response_headers({"metadata": {"applied_guardrails": names}})
 
-            return min(_timed() for _ in range(3))
-
-        metadata: Final = {"metadata": {"applied_guardrails": names}}
-        assert _guardrail_response_headers(metadata) == {}
-        assert _best_cpu_seconds(lambda: _guardrail_response_headers(metadata)) < 15 * _best_cpu_seconds(
-            lambda: ",".join(names)
-        )
+        assert headers == {}
+        is_sendable.assert_not_called()
 
     @pytest.mark.parametrize("control", ["\x01", "\x1f", "\x7f", "\x00", "\n"])
     def test_guardrail_name_with_a_control_character_stays_out_of_the_header(self, control):
