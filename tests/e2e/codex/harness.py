@@ -47,6 +47,7 @@ class CodexHarness:
     def codex_home(self) -> Path:
         return self.home / ".codex"
 
+    @step("Create a workspace folder holding the test's files")
     def new_workspace(self, files: Mapping[str, str]) -> Path:
         workspace: Final = Path(tempfile.mkdtemp(prefix="workspace-", dir=self.home))
         for name, content in files.items():
@@ -71,6 +72,7 @@ class CodexHarness:
         return codex_run(exit_code=completed.returncode, stdout=completed.stdout, stderr=completed.stderr)
 
 
+@step("Give Codex a fresh empty home whose config sends every request to the proxy")
 @contextmanager
 def codex_harness(
     *, gateway: str, api_key: str, rate_bucket: RateBucket, limiter: RateLimiter
