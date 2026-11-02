@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 
 MODEL_COST_MAP_RELOAD_PARAM_NAME = "model_cost_map_reload_config"
 
-_CONFIGURED_INTERVAL_HOURS: Final = TypeAdapter(Annotated[StrictInt, Field(gt=0)])
+_CONFIGURED_INTERVAL_HOURS: Final[TypeAdapter[int]] = TypeAdapter(Annotated[StrictInt, Field(gt=0)])
 
 
 class _RevisionIncrement(TypedDict):
