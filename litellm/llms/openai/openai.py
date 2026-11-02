@@ -1202,7 +1202,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         shared_session: Optional["ClientSession"] = None,
     ):
         response = None
-        data = provider_config.transform_request(
+        data = await provider_config.async_transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
