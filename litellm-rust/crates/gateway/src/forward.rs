@@ -14,6 +14,8 @@ use hyper_util::{
 
 use crate::Error;
 
+pub const PEER_HEADER: &str = "x-litellm-rust-peer";
+
 #[derive(Clone)]
 pub struct Forward {
     upstream: Uri,
@@ -61,35 +63,23 @@ async fn forward(
     *request.version_mut() = axum::http::Version::HTTP_11;
     let headers = request.headers_mut();
     strip_hop_headers(headers);
-    let forwarded = headers
-        .get_all("x-forwarded-for")
-        .iter()
-        .map(|value| value.as_bytes())
-        .collect::<Vec<_>>();
-    let mut forwarded = forwarded.join(b", ".as_slice());
-    if !forwarded.is_empty() {
-        forwarded.extend_from_slice(b", ");
-    }
-    forwarded.extend_from_slice(peer.ip().to_string().as_bytes());
+    // Forwarding headers pass through untouched so Python sees the request as if the client
+    // connected to it directly. Inserting replaces any client-sent copy: the peer is the one
+    // value a client must not choose.
     headers.insert(
-        "x-forwarded-for",
-        HeaderValue::from_bytes(&forwarded).map_err(|_| StatusCode::BAD_REQUEST)?,
+        PEER_HEADER,
+        HeaderValue::from_str(&peer.to_string()).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
     );
-    if !headers.contains_key("x-forwarded-proto") {
-        headers.insert("x-forwarded-proto", HeaderValue::from_static("http"));
-    }
-    let mut response = state
-        .client
-        .request(request)
-        .await
-        .map_err(|error| {
-            tracing::warn!(%error, "python proxy unreachable");
-            StatusCode::BAD_GATEWAY
-        })?;
+    let mut response = state.client.request(request).await.map_err(|error| {
+        tracing::warn!(%error, "python proxy unreachable");
+        StatusCode::BAD_GATEWAY
+    })?;
     strip_hop_headers(response.headers_mut());
     Ok(response.map(Body::new))
 }
 
+// Per-connection headers (RFC 9110 section 7.6.1) describe the client's connection to Rust, not
+// Rust's connection to Python, so a proxy must drop them instead of forwarding them.
 fn strip_hop_headers(headers: &mut HeaderMap) {
     let connection_headers: Vec<_> = headers
         .get_all(header::CONNECTION)
@@ -159,10 +149,23 @@ mod tests {
                     assert_eq!(request.headers()["host"], "public.example");
                     assert_eq!(request.headers()["authorization"], "Bearer test");
                     assert_eq!(
-                        request.headers()["x-forwarded-for"],
-                        "192.0.2.1, 192.0.2.2, 198.51.100.5"
+                        request
+                            .headers()
+                            .get_all("x-forwarded-for")
+                            .iter()
+                            .collect::<Vec<_>>(),
+                        ["192.0.2.1", "192.0.2.2"]
                     );
                     assert_eq!(request.headers()["x-forwarded-proto"], "https");
+                    assert_eq!(request.headers()["forwarded"], "for=192.0.2.1;proto=https");
+                    assert_eq!(
+                        request
+                            .headers()
+                            .get_all(PEER_HEADER)
+                            .iter()
+                            .collect::<Vec<_>>(),
+                        ["198.51.100.5:1234"]
+                    );
                     assert!(!request.headers().contains_key("x-remove"));
                     assert!(!request.headers().contains_key("proxy-authorization"));
                     assert_eq!(
@@ -190,6 +193,9 @@ mod tests {
             .header("x-forwarded-for", "192.0.2.1")
             .header("x-forwarded-for", "192.0.2.2")
             .header("x-forwarded-proto", "https")
+            .header("forwarded", "for=192.0.2.1;proto=https")
+            .header(PEER_HEADER, "10.1.2.3:1")
+            .header(PEER_HEADER, "10.1.2.4:1")
             .header("connection", "x-remove, keep-alive")
             .header("x-remove", "remove")
             .header("proxy-authorization", "remove")
@@ -250,8 +256,15 @@ mod tests {
             axum::serve(
                 upstream,
                 Router::new().fallback(|request: Request| async {
-                    assert_eq!(request.headers()["x-forwarded-for"], "127.0.0.1");
-                    assert_eq!(request.headers()["x-forwarded-proto"], "http");
+                    let headers = request.headers();
+                    assert!(!headers.contains_key("x-forwarded-for"));
+                    assert!(!headers.contains_key("x-forwarded-proto"));
+                    assert!(
+                        headers[PEER_HEADER]
+                            .to_str()
+                            .unwrap()
+                            .starts_with("127.0.0.1:")
+                    );
                     Response::new(request.into_body())
                 }),
             )
