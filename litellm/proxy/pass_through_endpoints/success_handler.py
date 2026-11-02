@@ -79,6 +79,18 @@ def _websocket_frames(
     )
 
 
+async def finalize_cost_without_success_logs(
+    *,
+    logging_obj: LiteLLMLoggingObj,
+    standard_logging_response_object: object,
+    **_success_log_fields: object,  # kwargs-ok: accepts every field a log dispatch receives; none are needed here
+) -> None:
+    """Settles the provider's charge on the logging object for a response that won't be logged as a success"""
+    from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost
+
+    await finalize_proxy_response_cost(logging_obj, standard_logging_response_object)
+
+
 class PassThroughEndpointLogging:
     def __init__(
         self,
