@@ -54,6 +54,9 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
             region=region,
         )
 
+    def _default_max_tokens_models(self, model: str, litellm_params: Mapping[str, object]) -> tuple[str, ...]:
+        return (f"bedrock_mantle/{model}", *super()._default_max_tokens_models(model, litellm_params))
+
     def validate_environment(
         self,
         headers: dict,

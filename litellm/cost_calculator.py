@@ -6,6 +6,7 @@ import time
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
+from itertools import accumulate
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
@@ -3850,44 +3851,65 @@ def handle_realtime_transcription_cost_calculation(
       - {"type": "duration", "seconds": <float>}  → priced via input_cost_per_second
       - {"type": "tokens", "input_tokens": ...}    → priced via input/audio token cost
     """
-    completed_events: Final = [
-        cast(dict, result) for result in results if result.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE
-    ]
-    if not completed_events:
+    configured_models: Final = tuple(accumulate(map(_session_transcription_model, results), _newer_model))
+    clips: Final = tuple(
+        (as_str_mapping(result.get("usage")) or {}, configured)
+        for result, configured in zip(results, configured_models, strict=True)
+        if result.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE
+    )
+    if not clips:
         return 0.0
 
-    model_name: Final = _get_transcription_model_name_from_results(results) or litellm_model_name
-    model_info: Final = _cost_map_model_info(model_name, custom_llm_provider)
+    fallback_model: Final = _get_transcription_model_name_from_results(results) or litellm_model_name
+    clip_models: Final = tuple((usage, configured or fallback_model) for usage, configured in clips)
+    model_infos: Final = MappingProxyType(
+        {model: _cost_map_model_info(model, custom_llm_provider) for model in frozenset(m for _, m in clip_models)}
+    )
     override_info: Final = (
         _cost_map_model_info(custom_pricing_model, custom_llm_provider) if custom_pricing_model is not None else None
     )
+    return sum(
+        (_transcription_usage_cost(dict(usage), model_infos[model], override_info) for usage, model in clip_models),
+        0.0,
+    )
 
-    total_cost = 0.0
-    for event in completed_events:
-        usage = event.get("usage") or {}
-        total_cost += _transcription_usage_cost(usage, model_info, override_info)
-    return total_cost
+
+_TRANSCRIPTION_SESSION_EVENT_TYPES: Final = frozenset(
+    {"transcription_session.created", "transcription_session.updated", "session.created", "session.updated"}
+)
+
+
+def _str_field(mapping: Mapping[str, object] | None, key: str) -> str | None:
+    value: Final = None if mapping is None else mapping.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _configured_transcription_model(session: Mapping[str, object]) -> str | None:
+    audio_input: Final = as_str_mapping((as_str_mapping(session.get("audio")) or {}).get("input"))
+    nested: Final = _str_field(as_str_mapping((audio_input or {}).get("transcription")), "model")
+    return nested or _str_field(as_str_mapping(session.get("input_audio_transcription")), "model")
+
+
+def _session_of(result: Mapping[str, object]) -> Mapping[str, object] | None:
+    return as_str_mapping(result.get("session")) if result.get("type") in _TRANSCRIPTION_SESSION_EVENT_TYPES else None
+
+
+def _session_transcription_model(result: Mapping[str, object]) -> str | None:
+    session: Final = _session_of(result)
+    return None if session is None else _configured_transcription_model(session)
+
+
+def _newer_model(current: str | None, newer: str | None) -> str | None:
+    return newer or current
 
 
 def _get_transcription_model_name_from_results(
     results: OpenAIRealtimeStreamList,
 ) -> str | None:
-    """Resolve the ASR model from a transcription_session.* / session.* event."""
-    for result in results:
-        if result.get("type") in (
-            "transcription_session.created",
-            "transcription_session.updated",
-            "session.created",
-            "session.updated",
-        ):
-            session = cast(dict, result).get("session", {}) or {}
-            transcription = ((session.get("audio", {}) or {}).get("input", {}) or {}).get(
-                "transcription", {}
-            ) or session.get("input_audio_transcription", {})
-            model = (transcription or {}).get("model") or session.get("model")
-            if model:
-                return model
-    return None
+    return next(
+        (model for result in results if (model := _str_field(_session_of(result), "model"))),
+        None,
+    )
 
 
 _TranscriptionRateKey: TypeAlias = Literal[
