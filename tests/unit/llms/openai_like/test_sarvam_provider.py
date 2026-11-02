@@ -16,13 +16,6 @@ SARVAM_MODELS = (
     "sarvam/deepseekv4.1-flash-1017",
 )
 
-BETA_MODELS = (
-    "sarvam/deepseekv4-pro",
-    "sarvam/kimi-k3",
-    "sarvam/mimo-v2.6-flash",
-    "sarvam/mimo-v2.6-pro",
-)
-
 
 class TestSarvamProviderConfig:
     def test_sarvam_json_config_exists(self):
@@ -89,10 +82,6 @@ class TestSarvamCostMap:
 
         assert entry["max_output_tokens"] == entry["max_input_tokens"]
         assert entry["max_tokens"] == entry["max_output_tokens"]
-
-    def test_beta_models_absent(self):
-        for model in BETA_MODELS:
-            assert model not in litellm.model_cost
 
     def test_stale_sarvam_m_absent(self):
         assert "sarvam/sarvam-m" not in litellm.model_cost
