@@ -256,6 +256,21 @@ from litellm.router_api import (
 from litellm.router_api import RoutingContext as RouterContext
 from litellm.router_api import deployment_id as _deployment_id
 from litellm.router_deprecated import DeprecatedRouterMembers
+from litellm.router_endpoint_table import (
+    ENDPOINTS,
+    SYNC_DISPATCHES,
+    Dispatch,
+    EndpointHandler,
+    as_handler,
+    dispatch_for,
+    handler_call_type,
+    handler_identity,
+    host_handler,
+    interaction_request,
+    managed_agent_request,
+    search_tool_call,
+    with_provider,
+)
 from litellm.router_host import router_host
 from litellm.router_python_host import PythonHost, python_host
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
@@ -1332,6 +1347,10 @@ def _base_model_widened_window(
 _SETTING_ATTRIBUTES: Final = frozenset("_core_" + name for name in SETTING_FIELDS)
 
 
+# A table-bound endpoint: its arguments and result depend on the endpoint, as before the table.
+TableEndpoint: TypeAlias = Callable[..., Any]  # each endpoint keeps its litellm signature
+
+
 class PythonCore(DeprecatedRouterMembers):
     _core_model_names: set[str] = set()
     _core_cache_responses: bool | None = False
@@ -1339,6 +1358,137 @@ class PythonCore(DeprecatedRouterMembers):
     # Bumped by every ``apply``: the static arguments plus ``_core_applied`` are the settings.
     _settings_version: int = 0
     _core_applied: Mapping[str, object] = MappingProxyType({})
+
+    # The endpoints of litellm/router_endpoint_table.py, bound per instance by _bind_endpoints; declared
+    # here so type checkers see them on the core and on Router.
+    _arealtime: TableEndpoint
+    _aresponses_websocket: TableEndpoint
+    a_add_message: TableEndpoint
+    aadapter_generate_content: TableEndpoint
+    aanthropic_messages: TableEndpoint
+    acancel_fine_tuning_job: TableEndpoint
+    acancel_interaction: TableEndpoint
+    acancel_responses: TableEndpoint
+    acompact_responses: TableEndpoint
+    acreate_agent: TableEndpoint
+    acreate_assistants: TableEndpoint
+    acreate_container: TableEndpoint
+    acreate_fine_tuning_job: TableEndpoint
+    acreate_interaction: TableEndpoint
+    acreate_realtime_client_secret: TableEndpoint
+    acreate_realtime_transcription_session: TableEndpoint
+    acreate_skill: TableEndpoint
+    acreate_thread: TableEndpoint
+    adecisions: TableEndpoint
+    adelete_agent: TableEndpoint
+    adelete_assistant: TableEndpoint
+    adelete_container: TableEndpoint
+    adelete_container_file: TableEndpoint
+    adelete_interaction: TableEndpoint
+    adelete_responses: TableEndpoint
+    adelete_skill: TableEndpoint
+    aextraction: TableEndpoint
+    afile_content: TableEndpoint
+    afile_delete: TableEndpoint
+    afile_list: TableEndpoint
+    agenerate_content: TableEndpoint
+    agenerate_content_stream: TableEndpoint
+    aget_agent: TableEndpoint
+    aget_assistants: TableEndpoint
+    aget_interaction: TableEndpoint
+    aget_messages: TableEndpoint
+    aget_responses: TableEndpoint
+    aget_skill: TableEndpoint
+    aget_thread: TableEndpoint
+    aimage_edit: TableEndpoint
+    alist_agent_versions: TableEndpoint
+    alist_agents: TableEndpoint
+    alist_container_files: TableEndpoint
+    alist_containers: TableEndpoint
+    alist_fine_tuning_jobs: TableEndpoint
+    alist_input_items: TableEndpoint
+    alist_skills: TableEndpoint
+    allm_passthrough_route: TableEndpoint
+    amoderation: TableEndpoint
+    anthropic_messages: TableEndpoint
+    aocr: TableEndpoint
+    arealtime_calls: TableEndpoint
+    aresponses: TableEndpoint
+    aretrieve_container: TableEndpoint
+    aretrieve_container_file: TableEndpoint
+    aretrieve_container_file_content: TableEndpoint
+    aretrieve_fine_tuning_job: TableEndpoint
+    arun_thread: TableEndpoint
+    asearch: TableEndpoint
+    asystemone: TableEndpoint
+    aupload_container_file: TableEndpoint
+    avector_store_delete: TableEndpoint
+    avector_store_file_content: TableEndpoint
+    avector_store_file_create: TableEndpoint
+    avector_store_file_delete: TableEndpoint
+    avector_store_file_list: TableEndpoint
+    avector_store_file_retrieve: TableEndpoint
+    avector_store_file_update: TableEndpoint
+    avector_store_list: TableEndpoint
+    avector_store_retrieve: TableEndpoint
+    avector_store_search: TableEndpoint
+    avector_store_update: TableEndpoint
+    avideo_content: TableEndpoint
+    avideo_create_character: TableEndpoint
+    avideo_edit: TableEndpoint
+    avideo_extension: TableEndpoint
+    avideo_generation: TableEndpoint
+    avideo_get_character: TableEndpoint
+    avideo_list: TableEndpoint
+    avideo_remix: TableEndpoint
+    avideo_status: TableEndpoint
+    cancel_interaction: TableEndpoint
+    create_agent: TableEndpoint
+    create_container: TableEndpoint
+    create_interaction: TableEndpoint
+    decisions: TableEndpoint
+    delete_agent: TableEndpoint
+    delete_container: TableEndpoint
+    delete_container_file: TableEndpoint
+    delete_interaction: TableEndpoint
+    extraction: TableEndpoint
+    generate_content: TableEndpoint
+    generate_content_stream: TableEndpoint
+    get_agent: TableEndpoint
+    get_interaction: TableEndpoint
+    list_agent_versions: TableEndpoint
+    list_agents: TableEndpoint
+    list_container_files: TableEndpoint
+    list_containers: TableEndpoint
+    ocr: TableEndpoint
+    responses: TableEndpoint
+    retrieve_container: TableEndpoint
+    retrieve_container_file: TableEndpoint
+    retrieve_container_file_content: TableEndpoint
+    search: TableEndpoint
+    systemone: TableEndpoint
+    upload_container_file: TableEndpoint
+    vector_store_create: TableEndpoint
+    vector_store_delete: TableEndpoint
+    vector_store_file_content: TableEndpoint
+    vector_store_file_create: TableEndpoint
+    vector_store_file_delete: TableEndpoint
+    vector_store_file_list: TableEndpoint
+    vector_store_file_retrieve: TableEndpoint
+    vector_store_file_update: TableEndpoint
+    vector_store_list: TableEndpoint
+    vector_store_retrieve: TableEndpoint
+    vector_store_search: TableEndpoint
+    vector_store_update: TableEndpoint
+    video_content: TableEndpoint
+    video_create_character: TableEndpoint
+    video_edit: TableEndpoint
+    video_extension: TableEndpoint
+    video_generation: TableEndpoint
+    video_get_character: TableEndpoint
+    video_list: TableEndpoint
+    video_remix: TableEndpoint
+    video_status: TableEndpoint
 
     # -- entry points: everything outside code needs besides the endpoint methods ---------------
     # See litellm/router_api.py. The members outside code used before these live in
@@ -2806,367 +2956,39 @@ class PythonCore(DeprecatedRouterMembers):
             case _:
                 return None
 
+    def _bind_endpoints(self, *, assistants: bool) -> None:
+        """Bind the factory-built endpoints of ``router_endpoint_table`` (the assistants ones, or
+        every other one), each served by its host op through ``host.invoke`` at call time."""
+        for spec in ENDPOINTS.values():
+            if (spec.dispatch == "assistants") is assistants:
+                setattr(
+                    self,
+                    spec.name,
+                    self._endpoint_wrapper(
+                        host_handler(self._host, spec.host_op, spec.call_type), spec.dispatch, spec.call_type
+                    ),
+                )
+
     def initialize_assistants_endpoint(self):
         ## INITIALIZE PASS THROUGH ASSISTANTS ENDPOINT ##
-        self.acreate_assistants = self.factory_function(self._host.invoke("acreate_assistants"))
-        self.adelete_assistant = self.factory_function(self._host.invoke("adelete_assistant"))
-        self.aget_assistants = self.factory_function(self._host.invoke("aget_assistants"))
-        self.acreate_thread = self.factory_function(self._host.invoke("acreate_thread"))
-        self.aget_thread = self.factory_function(self._host.invoke("aget_thread"))
-        self.a_add_message = self.factory_function(self._host.invoke("a_add_message"))
-        self.aget_messages = self.factory_function(self._host.invoke("aget_messages"))
-        self.arun_thread = self.factory_function(self._host.invoke("arun_thread"))
-
-    def _initialize_core_endpoints(self):
-        """Helper to initialize core router endpoints."""
-        self.amoderation = self.factory_function(self._host.invoke("amoderation"), call_type="moderation")
-        self.aanthropic_messages = self.factory_function(
-            self._host.invoke("anthropic_messages"), call_type="anthropic_messages"
-        )
-        self.anthropic_messages = self.factory_function(
-            self._host.invoke("anthropic_messages"), call_type="anthropic_messages"
-        )
-        self.agenerate_content = self.factory_function(
-            self._host.invoke("agenerate_content"), call_type="agenerate_content"
-        )
-        self.aadapter_generate_content = self.factory_function(
-            self._host.invoke("aadapter_generate_content"), call_type="aadapter_generate_content"
-        )
-        self.aresponses = self.factory_function(self._host.invoke("aresponses"), call_type="aresponses")
-        self.afile_delete = self.factory_function(self._host.invoke("afile_delete"), call_type="afile_delete")
-        self.afile_content = self.factory_function(self._host.invoke("afile_content"), call_type="afile_content")
-        self.responses = self.factory_function(self._host.invoke("responses"), call_type="responses")
-        self.aget_responses = self.factory_function(self._host.invoke("aget_responses"), call_type="aget_responses")
-        self.acancel_responses = self.factory_function(
-            self._host.invoke("acancel_responses"), call_type="acancel_responses"
-        )
-        self.acompact_responses = self.factory_function(
-            self._host.invoke("acompact_responses"), call_type="acompact_responses"
-        )
-        self.adelete_responses = self.factory_function(
-            self._host.invoke("adelete_responses"), call_type="adelete_responses"
-        )
-        self.alist_input_items = self.factory_function(
-            self._host.invoke("alist_input_items"), call_type="alist_input_items"
-        )
-        self._arealtime = self.factory_function(self._host.invoke("_arealtime"), call_type="_arealtime")
-        self.acreate_realtime_client_secret = self.factory_function(
-            self._host.invoke("acreate_realtime_client_secret"), call_type="acreate_realtime_client_secret"
-        )
-        self.arealtime_calls = self.factory_function(self._host.invoke("arealtime_calls"), call_type="arealtime_calls")
-        self.acreate_realtime_transcription_session = self.factory_function(
-            self._host.invoke("acreate_realtime_transcription_session"),
-            call_type="acreate_realtime_transcription_session",
-        )
-        self._aresponses_websocket = self.factory_function(
-            self._host.invoke("_aresponses_websocket"), call_type="_aresponses_websocket"
-        )
-        self.acreate_fine_tuning_job = self.factory_function(
-            self._host.invoke("acreate_fine_tuning_job"), call_type="acreate_fine_tuning_job"
-        )
-        self.acancel_fine_tuning_job = self.factory_function(
-            self._host.invoke("acancel_fine_tuning_job"), call_type="acancel_fine_tuning_job"
-        )
-        self.alist_fine_tuning_jobs = self.factory_function(
-            self._host.invoke("alist_fine_tuning_jobs"), call_type="alist_fine_tuning_jobs"
-        )
-        self.aretrieve_fine_tuning_job = self.factory_function(
-            self._host.invoke("aretrieve_fine_tuning_job"), call_type="aretrieve_fine_tuning_job"
-        )
-        self.afile_list = self.factory_function(self._host.invoke("afile_list"), call_type="alist_files")
-        self.aimage_edit = self.factory_function(self._host.invoke("aimage_edit"), call_type="aimage_edit")
-        self.allm_passthrough_route = self.factory_function(
-            self._host.invoke("allm_passthrough_route"), call_type="allm_passthrough_route"
-        )
-        # Note: acancel_batch is defined as a method on the Router class (not using factory_function)
-        # to properly handle model-to-provider mapping like acreate_batch and aretrieve_batch
-
-    def _initialize_vector_store_endpoints(self):
-        """Initialize vector store endpoints."""
-        from litellm.vector_stores.main import (
-            adelete,
-            alist,
-            aretrieve,
-            asearch,
-            aupdate,
-            create,
-            delete,
-            list,
-            retrieve,
-            search,
-            update,
-        )
-
-        self.avector_store_search = self.factory_function(asearch, call_type="avector_store_search")
-        self.vector_store_search = self.factory_function(search, call_type="vector_store_search")
-        self.vector_store_create = self.factory_function(create, call_type="vector_store_create")
-        self.avector_store_retrieve = self.factory_function(aretrieve, call_type="avector_store_retrieve")
-        self.vector_store_retrieve = self.factory_function(retrieve, call_type="vector_store_retrieve")
-        self.avector_store_list = self.factory_function(alist, call_type="avector_store_list")
-        self.vector_store_list = self.factory_function(list, call_type="vector_store_list")
-        self.avector_store_update = self.factory_function(aupdate, call_type="avector_store_update")
-        self.vector_store_update = self.factory_function(update, call_type="vector_store_update")
-        self.avector_store_delete = self.factory_function(adelete, call_type="avector_store_delete")
-        self.vector_store_delete = self.factory_function(delete, call_type="vector_store_delete")
-
-    def _initialize_vector_store_file_endpoints(self):
-        """Initialize vector store file endpoints."""
-        from litellm.vector_store_files.main import (
-            acreate as avector_store_file_create_fn,
-        )
-        from litellm.vector_store_files.main import (
-            adelete as avector_store_file_delete_fn,
-        )
-        from litellm.vector_store_files.main import alist as avector_store_file_list_fn
-        from litellm.vector_store_files.main import (
-            aretrieve as avector_store_file_retrieve_fn,
-        )
-        from litellm.vector_store_files.main import (
-            aretrieve_content as avector_store_file_content_fn,
-        )
-        from litellm.vector_store_files.main import (
-            aupdate as avector_store_file_update_fn,
-        )
-        from litellm.vector_store_files.main import (
-            create as vector_store_file_create_fn,
-        )
-        from litellm.vector_store_files.main import (
-            delete as vector_store_file_delete_fn,
-        )
-        from litellm.vector_store_files.main import list as vector_store_file_list_fn
-        from litellm.vector_store_files.main import (
-            retrieve as vector_store_file_retrieve_fn,
-        )
-        from litellm.vector_store_files.main import (
-            retrieve_content as vector_store_file_content_fn,
-        )
-        from litellm.vector_store_files.main import (
-            update as vector_store_file_update_fn,
-        )
-
-        self.avector_store_file_create = self.factory_function(
-            avector_store_file_create_fn, call_type="avector_store_file_create"
-        )
-        self.vector_store_file_create = self.factory_function(
-            vector_store_file_create_fn, call_type="vector_store_file_create"
-        )
-        self.avector_store_file_list = self.factory_function(
-            avector_store_file_list_fn, call_type="avector_store_file_list"
-        )
-        self.vector_store_file_list = self.factory_function(
-            vector_store_file_list_fn, call_type="vector_store_file_list"
-        )
-        self.avector_store_file_retrieve = self.factory_function(
-            avector_store_file_retrieve_fn, call_type="avector_store_file_retrieve"
-        )
-        self.vector_store_file_retrieve = self.factory_function(
-            vector_store_file_retrieve_fn, call_type="vector_store_file_retrieve"
-        )
-        self.avector_store_file_content = self.factory_function(
-            avector_store_file_content_fn, call_type="avector_store_file_content"
-        )
-        self.vector_store_file_content = self.factory_function(
-            vector_store_file_content_fn, call_type="vector_store_file_content"
-        )
-        self.avector_store_file_update = self.factory_function(
-            avector_store_file_update_fn, call_type="avector_store_file_update"
-        )
-        self.vector_store_file_update = self.factory_function(
-            vector_store_file_update_fn, call_type="vector_store_file_update"
-        )
-        self.avector_store_file_delete = self.factory_function(
-            avector_store_file_delete_fn, call_type="avector_store_file_delete"
-        )
-        self.vector_store_file_delete = self.factory_function(
-            vector_store_file_delete_fn, call_type="vector_store_file_delete"
-        )
-
-    def _initialize_google_genai_endpoints(self):
-        """Initialize Google GenAI endpoints."""
-        from litellm.google_genai import (
-            agenerate_content,
-            agenerate_content_stream,
-            generate_content,
-            generate_content_stream,
-        )
-
-        self.agenerate_content = self.factory_function(agenerate_content, call_type="agenerate_content")
-        self.generate_content = self.factory_function(generate_content, call_type="generate_content")
-        self.agenerate_content_stream = self.factory_function(
-            agenerate_content_stream, call_type="agenerate_content_stream"
-        )
-        self.generate_content_stream = self.factory_function(
-            generate_content_stream, call_type="generate_content_stream"
-        )
-
-    def _initialize_ocr_search_endpoints(self):
-        """Initialize OCR and search endpoints."""
-        from litellm.ocr import aocr, ocr
-
-        self.aocr = self.factory_function(aocr, call_type="aocr")
-        self.ocr = self.factory_function(ocr, call_type="ocr")
-
-        from litellm.search import asearch, search
-
-        self.asearch = self.factory_function(asearch, call_type="asearch")
-        self.search = self.factory_function(search, call_type="search")
-
-        from litellm.decisions import adecisions, decisions
-
-        self.adecisions = self.factory_function(adecisions, call_type="adecisions")
-        self.decisions = self.factory_function(decisions, call_type="decisions")
-
-        from litellm.systemone import asystemone, systemone
-
-        self.asystemone = self.factory_function(asystemone, call_type="asystemone")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
-        self.systemone = self.factory_function(systemone, call_type="systemone")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
-
-        from litellm.extraction import aextraction, extraction
-
-        self.aextraction = self.factory_function(aextraction, call_type="aextraction")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
-        self.extraction = self.factory_function(extraction, call_type="extraction")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
-
-    def _initialize_video_endpoints(self):
-        """Initialize video endpoints."""
-        from litellm.videos import (
-            avideo_content,
-            avideo_create_character,
-            avideo_edit,
-            avideo_extension,
-            avideo_generation,
-            avideo_get_character,
-            avideo_list,
-            avideo_remix,
-            avideo_status,
-            video_content,
-            video_create_character,
-            video_edit,
-            video_extension,
-            video_generation,
-            video_get_character,
-            video_list,
-            video_remix,
-            video_status,
-        )
-
-        self.avideo_generation = self.factory_function(avideo_generation, call_type="avideo_generation")
-        self.video_generation = self.factory_function(video_generation, call_type="video_generation")
-        self.avideo_list = self.factory_function(avideo_list, call_type="avideo_list")
-        self.video_list = self.factory_function(video_list, call_type="video_list")
-        self.avideo_status = self.factory_function(avideo_status, call_type="avideo_status")
-        self.video_status = self.factory_function(video_status, call_type="video_status")
-        self.avideo_content = self.factory_function(avideo_content, call_type="avideo_content")
-        self.video_content = self.factory_function(video_content, call_type="video_content")
-        self.avideo_remix = self.factory_function(avideo_remix, call_type="avideo_remix")
-        self.video_remix = self.factory_function(video_remix, call_type="video_remix")
-        self.avideo_create_character = self.factory_function(
-            avideo_create_character, call_type="avideo_create_character"
-        )
-        self.video_create_character = self.factory_function(video_create_character, call_type="video_create_character")
-        self.avideo_get_character = self.factory_function(avideo_get_character, call_type="avideo_get_character")
-        self.video_get_character = self.factory_function(video_get_character, call_type="video_get_character")
-        self.avideo_edit = self.factory_function(avideo_edit, call_type="avideo_edit")
-        self.video_edit = self.factory_function(video_edit, call_type="video_edit")
-        self.avideo_extension = self.factory_function(avideo_extension, call_type="avideo_extension")
-        self.video_extension = self.factory_function(video_extension, call_type="video_extension")
-
-    def _initialize_container_endpoints(self):
-        """Initialize container endpoints."""
-        from litellm.containers import (
-            acreate_container,
-            adelete_container,
-            alist_containers,
-            aretrieve_container,
-            create_container,
-            delete_container,
-            list_containers,
-            retrieve_container,
-        )
-        from litellm.containers.endpoint_factory import (
-            _generated_endpoints as container_file_endpoints,
-        )
-
-        self.acreate_container = self.factory_function(acreate_container, call_type="acreate_container")
-        self.create_container = self.factory_function(create_container, call_type="create_container")
-        self.alist_containers = self.factory_function(alist_containers, call_type="alist_containers")
-        self.list_containers = self.factory_function(list_containers, call_type="list_containers")
-        self.aretrieve_container = self.factory_function(aretrieve_container, call_type="aretrieve_container")
-        self.retrieve_container = self.factory_function(retrieve_container, call_type="retrieve_container")
-        self.adelete_container = self.factory_function(adelete_container, call_type="adelete_container")
-        self.delete_container = self.factory_function(delete_container, call_type="delete_container")
-
-        # Auto-register JSON-generated container file endpoints
-        for name, func in container_file_endpoints.items():
-            setattr(self, name, self.factory_function(func, call_type=name))
-
-    def _initialize_skills_endpoints(self):
-        """Initialize Anthropic Skills API endpoints."""
-        self.acreate_skill = self.factory_function(self._host.invoke("acreate_skill"), call_type="acreate_skill")
-        self.alist_skills = self.factory_function(self._host.invoke("alist_skills"), call_type="alist_skills")
-        self.aget_skill = self.factory_function(self._host.invoke("aget_skill"), call_type="aget_skill")
-        self.adelete_skill = self.factory_function(self._host.invoke("adelete_skill"), call_type="adelete_skill")
-
-    def _initialize_interactions_endpoints(self):
-        """Initialize Google Interactions API endpoints."""
-        from litellm.interactions import acancel as acancel_interaction
-        from litellm.interactions import acreate as acreate_interaction
-        from litellm.interactions import adelete as adelete_interaction
-        from litellm.interactions import aget as aget_interaction
-        from litellm.interactions import cancel as cancel_interaction
-        from litellm.interactions import create as create_interaction
-        from litellm.interactions import delete as delete_interaction
-        from litellm.interactions import get as get_interaction
-
-        self.acreate_interaction = self.factory_function(acreate_interaction, call_type="acreate_interaction")
-        self.create_interaction = self.factory_function(create_interaction, call_type="create_interaction")
-        self.aget_interaction = self.factory_function(aget_interaction, call_type="aget_interaction")
-        self.get_interaction = self.factory_function(get_interaction, call_type="get_interaction")
-        self.adelete_interaction = self.factory_function(adelete_interaction, call_type="adelete_interaction")
-        self.delete_interaction = self.factory_function(delete_interaction, call_type="delete_interaction")
-        self.acancel_interaction = self.factory_function(acancel_interaction, call_type="acancel_interaction")
-        self.cancel_interaction = self.factory_function(cancel_interaction, call_type="cancel_interaction")
-
-    def _initialize_managed_agents_endpoints(self):
-        """Initialize Google Managed Agents API endpoints (v1beta/agents)."""
-        from litellm.interactions.agents import acreate as acreate_agent
-        from litellm.interactions.agents import adelete as adelete_agent
-        from litellm.interactions.agents import aget as aget_agent
-        from litellm.interactions.agents import alist as alist_agents
-        from litellm.interactions.agents import alist_versions as alist_agent_versions
-        from litellm.interactions.agents import create as create_agent
-        from litellm.interactions.agents import delete as delete_agent
-        from litellm.interactions.agents import get as get_agent
-        from litellm.interactions.agents import list as list_agents
-        from litellm.interactions.agents import list_versions as list_agent_versions
-
-        self.acreate_agent = self.factory_function(acreate_agent, call_type="acreate_agent")
-        self.create_agent = self.factory_function(create_agent, call_type="create_agent")
-        self.alist_agents = self.factory_function(alist_agents, call_type="alist_agents")
-        self.list_agents = self.factory_function(list_agents, call_type="list_agents")
-        self.aget_agent = self.factory_function(aget_agent, call_type="aget_agent")
-        self.get_agent = self.factory_function(get_agent, call_type="get_agent")
-        self.adelete_agent = self.factory_function(adelete_agent, call_type="adelete_agent")
-        self.delete_agent = self.factory_function(delete_agent, call_type="delete_agent")
-        self.alist_agent_versions = self.factory_function(alist_agent_versions, call_type="alist_agent_versions")
-        self.list_agent_versions = self.factory_function(list_agent_versions, call_type="list_agent_versions")
-
-    def _initialize_specialized_endpoints(self):
-        """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container, skills, interactions)."""
-        self._initialize_vector_store_endpoints()
-        self._initialize_vector_store_file_endpoints()
-        self._initialize_google_genai_endpoints()
-        self._initialize_ocr_search_endpoints()
-        # Override vector store methods with router-aware implementations
-        self._override_vector_store_methods_for_router()
-        self._initialize_video_endpoints()
-        self._initialize_container_endpoints()
-        self._initialize_skills_endpoints()
-        self._initialize_interactions_endpoints()
-        self._initialize_managed_agents_endpoints()
+        self._bind_endpoints(assistants=True)
 
     def initialize_router_endpoints(self):
-        self._initialize_core_endpoints()
-        self._initialize_specialized_endpoints()
+        self._bind_endpoints(assistants=False)
+
+    # The endpoint groups are bound together from one table (litellm/router_endpoint_table.py);
+    # each group's former initializer binds them all.
+    _initialize_core_endpoints = initialize_router_endpoints
+    _initialize_specialized_endpoints = initialize_router_endpoints
+    _initialize_vector_store_endpoints = initialize_router_endpoints
+    _initialize_vector_store_file_endpoints = initialize_router_endpoints
+    _initialize_google_genai_endpoints = initialize_router_endpoints
+    _initialize_ocr_search_endpoints = initialize_router_endpoints
+    _initialize_video_endpoints = initialize_router_endpoints
+    _initialize_container_endpoints = initialize_router_endpoints
+    _initialize_skills_endpoints = initialize_router_endpoints
+    _initialize_interactions_endpoints = initialize_router_endpoints
+    _initialize_managed_agents_endpoints = initialize_router_endpoints
 
     def validate_fallbacks(self, fallback_param: Sequence[Mapping[str, object]] | None):
         """
@@ -5940,14 +5762,18 @@ class PythonCore(DeprecatedRouterMembers):
         messages: list[AllMessageValues],
         kwargs: dict[str, Any],
     ):
+        # The routing function `acompletion` hands along, kept out of `function_setup` (which takes
+        # the litellm function's name) and handed back for a routed call.
+        routing_function: Final = kwargs.pop("original_function", None)
         litellm_logging_object = kwargs.get("litellm_logging_obj", None)
         if litellm_logging_object is None:
             litellm_logging_object, kwargs = function_setup(
                 **{
+                    **kwargs,
                     "original_function": "acompletion",
                     "rules_obj": Rules(),
                     "start_time": get_utc_datetime(),
-                    **kwargs,
+                    "litellm_call_id": kwargs.get("litellm_call_id") or str(uuid.uuid4()),
                 }
             )
         litellm_logging_object = cast(LiteLLMLogging, litellm_logging_object)
@@ -6022,7 +5848,6 @@ class PythonCore(DeprecatedRouterMembers):
 
         _model_list: Final = self._core_get_model_list(model_name=model)
         if _model_list is None or len(_model_list) == 0:  # if direct call to model
-            kwargs.pop("original_function")
             return await self._host.invoke("acompletion")(**kwargs)
 
         target_group_timeouts: Final = {
@@ -6039,6 +5864,7 @@ class PythonCore(DeprecatedRouterMembers):
         return await self.async_function_with_fallbacks(
             **{key: value for key, value in kwargs.items() if key not in ("timeout", "stream_timeout")},
             **target_group_timeouts,
+            original_function=routing_function,
         )
 
     def image_generation(self, prompt: str, model: str, **kwargs):
@@ -6364,7 +6190,6 @@ class PythonCore(DeprecatedRouterMembers):
     async def arerank(self, model: str, **kwargs):
         try:
             kwargs["model"] = model
-            kwargs["input"] = input
             kwargs["original_function"] = self._arerank
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
 
@@ -6795,7 +6620,7 @@ class PythonCore(DeprecatedRouterMembers):
 
         passthrough_on_no_deployment: Final = kwargs.pop("passthrough_on_no_deployment", False)
         function_name: Final = "_ageneric_api_call_with_fallbacks"
-        handler_name: Final[str | None] = getattr(original_generic_function, "__name__", None)
+        handler_name: Final[str | None] = handler_call_type(original_generic_function)
         deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
@@ -6832,7 +6657,7 @@ class PythonCore(DeprecatedRouterMembers):
             )
 
             custom_llm_provider: Final = provider_for_generic_call(data)
-            generic_function_name: Final[str] = getattr(original_generic_function, "__name__", "")
+            generic_function_name: Final[str] = handler_name or ""
 
             response_kwargs: Final = {
                 **without_retrieve_stream_defaults(data, kwargs),
@@ -7342,9 +7167,7 @@ class PythonCore(DeprecatedRouterMembers):
             )
             carry_superseded_attempt_usage(retry_kwargs)
             try:
-                with endpoint_selection(
-                    getattr(handler, "__name__", None), getattr(handler, "__module__", None), model=model_group
-                ):
+                with endpoint_selection(*handler_identity(handler), model=model_group):
                     response = await attempt_function(**retry_kwargs)
             except Exception as retry_error:  # noqa: BLE001  # the fallback chain judges the failed retry
                 wrapped = _stream_fallback_error_for_raised(retry_error, model_group, False, e.llm_provider)
@@ -7576,7 +7399,7 @@ class PythonCore(DeprecatedRouterMembers):
         Returns:
             The response from the handler function
         """
-        handler_name: Final = original_function.__name__
+        handler_name: Final = handler_call_type(original_function)
         metadata_variable_name: Final = get_router_metadata_variable_name(function_name="generic_api_call")
         try:
             verbose_router_logger.debug("Inside _generic_api_call() - handler: %s, model: %s", handler_name, model)
@@ -7960,13 +7783,13 @@ class PythonCore(DeprecatedRouterMembers):
         try:
             # If model is None, use the factory function approach (direct SDK call)
             if model is None:
-                from litellm.vector_stores.main import acreate
-
-                # Use the factory function to handle the call
-                factory_fn: Final = self.factory_function(acreate, call_type="avector_store_create")
-                return await factory_fn(**kwargs)
-
-            from litellm.vector_stores import acreate as avector_store_create_sdk
+                factory_fn: Final = self._endpoint_wrapper(
+                    host_handler(self._host, "vector_stores.main.acreate", "avector_store_create"),
+                    "vector_store",
+                    "avector_store_create",
+                )
+                created: Final = factory_fn(**kwargs)
+                return await created if inspect.isawaitable(created) else created
 
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             deployment: Final = await self._core_async_get_available_deployment(
@@ -7998,7 +7821,7 @@ class PythonCore(DeprecatedRouterMembers):
             custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
 
             async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
-                response = await avector_store_create_sdk(
+                pending_response: Final = self._host.invoke("vector_stores.acreate")(
                     **{
                         **data,
                         "custom_llm_provider": custom_llm_provider,
@@ -8007,6 +7830,7 @@ class PythonCore(DeprecatedRouterMembers):
                         **kwargs,
                     }
                 )
+                response: Final = await pending_response if inspect.isawaitable(pending_response) else pending_response
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.avector_store_create(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -8395,380 +8219,122 @@ class PythonCore(DeprecatedRouterMembers):
 
         return await original_function(**kwargs)
 
-    def factory_function(
-        self,
-        original_function: Callable,
-        call_type: Literal[
-            "assistants",
-            "moderation",
-            "anthropic_messages",
-            "aresponses",
-            "acancel_responses",
-            "acompact_responses",
-            "responses",
-            "aget_responses",
-            "adelete_responses",
-            "afile_delete",
-            "afile_content",
-            "_arealtime",
-            "acreate_realtime_client_secret",
-            "arealtime_calls",
-            "acreate_realtime_transcription_session",
-            "_aresponses_websocket",
-            "acreate_fine_tuning_job",
-            "acancel_fine_tuning_job",
-            "alist_fine_tuning_jobs",
-            "aretrieve_fine_tuning_job",
-            "alist_files",
-            "aimage_edit",
-            "allm_passthrough_route",
-            "alist_input_items",
-            "agenerate_content",
-            "generate_content",
-            "agenerate_content_stream",
-            "generate_content_stream",
-            "avector_store_search",
-            "avector_store_create",
-            "avector_store_retrieve",
-            "avector_store_list",
-            "avector_store_update",
-            "avector_store_delete",
-            "avector_store_file_create",
-            "avector_store_file_list",
-            "avector_store_file_retrieve",
-            "avector_store_file_content",
-            "avector_store_file_update",
-            "avector_store_file_delete",
-            "vector_store_search",
-            "vector_store_create",
-            "vector_store_retrieve",
-            "vector_store_list",
-            "vector_store_update",
-            "vector_store_delete",
-            "vector_store_file_create",
-            "vector_store_file_list",
-            "vector_store_file_retrieve",
-            "vector_store_file_content",
-            "vector_store_file_update",
-            "vector_store_file_delete",
-            "aocr",
-            "ocr",
-            "asearch",
-            "search",
-            "adecisions",
-            "decisions",
-            "asystemone",
-            "systemone",
-            "aextraction",
-            "extraction",
-            "aadapter_generate_content",
-            "avideo_generation",
-            "video_generation",
-            "avideo_list",
-            "video_list",
-            "avideo_status",
-            "video_status",
-            "avideo_content",
-            "video_content",
-            "avideo_remix",
-            "video_remix",
-            "avideo_create_character",
-            "video_create_character",
-            "avideo_get_character",
-            "video_get_character",
-            "avideo_edit",
-            "video_edit",
-            "avideo_extension",
-            "video_extension",
-            "acreate_container",
-            "create_container",
-            "alist_containers",
-            "list_containers",
-            "aretrieve_container",
-            "retrieve_container",
-            "adelete_container",
-            "delete_container",
-            "aupload_container_file",
-            "upload_container_file",
-            "alist_container_files",
-            "list_container_files",
-            "aretrieve_container_file",
-            "retrieve_container_file",
-            "adelete_container_file",
-            "delete_container_file",
-            "acreate_skill",
-            "alist_skills",
-            "aget_skill",
-            "adelete_skill",
-            "acreate_interaction",
-            "create_interaction",
-            "aget_interaction",
-            "get_interaction",
-            "adelete_interaction",
-            "delete_interaction",
-            "acancel_interaction",
-            "cancel_interaction",
-            "acreate_agent",
-            "create_agent",
-            "alist_agents",
-            "list_agents",
-            "aget_agent",
-            "get_agent",
-            "adelete_agent",
-            "delete_agent",
-            "alist_agent_versions",
-            "list_agent_versions",
-        ] = "assistants",
-    ):
+    def factory_function(self, original_function: Callable[..., object], call_type: str = "assistants"):
         """
-        Creates appropriate wrapper functions for different API call types.
+        Creates the wrapper the router serves an endpoint of ``call_type`` with, dispatched as
+        ``litellm/router_endpoint_table.py`` says. An unknown call type is refused here, when the
+        endpoint is bound, never answered with a wrapper that dispatches nowhere.
 
         Returns:
             - A synchronous function for synchronous call types
             - An asynchronous function for asynchronous call types
         """
-        # Handle synchronous call types
-        if call_type in (
-            "responses",
-            "generate_content",
-            "generate_content_stream",
-            "ocr",
-            "search",
-            "decisions",
-            "systemone",
-            "extraction",
-            "video_generation",
-            "video_list",
-            "video_status",
-            "video_content",
-            "video_remix",
-            "create_container",
-            "list_containers",
-            "retrieve_container",
-            "delete_container",
-        ):
+        return self._endpoint_wrapper(as_handler(original_function, call_type), dispatch_for(call_type), call_type)
+
+    def _endpoint_wrapper(self, handler: EndpointHandler, dispatch: Dispatch, call_type: str) -> Callable[..., object]:
+        if dispatch in SYNC_DISPATCHES:
 
             def sync_wrapper(
                 custom_llm_provider: str | None = None,
                 client: object | None = None,
                 **kwargs,
             ):
-                return self._generic_api_call_with_fallbacks(original_function=original_function, **kwargs)
+                return self._dispatch_sync_endpoint(handler, dispatch, call_type, custom_llm_provider, client, kwargs)
 
             return sync_wrapper
 
-        if call_type in (
-            "vector_store_search",
-            "vector_store_create",
-            "vector_store_retrieve",
-            "vector_store_list",
-            "vector_store_update",
-            "vector_store_delete",
-        ):
-
-            def vector_store_sync_wrapper(
-                custom_llm_provider: str | None = None,
-                client: object | None = None,
-                **kwargs,
-            ):
-                provider_kwargs: Final = (
-                    MappingProxyType({**kwargs, "custom_llm_provider": custom_llm_provider})
-                    if custom_llm_provider and "custom_llm_provider" not in kwargs
-                    else MappingProxyType(kwargs)
-                )
-                search_kwargs: Final = (
-                    MappingProxyType(
-                        {
-                            **provider_kwargs,
-                            "_direct_vector_store_embedding_executor": RouterVectorStoreEmbeddingExecutor(
-                                router=self._core_public(),
-                                metadata=self._vector_store_request_metadata(kwargs),
-                            ),
-                        }
-                    )
-                    if call_type == "vector_store_search"
-                    else provider_kwargs
-                )
-                if search_kwargs.get("model"):
-                    return self._generic_api_call_with_fallbacks(original_function=original_function, **search_kwargs)
-                if call_type == "vector_store_search":
-                    return original_function(**MappingProxyType({**search_kwargs, "router": self._core_public()}))
-                return original_function(**search_kwargs)
-
-            return vector_store_sync_wrapper
-
-        if call_type in (
-            "vector_store_file_create",
-            "vector_store_file_list",
-            "vector_store_file_retrieve",
-            "vector_store_file_content",
-            "vector_store_file_update",
-            "vector_store_file_delete",
-        ):
-
-            def vector_store_file_sync_wrapper(
-                custom_llm_provider: str | None = None,
-                client: object | None = None,
-                **kwargs,
-            ):
-                return original_function(
-                    custom_llm_provider=custom_llm_provider,
-                    client=client,
-                    **kwargs,
-                )
-
-            return vector_store_file_sync_wrapper
-
-        if call_type in (
-            "create_agent",
-            "list_agents",
-            "get_agent",
-            "delete_agent",
-            "list_agent_versions",
-        ):
-
-            def managed_agents_sync_wrapper(
-                custom_llm_provider: str | None = None,
-                client: object | None = None,
-                **kwargs,
-            ):
-                if custom_llm_provider and "custom_llm_provider" not in kwargs:
-                    kwargs["custom_llm_provider"] = custom_llm_provider
-                if "custom_llm_provider" not in kwargs:
-                    kwargs["custom_llm_provider"] = "gemini"
-                return original_function(**kwargs)
-
-            return managed_agents_sync_wrapper
-
-        # Handle asynchronous call types
         async def async_wrapper(
             custom_llm_provider: str | None = None,
             client: AsyncOpenAI | None = None,
             **kwargs,
         ):
-            if call_type == "assistants":
+            return await self._dispatch_async_endpoint(
+                handler, dispatch, call_type, custom_llm_provider, client, kwargs
+            )
+
+        return async_wrapper
+
+    def _dispatch_sync_endpoint(
+        self,
+        handler: EndpointHandler,
+        dispatch: Dispatch,
+        call_type: str,
+        custom_llm_provider: str | None,
+        client: object | None,
+        kwargs: dict[str, Any],  # mutable-ok: the wrapper's own kwargs, shaped in place as before
+    ) -> object:
+        match dispatch:
+            case "generic_sync":
+                return self._generic_api_call_with_fallbacks(original_function=handler, **kwargs)
+            case "search_sync":
+                return self._search_with_search_tools(original_function=handler, **kwargs)
+            case "vector_store_sync":
+                return self._vector_store_sync_call(handler, call_type, custom_llm_provider, kwargs)
+            case "vector_store_file_sync":
+                return handler(custom_llm_provider=custom_llm_provider, client=client, **kwargs)
+            case "interaction_sync":
+                interaction_kwargs: Final = interaction_request(custom_llm_provider, kwargs)
+                if interaction_kwargs.get("model"):
+                    return self._generic_api_call_with_fallbacks(original_function=handler, **interaction_kwargs)
+                return handler(**interaction_kwargs)
+            case "managed_agent_sync":
+                return handler(**managed_agent_request(custom_llm_provider, kwargs))
+            case _:
+                raise ValueError(f"{dispatch!r} is not a sync endpoint dispatch")
+
+    async def _dispatch_async_endpoint(
+        self,
+        handler: EndpointHandler,
+        dispatch: Dispatch,
+        call_type: str,
+        custom_llm_provider: str | None,
+        client: AsyncOpenAI | None,
+        kwargs: dict[str, Any],  # mutable-ok: the wrapper's own kwargs, shaped in place as before
+    ) -> object:
+        match dispatch:
+            case "assistants":
                 return await self._pass_through_assistants_endpoint_factory(
-                    original_function=original_function,
+                    original_function=handler,
                     custom_llm_provider=custom_llm_provider,
                     client=client,
                     **kwargs,
                 )
-            elif call_type == "moderation":
-                return await self._pass_through_moderation_endpoint_factory(
-                    original_function=original_function, **kwargs
-                )
-            elif call_type in ("asearch", "search"):
-                return await self._asearch_with_fallbacks(
-                    original_function=original_function,
-                    **kwargs,
-                )
-            elif call_type in (
-                "avector_store_file_create",
-                "avector_store_file_list",
-                "avector_store_file_retrieve",
-                "avector_store_file_content",
-                "avector_store_file_update",
-                "avector_store_file_delete",
-            ):
-                return await self._init_vector_store_api_endpoints(
-                    original_function=original_function,
-                    custom_llm_provider=custom_llm_provider,
-                    **kwargs,
-                )
-            elif call_type == "aresponses":
-                return await self._aresponses_with_streaming_fallbacks(
-                    original_function=original_function,
-                    **kwargs,
-                )
-            elif call_type in (
-                "acreate_realtime_client_secret",
-                "arealtime_calls",
-                "acreate_realtime_transcription_session",
-            ):
+            case "moderation":
+                return await self._pass_through_moderation_endpoint_factory(original_function=handler, **kwargs)
+            case "search":
+                return await self._asearch_with_fallbacks(original_function=handler, **kwargs)
+            case "responses":
+                return await self._aresponses_with_streaming_fallbacks(original_function=handler, **kwargs)
+            case "anthropic_messages":
+                return await self._aanthropic_messages_with_streaming_fallbacks(original_function=handler, **kwargs)
+            case "generic":
+                return await self._ageneric_api_call_with_fallbacks(original_function=handler, **kwargs)
+            case "generic_client":
+                return await self._ageneric_api_call_with_fallbacks(original_function=handler, client=client, **kwargs)
+            case "generic_provider_client":
                 return await self._ageneric_api_call_with_fallbacks(
-                    original_function=original_function,
+                    original_function=handler,
+                    custom_llm_provider=custom_llm_provider,
                     client=client,
                     **kwargs,
                 )
-            elif call_type in (
-                "anthropic_messages",
-                "_arealtime",
-                "_aresponses_websocket",
-                "acreate_fine_tuning_job",
-                "acancel_fine_tuning_job",
-                "alist_fine_tuning_jobs",
-                "aretrieve_fine_tuning_job",
-                "alist_files",
-                "aimage_edit",
-                "agenerate_content",
-                "agenerate_content_stream",
-                "aocr",
-                "ocr",
-                "adecisions",
-                "asystemone",
-                "aextraction",
-                "avideo_generation",
-                "avideo_list",
-                "avideo_status",
-                "avideo_content",
-                "avideo_remix",
-                "avideo_create_character",
-                "avideo_get_character",
-                "avideo_edit",
-                "avideo_extension",
-                "acreate_skill",
-                "alist_skills",
-                "aget_skill",
-                "adelete_skill",
-            ):
-                return await self._dispatch_generic_call_type(
-                    call_type=call_type,
-                    original_function=original_function,
-                    **kwargs,
-                )
-            elif call_type in (
-                "acreate_container",
-                "alist_containers",
-                "aretrieve_container",
-                "adelete_container",
-                "aupload_container_file",
-                "alist_container_files",
-                "aretrieve_container_file",
-                "adelete_container_file",
-                "aretrieve_container_file_content",
-            ):
-                return await self._init_containers_api_endpoints(
-                    original_function=original_function,
-                    custom_llm_provider=custom_llm_provider,
-                    **kwargs,
-                )
-            elif call_type == "allm_passthrough_route":
+            case "passthrough":
                 if client:
                     kwargs["client"] = client
                 return await self._ageneric_api_call_with_fallbacks(
-                    original_function=original_function,
+                    original_function=handler,
                     passthrough_on_no_deployment=True,
                     **kwargs,
                 )
-            elif call_type in (
-                "aget_responses",
-                "acancel_responses",
-                "acompact_responses",
-                "adelete_responses",
-                "alist_input_items",
-            ):
+            case "response_id":
                 return await self._init_responses_api_endpoints(
-                    original_function=original_function,
-                    **kwargs,
+                    original_function=handler, custom_llm_provider=custom_llm_provider, **kwargs
                 )
-            elif call_type in (
-                "avector_store_search",
-                "avector_store_create",
-                "avector_store_retrieve",
-                "avector_store_list",
-                "avector_store_update",
-                "avector_store_delete",
-            ):
+            case "container":
+                return await self._init_containers_api_endpoints(
+                    original_function=handler, custom_llm_provider=custom_llm_provider, **kwargs
+                )
+            case "vector_store":
                 vector_store_kwargs: Final = (
                     {
                         **kwargs,
@@ -8781,44 +8347,64 @@ class PythonCore(DeprecatedRouterMembers):
                     else kwargs
                 )
                 return await self._init_vector_store_api_endpoints(
-                    original_function=original_function,
+                    original_function=handler,
                     custom_llm_provider=custom_llm_provider,
                     call_type=call_type,
                     **vector_store_kwargs,
                 )
-            elif call_type in ("afile_delete", "afile_content"):
-                return await self._ageneric_api_call_with_fallbacks(
-                    original_function=original_function,
-                    custom_llm_provider=custom_llm_provider,
-                    client=client,
-                    **kwargs,
-                )
-            elif call_type in (
-                "acreate_interaction",
-                "create_interaction",
-                "aget_interaction",
-                "adelete_interaction",
-                "acancel_interaction",
-            ):
+            case "interaction":
                 return await self._init_interactions_api_endpoints(
-                    original_function=original_function,
-                    custom_llm_provider=custom_llm_provider,
-                    **kwargs,
+                    original_function=handler, custom_llm_provider=custom_llm_provider, **kwargs
                 )
-            elif call_type in (
-                "acreate_agent",
-                "alist_agents",
-                "aget_agent",
-                "adelete_agent",
-                "alist_agent_versions",
-            ):
+            case "managed_agent":
                 return await self._init_managed_agents_api_endpoints(
-                    original_function=original_function,
-                    custom_llm_provider=custom_llm_provider,
-                    **kwargs,
+                    original_function=handler, custom_llm_provider=custom_llm_provider, **kwargs
                 )
+            case _:
+                raise ValueError(f"{dispatch!r} is not an async endpoint dispatch")
 
-        return async_wrapper
+    def _vector_store_sync_call(
+        self,
+        handler: EndpointHandler,
+        call_type: str,
+        custom_llm_provider: str | None,
+        kwargs: Mapping[str, object],
+    ) -> object:
+        provider_kwargs: Final = MappingProxyType(with_provider(custom_llm_provider, kwargs))
+        search_kwargs: Final = (
+            MappingProxyType(
+                {
+                    **provider_kwargs,
+                    "_direct_vector_store_embedding_executor": RouterVectorStoreEmbeddingExecutor(
+                        router=self._core_public(),
+                        metadata=self._vector_store_request_metadata(kwargs),
+                    ),
+                }
+            )
+            if call_type == "vector_store_search"
+            else provider_kwargs
+        )
+        if search_kwargs.get("model"):
+            return self._generic_api_call_with_fallbacks(original_function=handler, **search_kwargs)
+        if call_type == "vector_store_search":
+            return handler(**MappingProxyType({**search_kwargs, "router": self._core_public()}))
+        return handler(**search_kwargs)
+
+    def _search_with_search_tools(
+        self,
+        original_function: Callable,
+        **kwargs: object,  # kwargs-ok: the search request
+    ) -> object:
+        """The sync ``search``: one attempt on one of the router's search tools named
+        ``search_tool_name`` (else ``model``), as ``asearch`` picks among them."""
+        search_tool_name: Final = kwargs.get("search_tool_name", kwargs.get("model"))
+        if not search_tool_name:
+            raise ValueError("search_tool_name or model parameter is required for search")
+        request: Final = {key: value for key, value in kwargs.items() if key != "model"}
+        self._update_kwargs_before_fallbacks(
+            model=search_tool_name, kwargs=request, metadata_variable_name="litellm_metadata"
+        )
+        return original_function(**search_tool_call(self._core_ctx.settings().search_tools, search_tool_name, request))
 
     @staticmethod
     def _vector_store_request_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
@@ -8918,18 +8504,24 @@ class PythonCore(DeprecatedRouterMembers):
     async def _init_responses_api_endpoints(
         self,
         original_function: Callable,
+        custom_llm_provider: str | None = None,
         **kwargs,
     ):
         """
         Initialize the Responses API endpoints on the router.
 
         GET, DELETE, CANCEL Responses API Requests encode the model_id in the response_id, this function decodes the response_id and sets the model to the model_id.
+        A plain id with no model names no deployment: the handler is called directly, as
+        ``litellm.aget_responses`` is without a router (the given provider, else the one the id names).
         """
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
         model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(kwargs.get("response_id"))
         if model_id is not None:
             kwargs["model"] = model_id
+        if not kwargs.get("model"):
+            direct_kwargs: Final = {key: value for key, value in kwargs.items() if key != "model"}
+            return await original_function(**with_provider(custom_llm_provider, direct_kwargs))
         return await self._ageneric_api_call_with_fallbacks(
             original_function=original_function,
             **kwargs,
@@ -8947,22 +8539,15 @@ class PythonCore(DeprecatedRouterMembers):
         GET, DELETE, CANCEL Interactions API Requests don't need model-based routing,
         so we call the original function directly with the custom_llm_provider.
         """
-        if custom_llm_provider and "custom_llm_provider" not in kwargs:
-            kwargs["custom_llm_provider"] = custom_llm_provider
-        # Default to gemini for interactions API
-        if "custom_llm_provider" not in kwargs:
-            kwargs["custom_llm_provider"] = "gemini"
-        # If the proxy accidentally passed agent name as model, clear it
-        if kwargs.get("agent") and kwargs.get("model") == kwargs.get("agent"):
-            kwargs["model"] = None
+        request: Final = interaction_request(custom_llm_provider, kwargs)
         # Model-based interactions use deployment routing + fallbacks; agent-only calls
         # must not enter model-group lookup (agent name is not a LiteLLM deployment).
-        if kwargs.get("model"):
+        if request.get("model"):
             return await self._ageneric_api_call_with_fallbacks(
                 original_function=original_function,
-                **kwargs,
+                **request,
             )
-        return await original_function(**kwargs)
+        return await original_function(**request)
 
     async def _init_managed_agents_api_endpoints(
         self,
@@ -8976,11 +8561,7 @@ class PythonCore(DeprecatedRouterMembers):
         CRUD operations for Gemini managed agents don't need model-based routing,
         so we call the original function directly with the custom_llm_provider.
         """
-        if custom_llm_provider and "custom_llm_provider" not in kwargs:
-            kwargs["custom_llm_provider"] = custom_llm_provider
-        if "custom_llm_provider" not in kwargs:
-            kwargs["custom_llm_provider"] = "gemini"
-        return await original_function(**kwargs)
+        return await original_function(**managed_agent_request(custom_llm_provider, kwargs))
 
     async def _pass_through_assistants_endpoint_factory(
         self,
@@ -9371,7 +8952,7 @@ class PythonCore(DeprecatedRouterMembers):
         """
         model_group: Final[str | None] = kwargs.get("model")
         compaction_surface: Final = surface_for_call(
-            getattr(kwargs.get("original_generic_function") or kwargs.get("original_function"), "__name__", "")
+            handler_call_type(kwargs.get("original_generic_function") or kwargs.get("original_function")) or ""
         )
         if compaction_surface is not None:
             kwargs["_context_compaction_state"] = initialize_compaction_state(kwargs, compaction_surface)
@@ -9730,8 +9311,7 @@ class PythonCore(DeprecatedRouterMembers):
         )
         try:
             with endpoint_selection(
-                getattr(endpoint_function, "__name__", None),
-                getattr(endpoint_function, "__module__", None),
+                *handler_identity(endpoint_function),
                 model=_OPAQUE_VALUE_ADAPTER.validate_python(model_group),
             ):
                 response = original_function(*args, **kwargs)
@@ -10541,7 +10121,7 @@ class PythonCore(DeprecatedRouterMembers):
             get_safeguard_refusal_stop_details,
         )
 
-        if getattr(original_generic_function, "__name__", "") != "anthropic_messages":
+        if handler_call_type(original_generic_function) != "anthropic_messages":
             return False
         if get_safeguard_refusal_stop_details(response) is None:
             return False

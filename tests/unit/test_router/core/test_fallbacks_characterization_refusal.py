@@ -3,8 +3,8 @@ Characterization of a router core's Anthropic safeguard-refusal fallbacks on /v1
 (non-streaming): a ``stop_reason: "refusal"`` response carrying ``stop_details`` re-enters the
 fallback chain only when a fallback would resolve for it.
 
-The core recognises a /v1/messages call by its endpoint's name, so this module runs on
-``NamedEndpointHost`` (a ``ScriptedHost`` whose ``anthropic_messages`` endpoint is named so).
+The core recognises a /v1/messages call by the endpoint it serves, never by the host function's
+``__name__``: ``ScriptedHost``'s endpoints are all named ``endpoint``, and the refusal gate holds.
 """
 
 import pytest
@@ -13,16 +13,16 @@ from litellm.router_core import RouterCore
 from tests.unit.test_router.core.fallbacks_helpers import (
     MESSAGES,
     MakeCore,
-    NamedEndpointHost,
     anthropic_message,
     anthropic_refusal,
     build,
 )
+from tests.unit.test_router.core.scripted_host import ScriptedHost
 
 
 @pytest.fixture
-def host() -> NamedEndpointHost:
-    return NamedEndpointHost()
+def host() -> ScriptedHost:
+    return ScriptedHost()
 
 
 async def messages(core: RouterCore, **request: object) -> object:  # kwargs-ok: request kwargs
@@ -40,7 +40,7 @@ async def messages(core: RouterCore, **request: object) -> object:  # kwargs-ok:
     ids=["content-policy-chain", "general-chain", "default-fallbacks"],
 )
 async def test_a_safeguard_refusal_falls_back_when_a_chain_resolves(
-    make_core: MakeCore, host: NamedEndpointHost, arguments: dict[str, object], expected: list[str]
+    make_core: MakeCore, host: ScriptedHost, arguments: dict[str, object], expected: list[str]
 ) -> None:
     core = build(make_core, **arguments)
     host.answer("openai/a", anthropic_refusal())
@@ -71,7 +71,7 @@ async def test_a_safeguard_refusal_falls_back_when_a_chain_resolves(
 )
 async def test_a_refusal_is_returned_to_the_caller_when_no_fallback_would_resolve(
     make_core: MakeCore,
-    host: NamedEndpointHost,
+    host: ScriptedHost,
     arguments: dict[str, object],
     request_kwargs: dict[str, object],
     refusal: dict[str, object],
@@ -89,7 +89,7 @@ async def test_a_refusal_is_returned_to_the_caller_when_no_fallback_would_resolv
 
 @pytest.mark.asyncio
 async def test_the_last_refusal_is_returned_when_every_fallback_refuses(
-    make_core: MakeCore, host: NamedEndpointHost
+    make_core: MakeCore, host: ScriptedHost
 ) -> None:
     core = build(make_core, fallbacks=[{"a": ["b"]}])
     host.answer("*", anthropic_refusal())
