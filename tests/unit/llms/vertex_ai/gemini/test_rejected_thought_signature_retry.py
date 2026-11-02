@@ -19,6 +19,7 @@ from litellm.utils import CustomStreamWrapper
 MODEL: Final = "gemini/gemini-3.8-flash"
 VERTEX_MINTED: Final = base64.b64encode(b"minted-by-vertex").decode()
 VERTEX_MINTED_TEXT: Final = base64.b64encode(b"minted-by-vertex-for-text").decode()
+AI_STUDIO_MINTED: Final = base64.b64encode(b"minted-by-ai-studio").decode()
 HISTORY_WITH_FOREIGN_SIGNATURES: Final = (
     {"role": "user", "content": "What is the weather in Paris?"},
     {
@@ -228,7 +229,14 @@ def test_body_without_a_foreign_signature_has_nothing_to_resend():
 CACHE_CONTROL: Final = {"type": "ephemeral"}
 
 
-def _cached_history(tag: str) -> tuple[Mapping[str, object], ...]:
+def _cached_history(
+    tag: str, cached_signature: str = VERTEX_MINTED, later_signatures: tuple[str, ...] = ()
+) -> tuple[Mapping[str, object], ...]:
+    later_answer: Final = (
+        {"role": "assistant", "content": "Noted.", "provider_specific_fields": {"thought_signatures": [*later_signatures]}}
+        if later_signatures
+        else {"role": "assistant", "content": "Noted."}
+    )
     prefix: Final = " ".join(f"Reference paragraph {i} for {tag}: weather values are in Celsius." for i in range(600))
     return (
         {"role": "system", "content": [{"type": "text", "text": prefix, "cache_control": CACHE_CONTROL}]},
@@ -244,7 +252,7 @@ def _cached_history(tag: str) -> tuple[Mapping[str, object], ...]:
                     "id": "call_1",
                     "type": "function",
                     "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
-                    "provider_specific_fields": {"thought_signature": VERTEX_MINTED},
+                    "provider_specific_fields": {"thought_signature": cached_signature},
                 }
             ],
         },
@@ -254,12 +262,14 @@ def _cached_history(tag: str) -> tuple[Mapping[str, object], ...]:
             "content": [{"type": "text", "text": "18C and sunny", "cache_control": CACHE_CONTROL}],
         },
         {"role": "user", "content": [{"type": "text", "text": "Got it.", "cache_control": CACHE_CONTROL}]},
-        {"role": "assistant", "content": "Noted."},
+        later_answer,
         {"role": "user", "content": "And in Berlin?"},
     )
 
 
-def _google_ai_studio(stream: bool, generated: list[dict[str, object]]) -> Callable[[httpx.Request], httpx.Response]:
+def _google_ai_studio(
+    stream: bool, generated: list[dict[str, object]], minted: frozenset[str] = frozenset()
+) -> Callable[[httpx.Request], httpx.Response]:
     """Rejects a generateContent call whose own contents or referenced cache carry a signature AI Studio did not mint,
     the way the live backend answered on 2026-11-02."""
     caches: Final[dict[str, object]] = {}
@@ -277,7 +287,7 @@ def _google_ai_studio(stream: bool, generated: list[dict[str, object]]) -> Calla
         cache: Final = caches.get(body.get("cachedContent"), {"contents": []})
         assert isinstance(cache, dict)
         signatures: Final = {*_signatures_of(body), *_signatures_of(cache)}
-        if signatures - {get_dummy_thought_signature()}:
+        if signatures - {get_dummy_thought_signature(), *minted}:
             return _rejected(AI_STUDIO_REJECTION)
         return _answer(stream)
 
@@ -301,6 +311,44 @@ async def test_signature_inside_a_cached_prefix_is_resent_inline_with_the_placeh
     assert _signatures_of(generated[0]) == []
     assert "cachedContent" not in generated[1]
     assert _signatures_of(generated[1]) == [get_dummy_thought_signature()]
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.asyncio
+async def test_signature_after_a_cache_the_backend_accepts_is_resent_with_the_cache_kept(is_async: bool, stream: bool):
+    generated: Final[list[dict[str, object]]] = []
+    answer: Final = await _complete(
+        _cached_history(
+            f"own cache async={is_async} stream={stream}", AI_STUDIO_MINTED, later_signatures=(VERTEX_MINTED_TEXT,)
+        ),
+        _google_ai_studio(stream, generated, minted=frozenset({AI_STUDIO_MINTED})),
+        is_async,
+        stream,
+    )
+    assert answer == "Berlin is 12C."
+    assert [body.get("cachedContent") for body in generated] == ["cachedContents/prefix"] * 2
+    assert _signatures_of(generated[0]) == [VERTEX_MINTED_TEXT]
+    assert _signatures_of(generated[1]) == [get_dummy_thought_signature()]
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.asyncio
+async def test_signature_inside_and_after_the_cached_prefix_goes_inline_once_the_cache_kept_resend_is_rejected(
+    is_async: bool, stream: bool
+):
+    generated: Final[list[dict[str, object]]] = []
+    answer: Final = await _complete(
+        _cached_history(f"both async={is_async} stream={stream}", later_signatures=(VERTEX_MINTED_TEXT,)),
+        _google_ai_studio(stream, generated),
+        is_async,
+        stream,
+    )
+    assert answer == "Berlin is 12C."
+    assert [body.get("cachedContent") for body in generated] == ["cachedContents/prefix"] * 2 + [None]
+    assert _signatures_of(generated[1]) == [get_dummy_thought_signature()]
+    assert _signatures_of(generated[2]) == [get_dummy_thought_signature()] * 2
 
 
 def _backend_validating_cached_signatures(

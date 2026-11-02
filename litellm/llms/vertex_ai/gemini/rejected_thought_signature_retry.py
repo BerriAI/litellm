@@ -26,6 +26,10 @@ def names_rejected_thought_signature(status_code: int, message: str) -> bool:
     return status_code == 400 and _REJECTED_SIGNATURE_MARKER in message.lower()
 
 
+def _is_rejected_signature(error: httpx.HTTPStatusError | BaseLLMException) -> bool:
+    return names_rejected_thought_signature(*status_and_message(error))
+
+
 def _entries(value: object) -> Sequence[Mapping[str, object]]:
     try:
         return _ENTRIES.validate_python(value)
@@ -89,30 +93,26 @@ def with_placeholder_native_thought_signatures(body: Mapping[str, object]) -> Ma
     }
 
 
-def _signed_history(body: Body, inline: Body) -> Body:
-    """A signature inside a cached prefix is out of the placeholder's reach, so the resend carries the history
-    inline whenever the cache holds one."""
-    return inline if _foreign_signature_count(inline) > _foreign_signature_count(body) else body
-
-
-async def _signed_history_async(body: Body, uncached: Callable[[], Awaitable[Body]] | None) -> Body:
+async def _inline_history_async(body: Body, uncached: Callable[[], Awaitable[Body]] | None) -> Body | None:
     if uncached is None or body.get("cachedContent") is None:
-        return body
-    return _signed_history(body, await uncached())
+        return None
+    inline: Final = await uncached()
+    return inline if _foreign_signature_count(inline) > _foreign_signature_count(body) else None
 
 
-def _signed_history_sync(body: Body, uncached: Callable[[], Body] | None) -> Body:
+def _inline_history_sync(body: Body, uncached: Callable[[], Body] | None) -> Body | None:
     if uncached is None or body.get("cachedContent") is None:
-        return body
-    return _signed_history(body, uncached())
+        return None
+    inline: Final = uncached()
+    return inline if _foreign_signature_count(inline) > _foreign_signature_count(body) else None
 
 
 def _resend_body(signed: Body, placeholders: Callable[[Body], Body | None]) -> Body | None:
     resend_body: Final = placeholders(signed)
     if resend_body is not None:
         verbose_logger.warning(
-            "Gemini rejected a replayed thought signature, resending once with the skip_thought_signature_validator"
-            " placeholder in every signature slot"
+            "Gemini rejected a replayed thought signature, resending with the skip_thought_signature_validator"
+            " placeholder in place of the replayed signatures"
         )
     return resend_body
 
@@ -127,7 +127,7 @@ async def build_with_accepted_thought_signatures_async(
     try:
         return await build()
     except BaseLLMException as error:
-        if uncached is None or not names_rejected_thought_signature(*status_and_message(error)):
+        if uncached is None or not _is_rejected_signature(error):
             raise
         inline_body: Final = _resend_body(await uncached(), placeholders)
         if inline_body is None:
@@ -143,12 +143,44 @@ def build_with_accepted_thought_signatures_sync(
     try:
         return build()
     except BaseLLMException as error:
-        if uncached is None or not names_rejected_thought_signature(*status_and_message(error)):
+        if uncached is None or not _is_rejected_signature(error):
             raise
         inline_body: Final = _resend_body(uncached(), placeholders)
         if inline_body is None:
             raise
     return inline_body
+
+
+async def _post_inline_async(
+    body: Body,
+    placeholders: Callable[[Body], Body | None],
+    uncached: Callable[[], Awaitable[Body]] | None,
+    post: Callable[[Body], Awaitable[Sent]],
+    log_request: Callable[[Body], None],
+    rejection: httpx.HTTPStatusError | BaseLLMException,
+) -> tuple[Body, Sent]:
+    inline: Final = await _inline_history_async(body, uncached)
+    resend_body: Final = None if inline is None else _resend_body(inline, placeholders)
+    if resend_body is None:
+        raise rejection
+    log_request(resend_body)
+    return resend_body, await post(resend_body)
+
+
+def _post_inline_sync(
+    body: Body,
+    placeholders: Callable[[Body], Body | None],
+    uncached: Callable[[], Body] | None,
+    post: Callable[[Body], Sent],
+    log_request: Callable[[Body], None],
+    rejection: httpx.HTTPStatusError | BaseLLMException,
+) -> tuple[Body, Sent]:
+    inline: Final = _inline_history_sync(body, uncached)
+    resend_body: Final = None if inline is None else _resend_body(inline, placeholders)
+    if resend_body is None:
+        raise rejection
+    log_request(resend_body)
+    return resend_body, post(resend_body)
 
 
 async def post_with_accepted_thought_signatures_async(
@@ -159,17 +191,24 @@ async def post_with_accepted_thought_signatures_async(
     log_request: Callable[[Body], None],
 ) -> tuple[Body, Sent]:
     """Innermost retry around the raw post, so a cache rebuild (which re-transforms the messages and brings
-    the rejected signatures back) is itself wrapped by it. Returns the body the backend accepted."""
+    the rejected signatures back) is itself wrapped by it. The resend keeps the cache and swaps the signatures
+    the body carries, and sends the history inline only when that is rejected too and the cache holds one.
+    Returns the body the backend accepted."""
     try:
         return body, await post(body)
     except (httpx.HTTPStatusError, BaseLLMException) as error:
-        if not names_rejected_thought_signature(*status_and_message(error)):
+        if not _is_rejected_signature(error):
             raise
-        resend_body: Final = _resend_body(await _signed_history_async(body, uncached), placeholders)
+        resend_body: Final = _resend_body(body, placeholders)
         if resend_body is None:
+            return await _post_inline_async(body, placeholders, uncached, post, log_request, error)
+    log_request(resend_body)
+    try:
+        return resend_body, await post(resend_body)
+    except (httpx.HTTPStatusError, BaseLLMException) as error:
+        if not _is_rejected_signature(error):
             raise
-        log_request(resend_body)
-    return resend_body, await post(resend_body)
+        return await _post_inline_async(body, placeholders, uncached, post, log_request, error)
 
 
 def post_with_accepted_thought_signatures_sync(
@@ -182,10 +221,15 @@ def post_with_accepted_thought_signatures_sync(
     try:
         return body, post(body)
     except (httpx.HTTPStatusError, BaseLLMException) as error:
-        if not names_rejected_thought_signature(*status_and_message(error)):
+        if not _is_rejected_signature(error):
             raise
-        resend_body: Final = _resend_body(_signed_history_sync(body, uncached), placeholders)
+        resend_body: Final = _resend_body(body, placeholders)
         if resend_body is None:
+            return _post_inline_sync(body, placeholders, uncached, post, log_request, error)
+    log_request(resend_body)
+    try:
+        return resend_body, post(resend_body)
+    except (httpx.HTTPStatusError, BaseLLMException) as error:
+        if not _is_rejected_signature(error):
             raise
-        log_request(resend_body)
-    return resend_body, post(resend_body)
+        return _post_inline_sync(body, placeholders, uncached, post, log_request, error)
