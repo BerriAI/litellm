@@ -822,12 +822,32 @@ async def test_an_unhealthy_deployment_stays_excluded_when_the_healthy_one_is_co
     assert host.deployments_called("acompletion") == ["b"]
 
 
-def test_a_cooldown_recorded_outside_an_event_loop_raises_after_writing_it(make_core: MakeCore) -> None:
+def test_a_cooldown_recorded_outside_an_event_loop_is_written_and_reported(make_core: MakeCore) -> None:
     core: Final = make_core(model_list=group("a", "b"), allowed_fails=0)
 
-    with pytest.raises(RuntimeError, match="no running event loop"):
-        core.health().record_failure("a", server_error(), 500)
+    cooled: Final = core.health().record_failure("a", server_error(), 500)
 
+    assert cooled is True
+    assert set(cooled_down(core, ["a", "b"])) == {"a"}
+
+
+def test_a_failure_below_the_threshold_outside_an_event_loop_is_only_counted(make_core: MakeCore) -> None:
+    core: Final = make_core(model_list=group("a", "b"), allowed_fails=3)
+
+    cooled: Final = core.health().record_failure("a", server_error(), 500)
+
+    assert cooled is False
+    assert core.health().failures_this_minute("a") == 1
+    assert cooled_down(core, ["a", "b"]) == {}
+
+
+def test_failure_callback_outside_an_event_loop_cools_down(make_core: MakeCore) -> None:
+    core: Final = make_core(model_list=group("a", "b"), allowed_fails=0)
+
+    cooled: Final = core.deployment_callback_on_failure(failure_kwargs({"id": "a"}, server_error()), None, 0.0, 0.0)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]  # PythonCore's public member
+
+    assert cooled is True
+    assert core.health().failures_this_minute("a") == 1
     assert set(cooled_down(core, ["a", "b"])) == {"a"}
 
 

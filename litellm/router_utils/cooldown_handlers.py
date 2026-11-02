@@ -31,7 +31,7 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_deprecated import renamed_router_param
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCacheValue
-from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
+from litellm.router_utils.cooldown_callbacks import emit_router_cooldown_event, router_cooldown_event_callback
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
@@ -615,15 +615,28 @@ def set_cooldown_deployments(
             cooldown_time=time_to_cooldown,
         )
 
-        # Trigger cooldown callback handler
-        asyncio.create_task(
-            router_cooldown_event_callback(
-                ctx=ctx,
-                deployment_id=deployment,
-                exception_status=exception_status,
-                cooldown_time=time_to_cooldown,
+        # Trigger cooldown callback handler: a background task inside a running loop, inline outside one.
+        try:
+            loop: Final = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                emit_router_cooldown_event(
+                    ctx=ctx,
+                    deployment_id=deployment,
+                    exception_status=exception_status,
+                    cooldown_time=time_to_cooldown,
+                )
+            except Exception as e:  # noqa: BLE001  # as the task would, a failed event never undoes the cooldown
+                verbose_router_logger.exception("router cooldown event failed for %s: %s", deployment, e)
+        else:
+            _ = loop.create_task(
+                router_cooldown_event_callback(
+                    ctx=ctx,
+                    deployment_id=deployment,
+                    exception_status=exception_status,
+                    cooldown_time=time_to_cooldown,
+                )
             )
-        )
         return True
     return False
 
