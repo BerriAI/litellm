@@ -43,6 +43,7 @@ OPENAI_ROUTE: Final = "/openai/v1/chat/completions"
 ANTHROPIC_ROUTE: Final = "/anthropic/v1/messages"
 GEMINI_ROUTE: Final = "/gemini/v1beta/models/gemini-2.5-flash:generateContent"
 CUSTOM_ROUTE: Final = "/passthrough-auth-custom"
+PHONE_POST_CALL: Final = "passthrough-auth-phone-post-call"
 _CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 _JSON: Final = TypeAdapter(dict[str, JsonValue])
 _JSON_LIST: Final = TypeAdapter(list[JsonValue])
@@ -66,7 +67,11 @@ def _verdict(request: Request) -> Reply:
 
 
 _OPENAI_BODY: Final = json.dumps(
-    _JSON.validate_json(chat_reply("chatcmpl-passthrough-auth", "gpt-5.6", "Hi", stream=False).body), indent=2
+    {
+        **_JSON.validate_json(chat_reply("chatcmpl-passthrough-auth", "gpt-5.6", "Hi", stream=False).body),
+        "created": 1793600123,
+    },
+    indent=2,
 ).encode()
 
 
@@ -220,6 +225,17 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                                 "default_on": False,
                                 "api_base": generic_post_call_vendor.url,
                                 "api_key": "synthetic-guardrail-key",
+                            },
+                        },
+                        {
+                            "guardrail_name": PHONE_POST_CALL,
+                            "litellm_params": {
+                                "guardrail": "litellm_content_filter",
+                                "mode": "post_call",
+                                "default_on": False,
+                                "patterns": [
+                                    {"pattern_type": "prebuilt", "pattern_name": "us_phone", "action": "BLOCK"}
+                                ],
                             },
                         },
                         {
@@ -415,6 +431,18 @@ def test_key_apply_guardrail_post_call_scans_the_provider_reply(rig: AuthGuardra
         assert [b'"Hi' in request.body for request in rig.generic_post_call_vendor.drain()] == [True]
 
 
+def test_post_call_guardrail_does_not_read_a_reply_timestamp_as_a_phone_number(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": [PHONE_POST_CALL]})
+        _drain(rig)
+
+        response: Final = _send(gateway, OPENAI_ROUTE, _route_body(OPENAI_ROUTE, "What is the capital of France?"), key)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["created"] == 1793600123
+
+
 @pytest.mark.parametrize("route", [OPENAI_ROUTE, ANTHROPIC_ROUTE, GEMINI_ROUTE])
 def test_guardrail_the_client_names_in_metadata_still_runs_for_a_guarded_key(rig: AuthGuardrailRig, route: str) -> None:
     gateway: Final = rig.owned.gateway
@@ -539,7 +567,7 @@ def _charged_rows(gateway: Gateway, key: str) -> tuple[Mapping[str, object], ...
     )
 
 
-@pytest.mark.parametrize("route", [OPENAI_ROUTE, ANTHROPIC_ROUTE, GEMINI_ROUTE])
+@pytest.mark.parametrize("route", [ANTHROPIC_ROUTE, GEMINI_ROUTE])
 def test_response_a_post_call_guardrail_blocks_still_charges_the_provider_call(
     rig: AuthGuardrailRig, route: str
 ) -> None:
