@@ -2518,7 +2518,7 @@ def create_anthropic_model_list_response(
     }
 
 
-class RefusalStopFields(TypedDict, total=False):
+class StopReasonFields(TypedDict, total=False):
     stop_reason: ReadOnly[object]
     stop_details: ReadOnly[object]
 
@@ -2535,16 +2535,38 @@ def _dict_or_empty(value: object) -> object:
     return value if _is_dict(value) else _no_stop_fields()
 
 
-REFUSAL_STOP_FIELDS: Final[TypeAdapter[RefusalStopFields]] = TypeAdapter(
-    Annotated[RefusalStopFields, BeforeValidator(_dict_or_empty)]
+STOP_REASON_FIELDS: Final[TypeAdapter[StopReasonFields]] = TypeAdapter(
+    Annotated[StopReasonFields, BeforeValidator(_dict_or_empty)]
 )
 
+_STOP_REASONS_KEPT_RAW: Final = frozenset({"refusal", "pause_turn"})
 
-def refusal_provider_specific_fields(message: Mapping[str, object]) -> Mapping[str, object]:
+
+def stop_reason_provider_specific_fields(message: Mapping[str, object]) -> Mapping[str, object]:
     stop_reason: Final = message.get("stop_reason")
     stop_details: Final = message.get("stop_details")
     if stop_details is not None:
         return {"stop_reason": stop_reason, "stop_details": stop_details}
-    if stop_reason == "refusal":
+    if stop_reason in _STOP_REASONS_KEPT_RAW:
         return {"stop_reason": stop_reason}
     return {}
+
+
+class _RefusalStopDetails(TypedDict, total=False):
+    explanation: ReadOnly[object]
+
+
+_REFUSAL_STOP_DETAILS: Final[TypeAdapter[_RefusalStopDetails]] = TypeAdapter(
+    Annotated[_RefusalStopDetails, BeforeValidator(_dict_or_empty)]
+)
+
+
+class RefusalParams(TypedDict, total=False):
+    refusal: ReadOnly[str]
+
+
+def refusal_params(message: Mapping[str, object]) -> RefusalParams:
+    if message.get("stop_reason") != "refusal":
+        return {}
+    explanation: Final = _REFUSAL_STOP_DETAILS.validate_python(message.get("stop_details")).get("explanation")
+    return {"refusal": explanation} if isinstance(explanation, str) and explanation else {}

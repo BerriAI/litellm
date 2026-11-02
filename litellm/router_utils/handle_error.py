@@ -23,7 +23,7 @@ else:
 
 @renamed_router_param("litellm_router_instance")
 async def send_llm_exception_alert(
-    ctx: "RoutingContext",
+    ctx: "RoutingContext | None",
     request_kwargs: dict,
     error_traceback_str: str,
     original_exception,
@@ -39,6 +39,9 @@ async def send_llm_exception_alert(
     Returns:
         None
     """
+    if ctx is None:
+        return
+
     slack_alerting_logger: Final = ctx.observers().slack_alerting_logger
     if slack_alerting_logger is None:
         return
