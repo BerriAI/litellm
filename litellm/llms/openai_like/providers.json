@@ -262,6 +262,11 @@
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   },
+  "iteracompute": {
+    "base_url": "https://api.iteracompute.com/v1",
+    "api_key_env": "ITERACOMPUTE_API_KEY",
+    "api_base_env": "ITERACOMPUTE_API_BASE"
+  },
   "inferenceapis": {
     "base_url": "https://api.inferenceapis.com/v1",
     "api_key_env": "INFERENCEAPIS_API_KEY",
