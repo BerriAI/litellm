@@ -1,122 +1,28 @@
-use std::{collections::BTreeMap, fmt, time::Duration};
+use std::{collections::BTreeMap, time::Duration};
 
-use litellm_router_types::Spelled;
+use litellm_core_utils::settings::Lookup;
+use litellm_python_compat::{BigInt, number};
+use litellm_redis_types::{
+    ClusterEndpoint, ClusterNode as RedisNode, Endpoint, HostEndpoint, SentinelEndpoint,
+};
 use litellm_secret_value::SecretValue;
 use serde::{Deserialize, Deserializer, de::Error as _};
+use veil::Redact;
 
-use crate::{AdditionalFields, Error, Object, Value};
+use crate::{Object, Value};
 
-pub type Lookup<'a> = &'a dyn Fn(&str) -> Option<String>;
+mod auth;
+mod error;
+mod keys;
+mod secrets;
+mod sentinel;
+mod tls;
 
-const SUPPORTED: &[&str] = &[
-    "url",
-    "host",
-    "port",
-    "username",
-    "password",
-    "ssl",
-    "db",
-    "socket_timeout",
-    "startup_nodes",
-    "namespace",
-];
+use keys::Handling;
 
-const IGNORED: &[&str] = &[
-    "max_connections",
-    "single_connection_client",
-    "health_check_interval",
-    "socket_keepalive",
-    "socket_keepalive_options",
-    "decode_responses",
-    "encoding",
-    "encoding_errors",
-    "charset",
-    "errors",
-    "client_name",
-    "lib_name",
-    "lib_version",
-    "sentinel_password",
-    "gcp_ssl_ca_certs",
-    "azure_client_id",
-    "azure_tenant_id",
-    "azure_client_secret",
-    "aws_iam_user_name",
-    "aws_iam_cache_name",
-    "aws_iam_region",
-    "aws_iam_serverless",
-];
-
-const WARN_IGNORED: &[&str] = &[
-    "max_connections",
-    "health_check_interval",
-    "socket_keepalive",
-    "socket_keepalive_options",
-];
-
-const REDIS_PY_KWARGS: &[&str] = &[
-    "aws_iam_auth",
-    "aws_iam_cache_name",
-    "aws_iam_region",
-    "aws_iam_serverless",
-    "aws_iam_user_name",
-    "azure_client_id",
-    "azure_client_secret",
-    "azure_redis_ad_token",
-    "azure_tenant_id",
-    "cache",
-    "cache_config",
-    "charset",
-    "client_name",
-    "db",
-    "decode_responses",
-    "encoding",
-    "encoding_errors",
-    "errors",
-    "event_dispatcher",
-    "gcp_service_account",
-    "gcp_ssl_ca_certs",
-    "health_check_interval",
-    "host",
-    "lib_name",
-    "lib_version",
-    "max_connections",
-    "password",
-    "port",
-    "protocol",
-    "redis_connect_func",
-    "retry_on_error",
-    "retry_on_timeout",
-    "single_connection_client",
-    "socket_connect_timeout",
-    "socket_keepalive",
-    "socket_keepalive_options",
-    "socket_timeout",
-    "ssl",
-    "ssl_ca_certs",
-    "ssl_ca_data",
-    "ssl_ca_path",
-    "ssl_cert_reqs",
-    "ssl_certfile",
-    "ssl_check_hostname",
-    "ssl_ciphers",
-    "ssl_keyfile",
-    "ssl_min_version",
-    "ssl_ocsp_context",
-    "ssl_ocsp_expected_cert",
-    "ssl_password",
-    "ssl_validate_ocsp",
-    "ssl_validate_ocsp_stapled",
-    "unix_socket_path",
-    "url",
-    "username",
-];
-
-const UNSUPPORTED_EXTRA: &[&str] = &[
-    "credential_provider",
-    "sentinel_nodes",
-    "retry",
-    "connection_pool",
-];
+pub use auth::{AwsIamAuth, AzureAdAuth, RedisAuth};
+pub use error::{Expected, RedisError};
+pub use secrets::SecretSnapshot;
 
 const CACHE_ONLY: &[&str] = &[
     "type",
@@ -130,67 +36,11 @@ const CACHE_ONLY: &[&str] = &[
     "_backend",
 ];
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Deserialize, Redact)]
+#[serde(transparent)]
 pub struct RedisSettings {
-    pub url: Option<SecretValue>,
-    pub host: Option<Spelled<String>>,
-    pub port: Option<Spelled<u16>>,
-    pub username: Option<SecretValue>,
-    pub password: Option<SecretValue>,
-    pub ssl: Option<Spelled<bool>>,
-    pub db: Option<Spelled<i64>>,
-    pub socket_timeout: Option<Spelled<f64>>,
-    pub startup_nodes: Option<Value>,
-    pub namespace: Option<Spelled<String>>,
-    pub additional_fields: AdditionalFields,
-    unparsed: DeferredInputs,
-}
-
-impl<'de> Deserialize<'de> for RedisSettings {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let fields = BTreeMap::<String, Value>::deserialize(deserializer)?;
-        let scalar = |key: &str| fields.get(key).and_then(as_text);
-        Ok(Self {
-            url: scalar("url").map(SecretValue::new),
-            host: scalar("host").map(Spelled::Value),
-            port: spelled(scalar("port")),
-            username: scalar("username").map(SecretValue::new),
-            password: scalar("password").map(SecretValue::new),
-            ssl: spelled(scalar("ssl")),
-            db: spelled(scalar("db")),
-            socket_timeout: spelled(scalar("socket_timeout")),
-            startup_nodes: fields
-                .get("startup_nodes")
-                .filter(|value| !value.is_null())
-                .cloned(),
-            namespace: scalar("namespace").map(Spelled::Value),
-            additional_fields: cloned(&fields, |key, _| !SUPPORTED.contains(&key)),
-            unparsed: deferred_inputs(&fields),
-        })
-    }
-}
-
-impl fmt::Debug for RedisSettings {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RedisSettings")
-            .field("url", &self.url)
-            .field("host", &self.host)
-            .field("port", &self.port)
-            .field("username", &self.username)
-            .field("password", &self.password)
-            .field("ssl", &self.ssl)
-            .field("db", &self.db)
-            .field("socket_timeout", &self.socket_timeout)
-            .field(
-                "startup_nodes",
-                &self.startup_nodes.as_ref().map(|_| "<configured>"),
-            )
-            .field("namespace", &self.namespace)
-            .field("additional_fields", &self.additional_fields.keys())
-            .field("unparsed", &self.unparsed.keys())
-            .finish()
-    }
+    #[redact(with = "[REDACTED]")]
+    fields: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -216,63 +66,13 @@ impl<'de> Deserialize<'de> for CacheSettings {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedRedis {
-    pub endpoint: RedisEndpoint,
+    pub endpoint: Endpoint,
+    pub auth: RedisAuth,
     pub namespace: Option<String>,
     pub timeout: Option<Duration>,
-}
-
-impl fmt::Debug for ResolvedRedis {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ResolvedRedis")
-            .field("endpoint", &self.endpoint)
-            .field("namespace", &self.namespace)
-            .field("timeout", &self.timeout)
-            .finish()
-    }
-}
-
-#[derive(Clone, PartialEq)]
-pub enum RedisEndpoint {
-    Url(SecretValue),
-    Host(RedisHost),
-    Cluster(RedisCluster),
-}
-
-impl fmt::Debug for RedisEndpoint {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Url(_) => formatter.debug_tuple("Url").field(&"<redacted>").finish(),
-            Self::Host(host) => host.fmt(formatter),
-            Self::Cluster(cluster) => cluster.fmt(formatter),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct RedisHost {
-    pub host: String,
-    pub port: u16,
-    pub username: Option<SecretValue>,
-    pub password: Option<SecretValue>,
-    pub tls: bool,
-    pub db: i64,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct RedisCluster {
-    pub nodes: Vec<RedisNode>,
-    pub username: Option<SecretValue>,
-    pub password: Option<SecretValue>,
-    pub tls: bool,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct RedisNode {
-    pub host: String,
-    pub port: u16,
+    pub connect_timeout: Option<Duration>,
 }
 
 #[derive(Clone)]
@@ -284,165 +84,191 @@ struct Entry {
 type Kwargs = BTreeMap<String, Entry>;
 
 impl RedisSettings {
-    pub fn resolve(&self, lookup: Lookup<'_>) -> Result<ResolvedRedis, Error> {
-        self.resolve_with(lookup, false)
+    pub fn resolve(
+        &self,
+        secrets: &SecretSnapshot,
+        environment: &dyn Lookup,
+    ) -> Result<ResolvedRedis, RedisError> {
+        self.resolve_with(secrets, environment, false)
     }
 
-    pub fn resolve_cache(&self, lookup: Lookup<'_>) -> Result<ResolvedRedis, Error> {
-        self.resolve_with(lookup, true)
+    pub fn resolve_cache(
+        &self,
+        secrets: &SecretSnapshot,
+        environment: &dyn Lookup,
+    ) -> Result<ResolvedRedis, RedisError> {
+        self.resolve_with(secrets, environment, true)
     }
 
-    fn resolve_with(&self, lookup: Lookup<'_>, cache: bool) -> Result<ResolvedRedis, Error> {
+    fn resolve_with(
+        &self,
+        secrets: &SecretSnapshot,
+        environment: &dyn Lookup,
+        cache: bool,
+    ) -> Result<ResolvedRedis, RedisError> {
+        let lookup: &dyn Lookup = secrets;
         let block = self.kwargs(cache);
         let block: Kwargs = block
             .into_iter()
             .filter_map(|(key, entry)| {
-                let value = environment_reference(&entry.value, lookup)?;
-                Some((key, Entry { value, ..entry }))
+                let value = environment_reference(&entry.value, lookup);
+                let value = match (&value, cache, key.as_str()) {
+                    (Value::String(text), false, "ssl") => {
+                        coordination_bool(text).map(Value::Bool).unwrap_or(value)
+                    }
+                    _ => value,
+                };
+                (!value.is_null() || keeps_explicit_none(cache, &key))
+                    .then(|| (key, Entry { value, ..entry }))
             })
             .collect();
-        let environment = environment_kwargs(lookup);
+        let environment_kwargs = environment_kwargs(lookup);
         let names_a_target = ["host", "startup_nodes", "sentinel_nodes"]
             .iter()
-            .any(|key| block.contains_key(*key));
-        let drop_environment_url = names_a_target && !block.contains_key("url");
-        let merged: Kwargs = environment
+            .any(|key| is_set(&block, key));
+        let drop_environment_url = names_a_target && !is_set(&block, "url");
+        let merged: Kwargs = environment_kwargs
             .into_iter()
             .filter(|(key, _)| !(key == "url" && drop_environment_url))
             .chain(block)
             .collect();
-        reject_unsupported(&merged, lookup)?;
+        reject_unsupported(&merged)?;
         warn_ignored(&merged);
 
-        let startup_nodes = match merged.get("startup_nodes") {
-            Some(entry) => Some(cluster_nodes(&entry.value)?),
-            None => lookup("REDIS_CLUSTER_NODES")
-                .map(|nodes| cluster_nodes(&Value::String(nodes)))
+        let startup_nodes = match configured(&merged, "startup_nodes") {
+            Some(entry) => Some(
+                cluster_nodes(&entry.value)
+                    .ok_or_else(|| invalid(&entry.source, Expected::StartupNodes))?,
+            ),
+            None => keys::fallback("startup_nodes", lookup)
+                .map(|(source, nodes)| {
+                    cluster_nodes(&Value::String(nodes))
+                        .ok_or_else(|| invalid(source, Expected::StartupNodes))
+                })
                 .transpose()?,
+        }
+        .filter(|nodes| !nodes.is_empty());
+        let url = text_value(&merged, "url");
+        let ssl = bool_value(&merged, "ssl");
+        let uses_tls = match (&startup_nodes, &url) {
+            (Some(_), _) | (None, None) => ssl,
+            (None, Some(url)) => url
+                .split_once("://")
+                .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("rediss")),
         };
-        let username = secret_value(&merged, "username");
-        let password = secret_value(&merged, "password");
-        let tls = bool_value(&merged, "ssl");
-        let endpoint = match (startup_nodes, text_value(&merged, "url")) {
-            (Some(nodes), _) if !nodes.is_empty() => RedisEndpoint::Cluster(RedisCluster {
-                nodes,
-                username,
-                password,
-                tls,
-            }),
-            (_, Some(url)) => RedisEndpoint::Url(SecretValue::new(url)),
-            _ => RedisEndpoint::Host(RedisHost {
-                host: text_value(&merged, "host").ok_or(Error::RedisInvalid {
-                    setting: "host",
-                    reason: "either host or url must be specified for redis",
-                })?,
-                port: integer(&merged, "port")?.unwrap_or(6379),
-                username,
-                password,
-                tls,
-                db: integer(&merged, "db")?.unwrap_or(0),
-            }),
+        let auth = auth::redis_auth(&merged, lookup, environment, uses_tls)?;
+        let gcp_ca_certs = match &auth {
+            RedisAuth::GcpIam { .. } if ssl => {
+                text_or_fallback(&merged, "gcp_ssl_ca_certs", lookup)
+                    .filter(|path| !path.is_empty())
+            }
+            _ => None,
         };
-        let timeout = merged
-            .get("socket_timeout")
-            .and_then(|entry| as_text(&entry.value))
-            .map(|seconds| {
-                seconds
-                    .parse::<f64>()
-                    .ok()
-                    .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
-                    .ok_or(Error::RedisInvalid {
-                        setting: "socket_timeout",
-                        reason: "must be a non-negative number of seconds",
+        let tls = || {
+            ssl.then(|| tls::tls_options(&merged, gcp_ca_certs.clone()))
+                .transpose()
+        };
+        let db = || integer(&merged, "db").map(|db| db.unwrap_or(0));
+        let endpoint = match (startup_nodes, url) {
+            (Some(nodes), _) => {
+                reject_cluster_db(&merged)?;
+                Endpoint::Cluster(ClusterEndpoint { nodes, tls: tls()? })
+            }
+            (None, Some(url)) => Endpoint::Url {
+                tls: tls::url_tls(&url)?,
+                url: SecretValue::new(match &auth {
+                    RedisAuth::Static { .. } => url,
+                    _ => without_userinfo(&url),
+                }),
+            },
+            (None, None) => match sentinel::sentinel_target(&merged, lookup)? {
+                Some(target) => {
+                    reject_sentinel_host(&merged)?;
+                    Endpoint::Sentinel(SentinelEndpoint {
+                        sentinels: target.sentinels,
+                        service_name: target.service_name,
+                        sentinel_password: target.sentinel_password,
+                        tls: tls()?,
+                        db: db()?,
                     })
-            })
-            .transpose()?;
+                }
+                None => Endpoint::Host(HostEndpoint {
+                    host: text_value(&merged, "host").ok_or(RedisError::NoTarget)?,
+                    port: integer(&merged, "port")?.unwrap_or(6379),
+                    tls: tls()?,
+                    db: db()?,
+                }),
+            },
+        };
+        let auth = match (&endpoint, auth) {
+            (Endpoint::Url { .. }, RedisAuth::Static { username, .. }) => RedisAuth::Static {
+                username,
+                password: None,
+            },
+            (_, auth) => auth,
+        };
         Ok(ResolvedRedis {
             endpoint,
+            auth,
             namespace: text_value(&merged, "namespace"),
-            timeout,
+            timeout: seconds(&merged, "socket_timeout")?,
+            connect_timeout: seconds(&merged, "socket_connect_timeout")?,
         })
     }
 
+    pub fn validate_coordination(&self) -> Result<(), RedisError> {
+        let text = |key: &str| self.fields.get(key).and_then(as_text);
+        if text("port").is_some_and(|port| port.parse::<u16>().is_err()) {
+            return Err(invalid("port", Expected::Integer));
+        }
+        if text("ssl").is_some_and(|ssl| coordination_bool(&ssl).is_none()) {
+            return Err(invalid("ssl", Expected::Boolean));
+        }
+        Ok(())
+    }
+
     fn kwargs(&self, cache: bool) -> Kwargs {
-        let known = [
+        let entry = |key: &str, value: &Value| {
             (
-                "url",
-                self.url.as_ref().map(|value| value.expose().to_owned()),
-            ),
-            ("host", spelled_text(self.host.as_ref())),
-            ("port", spelled_text(self.port.as_ref())),
-            (
-                "username",
-                self.username
-                    .as_ref()
-                    .map(|value| value.expose().to_owned()),
-            ),
-            (
-                "password",
-                self.password
-                    .as_ref()
-                    .map(|value| value.expose().to_owned()),
-            ),
-            ("ssl", spelled_text(self.ssl.as_ref())),
-            ("db", spelled_text(self.db.as_ref())),
-            ("socket_timeout", spelled_text(self.socket_timeout.as_ref())),
-            ("namespace", spelled_text(self.namespace.as_ref())),
-        ];
-        let known = known.into_iter().filter_map(|(key, value)| {
-            value.map(|value| {
-                (
-                    key.to_owned(),
-                    Entry {
-                        value: Value::String(value),
-                        source: key.to_owned(),
-                    },
-                )
-            })
-        });
-        let startup_nodes = self.startup_nodes.clone().map(|value| {
-            (
-                "startup_nodes".to_owned(),
-                Entry {
-                    value,
-                    source: "startup_nodes".to_owned(),
-                },
-            )
-        });
-        let extras = self.additional_fields.iter().filter_map(|(key, value)| {
-            if cache && CACHE_ONLY.contains(&key.as_str()) {
-                return None;
-            }
-            let key = match (cache, key.as_str()) {
-                (true, "redis_startup_nodes") => "startup_nodes".to_owned(),
-                _ => key.clone(),
-            };
-            Some((
-                key.clone(),
+                key.to_owned(),
                 Entry {
                     value: value.clone(),
-                    source: key,
-                },
-            ))
-        });
-        let unparsed = self.unparsed.iter().map(|(key, value)| {
-            (
-                key.clone(),
-                Entry {
-                    value: value.0.clone(),
-                    source: key.clone(),
+                    source: key.to_owned(),
                 },
             )
-        });
-        extras
-            .chain(unparsed)
-            .chain(known)
-            .chain(startup_nodes)
-            .collect()
+        };
+        let aliased = self
+            .fields
+            .get("redis_startup_nodes")
+            .filter(|_| cache)
+            .map(|value| entry("startup_nodes", value));
+        let direct = self
+            .fields
+            .iter()
+            .filter(|(key, _)| {
+                !(cache
+                    && (key.as_str() == "redis_startup_nodes"
+                        || CACHE_ONLY.contains(&key.as_str())))
+            })
+            .map(|(key, value)| entry(key, value));
+        aliased.into_iter().chain(direct).collect()
     }
 }
 
-pub fn environment_has_target(lookup: Lookup<'_>) -> bool {
+// _get_redis_url_kwargs keeps only plain Connection kwargs, so redis-py drops every ssl_* setting for a url
+// and a credential provider replaces the url's userinfo, which _url_without_userinfo strips
+fn without_userinfo(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_owned();
+    };
+    let (authority, tail) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    format!("{scheme}://{host}{tail}")
+}
+
+pub fn environment_has_target(lookup: &dyn Lookup) -> bool {
     [
         "REDIS_HOST",
         "REDIS_URL",
@@ -450,69 +276,88 @@ pub fn environment_has_target(lookup: Lookup<'_>) -> bool {
         "REDIS_SENTINEL_NODES",
     ]
     .iter()
-    .any(|name| lookup(name).is_some())
+    .any(|name| lookup.get(name).is_some())
 }
 
-fn reject_unsupported(merged: &Kwargs, lookup: Lookup<'_>) -> Result<(), Error> {
-    let active_auth = [
-        merged
-            .get("gcp_service_account")
-            .map(|entry| entry.source.as_str())
-            .or_else(|| lookup("REDIS_GCP_SERVICE_ACCOUNT").map(|_| "REDIS_GCP_SERVICE_ACCOUNT")),
-        text_value(merged, "azure_redis_ad_token")
-            .or_else(|| lookup("REDIS_AZURE_AD_TOKEN"))
-            .filter(|value| value.eq_ignore_ascii_case("true"))
-            .map(|_| {
-                merged
-                    .get("azure_redis_ad_token")
-                    .map_or("REDIS_AZURE_AD_TOKEN", |entry| entry.source.as_str())
-            }),
-        bool_value(merged, "aws_iam_auth").then(|| merged["aws_iam_auth"].source.as_str()),
-        merged
-            .get("sentinel_nodes")
-            .map(|entry| entry.source.as_str())
-            .or_else(|| lookup("REDIS_SENTINEL_NODES").map(|_| "REDIS_SENTINEL_NODES")),
-    ];
-    if let Some(setting) = active_auth.into_iter().flatten().next() {
-        return Err(Error::RedisSetting(setting.to_owned()));
-    }
-    match merged
-        .iter()
-        .find(|(key, _)| is_unsupported(key))
-        .map(|(_, entry)| entry.source.clone())
-    {
-        Some(setting) => Err(Error::RedisSetting(setting)),
+fn reject_unsupported(merged: &Kwargs) -> Result<(), RedisError> {
+    match merged.iter().find(|(key, _)| is_unsupported(key)) {
+        Some((_, entry)) => Err(RedisError::Unsupported {
+            setting: entry.source.clone(),
+        }),
         None => Ok(()),
     }
 }
 
+fn invalid(setting: &str, expected: Expected) -> RedisError {
+    RedisError::Invalid {
+        setting: setting.to_owned(),
+        expected,
+    }
+}
+
+fn parsed<T>(
+    kwargs: &Kwargs,
+    key: &str,
+    expected: Expected,
+    parse: impl Fn(&str) -> Option<T>,
+) -> Result<Option<T>, RedisError> {
+    kwargs
+        .get(key)
+        .and_then(|entry| Some((as_text(&entry.value)?, &entry.source)))
+        .map(|(text, source)| parse(&text).ok_or_else(|| invalid(source, expected)))
+        .transpose()
+}
+
+fn seconds(merged: &Kwargs, key: &str) -> Result<Option<Duration>, RedisError> {
+    coerced(merged, key, Expected::Seconds, number::float, |seconds| {
+        Duration::try_from_secs_f64(seconds).ok()
+    })
+}
+
+fn coerced<N, T>(
+    kwargs: &Kwargs,
+    key: &str,
+    expected: Expected,
+    parse: impl Fn(&str) -> Option<N>,
+    convert: impl Fn(N) -> Option<T>,
+) -> Result<Option<T>, RedisError> {
+    let Some((entry, text)) = kwargs
+        .get(key)
+        .and_then(|entry| Some((entry, as_text(&entry.value)?)))
+    else {
+        return Ok(None);
+    };
+    match parse(&text) {
+        Some(number) => convert(number)
+            .map(Some)
+            .ok_or_else(|| invalid(&entry.source, expected)),
+        None => {
+            tracing::warn!(setting = %entry.source, "Redis setting is not a number, so the default is used like redis-py");
+            Ok(None)
+        }
+    }
+}
+
 fn warn_ignored(merged: &Kwargs) {
-    for setting in WARN_IGNORED {
-        if merged.contains_key(*setting) {
-            tracing::warn!(setting, "Redis setting is accepted but ignored");
+    for key in merged.keys() {
+        if keys::setting(key).is_some_and(|setting| setting.handling == Handling::Warn) {
+            tracing::warn!(setting = %key, "Redis setting is accepted but ignored");
         }
     }
 }
 
 fn is_unsupported(key: &str) -> bool {
-    let known = REDIS_PY_KWARGS.contains(&key) || UNSUPPORTED_EXTRA.contains(&key);
-    let handled = SUPPORTED.contains(&key)
-        || IGNORED.contains(&key)
-        || matches!(
-            key,
-            "gcp_service_account" | "azure_redis_ad_token" | "aws_iam_auth"
-        );
-    known && !handled
+    keys::setting(key).is_some_and(|setting| setting.handling == Handling::Reject)
 }
 
-fn environment_kwargs(lookup: Lookup<'_>) -> Kwargs {
-    REDIS_PY_KWARGS
+fn environment_kwargs(lookup: &dyn Lookup) -> Kwargs {
+    keys::SETTINGS
         .iter()
-        .filter_map(|key| {
-            let source = format!("REDIS_{}", key.to_ascii_uppercase());
-            let value = lookup(&source)?;
+        .filter_map(|setting| {
+            let source = setting.environment_name()?;
+            let value = lookup.get(&source)?;
             Some((
-                (*key).to_owned(),
+                setting.kwarg.to_owned(),
                 Entry {
                     value: Value::String(value),
                     source,
@@ -522,15 +367,87 @@ fn environment_kwargs(lookup: Lookup<'_>) -> Kwargs {
         .collect()
 }
 
-fn environment_reference(value: &Value, lookup: Lookup<'_>) -> Option<Value> {
+// load_config resolves os.environ/ to None when unset, so a missing reference is a null like any other
+fn environment_reference(value: &Value, lookup: &dyn Lookup) -> Value {
     match value {
         Value::String(text) => match text.strip_prefix("os.environ/") {
-            Some(name) => lookup(name).map(Value::String),
-            None => Some(value.clone()),
+            Some(name) => lookup.get(name).map_or(Value::Null, Value::String),
+            None => value.clone(),
         },
-        Value::Null => None,
-        _ => Some(value.clone()),
+        _ => value.clone(),
     }
+}
+
+// coordination_redis reaches redis-py through model_dump(exclude_none=True), so every null is dropped. Cache
+// and RedisCache drop a null only for the parameters they name, and pass any other key on as an explicit None
+// that overrides the REDIS_* environment value
+fn keeps_explicit_none(cache: bool, key: &str) -> bool {
+    const NAMED_BY_CACHE: &[&str] = &[
+        "host",
+        "port",
+        "password",
+        "socket_timeout",
+        "startup_nodes",
+        "namespace",
+        "gcp_service_account",
+        "gcp_ssl_ca_certs",
+    ];
+    cache && !NAMED_BY_CACHE.contains(&key)
+}
+
+// redis-py's RedisCluster raises unless db is 0 or None
+fn reject_cluster_db(merged: &Kwargs) -> Result<(), RedisError> {
+    let Some(entry) = merged.get("db").filter(|entry| !entry.value.is_null()) else {
+        return Ok(());
+    };
+    match &entry.value {
+        Value::String(_) if matches!(integer::<i64>(merged, "db"), Ok(None | Some(0))) => Ok(()),
+        value if !truthy(value) => Ok(()),
+        _ => Err(RedisError::DbInCluster {
+            setting: entry.source.clone(),
+        }),
+    }
+}
+
+// redis.asyncio.Sentinel passes the connection kwargs to each monitor's Redis(host=..., port=...), so a host or
+// port setting raises TypeError when litellm builds the client
+fn reject_sentinel_host(merged: &Kwargs) -> Result<(), RedisError> {
+    match ["host", "port"]
+        .iter()
+        .find_map(|key| merged.get(*key).filter(|entry| !entry.value.is_null()))
+    {
+        Some(entry) => Err(RedisError::SentinelWithHost {
+            setting: entry.source.clone(),
+        }),
+        None => Ok(()),
+    }
+}
+
+fn is_set(kwargs: &Kwargs, key: &str) -> bool {
+    kwargs.get(key).is_some_and(|entry| !entry.value.is_null())
+}
+
+// Python chains these settings with `or`, so a falsy configured value ("", [], 0, False) falls through too
+fn configured<'a>(kwargs: &'a Kwargs, key: &str) -> Option<&'a Entry> {
+    kwargs.get(key).filter(|entry| truthy(&entry.value))
+}
+
+fn truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(flag) => *flag,
+        Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
+        Value::String(text) => !text.is_empty(),
+        Value::Sequence(items) => !items.is_empty(),
+        Value::Mapping(entries) => !entries.is_empty(),
+        Value::Tagged(_) => true,
+    }
+}
+
+fn text_or_fallback(kwargs: &Kwargs, key: &str, lookup: &dyn Lookup) -> Option<String> {
+    configured(kwargs, key)
+        .and_then(|entry| as_text(&entry.value))
+        .or_else(|| keys::fallback_value(key, lookup))
 }
 
 fn as_text(value: &Value) -> Option<String> {
@@ -559,109 +476,97 @@ fn bool_value(kwargs: &Kwargs, key: &str) -> bool {
     }
 }
 
-fn integer<T: std::str::FromStr>(kwargs: &Kwargs, key: &'static str) -> Result<Option<T>, Error> {
-    kwargs
-        .get(key)
-        .and_then(|entry| as_text(&entry.value))
-        .map(|text| {
-            text.parse().map_err(|_| Error::RedisInvalid {
-                setting: key,
-                reason: "must be an integer",
-            })
-        })
-        .transpose()
+fn integer<T: TryFrom<BigInt>>(kwargs: &Kwargs, key: &str) -> Result<Option<T>, RedisError> {
+    coerced(kwargs, key, Expected::Integer, number::int, |number| {
+        T::try_from(number).ok()
+    })
 }
 
-const INVALID_NODES: Error = Error::RedisInvalid {
-    setting: "startup_nodes",
-    reason: "must be a list of {host, port} objects",
-};
+fn cluster_nodes(value: &Value) -> Option<Vec<RedisNode>> {
+    nodes(value, |node| {
+        node_address(
+            node.get("host").and_then(as_text),
+            node.get("port").and_then(as_text),
+        )
+    })
+}
 
-fn cluster_nodes(value: &Value) -> Result<Vec<RedisNode>, Error> {
+fn nodes(value: &Value, parse: impl Fn(&Value) -> Option<RedisNode>) -> Option<Vec<RedisNode>> {
     match value {
-        Value::String(json) => {
-            let nodes: Vec<serde_json::Map<String, serde_json::Value>> =
-                serde_json::from_str(json).map_err(|_| INVALID_NODES)?;
-            nodes
-                .iter()
-                .map(|node| {
-                    cluster_node(
-                        node.get("host").and_then(json_text),
-                        node.get("port").and_then(json_text),
-                    )
-                })
-                .collect()
-        }
-        Value::Sequence(nodes) => nodes
+        Value::String(json) => serde_json::from_str::<Vec<Value>>(json)
+            .ok()?
             .iter()
-            .map(|node| {
-                cluster_node(
-                    node.get("host").and_then(as_text),
-                    node.get("port").and_then(as_text),
-                )
-            })
+            .map(parse)
             .collect(),
-        _ => Err(INVALID_NODES),
-    }
-}
-
-fn cluster_node(host: Option<String>, port: Option<String>) -> Result<RedisNode, Error> {
-    match (host, port.and_then(|port| port.parse().ok())) {
-        (Some(host), Some(port)) => Ok(RedisNode { host, port }),
-        _ => Err(INVALID_NODES),
-    }
-}
-
-fn json_text(value: &serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::String(text) => Some(text.clone()),
-        serde_json::Value::Number(number) => Some(number.to_string()),
+        Value::Sequence(nodes) => nodes.iter().map(parse).collect(),
         _ => None,
     }
 }
 
-fn spelled_text<T: ToString>(value: Option<&Spelled<T>>) -> Option<String> {
-    value.map(|value| match value {
-        Spelled::Value(value) => value.to_string(),
-        Spelled::Text(value) => value.clone(),
+fn node_address(host: Option<String>, port: Option<String>) -> Option<RedisNode> {
+    Some(RedisNode {
+        host: host?,
+        port: port?.parse().ok()?,
     })
 }
 
-fn spelled<T: std::str::FromStr>(text: Option<String>) -> Option<Spelled<T>> {
-    text.map(|text| match text.parse() {
-        Ok(value) => Spelled::Value(value),
-        Err(_) => Spelled::Text(text),
-    })
+fn coordination_bool(text: &str) -> Option<bool> {
+    match text.to_ascii_lowercase().as_str() {
+        "1" | "on" | "t" | "true" | "y" | "yes" => Some(true),
+        "0" | "off" | "f" | "false" | "n" | "no" => Some(false),
+        _ => None,
+    }
 }
 
-fn cloned(
-    fields: &BTreeMap<String, Value>,
-    keep: impl Fn(&str, &Value) -> bool,
-) -> AdditionalFields {
-    fields
-        .iter()
-        .filter(|(key, value)| keep(key, value))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
-}
+#[cfg(test)]
+mod tests {
+    use super::{RedisSettings, SecretSnapshot};
+    use litellm_redis_types::Endpoint;
+    use rstest::rstest;
 
-#[derive(Clone)]
-struct DeferredInput(Value);
-
-type DeferredInputs = BTreeMap<String, DeferredInput>;
-
-fn deferred_inputs(fields: &BTreeMap<String, Value>) -> DeferredInputs {
-    fields
-        .iter()
-        .filter(|(key, value)| is_unparsed(key, value))
-        .map(|(key, value)| (key.clone(), DeferredInput(value.clone())))
-        .collect()
-}
-
-fn is_unparsed(key: &str, value: &Value) -> bool {
-    SUPPORTED.contains(&key)
-        && match key {
-            "startup_nodes" => value.is_null(),
-            _ => as_text(value).is_none(),
+    #[rstest]
+    #[case::on("on", true)]
+    #[case::t("t", true)]
+    #[case::y("y", true)]
+    #[case::upper_on("ON", true)]
+    #[case::off("off", false)]
+    #[case::f("f", false)]
+    #[case::n("n", false)]
+    fn coordination_ssl_aliases_are_normalized_without_changing_raw_cache_kwargs(
+        #[case] value: &str,
+        #[case] tls: bool,
+        #[values(false, true)] cache: bool,
+    ) {
+        let settings: RedisSettings = serde_json::from_value(serde_json::json!({
+            "host": "redis", "ssl": value,
+        }))
+        .unwrap();
+        settings.validate_coordination().unwrap();
+        let environment = |_: &str| None;
+        let secrets = SecretSnapshot::read(settings.secret_names(), &environment);
+        let resolved = if cache {
+            settings.resolve_cache(&secrets, &environment)
+        } else {
+            settings.resolve(&secrets, &environment)
         }
+        .unwrap();
+        let Endpoint::Host(host) = resolved.endpoint else {
+            panic!("expected host endpoint");
+        };
+        assert_eq!(host.tls.is_some(), tls && !cache);
+    }
+
+    #[rstest]
+    #[case::scalar(serde_json::json!("credential-value"))]
+    #[case::object(serde_json::json!({"secret": "credential-value"}))]
+    #[case::array(serde_json::json!(["credential-value"]))]
+    fn credentials_are_redacted(#[case] password: serde_json::Value) {
+        let settings: RedisSettings = serde_json::from_value(serde_json::json!({
+            "host": "redis", "password": password,
+        }))
+        .unwrap();
+        let debug = format!("{settings:?}");
+        assert!(!debug.contains("credential-value"));
+        assert!(debug.contains("[REDACTED]"));
+    }
 }
