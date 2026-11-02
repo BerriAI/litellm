@@ -293,6 +293,12 @@ def _self_referencing_chunk() -> Mapping[str, object]:
     return chunk
 
 
+def _chunk_holding_itself_twice() -> Mapping[str, object]:
+    chunk: Final[dict[str, object]] = {"type": "response.output_text.delta"}
+    chunk.update(left=chunk, right=chunk)  # mutable-ok: a self-reference needs the dict to exist before it can hold itself
+    return chunk
+
+
 _REDACTED_HEADERS: Final = RedactedDict({"authorization": "Bearer hook-canary"})
 
 
@@ -309,6 +315,7 @@ _REDACTED_HEADERS: Final = RedactedDict({"authorization": "Bearer hook-canary"})
         {"type": "response.output_text.delta", ("a", "b"): 1},
         {"type": "response.output_text.delta", "score": float("nan")},
         _self_referencing_chunk(),
+        _chunk_holding_itself_twice(),
     ],
     ids=[
         "masked_string",
@@ -321,6 +328,7 @@ _REDACTED_HEADERS: Final = RedactedDict({"authorization": "Bearer hook-canary"})
         "tuple_key",
         "nan",
         "holds_itself",
+        "holds_itself_twice",
     ],
 )
 def test_responses_sse_chunk_that_json_cannot_show_as_printed_keeps_the_base_frame(chunk: Mapping[object, object]) -> None:

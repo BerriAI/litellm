@@ -3,6 +3,7 @@ import re
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import suppress
+from dataclasses import dataclass
 from enum import Enum
 from http import HTTPStatus
 from itertools import accumulate, chain, groupby, islice, repeat, takewhile
@@ -116,13 +117,28 @@ def _children(value: object) -> tuple[object, ...]:
     return tuple(value) if _is_sequence(value) else ()
 
 
-def _next_level(level: tuple[object, ...], _: None) -> tuple[object, ...]:
-    return tuple(chain.from_iterable(_children(value) for value in level))
+@dataclass(frozen=True, slots=True)
+class _PlainJsonLevel:
+    values: tuple[object, ...]
+    seen: frozenset[int]
+
+
+def _next_level(level: _PlainJsonLevel, _: None) -> _PlainJsonLevel:
+    unseen: Final = {id(value): value for value in level.values if id(value) not in level.seen}
+    return _PlainJsonLevel(
+        values=tuple(chain.from_iterable(map(_children, unseen.values()))),
+        seen=level.seen.union(unseen),
+    )
+
+
+def _settles(level: _PlainJsonLevel) -> bool:
+    return not level.values or not all(map(_is_plain_node, level.values))
 
 
 def _is_plain_json(chunk: object) -> bool:
-    levels: Final = islice(accumulate(repeat(None), _next_level, initial=(chunk,)), _MAX_PLAIN_JSON_DEPTH)
-    return next((not level for level in levels if not level or not all(map(_is_plain_node, level))), False)
+    first: Final = _PlainJsonLevel(values=(chunk,), seen=frozenset())
+    levels: Final = islice(accumulate(repeat(None), _next_level, initial=first), _MAX_PLAIN_JSON_DEPTH)
+    return next((not level.values for level in levels if _settles(level)), False)
 
 
 def responses_chunk_data(chunk: object) -> str | None:
