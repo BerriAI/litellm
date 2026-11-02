@@ -5287,7 +5287,7 @@ _PERSIMMON_LOGPROBS: Final = (
 
 @pytest.mark.asyncio
 async def test_masked_output_text_drops_the_logprobs_that_spell_the_original_text() -> None:
-    response = ResponsesAPIResponse.model_validate(
+    response: Final = ResponsesAPIResponse.model_validate(
         {
             "id": "resp_1",
             "created_at": 1,
@@ -5313,11 +5313,11 @@ async def test_masked_output_text_drops_the_logprobs_that_spell_the_original_tex
         }
     )
 
-    result = await OpenAIResponsesHandler().process_output_response(
+    result: Final = await OpenAIResponsesHandler().process_output_response(
         response, _PersimmonTextMaskingGuardrail(guardrail_name="mask")
     )
 
-    part = stream_item_items(result.output[0], "content")[0]
+    part: Final = stream_item_items(result.output[0], "content")[0]
     assert (stream_item_field(part, "text"), stream_item_field(part, "logprobs")) == ("ripe [MASKED]", None)
 
 
@@ -5334,7 +5334,7 @@ class _PassThroughGuardrail(CustomGuardrail):
 
 @pytest.mark.asyncio
 async def test_a_passing_guardrail_keeps_the_output_text_logprobs() -> None:
-    response = ResponsesAPIResponse.model_validate(
+    response: Final = ResponsesAPIResponse.model_validate(
         {
             "id": "resp_1",
             "created_at": 1,
@@ -5360,11 +5360,11 @@ async def test_a_passing_guardrail_keeps_the_output_text_logprobs() -> None:
         }
     )
 
-    result = await OpenAIResponsesHandler().process_output_response(
+    result: Final = await OpenAIResponsesHandler().process_output_response(
         response, _PassThroughGuardrail(guardrail_name="pass")
     )
 
-    part = stream_item_items(result.output[0], "content")[0]
+    part: Final = stream_item_items(result.output[0], "content")[0]
     assert (stream_item_field(part, "text"), stream_item_field(part, "logprobs")) == (
         "ripe persimmon",
         list(_PERSIMMON_LOGPROBS),
@@ -5372,7 +5372,7 @@ async def test_a_passing_guardrail_keeps_the_output_text_logprobs() -> None:
 
 
 def test_stream_rewrite_drops_logprobs_from_the_delta_done_and_part_events() -> None:
-    delta = OutputTextDeltaEvent(
+    delta: Final = OutputTextDeltaEvent(
         type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
         item_id="msg_1",
         output_index=0,
@@ -5380,7 +5380,7 @@ def test_stream_rewrite_drops_logprobs_from_the_delta_done_and_part_events() -> 
         delta="ripe persimmon",
         logprobs=_PERSIMMON_LOGPROBS,
     )
-    done = OutputTextDoneEvent(
+    done: Final = OutputTextDoneEvent(
         type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
         item_id="msg_1",
         output_index=0,
@@ -5388,7 +5388,7 @@ def test_stream_rewrite_drops_logprobs_from_the_delta_done_and_part_events() -> 
         text="ripe persimmon",
         logprobs=_PERSIMMON_LOGPROBS,
     )
-    part_done = ContentPartDoneEvent(
+    part_done: Final = ContentPartDoneEvent(
         type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
         item_id="msg_1",
         output_index=0,
