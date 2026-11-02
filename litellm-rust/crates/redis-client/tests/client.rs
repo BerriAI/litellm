@@ -292,6 +292,8 @@ impl RedisEvents for Recorded {
     fn call(&self, event: &CallEvent) {
         self.0.lock().unwrap().push(*event);
     }
+
+    fn breaker(&self, _transition: &litellm_circuit_breaker::Transition<State>) {}
 }
 
 #[rstest]

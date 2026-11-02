@@ -6,15 +6,32 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-auth-aws.workspace = true
+litellm-auth-azure.workspace = true
+litellm-auth-gcp.workspace = true
+litellm-auth-types.workspace = true
+litellm-error.workspace = true
+litellm-secret-value.workspace = true
+strum.workspace = true
 litellm-circuit-breaker.workspace = true
 litellm-config.workspace = true
+litellm-core-utils.workspace = true
+litellm-http.workspace = true
 litellm-redis-client.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+veil.workspace = true
+time.workspace = true
+url.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "macros"] }
 tracing.workspace = true
 
 [dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
 litellm-redis-testing.workspace = true
 rustls.workspace = true
-serde_json.workspace = true
 rstest.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

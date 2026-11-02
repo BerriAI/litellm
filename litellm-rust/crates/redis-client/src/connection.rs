@@ -44,9 +44,11 @@ impl Connection {
         timeouts: Timeouts,
     ) -> Result<Self, ConnectError> {
         match endpoint {
-            Endpoint::Url { .. } | Endpoint::Host(_) => {
-                Self::standalone(config::connection_info(endpoint, credentials)?, timeouts)
-            }
+            Endpoint::Url { .. } | Endpoint::Host(_) => Self::standalone(
+                config::connection_info(endpoint, credentials)?,
+                credentials,
+                timeouts,
+            ),
             Endpoint::Cluster(cluster) => Self::cluster(cluster, credentials, timeouts),
             Endpoint::Sentinel(sentinel) => Ok(Self::Sentinel(SentinelConnection::new(
                 sentinel,
@@ -64,11 +66,19 @@ impl Connection {
         }
     }
 
-    fn standalone(info: ConnectionInfo, timeouts: Timeouts) -> Result<Self, ConnectError> {
+    fn standalone(
+        info: ConnectionInfo,
+        credentials: &Credentials,
+        timeouts: Timeouts,
+    ) -> Result<Self, ConnectError> {
         let config = ConnectionManagerConfig::new()
             .set_connection_timeout(Some(timeouts.connect))
             .set_response_timeout(Some(timeouts.response))
             .set_number_of_retries(RECONNECT_RETRIES);
+        let config = match credentials {
+            Credentials::Provider(provider) => config.set_credentials_provider(provider.clone()),
+            Credentials::Static { .. } => config,
+        };
         let manager = ConnectionManager::new_lazy_with_config(redis::Client::open(info)?, config)?;
         Ok(Self::Standalone(manager))
     }
@@ -97,14 +107,18 @@ impl Connection {
                 .danger_accept_invalid_hostnames(!tls.check_hostname),
             None => builder,
         };
-        let Credentials { username, password } = credentials;
-        let builder = match username {
-            Some(username) => builder.username(username.expose()),
-            None => builder,
-        };
-        let builder = match password {
-            Some(password) => builder.password(password.expose()),
-            None => builder,
+        let builder = match credentials {
+            Credentials::Static { username, password } => {
+                let builder = match username {
+                    Some(username) => builder.username(username.expose()),
+                    None => builder,
+                };
+                match password {
+                    Some(password) => builder.password(password.expose()),
+                    None => builder,
+                }
+            }
+            Credentials::Provider(provider) => builder.set_credentials_provider(provider.clone()),
         };
         // The builder's response timeout bounds the whole request, but with_config overwrites each node's
         // response timeout with this one even when unset, so it has to be repeated here
@@ -176,8 +190,14 @@ impl SentinelConnection {
             &endpoint.service_name,
             SentinelServerType::Master,
         )?;
-        let builder = match (&endpoint.sentinel_password, &credentials.username) {
-            (Some(password), Some(username)) => builder
+        let builder = match (&endpoint.sentinel_password, credentials) {
+            (
+                Some(password),
+                Credentials::Static {
+                    username: Some(username),
+                    ..
+                },
+            ) => builder
                 .set_client_to_sentinel_username(username.expose())
                 .set_client_to_sentinel_password(password.expose()),
             (Some(password), _) => builder.set_client_to_sentinel_password(password.expose()),
@@ -192,6 +212,10 @@ impl SentinelConnection {
         let config = AsyncConnectionConfig::new()
             .set_connection_timeout(Some(timeouts.connect))
             .set_response_timeout(Some(timeouts.response));
+        let config = match credentials {
+            Credentials::Provider(provider) => config.set_credentials_provider(provider.clone()),
+            Credentials::Static { .. } => config,
+        };
         Ok(Self(Arc::new(SentinelState {
             discovery: tokio::sync::Mutex::new(builder.build()?),
             current: Mutex::new(None),
