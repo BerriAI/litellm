@@ -1997,3 +1997,24 @@ async def test_execute_tool_calls_marks_exception_results_as_error(monkeypatch):
             "is_error": True,
         }
     ]
+
+
+def test_mcp_tool_result_keeps_original_keys_required_statically():
+    """
+    PEP 655 negative control (#49359 review): ``is_error`` is the only optional
+    key; ``tool_call_id``, ``result``, and ``name`` must stay required, so a
+    bare ``{"is_error": True}`` literal is rejected at type-check time. This
+    pins the static contract the runtime tests cannot see.
+    """
+    from typing_extensions import assert_type
+
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import MCPToolResult
+
+    # The three original keys keep Required status: total=False was reverted.
+    assert not MCPToolResult.__required_keys__ < {"tool_call_id", "result", "name"}
+    assert MCPToolResult.__required_keys__ == {"tool_call_id", "result", "name"}
+    assert MCPToolResult.__optional_keys__ == {"is_error"}
+
+    # Runtime shape of a full result is unchanged.
+    full: MCPToolResult = {"tool_call_id": "call-1", "result": "ok", "name": "echo"}
+    assert_type(full, MCPToolResult)
