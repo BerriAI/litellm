@@ -924,9 +924,20 @@ class ChatCompletionSession(TypedDict, total=False):
 ########### End of Initialize Classes used for Responses API  ###########
 
 
+OUTPUT_TEXT_LOGPROBS_INCLUDE: Final = "message.output_text.logprobs"
+
+
 def _requested_top_logprobs(request_fields: Mapping[str, object]) -> int | None:
     value: Final = request_fields.get("top_logprobs")
     return value if isinstance(value, int) else None
+
+
+def _requests_output_text_logprobs(request_fields: Mapping[str, object]) -> bool:
+    """``top_logprobs`` or ``include: [message.output_text.logprobs]`` each ask the chat route for logprobs."""
+    include: Final = request_fields.get("include")
+    return _requested_top_logprobs(request_fields) is not None or (
+        isinstance(include, (list, tuple)) and OUTPUT_TEXT_LOGPROBS_INCLUDE in include
+    )
 
 
 def _chain_session_metadata(chain_session: str, request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
@@ -1299,7 +1310,7 @@ class LiteLLMCompletionResponsesConfig:
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
             "top_logprobs": top_logprobs,
-            "logprobs": True if top_logprobs is not None else None,
+            "logprobs": True if _requests_output_text_logprobs(responses_api_request) else None,
             "user": responses_api_request.get("user"),
             "temperature": responses_api_request.get("temperature"),
             "parallel_tool_calls": responses_api_request.get("parallel_tool_calls"),

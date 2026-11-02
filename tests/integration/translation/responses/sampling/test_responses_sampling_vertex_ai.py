@@ -108,6 +108,21 @@ GEMINI_2_5_FLASH_TOP_LOGPROBS_TEST_CASE: Final = replace(
 )
 
 
-@pytest.mark.parametrize("case", [GEMINI_2_5_FLASH_TOP_LOGPROBS_TEST_CASE], ids=lambda case: case.id)
+GEMINI_2_5_FLASH_INCLUDE_LOGPROBS_TEST_CASE: Final = replace(
+    GEMINI_2_5_FLASH_TOP_LOGPROBS_TEST_CASE,
+    scenario="include_output_text_logprobs",
+    litellm_request={**GEMINI_2_5_FLASH_TEST_CASE.litellm_request, "include": ["message.output_text.logprobs"]},
+    expected_provider_request={
+        **GEMINI_2_5_FLASH_TEST_CASE.expected_provider_request,
+        "generationConfig": {**GENERATION_CONFIG, "responseLogprobs": True},
+    },
+)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [GEMINI_2_5_FLASH_TOP_LOGPROBS_TEST_CASE, GEMINI_2_5_FLASH_INCLUDE_LOGPROBS_TEST_CASE],
+    ids=lambda case: case.id,
+)
 def test_responses_sampling_vertex_ai(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
     assert_translation(case, gateway, provider)

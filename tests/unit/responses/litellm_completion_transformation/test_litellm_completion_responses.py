@@ -7489,6 +7489,17 @@ def test_responses_top_logprobs_bridges_to_chat_logprobs() -> None:
     assert (request["top_logprobs"], request["logprobs"]) == (2, True)
 
 
+def test_responses_include_output_text_logprobs_bridges_to_chat_logprobs() -> None:
+    request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini-3.5-flash",
+        input="Say hello.",
+        responses_api_request={"include": ["message.output_text.logprobs"]},
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert request["logprobs"] is True and "top_logprobs" not in request
+
+
 def test_responses_without_top_logprobs_bridges_without_chat_logprobs() -> None:
     request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
         model="gemini-3.5-flash", input="Say hello.", responses_api_request={}, custom_llm_provider="vertex_ai"
