@@ -1,5 +1,3 @@
-"""Chat ``choice.logprobs`` as Responses ``output_text.logprobs``, which share one token shape."""
-
 from collections.abc import Mapping
 from typing import Final
 
@@ -34,7 +32,6 @@ def _choice_logprobs(choice_logprobs: object) -> ChoiceLogprobs | None:
 
 
 def output_text_logprobs(choice_logprobs: object) -> tuple[OutputTextLogprob, ...] | None:
-    """The ``logprobs`` a Responses text part carries for a chat choice, ``None`` when the choice sent none."""
     validated: Final = _choice_logprobs(choice_logprobs)
     if validated is None or validated.content is None:
         return None
