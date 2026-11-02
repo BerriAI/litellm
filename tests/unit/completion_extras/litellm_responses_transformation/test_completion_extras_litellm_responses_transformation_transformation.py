@@ -148,9 +148,6 @@ def test_fold_does_not_invent_one_phase_for_mixed_responses_messages() -> None:
     assert choices[0].message.provider_specific_fields is None
 
 
-
-
-
 def test_structured_output_fold_keeps_first_message_phase() -> None:
     commentary = ResponseOutputMessage.model_validate(
         {
