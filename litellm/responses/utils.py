@@ -50,6 +50,7 @@ from litellm.types.utils import (
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]
 ] = TypeAdapter(ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None)
+_REASONING_FIELDS_ONLY_ITS_ORIGIN_RESOLVES: Final = frozenset({"encrypted_content", "id", "status"})
 
 
 class _UsageExtraFields(ExtraItemsTypedDict, total=False, extra_items=object):
@@ -692,13 +693,17 @@ class ResponsesAPIRequestUtils:
         reasoning: Final = cast(Mapping[str, object], item)  # cast-ok: untyped client json
         if reasoning.get("type") != "reasoning" or not reasoning.get("encrypted_content"):
             return reasoning
+        return ResponsesAPIRequestUtils.readable_reasoning(reasoning)
+
+    @staticmethod
+    def readable_reasoning(reasoning: Mapping[str, object]) -> Mapping[str, object] | None:
         readable: Final = any(
             ResponsesAPIRequestUtils._has_readable_text(reasoning.get(key)) for key in ("summary", "content")
         )
         if not readable:
             return None
         kept: Final[dict[str, object]] = {  # mutable-ok: request item rebuilt without the undecryptable keys
-            key: value for key, value in reasoning.items() if key not in ("encrypted_content", "id")
+            key: value for key, value in reasoning.items() if key not in _REASONING_FIELDS_ONLY_ITS_ORIGIN_RESOLVES
         }
         return kept
 

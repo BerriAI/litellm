@@ -12,7 +12,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
-from litellm.responses.additional_tools import hoist_additional_tools
+from litellm.responses.additional_tools import with_additional_tools_hoisted
 from litellm.responses.file_search.emulated_handler import replace_file_search_tools
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -20,7 +20,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.responses.main import previous_response_client_ids
-from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInputParam
+from litellm.types.llms.openai import ResponseInputParam
 from litellm.utils import ProviderConfigManager
 
 _COUNTED_CHAT_PARAMS: Final = (
@@ -114,20 +114,6 @@ def with_provider_file_ids(
     }
 
 
-def _with_hoisted_additional_tools(responses_request: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
-    responses_input: Final = responses_request.get("input")
-    if not isinstance(responses_input, list):
-        return responses_request
-    input_items: Final = cast(ResponseInputParam, responses_input)  # cast-ok: forwarded as sent, as inference does
-    top_level_tools: Final = cast(  # cast-ok: tools are forwarded as sent, as inference does
-        "tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]", _ITEMS.validate_python(responses_request.get("tools") or ())
-    )
-    hoisted: Final = hoist_additional_tools(input_items, top_level_tools, drop_params=drop_params)
-    if not hoisted.hoisted:
-        return responses_request
-    return {**responses_request, "input": hoisted.input, "tools": list(hoisted.tools)}
-
-
 def _caller_input(responses_request: Mapping[str, object]) -> ResponseInputParam | None:
     responses_input: Final = responses_request.get("input")
     return (
@@ -205,7 +191,9 @@ async def chat_count_request(
         chat_body: Final = await _with_previous_turns(
             responses_batch_body_to_chat_body(
                 _with_compaction_as_summary_text(
-                    _with_emulated_file_search(_with_hoisted_additional_tools(responses_request, policy.drop_params))
+                    _with_emulated_file_search(
+                        with_additional_tools_hoisted(responses_request, drop_params=policy.drop_params)
+                    )
                 ),
                 custom_llm_provider,
                 policy.drop_params,

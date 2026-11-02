@@ -1,9 +1,11 @@
 import json
+import logging
 from types import MappingProxyType
 
 import pytest
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.codex_model_catalog import (
     CODEX_CATALOG_BYTE_LIMIT,
     CodexCatalogRow,
@@ -12,9 +14,11 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     CodexStockUpgrade,
     bundled_codex_models,
     codex_catalog_rows,
+    codex_entry_names_default_reasoning_level,
     codex_model_list_body,
     codex_models_response_json,
     configured_service_tiers,
+    merged_codex_catalog,
 )
 
 _PROMPT = "base prompt"
@@ -526,6 +530,55 @@ def test_an_entry_too_large_for_the_bytes_left_is_passed_over_and_the_smaller_on
     assert len(body.json.encode()) <= limit
 
 
+def test_merged_catalog_keeps_upstream_whole_and_adds_only_the_entries_that_fit_the_byte_limit():
+    upstream = {"models": [{"slug": "upstream-model", "priority": 4, "base_instructions": "u" * 500}]}
+    upstream_only = len(json.dumps(upstream, separators=(",", ":")))
+    rows = tuple(_row(f"model-{index}") for index in range(4))
+
+    def merged(*merged_rows, byte_limit):
+        return merged_codex_catalog(
+            json.dumps(upstream).encode(), merged_rows, stock=_STOCK, instructions=_PROMPT, byte_limit=byte_limit
+        )
+
+    unlimited = json.loads(merged(*rows, byte_limit=upstream_only * 100))["models"]
+    limit = len(merged(*rows[:2], byte_limit=upstream_only * 100).encode())
+
+    body = merged(*rows, byte_limit=limit)
+
+    assert len(body.encode()) <= limit
+    assert json.loads(body)["models"] == unlimited[:3]
+    assert merged(*rows, byte_limit=upstream_only) is None
+
+
+def test_merged_catalog_gives_an_alias_no_service_tier_or_upgrade_of_codexs_own():
+    upstream = json.dumps({"models": [{"slug": "upstream-model", "priority": 0}]}).encode()
+    rows = (_row("team-sol", upstream_model="openai/gpt-6-sol"), _row("team-55", upstream_model="openai/gpt-5.5"))
+
+    added = json.loads(merged_codex_catalog(upstream, rows, stock=_STOCK, instructions=_PROMPT))["models"][1:]
+
+    assert [
+        (entry["slug"], entry["service_tiers"], entry["default_service_tier"], entry["upgrade"]) for entry in added
+    ] == [
+        ("team-sol", [], None, None),
+        ("team-55", [], None, None),
+    ]
+
+
+def test_merged_catalog_warns_once_with_how_many_models_the_byte_limit_left_out(caplog, monkeypatch):
+    upstream = json.dumps({"models": [{"slug": "upstream-model", "priority": 0}]}).encode()
+    rows = tuple(_row(f"model-{index}") for index in range(4))
+    limit = len(merged_codex_catalog(upstream, rows[:1], stock=_STOCK, instructions=_PROMPT, byte_limit=10**6).encode())
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+
+    with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+        merged_codex_catalog(upstream, rows, stock=_STOCK, instructions=_PROMPT, byte_limit=limit)
+        merged_codex_catalog(upstream, rows[:1], stock=_STOCK, instructions=_PROMPT, byte_limit=limit)
+
+    assert [record.getMessage() for record in caplog.records] == [
+        f"Codex native model catalog left out 3 of 4 LiteLLM models to stay within Codex's {limit} byte limit"
+    ]
+
+
 def test_unlimited_body_keeps_every_entry():
     rows = tuple(_row(f"model-{index}") for index in range(3))
 
@@ -755,6 +808,33 @@ def test_catalog_rows_without_a_router_carry_only_the_listing():
     assert codex_catalog_rows(listing, (("plain", "plain"),), None) == (CodexCatalogRow(id="plain", mode="chat"),)
 
 
+@pytest.mark.parametrize("client_version", [None, "0.165.0"])
+def test_entry_names_a_default_reasoning_level_exactly_when_the_served_entry_carries_one(client_version):
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "open-weights", "litellm_params": {"model": "fireworks_ai/open-weights"}},
+            {"model_name": "coding-model", "litellm_params": {"model": "openai/gpt-5.5"}},
+            {
+                "model_name": "max-only",
+                "litellm_params": {"model": "hosted_vllm/qa-local-coder", "api_base": "https://vllm.example/v1"},
+                "model_info": {"supports_reasoning": True, "reasoning_effort_levels": ["max"]},
+            },
+        ]
+    )
+    names = ("open-weights", "coding-model", "max-only")
+    listing = tuple(
+        {"id": name, "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"} for name in names
+    )
+    served = json.loads(
+        codex_model_list_body(listing, tuple((name, name) for name in names), router, client_version=client_version)
+    )["models"]
+
+    assert [
+        codex_entry_names_default_reasoning_level(entry["slug"], router, None, client_version) for entry in served
+    ] == ["default_reasoning_level" in entry for entry in served]
+    assert ["default_reasoning_level" in entry for entry in served] == [False, True, client_version is not None]
+
+
 def test_codex_tool_search_is_offered_off_the_route_and_model_info_and_only_when_every_deployment_answers_it():
     claude = "anthropic/claude-sonnet-5-5"
     converse = "bedrock/us.anthropic.claude-sonnet-5-5"
@@ -801,3 +881,31 @@ def test_codex_tool_search_is_offered_off_the_route_and_model_info_and_only_when
         "mixed": False,
     }
     assert models[0]["context_window"] == 1000000
+
+
+def test_native_merged_catalog_offers_codex_tool_search_as_the_proxy_listing_does():
+    claude = "anthropic/claude-sonnet-5-5"
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "claude", "litellm_params": {"model": claude}},
+            {
+                "model_name": "claude-off",
+                "litellm_params": {"model": claude},
+                "model_info": {"supports_search_tool": False},
+            },
+            {"model_name": "coding-model", "litellm_params": {"model": "openai/gpt-5.5"}},
+        ]
+    )
+    names = ("claude", "claude-off", "coding-model")
+    listing = tuple({"id": name, "object": "model", "created": 0, "owned_by": "x", "mode": "chat"} for name in names)
+    entries = tuple((name, name) for name in names)
+    upstream = json.dumps({"models": [{"slug": "upstream-model", "priority": 0}]}).encode()
+
+    listed = json.loads(codex_model_list_body(listing, entries, router))["models"]
+    merged = json.loads(merged_codex_catalog(upstream, codex_catalog_rows(listing, entries, router)))["models"][1:]
+
+    assert [entry["slug"] for entry in merged] == list(names)
+    assert [entry.get("supports_search_tool") for entry in merged] == [
+        entry.get("supports_search_tool") for entry in listed
+    ]
+    assert [entry["supports_search_tool"] for entry in merged[:2]] == [True, False]

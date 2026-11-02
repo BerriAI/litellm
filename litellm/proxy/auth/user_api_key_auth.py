@@ -337,6 +337,30 @@ async def _resolve_router_settings_model_group_alias(
     rewrite_request_model(request_data, request, target)
 
 
+_CODEX_NATIVE_RESPONSES_ROUTE: Final = "/backend-api/codex/responses"
+
+
+def _resolve_codex_native_chatgpt_model(
+    request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
+    valid_token: UserAPIKeyAuth,
+    request: Request | None,
+    route: str,
+) -> None:
+    requested: Final = request_data.get("model")
+    if route != _CODEX_NATIVE_RESPONSES_ROUTE or request is None or not isinstance(requested, str):
+        return
+    from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import native_chatgpt_model
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return
+    target: Final = native_chatgpt_model(requested, llm_router, valid_token)
+    if target is None:
+        return
+    request.scope.setdefault(CLIENT_REQUESTED_MODEL_SCOPE_KEY, requested)
+    rewrite_request_model(request_data, request, target)
+
+
 def _get_model_names_for_budget_checks(
     model: str | list[str] | None,
 ) -> list[str]:
@@ -4121,6 +4145,7 @@ async def _authorize_authenticated_request(
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj, request=request)
     await _normalize_claude_model(request_data, user_api_key_auth_obj, request, route)
     await _resolve_router_settings_model_group_alias(request_data, user_api_key_auth_obj, request, route)
+    _resolve_codex_native_chatgpt_model(request_data, user_api_key_auth_obj, request, route)
 
     # Single authorization point. Builder paths MUST NOT call common_checks.
     # Route through the same exception handler the builder uses so
@@ -4588,6 +4613,7 @@ async def enforce_key_and_fallback_model_access(
     """
     await _normalize_claude_model(request_data, valid_token, request, route)
     await _resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
+    _resolve_codex_native_chatgpt_model(request_data, valid_token, request, route)
     config: Final = valid_token.config
 
     if config != {}:

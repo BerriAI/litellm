@@ -83,6 +83,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
     StoredTurns,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import (
@@ -2508,7 +2509,12 @@ class LiteLLMCompletionResponsesConfig:
         Returns None for anything this deployment did not write, so a genuinely
         opaque blob is still skipped rather than forwarded as garbage.
         """
-        decoded: Final = decode_thinking_blocks(input_item.get("encrypted_content"))
+        encrypted_content: Final = input_item.get("encrypted_content")
+        decoded: Final = decode_thinking_blocks(
+            ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(encrypted_content)[1]
+            if isinstance(encrypted_content, str)
+            else encrypted_content
+        )
         if decoded is None:
             return None
         return tuple(

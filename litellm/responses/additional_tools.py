@@ -5,13 +5,15 @@ from itertools import groupby
 from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # validating the openai tool union strips vendor keys from raw tools
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInputParam
 
 ADDITIONAL_TOOLS_INPUT_ITEM_TYPE: Final = "additional_tools"
+_NAMESPACE_TOOL_TYPE: Final = "namespace"
+_ITEMS: Final = TypeAdapter(tuple[object, ...])
 
 
 class _InputItemType(LiteLLMBaseModel):
@@ -61,7 +63,7 @@ def _members_of_copies(copies: Sequence[Mapping[str, object]]) -> Iterator[Mappi
 
 def _merged(copies: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
     newest: Final = copies[-1]
-    if newest.get("type") != "namespace" or len(copies) == 1:
+    if newest.get("type") != _NAMESPACE_TOOL_TYPE or len(copies) == 1:
         return newest
     members: Final = tuple(_members_of_copies(copies))
     return {**newest, "tools": list(_unique_tools(members))} if members else newest
@@ -112,3 +114,17 @@ def hoist_additional_tools(
         for tool in _unique_tools((*existing, *hoisted))
     )
     return HoistedAdditionalTools(input=remaining_input, tools=unique, hoisted=hoisted)
+
+
+def with_additional_tools_hoisted(request: Mapping[str, object], *, drop_params: bool) -> Mapping[str, object]:
+    request_input: Final = request.get("input")
+    if not isinstance(request_input, list):
+        return request
+    input_items: Final = cast(ResponseInputParam, request_input)  # cast-ok: forwarded as sent, as inference does
+    top_level_tools: Final = cast(  # cast-ok: tools are forwarded as sent, as inference does
+        "tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]", _ITEMS.validate_python(request.get("tools") or ())
+    )
+    hoisted: Final = hoist_additional_tools(input_items, top_level_tools, drop_params=drop_params)
+    if not hoisted.hoisted:
+        return request
+    return {**request, "input": hoisted.input, "tools": list(hoisted.tools)}

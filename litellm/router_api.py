@@ -1023,6 +1023,34 @@ class RouterRegistry:
             return r._core_prompt_caching_pin_cache
         raise ValueError(f"unknown plugin kind {kind!r}")
 
+    def decryptable_reasoning(
+        self, model_group: str, request_input: Sequence[object], targets: "Sequence[Deployment]"
+    ) -> tuple[object, ...]:
+        """
+        ``request_input`` without the encrypted reasoning that ``targets``, the deployments a
+        ``model_group`` request may go to, cannot decrypt, keeping each item's readable summary.
+        When encrypted content affinity is on for the group, the router sends the request to the
+        reasoning's origin, so reasoning one target can decrypt stays; otherwise every target must
+        decrypt it (was reading ``optional_callbacks`` for ``EncryptedContentAffinityCheck``).
+        """
+        from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+            EncryptedContentAffinityCheck,
+        )
+
+        r: Final = self._router
+        target_dicts: Final = tuple(target.model_dump(exclude_none=True) for target in targets)
+        pinned: Final = any(
+            isinstance(callback, EncryptedContentAffinityCheck) and callback.is_enabled_for_model_group(model_group)
+            for callback in r.optional_callbacks or ()
+        )
+        target_groups: Final = (target_dicts,) if pinned else tuple((target,) for target in target_dicts)
+        kept: Final = list(request_input)
+        for group in target_groups:
+            EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+                r._core_ctx, kept, None, group, unmarked_origin=None
+            )
+        return tuple(kept)
+
 
 # Settings a caller may read. Assigning one from outside the router goes through apply(ChangeSet(assign=...)).
 SETTING_FIELDS: Final[tuple[str, ...]] = (

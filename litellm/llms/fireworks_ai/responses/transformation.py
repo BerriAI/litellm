@@ -1,10 +1,11 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # the base signature leaves the params bag untyped
 from urllib.parse import unquote
 
 import httpx
 
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.responses.transformation import (
     STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES,
@@ -20,8 +21,9 @@ from litellm.llms.fireworks_ai.common_utils import (
 )
 from litellm.llms.openai.responses.instruction_items import developer_items_as_system, instruction_items_folded
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponseInputParam
+from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInputParam
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -88,19 +90,25 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         headers: dict[str, str],  # mutable-ok: overrides the base class signature
     ) -> dict[str, object]:  # mutable-ok: overrides the base class signature
         validated_input: Final = self._validate_input_param(input)
+        tools_param: Final = cast(  # cast-ok: the base signature leaves the params bag untyped
+            "Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None", response_api_optional_request_params.get("tools")
+        )
+        hoisted: Final = hoist_additional_tools(
+            validated_input, tools_param, drop_params=drops_unsupported_params(litellm_params.drop_params)
+        )
+        hoisted_params: Final = (
+            {**response_api_optional_request_params, "tools": list(hoisted.tools)}
+            if hoisted.hoisted
+            else response_api_optional_request_params
+        )
         model_info: Final = deployment_model_info(litellm_params)
         declared: Final = declared_mid_conversation_system_support(model, self.custom_llm_provider.value, model_info)
         folded: Final = (
             None
             if deployment_declared_mid_conversation_system_support(model_info) is True
-            else instruction_items_folded(
-                validated_input, response_api_optional_request_params, "user" if declared is False else "system"
-            )
+            else instruction_items_folded(hoisted.input, hoisted_params, "user" if declared is False else "system")
         )
-        placed_input, placed_params = folded or (
-            developer_items_as_system(validated_input),
-            response_api_optional_request_params,
-        )
+        placed_input, placed_params = folded or (developer_items_as_system(hoisted.input), hoisted_params)
         request: Final = super().transform_responses_api_request(
             model=resolve_fireworks_resource_name(model),
             input=placed_input,

@@ -829,6 +829,81 @@ def test_attribute_errors_about_other_objects_pass_through_unchanged(router):
     assert _public_attribute_error(router, "_core_x", "x", other) is other
 
 
+_MINTING_DEPLOYMENT = "dep-minting-org"
+_OTHER_ORG_DEPLOYMENT = "dep-other-org"
+_BOTH_ORGS = (_MINTING_DEPLOYMENT, _OTHER_ORG_DEPLOYMENT)
+_GROUP_AFFINITY = ["encrypted_content_affinity"]
+
+
+@pytest.mark.parametrize(
+    "affinity, target_ids, reasoning_stays",
+    [
+        pytest.param({}, _BOTH_ORGS, False, id="no affinity, one target cannot decrypt"),
+        pytest.param({}, (_MINTING_DEPLOYMENT,), True, id="no affinity, the only target minted it"),
+        pytest.param(
+            {"optional_pre_call_checks": _GROUP_AFFINITY}, _BOTH_ORGS, True, id="global affinity, origin among targets"
+        ),
+        pytest.param(
+            {"optional_pre_call_checks": _GROUP_AFFINITY},
+            (_OTHER_ORG_DEPLOYMENT,),
+            False,
+            id="global affinity, origin not among targets",
+        ),
+        pytest.param(
+            {"optional_pre_call_checks": [], "model_group_affinity_config": {"pair": _GROUP_AFFINITY}},
+            _BOTH_ORGS,
+            True,
+            id="affinity on for this group",
+        ),
+        pytest.param(
+            {"optional_pre_call_checks": [], "model_group_affinity_config": {"other-group": _GROUP_AFFINITY}},
+            _BOTH_ORGS,
+            False,
+            id="affinity on for another group only",
+        ),
+    ],
+)
+def test_decryptable_reasoning_keeps_encrypted_reasoning_only_when_the_router_sends_it_to_a_deployment_that_decrypts_it(
+    affinity, target_ids, reasoning_stays
+):
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    r = Router(
+        model_list=[
+            {
+                "model_name": "pair",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_base": api_base, "api_key": "sk-pair"},
+                "model_info": {"id": model_id},
+            }
+            for api_base, model_id in (
+                ("https://minting-org.test/v1", _MINTING_DEPLOYMENT),
+                ("https://other-org.test/v1", _OTHER_ORG_DEPLOYMENT),
+            )
+        ],
+        **affinity,
+    )
+    summary = [{"type": "summary_text", "text": "multiply 17 by 23"}]
+    user_turn = {"type": "message", "role": "user", "content": "What is 17*23?"}
+    reasoning = {
+        "type": "reasoning",
+        "id": "rs_minted",
+        "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+            "gAAAAA-blob", _MINTING_DEPLOYMENT
+        ),
+        "summary": summary,
+    }
+    request_input = [user_turn, reasoning]
+    targets = tuple(r.registry().deployment(model_id) for model_id in target_ids)
+    try:
+        kept = r.registry().decryptable_reasoning("pair", request_input, targets)
+    finally:
+        r.retire()
+
+    readable_only = {"type": "reasoning", "summary": summary}
+    assert kept == (user_turn, reasoning if reasoning_stays else readable_only)
+    assert request_input == [user_turn, reasoning], "the caller's input must not change"
+
+
 # Router-family helpers whose Router parameter became a RoutingContext keep the old spellings.
 
 

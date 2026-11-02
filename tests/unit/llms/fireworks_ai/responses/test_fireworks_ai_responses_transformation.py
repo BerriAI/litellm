@@ -415,6 +415,68 @@ def test_transform_request_forwards_non_string_instructions_and_input_untouched(
     )
 
 
+CODEX_CLOCK_NAMESPACE_TOOL: Final = {
+    "type": "namespace",
+    "name": "clock",
+    "description": "Clock tools.",
+    "tools": [
+        {
+            "type": "function",
+            "name": "sleep",
+            "description": "Sleep for some seconds.",
+            "parameters": {"type": "object", "properties": {"seconds": {"type": "number"}}, "required": ["seconds"]},
+        }
+    ],
+}
+CODEX_ADDITIONAL_TOOLS_ITEM: Final = {
+    "type": "additional_tools",
+    "role": "developer",
+    "tools": [CODEX_CLOCK_NAMESPACE_TOOL],
+}
+
+
+@pytest.mark.parametrize("instructions", [None, "Answer with exactly one word."], ids=["no-instructions", "instructions"])
+def test_transform_request_moves_codex_additional_tools_item_into_tools(instructions: str | None) -> None:
+    user_item: Final = {"role": "user", "content": "Sleep for two seconds."}
+    request: Final = FireworksAIResponsesAPIConfig().transform_responses_api_request(
+        model="accounts/fireworks/models/glm-5p3",
+        input=cast(ResponseInputParam, [CODEX_ADDITIONAL_TOOLS_ITEM, user_item]),
+        response_api_optional_request_params={} if instructions is None else {"instructions": instructions},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert tuple(request["tools"]) == (CODEX_CLOCK_NAMESPACE_TOOL,)
+    assert tuple(request["input"]) == (user_item,)
+    assert request.get("instructions") == instructions
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected_clock_copies"),
+    [
+        pytest.param(True, 1, id="merged once under drop_params"),
+        pytest.param(None, 2, id="forwarded as sent without drop_params"),
+    ],
+)
+def test_transform_request_merges_codex_additional_tools_into_existing_tools_only_under_drop_params(
+    drop_params: bool | None, expected_clock_copies: int
+) -> None:
+    weather_tool: Final = {
+        "type": "function",
+        "name": "get_weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    }
+    user_item: Final = {"role": "user", "content": "Sleep for two seconds, then check the weather in Paris."}
+    request: Final = FireworksAIResponsesAPIConfig().transform_responses_api_request(
+        model="accounts/fireworks/models/glm-5p3",
+        input=cast(ResponseInputParam, [CODEX_ADDITIONAL_TOOLS_ITEM, user_item, CODEX_ADDITIONAL_TOOLS_ITEM]),
+        response_api_optional_request_params={"tools": [weather_tool]},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+    assert tuple(request["tools"]) == (weather_tool, *(CODEX_CLOCK_NAMESPACE_TOOL,) * expected_clock_copies)
+    assert tuple(request["input"]) == (user_item,)
+
+
 def test_responses_call_maps_pydantic_developer_items_and_replays_pydantic_output_items() -> None:
     client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
     pydantic_input: Final = cast(
