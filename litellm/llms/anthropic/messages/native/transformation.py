@@ -46,11 +46,13 @@ from ...common_utils import (
     AnthropicError,
     AnthropicModelInfo,
     context_management_betas,
+    has_context_1m_suffix,
     is_claude_model_target,
     merge_anthropic_beta_headers,
     optionally_handle_anthropic_oauth,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
+    strip_context_1m_suffix,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
     tools_without_custom_field,
 )
@@ -374,7 +376,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     model=model,
                 ),
             )
-        return self.finalize_messages_headers(headers, optional_params, messages), api_base
+        return self.finalize_messages_headers(headers, optional_params, messages, model=model), api_base
 
     async def avalidate_anthropic_messages_environment(
         self,
@@ -414,7 +416,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     model=model,
                 ),
             )
-        return self.finalize_messages_headers(oauth_headers, optional_params, messages), api_base
+        return self.finalize_messages_headers(oauth_headers, optional_params, messages, model=model), api_base
 
     def _require_auth_header(self, auth_header: Mapping[str, str] | None, model: str) -> Mapping[str, str]:
         if auth_header is None:
@@ -453,6 +455,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers: dict,  # mutable-ok: out-param
         optional_params: dict,  # mutable-ok: out-param
         messages: list[object],  # mutable-ok: mirrors the validate_anthropic_messages_environment contract
+        model: str = "",
     ) -> dict:  # mutable-ok: out-param
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
@@ -462,6 +465,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             headers=headers,
             optional_params=optional_params,
             messages=messages,
+            model=model,
         )
 
     @staticmethod
@@ -792,7 +796,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 )
             ),
             max_tokens=max_tokens,
-            model=model,
+            model=strip_context_1m_suffix(model),
             **anthropic_messages_optional_request_params,
         )
         request: Final = (
@@ -853,6 +857,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         messages: Sequence[object] = (),
         beta_map_provider: str | None = None,
         drop_params: bool = False,
+        model: str = "",
     ) -> dict:
         """
         Auto-inject anthropic-beta headers based on features used.
@@ -863,6 +868,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         - output_format: adds 'structured-outputs-2025-11-13'
         - speed: adds 'fast-mode-2026-02-01'
         - a message carrying output_config: adds 'per-turn-control-2026-07-01'
+        - [1m] model suffix: adds 'context-1m-2025-08-07'
 
         Args:
             headers: Request headers dict
@@ -871,6 +877,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             messages: Request messages, scanned for per-message output_config
             beta_map_provider: Provider whose beta map column gates safeguards, defaults to custom_llm_provider
             drop_params: Whether the deployment or request set drop_params
+            model: Requested model name, checked for the [1m] suffix
         """
         beta_values: Final[set[str]] = set()
 
@@ -885,6 +892,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         if requires_native_compaction_beta(custom_llm_provider, optional_params, messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
+
+        if has_context_1m_suffix(model):
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_1M_2025_08_07.value)
 
         beta_values.update(context_management_betas(optional_params.get("context_management")))
 
