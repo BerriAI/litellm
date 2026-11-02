@@ -27,6 +27,38 @@ class _AuthCarryingMetadata(TypedDict):
     user_api_key_auth: ReadOnly[NotRequired["UserAPIKeyAuth | None"]]
 
 
+async def authorize_provider_mcp_request(
+    body: Mapping[str, object], context: Mapping[str, object], *, provider_bound: bool = False
+) -> None:
+    buckets: Final = tuple(
+        TypeAdapter(dict[str, object]).validate_python(context[key])
+        for key in ("litellm_metadata", "metadata")
+        if isinstance(context.get(key), Mapping)
+    )
+    auth: Final = next((bucket["user_api_key_auth"] for bucket in buckets if "user_api_key_auth" in bucket), None)
+    if auth is None:
+        return
+    extra: Final = body.get("extra_body")
+    effective: Final = (
+        {**body, **TypeAdapter(dict[str, object]).validate_python(extra)} if isinstance(extra, Mapping) else body
+    )
+    tools: Final = effective.get("tools")
+    has_native_tools: Final = isinstance(tools, (list, tuple)) and any(
+        isinstance(tool, Mapping)
+        and TypeAdapter(dict[str, object]).validate_python(tool).get("type") in ("mcp", "mcp_toolset")
+        for tool in TypeAdapter(tuple[object, ...]).validate_python(tools)
+    )
+    if not has_native_tools and not effective.get("mcp_servers"):
+        return
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+    if not isinstance(auth, UserAPIKeyAuth):
+        return
+    from litellm.proxy.mcp_server.auth.provider_mcp import authorize_provider_mcp
+
+    await authorize_provider_mcp(effective, auth, provider_bound=provider_bound)
+
+
 @dataclass(frozen=True, slots=True)
 class MCPRequestContext:
     """Everything a gateway handler must forward to MCP tool listing and execution."""

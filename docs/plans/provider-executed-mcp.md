@@ -1,6 +1,6 @@
 # Provider-executed MCP registration
 
-Status: registration API, YAML registration, execution isolation, and the explicit provider input model are approved and pushed through `a44cd0949e`. Permission integration is reviewed and approved. Native-request enforcement is next
+Status: registration and permission integration are approved and pushed through `f1bb8d8ddd`. Native request authorization is implemented and approved for commit and push
 
 ## Implementation plan
 
@@ -11,22 +11,54 @@ Work through these layers in order on `litellm_provider_mcp_registration`. Updat
 | 1 | Settle registration fields, values, storage, and validation | Approved |
 | 2 | Implement persistence and execution-mode isolation before enabling provider registration | Database, isolation, and admin API committed; YAML registration and provider input model reviewed and approved |
 | 3 | Management UI/API, stored tool options, and existing key/team/toolset selectors | Scoped retrieval, assignment, and stored tool selectors implemented and approved. Provider registration form remains separate |
-| 4 | Authorize effective OpenAI Responses and Anthropic Messages MCP attachments through existing MCP permissions | Pending |
-| 5 | Live provider tests, streaming admission tests, UI tests, and gateway regressions | Pending |
+| 4 | Authorize effective OpenAI Responses and Anthropic Messages MCP attachments through existing MCP permissions | Implemented and approved |
+| 5 | Live provider tests, streaming admission tests, UI tests, and gateway regressions | Request admission and gateway regressions verified. Real OpenAI JSON/streaming passed. Real Anthropic calls blocked by invalid QA credential. Earlier browser QA remains incomplete |
 
-The next phase enforces native attachments before provider dispatch using the completed permission integration. Preserve the current sources of truth and lookup paths. Object permissions remain database-backed and use the existing auth caches. Key assignment keeps its database lookup and gains recognition of provider-only YAML records in its config fallback. Scoped lists keep their existing permission calculation and hydrate authorized provider IDs from the already-loaded registration inventory. Provider tool selectors use stored allowed tools and descriptions. Gateway lookup, discovery, and execution retain their existing paths
+Request authorization enforces native attachments before provider dispatch using the completed permission integration. Preserve the current sources of truth and lookup paths. Object permissions remain database-backed and use the existing auth caches. Key assignment keeps its database lookup and gains recognition of provider-only YAML records in its config fallback. Scoped lists keep their existing permission calculation and hydrate authorized provider IDs from the already-loaded registration inventory. Provider tool selectors use stored allowed tools and descriptions. Gateway lookup, discovery, and execution retain their existing paths
 
 Reuse the existing server/tool grant resolution functions, groups, toolsets, and explicit denies. The user accepted today's permission combination and error-handling semantics for v1, including existing inheritance and additive access-group behavior. Do not introduce a stricter policy or broadly replace auth lookups in this feature. Apply the provider registration's allowed-tools ceiling to the resolved permission scope. Native admission must resolve the canonical URL, require provider execution mode, and validate a finite requested tool scope after effective request configuration is assembled. Cover both native APIs and streaming, with denied requests producing no provider dispatch. Provider MCP discovery/execution stays outside LiteLLM
 
 V1 supports URL-based OpenAI Responses MCP and both Anthropic Messages connector formats. Request authorization applies to streaming and non-streaming calls before provider dispatch. Reuse today's key/team permission semantics, bounded by the registered server's allowed tools. Existing applicable permission ceilings and explicit denies continue to apply
 
-Response/SSE inspection, per-invocation argument policy inside a provider's tool loop, automatic MCP discovery for provider registrations, local MCP references, provider connector IDs, and additional API bridges are outside v1
+Chat Completions entry routes, response/SSE inspection, per-invocation argument policy inside a provider's tool loop, automatic MCP discovery for provider registrations, local MCP references, provider connector IDs, and additional API bridges are outside v1
 
 The registry design review is deferred by agreement on 2026-11-02. This batch retains the executable registry and separate provider registration inventory. A later revision may publish both modes through one registry and derive executable views at gateway boundaries. No registry consolidation is included in this approval
 
-## Current review acceptance criteria
+## Request authorization review
 
-This batch connects provider registrations to existing permission assignment, scoped management retrieval, and key/team/toolset tool choices. It changes no database schema or permission-combination rules. Native LLM request admission remains the next batch. The provider create/edit form, response inspection, and billing attribution remain separate work
+This batch adds first-class request authorization. It changes no registration schema, permission-combination policy, database lookup owner, or management inventory design. The admission logic lives in `litellm/proxy/mcp_server/auth/provider_mcp.py` and calls the existing server and tool permission resolvers
+
+Control flow
+
+1. The shared deployment pre-call function runs after router/model parameters and deployment callbacks are assembled and before response cache lookup. It forwards the effective request and proxy-owned auth metadata through `authorize_provider_mcp_request`
+2. The request adapter overlays `extra_body` and extracts the existing authenticated `UserAPIKeyAuth`. Ordinary SDK calls without proxy identity retain their behavior
+3. The admission module classifies OpenAI MCP tools through the same gateway classifier used for execution. Gateway references keep their existing authorization path. Native references and Anthropic connectors become URL plus finite tool-scope attachments
+4. Within the existing catalog operation, canonical URLs resolve only against provider registrations. `get_allowed_mcp_servers` resolves server grants and `get_allowed_tools_for_server` resolves key/team/toolset/group tool scope. The registered `allowed_tools` bounds that result. A mismatch returns 403 without rewriting the request
+5. The async Responses and Messages HTTP handlers run the same check on their final transformed body before signing or sending it. This catches attachments added after deployment admission. At this stage any remaining MCP URL is provider-bound, so it cannot escape admission through the gateway shortcut
+
+There are two admission boundaries for distinct reasons. The deployment boundary prevents revoked MCP access from reading a cached response. The final-body boundary checks what will actually leave LiteLLM after transformations and later hooks. Both use the same policy implementation, and neither discovers or calls MCP tools
+
+Registered provider URLs take precedence over the existing hostname-blind `/mcp/<name>` gateway shortcut. Other gateway shortcut behavior is preserved. Explicit `litellm_proxy` references remain gateway requests
+
+| Attachment format | Required bounded scope |
+| --- | --- |
+| OpenAI Responses | `allowed_tools` list or `allowed_tools.tool_names`. A read-only filter alone is unbounded |
+| Anthropic legacy connector | Nonempty `tool_configuration.allowed_tools` when enabled, or explicit `enabled=false` |
+| Anthropic MCP toolset | `default_config.enabled=false`, with named tools explicitly enabled in `configs` |
+
+Unknown URLs, gateway-only registrations used as native endpoints, unauthorized servers/tools, ambiguous connector/toolset declarations, and unbounded scope reject. Provider connector IDs are unsupported in v1 and reject even when paired with a registered URL. Empty registration tools remain a deny-all tool ceiling. Local references, response inspection, SSE event authorization, and billing attribution remain outside this batch
+
+Verification covers unchanged allowed payloads, canonical host/default-port equivalence, URL/path/query changes, current key/team semantics, denied server and tool grants, both Anthropic formats, config and database registrations, model-configured attachments, `extra_body`, JSON and streaming admission, registration revocation, cached responses, late hook changes, gateway routing, and SDK compatibility
+
+The before/after proxy and PostgreSQL matrix records 23 denied cases that dispatched on `f1bb8d8ddd` and return 403 with zero provider dispatches on this branch. Two database-registered allowed cases reach the controlled upstream unchanged. Real OpenAI MCP discovery and tool execution succeed in JSON and streaming modes. A separate real OpenAI call with `allowed_tools=[]` emitted no MCP tool calls
+
+Real Anthropic execution is not verified in this batch. The designated local QA key returns `401 invalid x-api-key`, including on a direct `/v1/models` control. Both Anthropic request shapes have unit coverage, and modern connector admission has live proxy coverage with a controlled upstream. Earlier successful provider execution evidence belongs to the separate usage audit and is not claimed as verification of this diff
+
+The broader focused suite passed 1,675 tests with one skip. The final 42-case native admission suite passed, including added cache-revocation, execution-mode, and connector-ID regressions. Changed-file type comparison against `f1bb8d8ddd` introduced no diagnostics. Local evidence is under `/Users/mchanshetty/Desktop/code/mcp-gap-matrix/auth-review/` and the before-run evidence is under `auth-before-review/`. This is focused local verification, not a full CI run
+
+## Permission integration review, approved
+
+The previous batch connected provider registrations to existing permission assignment, scoped management retrieval, and key/team/toolset tool choices. It changes no database schema or permission-combination rules. Native LLM request admission is covered by the current review above. The provider create/edit form, response inspection, and billing attribution remain separate work
 
 | Area | Behavior and proof |
 | --- | --- |
@@ -87,7 +119,7 @@ One SSRF test was excluded from the focused pass count. It fails identically on 
 
 The separate usage audit made eight real OpenAI Responses and Anthropic Messages requests, comparing control/native MCP and JSON/streaming. All four MCP cases executed successfully. Client usage, normalized token totals, and model costs matched upstream usage and registry pricing. Native server/tool spend attribution and some Anthropic normalized usage details remain follow-ups. No accounting changes are included in this slice
 
-## Current invocation routing
+## Invocation routing before request authorization
 
 On the Responses path, `type: "mcp"` alone does not tell LiteLLM to connect to the server. An external `server_url` such as `https://custom.example/mcp` stays in the provider-bound tools. On a provider/API supporting native MCP, the provider discovers and calls that endpoint, subject to its own connectivity, authentication, and approval requirements. An unsupported provider/API may reject the attachment. LiteLLM does not automatically become the MCP executor
 
@@ -97,7 +129,7 @@ Current main also recognizes HTTP(S) URLs ending in `/mcp/<name>` when the name 
 
 These branches are implemented in [tool_precheck.py](../../litellm/responses/mcp/tool_precheck.py), [split_mcp_tools and gateway name resolution](../../litellm/responses/mcp/litellm_proxy_mcp_handler.py), and [Responses orchestration](../../litellm/responses/main.py). The prior live reproduction demonstrated provider execution of custom URLs under metadata and tool-permission guardrail restrictions. It did not configure registered-server object permissions
 
-The proposed `execution_mode` constrains which registered resource may be used in each path. Provider registrations must never enter gateway discovery or execution, including through the HTTPS path shortcut or toolset membership. Layer 2 must isolate them before enabling registration. Layer 4 must resolve native attachments by the approved canonical endpoint and prevent path-name collisions from silently selecting a different executor. The existing hostname-blind shortcut needs an explicit compatibility decision during that work
+The proposed `execution_mode` constrains which registered resource may be used in each path. Provider registrations must never enter gateway discovery or execution, including through the HTTPS path shortcut or toolset membership. Layer 2 must isolate them before enabling registration. Layer 4 must resolve native attachments by the approved canonical endpoint and prevent path-name collisions from silently selecting a different executor. The request authorization review above records the compatibility decision for the hostname-blind shortcut
 
 ## Layer 1 schema proposal
 

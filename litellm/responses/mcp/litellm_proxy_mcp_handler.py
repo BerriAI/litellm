@@ -117,6 +117,15 @@ async def _served_mcp_path_names(
     return await served_names(names) if names else frozenset[str]()
 
 
+def _provider_url(tool: Mapping[str, object]) -> str | None:
+    from litellm.types.mcp_server.provider_registration import canonical_provider_mcp_url
+
+    try:
+        return canonical_provider_mcp_url(tool.get("server_url"))
+    except ValueError:
+        return None
+
+
 class LiteLLM_Proxy_MCP_Handler:
     """
     Helper class with static methods for MCP integration with Responses API.
@@ -159,13 +168,15 @@ class LiteLLM_Proxy_MCP_Handler:
         served_names: Callable[[Collection[str]], Awaitable[frozenset[str]]] = _gateway_served_names,
     ) -> SplitTools:
         items: Final = tuple(tools or ())
-        served: Final = await _served_mcp_path_names(items, served_names)
+        if not any(proxy_path_mcp_name(tool) is not None for tool in items):
+            return LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(items)
+        routed: Final = await LiteLLM_Proxy_MCP_Handler.routes_through_gateway(items, served_names)
         return LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(
             [
-                {**tool, "server_url": f"{LITELLM_PROXY_MCP_SERVER_URL_PREFIX}{name}"}
-                if (name := proxy_path_mcp_name(tool)) in served
+                {**tool, "server_url": f"{LITELLM_PROXY_MCP_SERVER_URL_PREFIX}{proxy_path_mcp_name(tool)}"}
+                if through_gateway and not names_gateway_explicitly(tool)
                 else tool
-                for tool in items
+                for tool, through_gateway in zip(items, routed)
             ]
         )
 
@@ -179,7 +190,16 @@ class LiteLLM_Proxy_MCP_Handler:
     ) -> tuple[bool, ...]:
         items: Final = tuple(tools or ())
         served: Final = await _served_mcp_path_names(items, served_names)
-        return tuple(names_gateway_explicitly(tool) or proxy_path_mcp_name(tool) in served for tool in items)
+        if not served:
+            return tuple(map(names_gateway_explicitly, items))
+        provider_urls: Final = frozenset(
+            server.url for server in global_manager().catalog.provider_registrations().values()
+        )
+        return tuple(
+            names_gateway_explicitly(tool)
+            or (proxy_path_mcp_name(tool) in served and _provider_url(tool) not in provider_urls)
+            for tool in items
+        )
 
     @staticmethod
     async def _apply_toolset_permissions(

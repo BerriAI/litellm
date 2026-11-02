@@ -2642,6 +2642,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        from litellm.responses.mcp.request_context import authorize_provider_mcp_request
+
+        await authorize_provider_mcp_request(_JSON_OBJECT.validate_python(request_body), kwargs, provider_bound=True)
         logging_obj.stream = stream
         logging_obj.model_call_details.update(request_body)
 
@@ -3246,6 +3249,13 @@ class BaseLLMHTTPHandler:
                     extra_body=extra_body, request=data, model=model, litellm_params=litellm_params
                 )
             )
+        from litellm.responses.mcp.request_context import authorize_provider_mcp_request
+
+        await authorize_provider_mcp_request(
+            data,
+            {"litellm_metadata": litellm_metadata},
+            provider_bound=True,
+        )
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
