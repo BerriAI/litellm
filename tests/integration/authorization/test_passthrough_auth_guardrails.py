@@ -461,7 +461,12 @@ def test_post_call_pass_honors_a_global_guardrail_opt_out_as_the_native_route_do
         key: Final = _key_with_opt_out(scenario, opt_out)
         _drain(rig)
 
-        response: Final = _send(gateway, route, _route_body(OPENAI_ROUTE, "What is the capital of France?"), key)
+        response: Final = _send(
+            gateway,
+            route,
+            {**_route_body(OPENAI_ROUTE, "What is the capital of France?"), "model": GUARDED_MODEL},
+            key,
+        )
 
         assert response.status_code == 200, response.text
         assert len(rig.generic_post_call_vendor.drain()) == 1
