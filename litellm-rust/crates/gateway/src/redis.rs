@@ -7,7 +7,7 @@ use litellm_config::{
 };
 use litellm_redis_client::{
     ClusterEndpoint, ClusterNode, DEFAULT_TIMEOUT, Endpoint, HostEndpoint, Namespace, RedisClient,
-    RedisConfig,
+    RedisConfig, Timeouts,
 };
 
 use crate::Error;
@@ -178,8 +178,9 @@ fn client(params: Params, breaker: Option<BreakerConfig>) -> Result<RedisClient,
     Ok(RedisClient::new(RedisConfig {
         endpoint,
         namespace: params.namespace.map(Namespace::new).unwrap_or_default(),
-        timeout: params.timeout.unwrap_or(DEFAULT_TIMEOUT),
+        timeouts: Timeouts::new(params.timeout.unwrap_or(DEFAULT_TIMEOUT), None),
         breaker: breaker.map(|config| Breaker::new(config, Box::new(log_transition))),
+        events: None,
     })?)
 }
 

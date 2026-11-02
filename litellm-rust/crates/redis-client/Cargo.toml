@@ -10,9 +10,10 @@ litellm-circuit-breaker.workspace = true
 litellm-secret-value.workspace = true
 futures-util.workspace = true
 redis = { workspace = true, features = ["cluster-async", "connection-manager", "tokio-rustls-comp"] }
+socket2 = "0.6.5"
 thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
 
 [dev-dependencies]
 litellm-redis-testing.workspace = true
 rstest.workspace = true
-tokio.workspace = true
