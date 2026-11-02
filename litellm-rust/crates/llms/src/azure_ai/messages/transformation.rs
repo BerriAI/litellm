@@ -363,7 +363,7 @@ mod tests {
             "metadata": {"user_id": "u1"},
             "stop_sequences": ["STOP"],
             "stream": false,
-            "temperature": 0.4,
+            "temperature": 1.0,
             "top_p": 0.9,
             "top_k": 40,
             "tools": [{"name": "get_weather", "input_schema": {"type": "object"}}],
