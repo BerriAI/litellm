@@ -1,6 +1,7 @@
 import json
 import operator
 import threading
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -11,6 +12,7 @@ from pydantic import ValidationError
 import litellm
 from litellm import anthropic_beta_headers_manager
 from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAnthropicTokenCounter
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import CountContextManagement, TokenCountResponse
 
 API_BASE: Final = "https://my-resource.services.ai.azure.com"
@@ -272,19 +274,50 @@ async def test_count_sends_the_tool_change_beta_when_the_history_adds_a_tool(mon
     assert route.calls.last.request.headers["anthropic-beta"] == "mid-conversation-tool-changes-2026-07-01,token-counting-2024-11-01"
 
 
+async def _betas_azure_inference_sends(context_management: Mapping[str, object]) -> frozenset[str]:
+    received: Final[list[httpx.Request]] = []
+
+    def foundry_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 2},
+            },
+        )
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(foundry_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=64,
+            messages=[{"role": "user", "content": "Summarize the thread."}],
+            model="azure_ai/claude-sonnet-5-5",
+            api_key="azure-key",
+            api_base=API_BASE,
+            context_management=context_management,
+            client=upstream,
+        )
+    finally:
+        await upstream.close()
+    return frozenset(filter(None, received[0].headers.get("anthropic-beta", "").split(",")))
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("edit_type", "expected_beta"),
-    [
-        ("clear_tool_uses_20250919", "context-management-2025-06-27,token-counting-2024-11-01"),
-        ("compact_20260112", "token-counting-2024-11-01"),
-    ],
-)
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize("edit_type", ["clear_tool_uses_20250919", "compact_20260112"])
 async def test_count_forwards_the_context_edits_with_the_betas_azure_inference_sends(
-    monkeypatch: pytest.MonkeyPatch, edit_type: str, expected_beta: str
+    monkeypatch: pytest.MonkeyPatch, edit_type: str
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     spec: Final = {"edits": [{"type": edit_type}]}
+    inference_betas: Final = await _betas_azure_inference_sends(spec)
     with respx.mock:
         route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 88}))
         result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
@@ -298,7 +331,9 @@ async def test_count_forwards_the_context_edits_with_the_betas_azure_inference_s
     assert result is not None
     assert result.total_tokens == 88
     assert json.loads(route.calls.last.request.content)["context_management"] == spec
-    assert route.calls.last.request.headers["anthropic-beta"] == expected_beta
+    assert frozenset(route.calls.last.request.headers["anthropic-beta"].split(",")) == inference_betas | {
+        "token-counting-2024-11-01"
+    }
 
 
 class _FetchThreads:
