@@ -40,6 +40,7 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
     VertexAIAnthropicConfig,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.types.utils import ChatCompletionToolCallChunk, ModelResponse, ServerToolUse, Usage
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
@@ -10017,18 +10018,18 @@ def test_transform_request_tool_config_point_without_tools_drops_the_key():
 _INPUT_TRANSFORMATIONS: Final = [{"type": "thinking_block_binding", "count": 2}]
 
 
-def _input_transformations_response() -> dict:
-    return {
-        "id": "msg_input_transformations",
-        "type": "message",
-        "role": "assistant",
-        "model": "claude-sonnet-4-6",
-        "content": [{"type": "text", "text": "ok"}],
-        "stop_reason": "end_turn",
-        "stop_sequence": None,
-        "usage": {"input_tokens": 12, "output_tokens": 3},
-        "input_transformations": _INPUT_TRANSFORMATIONS,
-    }
+def _input_transformations_response() -> AnthropicMessagesResponse:
+    return AnthropicMessagesResponse(
+        id="msg_input_transformations",
+        type="message",
+        role="assistant",
+        model="claude-sonnet-4-6",
+        content=[{"type": "text", "text": "ok"}],
+        stop_reason="end_turn",
+        stop_sequence=None,
+        usage={"input_tokens": 12, "output_tokens": 3},
+        input_transformations=_INPUT_TRANSFORMATIONS,
+    )
 
 
 def test_chat_response_surfaces_input_transformations_in_provider_specific_fields():
@@ -10048,8 +10049,9 @@ def test_chat_response_surfaces_input_transformations_in_provider_specific_field
 
 
 def test_chat_response_without_input_transformations_adds_no_key():
-    completion_response = _input_transformations_response()
-    del completion_response["input_transformations"]
+    completion_response: Final = {
+        key: value for key, value in _input_transformations_response().items() if key != "input_transformations"
+    }
     result = AnthropicConfig().transform_response(
         model="claude-sonnet-4-6",
         raw_response=httpx.Response(200, json=completion_response),
@@ -10063,6 +10065,29 @@ def test_chat_response_without_input_transformations_adds_no_key():
     )
 
     assert "input_transformations" not in result.choices[0].message.provider_specific_fields
+
+
+def test_json_mode_chat_response_keeps_input_transformations():
+    completion_response: Final = {
+        **_input_transformations_response(),
+        "content": [{"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": 42}}],
+        "stop_reason": "tool_use",
+    }
+    result: Final = AnthropicConfig().transform_response(
+        model="claude-sonnet-4-6",
+        raw_response=httpx.Response(200, json=completion_response),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+        json_mode=True,
+    )
+
+    assert json.loads(result.choices[0].message.content) == {"answer": 42}
+    assert result.choices[0].message.provider_specific_fields["input_transformations"] == _INPUT_TRANSFORMATIONS
 
 
 _KEPT_SEARCH_CALL: Final = {

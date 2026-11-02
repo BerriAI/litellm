@@ -2591,9 +2591,8 @@ class BaseLLMHTTPHandler:
         takes_another_beta_row: Final = (
             resolve_beta_provider(custom_llm_provider, affinity_api_base) != custom_llm_provider
         )
-        filters_beta_headers: Final = (
-            anthropic_messages_provider_config.should_filter_anthropic_beta_headers() or takes_another_beta_row
-        )
+        provider_filters_betas: Final = anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
+        filters_beta_headers: Final = provider_filters_betas or takes_another_beta_row
         if request_params.get("safeguards") is not None and filters_beta_headers:
             await aload_beta_headers_config()
         default_affinity_header: Final = get_provider_affinity_header(affinity_api_base)
@@ -2614,9 +2613,13 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
         )
 
-        if filters_beta_headers:
+        if filters_beta_headers and headers.get("anthropic-beta") is not None:
+            await aload_beta_headers_config()
             headers = update_headers_with_filtered_beta(
-                headers=headers, provider=custom_llm_provider, api_base=affinity_api_base
+                headers=headers,
+                provider=custom_llm_provider,
+                api_base=affinity_api_base,
+                unlisted="drop" if provider_filters_betas else "forward",
             )
 
         from litellm.llms.vertex_ai.vertex_llm_base import VertexBase

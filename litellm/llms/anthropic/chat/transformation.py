@@ -3168,8 +3168,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 STOP_REASON_FIELDS.validate_python(completion_response)
             )
             completion_response["stop_reason"] = "stop"
-            if stop_reason_fields:
-                json_mode_message.provider_specific_fields = dict(stop_reason_fields)
+            input_transformations: Final = provider_specific_fields.get("input_transformations")
+            json_mode_fields: Final = {
+                **stop_reason_fields,
+                **({} if input_transformations is None else {"input_transformations": input_transformations}),
+            }
+            if json_mode_fields:
+                json_mode_message.provider_specific_fields = json_mode_fields
             if "refusal" in refusal_fields:
                 json_mode_message.refusal = refusal_fields["refusal"]
             if thinking_blocks:
