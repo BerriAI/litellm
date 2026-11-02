@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http2_connection_spread import AsyncHTTP2ConnectionSpread
 from litellm.types.llms.custom_http import *
 
@@ -1206,6 +1207,17 @@ class AsyncHTTPHandler:
     _finalizer_close_tasks: ClassVar[set["asyncio.Task[None]"]] = set()  # mutable-ok: strong refs for pending closes
 
     @classmethod
+    async def _close_client_at_finalization(cls, client: httpx.AsyncClient) -> None:
+        try:
+            await client.aclose()
+        except (OSError, RuntimeError) as exc:
+            verbose_logger.debug("Error closing client at finalization: %s", exc)
+        finally:
+            task: Final = asyncio.current_task()
+            if task is not None:
+                cls._finalizer_close_tasks.discard(task)
+
+    @classmethod
     def _on_finalizer_close_done(cls, task: "asyncio.Task[None]") -> None:
         cls._finalizer_close_tasks.discard(task)
         if task.cancelled():
@@ -1272,8 +1284,8 @@ class AsyncHTTPHandler:
                 # here is the cross-loop path the transport refuses.
                 self._dispose_wrapped_aiohttp_session()
                 return
-            task: Final = loop.create_task(self._client.aclose())
             cls: Final = type(self)
+            task: Final = loop.create_task(cls._close_client_at_finalization(self._client))
             cls._finalizer_close_tasks.add(task)
             task.add_done_callback(cls._on_finalizer_close_done)
         except Exception:
@@ -1445,6 +1457,7 @@ class AsyncHTTPHandler:
                 connector=TCPConnector(**transport_connector_kwargs),
                 cookie_jar=DummyCookieJar(),
                 trust_env=trust_env,
+                trace_configs=[build_pool_wait_trace_config()],
             )
 
         # Use shared session if provided and valid
@@ -1973,7 +1986,7 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
         cache = LLMClientCache()
         setattr(litellm, "in_memory_llm_clients_cache", cache)
 
-    _cached_client: Final = cache.get_cache(_cache_key_name)
+    _cached_client: Final = cache.get_cache(_cache_key_name, loop_bound=False)
     if _cached_client:
         return _cached_client
 
@@ -1989,6 +2002,7 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
         value=_new_client,
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
         litellm_owned_client=True,
+        loop_bound=False,
     )
     return _new_client
 

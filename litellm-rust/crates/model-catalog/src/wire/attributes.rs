@@ -11,7 +11,7 @@ use crate::error::{DateCause, Error, Repr};
 use crate::vocabulary::{
     AudioFormat, EffortLevel, Endpoint, InputModality, Mode, OutputModality, VertexAiAudioApi,
 };
-use crate::wire::lax::Count;
+use crate::wire::lax::{Count, NumericCount};
 
 macro_rules! attributes {
     ($($(#[$doc:meta])* $name:ident: $ty:ty $(as $via:ty)?),* $(,)?) => {
@@ -104,9 +104,12 @@ attributes! {
     /// Cloud regions the model is available in ('global' or region ids).
     supported_regions: Vec<String>,
     thinking_always_on: bool,
-    token_count_framing: u64 as Count,
+    token_count_framing: u64 as NumericCount,
     token_count_model: TokenCountModel,
+    token_count_responses_framing: u64 as NumericCount,
+    token_count_responses_tool_framing: u64 as NumericCount,
     token_count_tokenizer: TokenCountTokenizer,
+    token_count_tool_framing: u64 as NumericCount,
     /// Provider default tokens-per-minute limit.
     tpm: u64 as Count,
     use_openai_responses_path: bool,
@@ -302,6 +305,18 @@ mod tests {
     #[case::reasoning_modes("reasoning_modes", json!(["none", "adaptive"]), true)]
     #[case::reasoning_context_not_a_list("reasoning_contexts", json!("reasoning"), false)]
     #[case::reasoning_mode_not_a_string("reasoning_modes", json!([1]), false)]
+    #[case::framing("token_count_framing", json!(12), true)]
+    #[case::framing_written_as_text("token_count_framing", json!("12"), false)]
+    #[case::framing_written_as_whole_float("token_count_framing", json!(12.0), true)]
+    #[case::fractional_tool_framing("token_count_tool_framing", json!(1.5), false)]
+    #[case::tool_framing("token_count_tool_framing", json!(214), true)]
+    #[case::tool_framing_written_as_text("token_count_tool_framing", json!("214"), false)]
+    #[case::tool_framing_as_a_flag("token_count_tool_framing", json!(true), false)]
+    #[case::negative_tool_framing("token_count_tool_framing", json!(-1), false)]
+    #[case::responses_framing("token_count_responses_framing", json!(38), true)]
+    #[case::responses_framing_as_a_flag("token_count_responses_framing", json!(false), false)]
+    #[case::responses_tool_framing("token_count_responses_tool_framing", json!(267), true)]
+    #[case::responses_tool_framing_written_as_text("token_count_responses_tool_framing", json!("267"), false)]
     fn each_attribute_reads_its_own_type(
         #[case] key: &str,
         #[case] value: Value,

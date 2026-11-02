@@ -328,7 +328,9 @@ def test_chat_audio_drop_params_keeps_every_voice_config_field_gemini_accepts(sp
 
 def test_chat_audio_reads_snake_case_wrapper_beside_null_camel_case_wrapper():
     mapped: Final = VertexGeminiConfig().map_openai_params(
-        non_default_params={"audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}},
+        non_default_params={
+            "audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}
+        },
         optional_params={},
         model="gemini-2.5-flash-preview-tts",
         drop_params=False,
@@ -1691,6 +1693,78 @@ def test_vertex_ai_map_thinking_param_without_budget_tokens_for_gemini_3():
     )
 
     assert result["thinkingConfig"] == {"includeThoughts": True}
+
+
+def _budget_drop_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "thinking.budget_tokens" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize("budget", ("high", 1024.5, {"tokens": 1024}))
+def test_gemini_non_integer_thinking_budget_drop_warns_once(budget: object, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": budget}},
+            optional_params={},
+            model="gemini-2.5-flash",
+            drop_params=False,
+        )
+
+    warnings: Final = _budget_drop_warnings(caplog)
+    assert "thinkingBudget" not in result["thinkingConfig"]
+    assert len(warnings) == 1
+    assert f"thinking.budget_tokens={budget!r}" in warnings[0]
+    assert "gemini-2.5-flash" in warnings[0]
+
+
+def test_gemini_integer_thinking_budget_is_sent_without_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 2048}},
+            optional_params={},
+            model="gemini-2.5-flash",
+            drop_params=False,
+        )
+
+    assert result["thinkingConfig"]["thinkingBudget"] == 2048
+    assert _budget_drop_warnings(caplog) == ()
+
+
+def test_gemini_3_thinking_budget_drop_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 2048}},
+            optional_params={},
+            model="gemini-3-pro-preview",
+            drop_params=False,
+        )
+
+    warnings: Final = _budget_drop_warnings(caplog)
+    assert "thinkingBudget" not in result["thinkingConfig"]
+    assert len(warnings) == 1
+    assert "thinking.budget_tokens=2048" in warnings[0]
+    assert "gemini-3-pro-preview" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "thinking",
+    ({"type": "enabled"}, {"type": "enabled", "budget_tokens": 0}, {"type": "disabled", "budget_tokens": 2048}),
+)
+def test_gemini_3_thinking_without_a_dropped_budget_does_not_warn(
+    thinking: dict[str, object], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": thinking},
+            optional_params={},
+            model="gemini-3-pro-preview",
+            drop_params=False,
+        )
+
+    assert _budget_drop_warnings(caplog) == ()
 
 
 def test_vertex_ai_map_tools():
@@ -3396,9 +3470,7 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
         async def dispatch_failure_handlers(self, *args, **kwargs):
             return None
 
-        async def dispatch_attempt_failure_handlers(
-            self, exception: Exception, traceback_exception: str
-        ) -> None:
+        async def dispatch_attempt_failure_handlers(self, exception: Exception, traceback_exception: str) -> None:
             return None
 
         def attempt_scoped_copy(self) -> "DummyLogging":
@@ -3528,9 +3600,7 @@ def test_grounding_annotations_preserve_all_web_sources(indices: list[int], expe
     ]
     metadata: Final = {
         "groundingChunks": chunks,
-        "groundingSupports": [
-            {"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}
-        ],
+        "groundingSupports": [{"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}],
     }
     annotations: Final = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata], "The passage")
     expected: Final = [
@@ -10351,6 +10421,106 @@ def test_map_openai_params_audio_voice_reaches_speech_config_mapped() -> None:
         drop_params=False,
     )
     assert optional_params["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+def _top_level_format_audio(audio_format: str) -> Mapping[str, object]:
+    return {"voice": "Kore", "format": audio_format}
+
+
+def _format_beside_speech_config_audio(audio_format: str) -> Mapping[str, object]:
+    return {"speech_config": {"voice_name": "Kore"}, "format": audio_format}
+
+
+def _format_inside_speech_config_audio(audio_format: str) -> Mapping[str, object]:
+    return {"speech_config": {"voice_name": "Kore", "format": audio_format}}
+
+
+_FORMAT_PLACEMENTS: Final = (
+    _top_level_format_audio,
+    _format_beside_speech_config_audio,
+    _format_inside_speech_config_audio,
+)
+
+
+@pytest.mark.parametrize("audio_format", ("mp3", "opus", "flac", "PCM16"))
+@pytest.mark.parametrize("audio", _FORMAT_PLACEMENTS)
+@pytest.mark.parametrize("model", ("gemini/gemini-3.8-flash-tts", "vertex_ai/gemini-3.8-flash-tts"))
+def test_chat_audio_unsupported_format_is_a_400_naming_the_model_and_format(
+    model: str, audio: Callable[[str], Mapping[str, object]], audio_format: str
+) -> None:
+    with respx.mock, pytest.raises(litellm.BadRequestError) as raised:
+        completion(
+            model=model,
+            messages=[{"role": "user", "content": "Say hello"}],
+            modalities=["audio"],
+            audio=audio(audio_format),
+            api_key="test-key",
+            vertex_project="test-project",
+            vertex_location="us-central1",
+        )
+
+    assert raised.value.status_code == 400
+    assert f"gemini-3.8-flash-tts does not take the audio format '{audio_format}'" in str(raised.value)
+
+
+@pytest.mark.parametrize("audio", _FORMAT_PLACEMENTS)
+@pytest.mark.parametrize("request_drop_params, global_drop_params", ((True, False), (False, True)))
+def test_chat_audio_unsupported_format_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    request_drop_params: bool,
+    global_drop_params: bool,
+    audio: Callable[[str], Mapping[str, object]],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    optional_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"modalities": ["audio"], "audio": audio("mp3")},
+        optional_params={},
+        model="gemini-3.8-flash-tts",
+        drop_params=request_drop_params,
+    )
+
+    assert optional_params == {
+        "responseModalities": ["AUDIO"],
+        "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
+    }
+
+
+def test_chat_audio_unsupported_format_error_caps_the_echoed_format() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"modalities": ["audio"], "audio": {"voice": "Kore", "format": "x" * 300}},
+            optional_params={},
+            model="gemini-3.8-flash-tts",
+            drop_params=False,
+        )
+
+    assert f"audio format '{'x' * 100}'" in str(raised.value)
+    assert "x" * 101 not in str(raised.value)
+
+
+@pytest.mark.parametrize("audio_format", [5, {"codec": "mp3"}, ["x"] * 300])
+def test_chat_audio_non_string_format_error_names_the_value_as_sent(audio_format: object) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"modalities": ["audio"], "audio": {"voice": "Kore", "format": audio_format}},
+            optional_params={},
+            model="gemini-3.8-flash-tts",
+            drop_params=False,
+        )
+
+    assert f"audio format {repr(audio_format)[:100]}. Set format" in str(raised.value)
+
+
+def test_map_audio_params_rejects_an_unsupported_format() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="audio format 'mp3'"):
+        VertexGeminiConfig().map_audio_params({"voice": "Kore", "format": "mp3"})
+
+
+def test_map_audio_params_maps_a_pcm16_voice() -> None:
+    assert VertexGeminiConfig().map_audio_params({"voice": "Kore", "format": "pcm16"}) == {
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}
+    }
 
 
 _CACHED_PROMPT_USAGE_METADATA = {

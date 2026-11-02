@@ -14,6 +14,7 @@ import respx
 from pydantic import ValidationError
 
 import litellm
+from litellm.cost_calculator import default_image_cost_calculator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.dashscope.common_utils import (
     DASHSCOPE_DEFAULT_ORIGIN,
@@ -23,7 +24,8 @@ from litellm.llms.dashscope.image_generation.transformation import (
     DEFAULT_API_BASE,
     DashScopeImageGenerationConfig,
 )
-from litellm.types.utils import ImageResponse
+from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
+from litellm.types.utils import ImageResponse, ModelInfo
 from litellm.utils import get_llm_provider
 
 # ---------------------------------------------------------------------------
@@ -614,6 +616,16 @@ def test_transform_response_without_image_content_has_no_images(
     assert _transform_response(payload).data == []
 
 
+@pytest.mark.parametrize("usage", [None, "n/a", ["input_image_count", 2]])
+def test_transform_response_returns_the_images_whatever_shape_usage_has(usage: object):
+    response = _transform_response(
+        {"output": {"choices": [{"message": {"content": [{"image": "https://a.example/1.png"}]}}]}, "usage": usage}
+    )
+
+    assert [image.url for image in response.data] == ["https://a.example/1.png"]
+    assert "billable_input_image_count" not in response.hidden_params
+
+
 def test_transform_response_skips_content_items_without_an_image():
     response = _transform_response(
         {
@@ -672,3 +684,50 @@ def test_transform_response_rejects_malformed_payloads_without_echoing_them(
         _transform_response(payload)
 
     assert "input_value" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("model", "usage"),
+    (
+        ("qwen-image-2.0", {"width": 2048, "height": 1536, "image_count": 1}),
+        (
+            "qwen-image-3.0",
+            {"output_width": 2048, "output_height": 1536, "output_image_count": 1, "input_image_count": 0},
+        ),
+    ),
+)
+def test_a_per_pixel_deployment_bills_the_size_dashscope_rendered_when_the_caller_sent_none(
+    model: str, usage: dict[str, int]
+):
+    response = _transform_response(
+        {
+            "output": {"choices": [{"message": {"content": [{"image": "https://a.example/1.png"}]}}]},
+            "usage": usage,
+        }
+    )
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        completion_response=response,
+        custom_llm_provider="dashscope",
+        call_type="image_generation",
+        model_info=ModelInfo(input_cost_per_pixel=1e-08),
+    )
+
+    assert cost == pytest.approx(2048 * 1536 * 1e-08)
+
+
+@pytest.mark.parametrize("model", ("qwen-image-2.0", "qwen-image-2.0-pro", "qwen-image-3.0"))
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_a_shared_row_bills_a_generated_image_the_same_on_the_default_calculator_released_proxies_use(model: str):
+    dashscope_cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        completion_response=ImageResponse(data=[{"url": "https://a.example/1.png"}]),
+        custom_llm_provider="dashscope",
+        call_type="image_generation",
+    )
+
+    assert dashscope_cost > 0
+    assert default_image_cost_calculator(model=f"dashscope/{model}", custom_llm_provider="dashscope") == pytest.approx(
+        dashscope_cost
+    )
