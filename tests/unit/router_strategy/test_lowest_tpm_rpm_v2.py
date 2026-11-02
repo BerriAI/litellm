@@ -717,3 +717,29 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
+
+def test_handler_built_outside_a_loop_starts_its_redis_sync_on_the_first_increment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: Final[list[float | None]] = []
+
+    async def sync_loop(self: LowestTPMLoggingHandler, default_sync_interval: float | None) -> None:
+        started.append(default_sync_interval)
+
+    monkeypatch.setattr(LowestTPMLoggingHandler, "periodic_sync_in_memory_spend_with_redis", sync_loop)
+
+    def refuse_to_install(loop: object) -> None:
+        pytest.fail("must not install an event loop")
+
+    monkeypatch.setattr(asyncio, "set_event_loop", refuse_to_install)
+    handler: Final = LowestTPMLoggingHandler(router_cache=DualCache())
+    assert handler._sync_task is None  # pyright: ignore[reportPrivateUsage]  # the background task under test
+
+    async def first_increment() -> None:
+        await handler._increment_value_in_current_window(key="k", value=1, ttl=60)  # pyright: ignore[reportPrivateUsage]  # the increment that starts it
+        await handler._increment_value_in_current_window(key="k", value=1, ttl=60)  # pyright: ignore[reportPrivateUsage]  # the increment that starts it
+        await asyncio.sleep(0)
+
+    asyncio.run(first_increment())
+    assert started == [0.1]

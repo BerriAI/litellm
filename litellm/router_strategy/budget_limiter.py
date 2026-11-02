@@ -128,7 +128,8 @@ class RouterBudgetLimiting(CustomLogger):
         self._redis_increment_queue_lock = asyncio.Lock()
         self._redis_increment_flush_lock = asyncio.Lock()
         self._detached_increment_operations: tuple[RedisPipelineIncrementOperation, ...] | None = None
-        self._sync_task: asyncio.Task[None] = asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
+        self._sync_task: asyncio.Task[None] | None = None
+        self._pending_provider_budget_inits: tuple[tuple[str, GenericBudgetInfo], ...] = ()
         self._retired = False
         self._flush_after_retire: asyncio.Task[None] | None = None
         self.provider_budget_config: GenericBudgetConfigType | None = provider_budget_config
@@ -137,13 +138,37 @@ class RouterBudgetLimiting(CustomLogger):
         self._init_provider_budgets()
         self._init_deployment_budgets(model_list=model_list)
         self._init_tag_budgets()
+        self._start_background_work()
 
         # Add self to litellm callbacks if it's a list
         if isinstance(litellm.callbacks, list):
             litellm.logging_callback_manager.add_litellm_callback(self)
 
+    def _start_background_work(self) -> None:
+        """Start the periodic Redis sync and the provider budget cache seeding once a loop runs.
+
+        Built from synchronous code there is no loop to run them on, so they wait for the first
+        async hook (``async_filter_deployments``, ``async_log_success_event``) instead; a sync task
+        left on a loop other than the running one (a short-lived loop that has since closed) is
+        replaced by one on the running loop."""
+        if self._retired:
+            return
+        try:
+            loop: Final = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        running: Final = self._sync_task
+        if running is not None and not running.done() and running.get_loop() is loop:
+            return
+        self._sync_task = loop.create_task(self.periodic_sync_in_memory_spend_with_redis())
+        pending: Final = self._pending_provider_budget_inits
+        self._pending_provider_budget_inits = ()
+        for provider, budget_config in pending:
+            _ = loop.create_task(self._init_provider_budget_in_cache(provider=provider, budget_config=budget_config))
+
     def retire(self) -> None:
-        self._sync_task.cancel()
+        if self._sync_task is not None:
+            self._sync_task.cancel()
         self._retired = True
         self._schedule_flush_after_retire()
 
@@ -184,6 +209,7 @@ class RouterBudgetLimiting(CustomLogger):
             and openai spend > openai budget limit
                 then skip this deployment
         """
+        self._start_background_work()
 
         # If a single deployment is passed, convert it to a list
         if isinstance(healthy_deployments, dict):
@@ -541,6 +567,7 @@ class RouterBudgetLimiting(CustomLogger):
         callback_fields: Final = _CALLBACK_FIELDS.validate_python(kwargs)
         if callback_fields.get("call_type") == "_arealtime":
             return
+        self._start_background_work()
         standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
         if standard_logging_payload is None:
             raise ValueError("standard_logging_payload is required")
@@ -917,12 +944,7 @@ class RouterBudgetLimiting(CustomLogger):
                         budget_limit=config.get("budget_limit"),
                         time_period=config.get("time_period"),
                     )
-                asyncio.create_task(
-                    self._init_provider_budget_in_cache(
-                        provider=provider,
-                        budget_config=self.provider_budget_config[provider],
-                    )
-                )
+                self._pending_provider_budget_inits += ((provider, self.provider_budget_config[provider]),)
 
             verbose_router_logger.debug("Initalized Provider budget config: %s", self.provider_budget_config)
 

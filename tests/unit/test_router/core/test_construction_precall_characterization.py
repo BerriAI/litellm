@@ -767,11 +767,25 @@ def test_an_empty_optional_pre_call_check_list_registers_nothing(make_core: Make
     assert host.lists["callbacks"] == []
 
 
-def test_router_budget_limiting_cannot_be_built_outside_an_event_loop(make_core: MakeCore) -> None:
-    """Oddity: the budget limiter starts a background task in its constructor, so a router that needs
-    one cannot be built from synchronous code with no running loop."""
-    with pytest.raises(RuntimeError, match="no running event loop"):
-        _one(make_core, optional_pre_call_checks=["router_budget_limiting"])
+def test_router_budget_limiting_can_be_built_outside_an_event_loop(make_core: MakeCore, host: ScriptedHost) -> None:
+    """Built from synchronous code, the budget limiter defers its background Redis sync until a loop runs."""
+    core: Final = _one(make_core, optional_pre_call_checks=["router_budget_limiting"])
+    limiter: Final = core.registry().plugins("budget_limiter")
+    assert isinstance(limiter, RouterBudgetLimiting)
+    assert host.lists["callbacks"] == [limiter]
+    core.retire()
+
+
+def test_a_provider_budget_config_can_be_built_outside_an_event_loop(make_core: MakeCore) -> None:
+    core: Final = _one(make_core, provider_budget_config={"openai": {"budget_limit": 1, "time_period": "1d"}})
+    assert isinstance(core.registry().plugins("budget_limiter"), RouterBudgetLimiting)
+    core.retire()
+
+
+def test_a_deployment_budget_can_be_built_outside_an_event_loop(make_core: MakeCore) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a", max_budget=1, budget_duration="1d")])
+    assert isinstance(core.registry().plugins("budget_limiter"), RouterBudgetLimiting)
+    core.retire()
 
 
 @pytest.mark.asyncio

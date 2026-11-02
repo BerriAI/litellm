@@ -87,7 +87,6 @@ from litellm.router_rust_fallbacks import (
 )
 from litellm.router_rust_health import (
     RustHealthCallbacks,
-    cooled_in_running_loop,
     failure_status,
 )
 from litellm.router_rust_health_routing import (
@@ -900,7 +899,7 @@ class RustHealth(RouterHealth):
         handle: Final = self._core._handle  # pyright: ignore[reportPrivateUsage]  # see above
         call: Final = handle.report_failure(deployment_id, failure, count_only=exception_status == "")
         done: Final = self._core._drive_sync_steps(call)  # pyright: ignore[reportPrivateUsage]  # see above
-        return cooled_in_running_loop(bool(done.get("cooled")))
+        return bool(done.get("cooled"))
 
     def team_ptu_ceiling(self, team_id: str, model_group: str) -> "PTUTeamCeiling | None":
         return self._core._hosted._core_team_ptu_ceiling(team_id, model_group)  # pyright: ignore[reportPrivateUsage]  # the host registry's ported ceiling

@@ -3672,3 +3672,64 @@ def test_the_refusal_names_each_cooled_deployment_some_cooldown_state_routes_the
     with pytest.raises(RouterRateLimitError) as refusal:
         _select(_tenant_router(EVERY_TENANT, **BOTH_ON), "async", "tenants", copy.deepcopy(request_kwargs))
     assert {deployment["model_id"] for deployment in refusal.value.cooldown_deployments or ()} == reachable
+
+
+def _sync_router() -> Router:
+    return Router(
+        model_list=[
+            {"model_name": "chat", "litellm_params": {"model": "openai/a", "api_key": "k"}, "model_info": {"id": "a"}},
+            {"model_name": "chat", "litellm_params": {"model": "openai/b", "api_key": "k"}, "model_info": {"id": "b"}},
+        ],
+        allowed_fails=0,
+    )
+
+
+def _cool_down_a(router: Router) -> bool:
+    exception: Final = litellm.InternalServerError(message="boom", model="a", llm_provider="openai")
+    return set_cooldown_deployments(
+        ctx=RoutingContext(router),
+        original_exception=exception,
+        exception_status=500,
+        deployment="a",
+        time_to_cooldown=60,
+    )
+
+
+def test_a_cooldown_set_outside_a_running_loop_reports_the_event_inline() -> None:
+    router: Final = _sync_router()
+
+    with patch("litellm.router_utils.cooldown_handlers.emit_router_cooldown_event") as emit:
+        cooled: Final = _cool_down_a(router)
+
+    assert cooled is True
+    assert emit.call_count == 1
+    assert emit.call_args.kwargs["deployment_id"] == "a"
+    assert emit.call_args.kwargs["exception_status"] == 500
+    assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == ["a"]
+
+
+def test_a_failing_cooldown_event_outside_a_running_loop_keeps_the_cooldown() -> None:
+    router: Final = _sync_router()
+
+    with patch(
+        "litellm.router_utils.cooldown_handlers.emit_router_cooldown_event", side_effect=ValueError("metrics down")
+    ):
+        cooled: Final = _cool_down_a(router)
+
+    assert cooled is True
+    assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_a_cooldown_set_inside_a_running_loop_reports_the_event_as_a_task() -> None:
+    router: Final = _sync_router()
+    with (
+        patch("litellm.router_utils.cooldown_handlers.router_cooldown_event_callback", new=MagicMock()) as callback,
+        patch("litellm.router_utils.cooldown_handlers.emit_router_cooldown_event") as emit,
+    ):
+        callback.return_value = asyncio.sleep(0)
+        assert _cool_down_a(router) is True
+        await asyncio.sleep(0)
+
+    assert callback.call_count == 1
+    assert emit.call_count == 0
