@@ -139,7 +139,7 @@ def initialize_callbacks_on_proxy(
     premium_user: bool,
     config_file_path: str,
     litellm_settings: dict,
-    callback_specific_params: dict | None = None,
+    callback_specific_params: Mapping[str, object] | None = None,
 ):
     if not isinstance(callback_specific_params, dict):
         callback_specific_params = {}
