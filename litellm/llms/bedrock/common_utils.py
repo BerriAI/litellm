@@ -364,6 +364,14 @@ def bedrock_chat_uses_native_structured_output(
     ) or (not thinking_requested and _bedrock_native_output_replaces_unforceable_tool(model, model_info))
 
 
+def bedrock_native_output_is_deployment_opt_in(
+    model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
+) -> bool:
+    return not _bedrock_model_supports(
+        model, "supports_native_structured_output", custom_llm_provider
+    ) and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+
+
 def bedrock_native_output_is_opt_in(
     model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
 ) -> bool:
@@ -463,13 +471,18 @@ def requests_output_config_format(optional_params: Mapping[str, object]) -> bool
             return False
 
 
+def requests_native_output(anthropic_optional_params: Mapping[str, object]) -> bool:
+    return isinstance(anthropic_optional_params.get("output_format"), Mapping) or requests_output_config_format(
+        anthropic_optional_params
+    )
+
+
 def requests_opt_in_native_output(
     model: str, anthropic_optional_params: Mapping[str, object], model_info: Mapping[str, object] | None
 ) -> bool:
-    native_output_requested: Final = isinstance(
-        anthropic_optional_params.get("output_format"), Mapping
-    ) or requests_output_config_format(anthropic_optional_params)
-    return native_output_requested and bedrock_native_output_is_opt_in(model, model_info=model_info)
+    return requests_native_output(anthropic_optional_params) and bedrock_native_output_is_opt_in(
+        model, model_info=model_info
+    )
 
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])

@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.anthropic.chat.transformation import (
     NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES,
     NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS,
@@ -5133,6 +5134,46 @@ def test_models_whose_thinking_stops_under_native_output_keep_the_json_tool_only
 
     assert ("outputConfig" in request) is native
     assert ("toolConfig" in request) is not native
+
+
+def _converse_capital_answer(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "output": {"message": {"role": "assistant", "content": [{"text": '{"city":"Paris","country":"France"}'}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 12, "totalTokens": 13},
+        },
+        request=request,
+    )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "model", ["us.anthropic.claude-opus-5-5", "global.anthropic.claude-sonnet-5-5", "global.anthropic.claude-fable-5-1"]
+)
+def test_streamed_json_schema_on_a_model_that_cannot_force_a_tool_still_calls_converse_without_streaming(
+    model: str,
+) -> None:
+    respond: Final = MagicMock(wraps=_converse_capital_answer)
+
+    stream: Final = litellm.completion(
+        model=f"bedrock/{model}",
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        response_format=CAPITAL_RESPONSE_FORMAT,
+        stream=True,
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-east-1",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+    )
+
+    assert isinstance(stream, CustomStreamWrapper)
+    streamed: Final = "".join(chunk.choices[0].delta.content or "" for chunk in stream)
+    sent: Final = respond.call_args.args[0]
+    assert sent.url.path.endswith("/converse")
+    assert "textFormat" in json.loads(sent.content)["outputConfig"]
+    assert json.loads(streamed) == {"city": "Paris", "country": "France"}
 
 
 def test_adaptive_thinking_is_kept_next_to_json_schema_on_a_native_output_profile(set_native_structured_output):
