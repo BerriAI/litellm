@@ -37,7 +37,7 @@ class AzureContentSafetyImageModerationGuardrail(AzureGuardrailBase, CustomGuard
     guardrail.
     """
 
-    use_native_lifecycle_hooks: ClassVar[bool] = True
+    use_native_lifecycle_hooks: ClassVar[bool] = False
 
     default_severity_threshold: int = 2
 

@@ -205,6 +205,11 @@ def test_image_moderation_event_hooks():
     ]
 
 
+def test_image_moderation_uses_unified_lifecycle_dispatch():
+    """Native lifecycle hooks are inherited no-ops, so pre and post call must go through apply_guardrail."""
+    assert AzureContentSafetyImageModerationGuardrail.use_native_lifecycle_hooks is False
+
+
 def test_image_moderation_loads_from_config():
     handler = InMemoryGuardrailHandler()
     registered = handler.initialize_guardrail(
