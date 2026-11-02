@@ -467,7 +467,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
                 </Collapsible>
               </FieldGroup>
 
-              <div className="mt-4 text-right">
+              <div className="sticky bottom-0 -mx-6 mt-4 -mb-6 flex justify-end border-t bg-popover px-6 py-4">
                 <Button type="submit">
                   <UserPlus />
                   Invite User
