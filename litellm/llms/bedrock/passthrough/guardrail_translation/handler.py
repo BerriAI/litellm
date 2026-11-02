@@ -45,6 +45,7 @@ from litellm.llms.bedrock.passthrough.guardrail_translation.structured_edits imp
     structured_edits,
     tool_edits,
 )
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy.guardrails.auto_router_compression import is_compression_guardrail
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -947,7 +948,7 @@ def _invoke_frames(items: Sequence[object]) -> tuple[InvokeStreamFrame, ...]:
 def _sse_events(sse: bytes) -> tuple[Mapping[str, object], ...]:
     return tuple(
         _JSON_OBJECT.validate_python(json.loads(line[len("data:") :]))
-        for line in sse.decode().splitlines()
+        for line in split_sse_lines(sse.decode())
         if line.startswith("data:")
     )
 

@@ -299,3 +299,55 @@ def test_an_openai_response_becomes_systemone_answers_with_the_callers_score_lab
     }
     assert response.usage is not None
     assert (response.usage.cached_tokens, response.usage.cache_write_tokens) == (256, 64)
+
+
+@pytest.mark.parametrize(
+    ("choice_probabilities", "score_probabilities"),
+    (
+        ((), ()),
+        (
+            ({"value": True, "probability": 0.8},),
+            ({"value": 1, "label": "major", "probability": 0.8},),
+        ),
+        (
+            (
+                {"value": True, "probability": 0.0},
+                {"value": "escalate", "probability": 0.8},
+            ),
+            (
+                {"value": 0, "label": "minor", "probability": 0.0},
+                {"value": 1, "label": "major", "probability": 0.8},
+            ),
+        ),
+        (
+            ({"value": True, "probability": 0.0},),
+            ({"value": 1, "label": "major", "probability": 0.0},),
+        ),
+    ),
+    ids=("empty", "missing", "explicit_zero", "only_zero"),
+)
+def test_openai_probabilities_preserve_missing_entries_and_explicit_zeros(
+    choice_probabilities: tuple[Mapping[str, object], ...],
+    score_probabilities: tuple[Mapping[str, object], ...],
+) -> None:
+    ir: Final = _openai_ir(_OPENAI_REQUEST)
+    payload: Final = {
+        **_OPENAI_RESPONSE,
+        "answers": [
+            _PREDICATE_ANSWER,
+            {**_CHOICE_ANSWER, "probabilities": choice_probabilities},
+            {
+                "type": "score",
+                "name": "severity",
+                "score": 1,
+                "confidence": 0.8,
+                "probabilities": score_probabilities,
+            },
+            _REFUSAL_ANSWER,
+        ],
+    }
+
+    response: Final = ir_to_openai_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir, "requested")
+
+    assert response.answers[1].model_dump(mode="json")["probabilities"] == list(choice_probabilities)
+    assert response.answers[2].model_dump(mode="json")["probabilities"] == list(score_probabilities)

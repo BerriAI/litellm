@@ -1,3 +1,4 @@
+import { copyToClipboard } from "@/utils/dataUtils";
 import { Check, Copy } from "lucide-react";
 import { useState, useCallback } from "react";
 import moment from "moment";
@@ -27,25 +28,9 @@ function CopyableJsonBlock({ label, value }: { label: string; value: Record<stri
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
-    try {
-      const text = JSON.stringify(value, null, 2);
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const el = document.createElement("textarea");
-        el.value = text;
-        el.style.position = "fixed";
-        el.style.opacity = "0";
-        document.body.appendChild(el);
-        el.focus();
-        el.select();
-        document.execCommand("copy");
-        document.body.removeChild(el);
-      }
+    if (await copyToClipboard(JSON.stringify(value, null, 2))) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch (e) {
-      console.error("Copy failed:", e);
     }
   }, [value]);
 

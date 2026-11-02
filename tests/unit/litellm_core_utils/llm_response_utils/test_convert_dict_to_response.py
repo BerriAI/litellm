@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import json
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -1110,6 +1111,44 @@ def test_convert_to_model_response_object_with_logprobs():
 
     assert result.system_fingerprint is None
     assert result._hidden_params is not None
+
+
+@pytest.mark.parametrize(
+    "upstream_logprobs",
+    [
+        pytest.param({"content": [{"token": "Hi", "logprob": None}]}, id="null-content-logprob"),
+        pytest.param(
+            {
+                "content": [{"token": "Hi", "logprob": -0.1, "top_logprobs": []}],
+                "refusal": [{"token": "I", "logprob": None}],
+            },
+            id="null-refusal-logprob",
+        ),
+    ],
+)
+def test_convert_to_model_response_object_passes_nonconforming_logprobs_through(
+    upstream_logprobs: Mapping[str, object],
+) -> None:
+    result: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1702685778,
+            "model": "test-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hi"},
+                    "logprobs": upstream_logprobs,
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    assert json.loads(result.model_dump_json())["choices"][0]["logprobs"] == upstream_logprobs
+
 
 def test_convert_to_model_response_object_error():
     """Test error handling for None response object."""
@@ -2287,17 +2326,19 @@ class TestConvertToStreamingResponse:
         }
 
         chunks = list(convert_to_streaming_response(response_object=response_object))
-        assert len(chunks) == 1
-        chunk = chunks[0]
-        assert chunk.id == "chatcmpl-123"
-        assert chunk.model == "gpt-4"
-        assert chunk.created == 1700000000
-        assert chunk.system_fingerprint == "fp_abc"
-        assert chunk.choices[0].delta.content == "Hello!"
-        assert chunk.choices[0].delta.role == "assistant"
-        assert chunk.choices[0].finish_reason == "stop"
-        assert chunk.usage.prompt_tokens == 5
-        assert chunk.usage.completion_tokens == 2
+        assert len(chunks) == 2
+        assert all(chunk.id == "chatcmpl-123" for chunk in chunks)
+        assert all(chunk.model == "gpt-4" for chunk in chunks)
+        assert all(chunk.created == 1700000000 for chunk in chunks)
+        assert all(chunk.system_fingerprint == "fp_abc" for chunk in chunks)
+        content, finish = chunks
+        assert content.choices[0].delta.content == "Hello!"
+        assert content.choices[0].delta.role == "assistant"
+        assert content.choices[0].finish_reason is None
+        assert finish.choices[0].delta.content is None
+        assert finish.choices[0].finish_reason == "stop"
+        assert finish.usage.prompt_tokens == 5
+        assert finish.usage.completion_tokens == 2
 
     def test_finish_details_fallback(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -2315,7 +2356,7 @@ class TestConvertToStreamingResponse:
         }
 
         chunks = list(convert_to_streaming_response(response_object=response_object))
-        assert chunks[0].choices[0].finish_reason == "length"
+        assert chunks[-1].choices[0].finish_reason == "length"
 
     def test_tool_calls_in_streaming(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -2347,17 +2388,20 @@ class TestConvertToStreamingResponse:
         }
 
         async def run():
-            chunks = []
-            async for chunk in convert_to_streaming_response_async(
-                response_object=response_object
-            ):
-                chunks.append(chunk)
-            return chunks
+            return [
+                chunk
+                async for chunk in convert_to_streaming_response_async(
+                    response_object=response_object
+                )
+            ]
 
         chunks = asyncio.run(run())
-        assert len(chunks) == 1
+        assert len(chunks) == 2
         assert chunks[0].choices[0].delta.tool_calls[0].id == "call_1"
         assert chunks[0].choices[0].delta.tool_calls[0].function.name == "get_weather"
+        assert chunks[0].choices[0].finish_reason is None
+        assert chunks[1].choices[0].delta.tool_calls is None
+        assert chunks[1].choices[0].finish_reason == "tool_calls"
 
 class TestConvertToStreamingResponseAsync:
     def test_none_raises(self):
@@ -2395,23 +2439,98 @@ class TestConvertToStreamingResponseAsync:
         }
 
         async def run():
-            chunks = []
-            async for chunk in convert_to_streaming_response_async(
-                response_object=response_object
-            ):
-                chunks.append(chunk)
-            return chunks
+            return [
+                chunk
+                async for chunk in convert_to_streaming_response_async(
+                    response_object=response_object
+                )
+            ]
 
         chunks = asyncio.run(run())
         # Cached replay is sliced into word-shaped chunks to preserve
         # streaming cadence; joining the slices reconstructs the content.
-        assert len(chunks) == 2
+        assert len(chunks) == 3
         assert all(c.id == "msg_async_1" for c in chunks)
         assert all(c.model == "claude-3" for c in chunks)
         assert "".join(c.choices[0].delta.content or "" for c in chunks) == "Hi there"
         assert chunks[0].choices[0].finish_reason is None
         assert chunks[-1].choices[0].finish_reason == "stop"
         assert chunks[-1].usage.prompt_tokens == 3
+
+    def test_preserves_reasoning_fields(self):
+        import asyncio
+
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            convert_to_streaming_response_async,
+        )
+
+        thinking_blocks = [
+            {
+                "type": "thinking",
+                "thinking": "cached reasoning",
+                "signature": "sig-cache",
+            }
+        ]
+        annotations = [
+            {
+                "type": "url_citation",
+                "url_citation": {
+                    "start_index": 0,
+                    "end_index": 5,
+                    "title": "Cached source",
+                    "url": "https://example.com/cached-source",
+                },
+            }
+        ]
+        response_object = {
+            "id": "msg_async_reasoning_cache",
+            "model": "claude-3",
+            "created": 1700000000,
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                        "content": "Final answer",
+                        "role": "assistant",
+                        "reasoning_content": "cached reasoning",
+                        "thinking_blocks": thinking_blocks,
+                        "annotations": annotations,
+                    },
+                }
+            ],
+        }
+
+        async def run():
+            return [
+                chunk
+                async for chunk in convert_to_streaming_response_async(
+                    response_object=response_object
+                )
+            ]
+
+        chunks = asyncio.run(run())
+
+        assert (
+            "".join(c.choices[0].delta.content or "" for c in chunks) == "Final answer"
+        )
+        assert chunks[0].choices[0].delta.content is None
+        assert chunks[0].choices[0].delta.reasoning_content == "cached reasoning"
+        assert chunks[0].choices[0].delta.thinking_blocks == thinking_blocks
+        last_content = max(
+            i for i, c in enumerate(chunks) if c.choices[0].delta.content
+        )
+        assert chunks[last_content].choices[0].delta.annotations == annotations
+        assert [
+            i for i, c in enumerate(chunks) if c.choices[0].delta.get("annotations")
+        ] == [last_content]
+        assert not any(
+            hasattr(c.choices[0].delta, "reasoning_content") for c in chunks[1:]
+        )
+        assert not any(
+            hasattr(c.choices[0].delta, "thinking_blocks") for c in chunks[1:]
+        )
+
 
 class TestHandleInvalidParallelToolCalls:
     def test_none_input(self):
@@ -2968,3 +3087,98 @@ def test_convert_to_model_response_object_function_output():
     assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(reasoning_tokens=0)
 
     assert result._hidden_params is not None
+
+
+@pytest.mark.parametrize(
+    "reported_cost",
+    [
+        float("nan"),
+        float("inf"),
+        {"input_tokens_cost": 0.0001, "request_cost": 0.005, "total_cost": float("nan")},
+        {"input_tokens_cost": float("inf"), "request_cost": 0.005, "total_cost": 0.0051},
+    ],
+    ids=["nan", "inf", "breakdown-with-nan-total", "breakdown-with-inf-part"],
+)
+def test_a_non_finite_provider_usage_cost_is_dropped_so_the_response_is_strict_json(reported_cost: object):
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-non-finite-cost",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "cost": reported_cost},
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    usage: Final = json.loads(json.dumps(response.model_dump(), allow_nan=False))["usage"]
+    assert "cost" not in usage
+    assert usage["total_tokens"] == 4
+
+
+def test_a_finite_provider_cost_breakdown_with_non_string_keys_is_kept():
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-int-key-cost",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "cost": {1: 0.5}},
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    assert response.usage.cost == {1: 0.5}
+
+
+_URL_CITATION: Final = {
+    "type": "url_citation",
+    "url_citation": {
+        "url": "https://example.com",
+        "title": "Example",
+        "content": "cited snippet",
+        "start_index": 0,
+        "end_index": 4,
+    },
+}
+_FILE_ANNOTATION: Final = {
+    "type": "file",
+    "file": {"hash": "abc123", "name": "report.pdf", "content": [{"type": "text", "text": "parsed page"}]},
+}
+
+
+def _message_with_annotations(annotations: list[dict[str, object]]) -> Message:
+    response: Final = {
+        "id": "gen-1",
+        "object": "chat.completion",
+        "created": 1712697600,
+        "model": "z-ai/glm-5.3",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "done", "annotations": annotations},
+            }
+        ],
+        "usage": {"completion_tokens": 1, "prompt_tokens": 1, "total_tokens": 2},
+    }
+    return convert_to_model_response_object(
+        response_object=response, model_response_object=ModelResponse(), response_type="completion"
+    ).choices[0].message
+
+
+def test_annotations_typed_other_than_url_citation_move_to_provider_specific_fields() -> None:
+    untyped_annotation: Final = {"start_index": 0, "end_index": 4}
+    message: Final = _message_with_annotations([_URL_CITATION, untyped_annotation, _FILE_ANNOTATION])
+
+    assert message.annotations == [_URL_CITATION, untyped_annotation]
+    assert message.provider_specific_fields["annotations"] == [_FILE_ANNOTATION]
+
+
+def test_url_citation_annotations_keep_provider_keys() -> None:
+    message: Final = _message_with_annotations([_URL_CITATION])
+
+    assert message.annotations == [_URL_CITATION]
+    assert "annotations" not in (message.provider_specific_fields or {})
