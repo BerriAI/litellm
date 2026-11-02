@@ -14,6 +14,7 @@ class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
 
 def trace_encode_error(message: str) -> bytes: ...
+def bundled_model_cost_map() -> bytes: ...
 
 @final
 class NativeClickHouseSpendConfig:
@@ -24,6 +25,12 @@ class NativeClickHouseSpendStorage:
     def __new__(cls, config: NativeClickHouseSpendConfig) -> NativeClickHouseSpendStorage: ...
     def ensure_schema(self) -> Future[None]: ...
     def insert_rows(self, rows: Sequence[Mapping[str, object]]) -> Future[None]: ...
+
+@final
+class NativeDatabase:
+    @staticmethod
+    def connect() -> Future[NativeDatabase]: ...
+    def close(self) -> Future[None]: ...
 
 @final
 class NativeDiagnosticProcessor:
@@ -207,6 +214,7 @@ __all__ = [
     "HuggingFaceEncoding",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
+    "NativeDatabase",
     "NativeDiagnosticProcessor",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
@@ -220,6 +228,7 @@ __all__ = [
     "aocr",
     "aresponses",
     "atranscription",
+    "bundled_model_cost_map",
     "completion",
     "embedding",
     "gil_stats",

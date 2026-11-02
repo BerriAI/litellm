@@ -141,7 +141,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         vertex_location=None,
         vertex_credentials=None,
         aembedding: bool | None = False,
-        timeout=300,
+        timeout: float | httpx.Timeout | None = 300,
         client=None,
         extra_headers: dict | None = None,
         drop_params: bool = False,

@@ -51,6 +51,7 @@ from litellm.llms.base_llm.managed_resources.isolation import (
     can_access_resource,
     resolve_resource_owner_id,
 )
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
@@ -240,6 +241,12 @@ _LIST_ROUTE_TABLE: Final[dict[tuple[str, str], ResourceKind]] = {
 # cleanly (no silent raw-ID leak).
 def _passthrough_sentinel_model_id(provider: str) -> str:
     return f"_passthrough_{provider}"
+
+
+def passthrough_file_model_id(provider: str) -> str | None:
+    if (provider, "/v1/files") not in _LIST_ROUTE_TABLE:
+        return None
+    return _passthrough_sentinel_model_id(provider)
 
 
 # Key under which the provider marker is stored in a file row's model_mappings.
@@ -824,7 +831,7 @@ _SSE_EVENT_ADAPTER: Final = TypeAdapter(Mapping[str, JsonValue])
 
 
 def _first_streamed_response(frames: bytes) -> tuple[str, Mapping[str, JsonValue]] | None:
-    for line in frames.decode("utf-8", errors="replace").splitlines():
+    for line in split_sse_lines(frames.decode("utf-8", errors="replace")):
         if not line.startswith(_SSE_DATA_PREFIX):
             continue
         try:
