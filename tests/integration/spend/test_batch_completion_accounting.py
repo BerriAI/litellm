@@ -10,11 +10,11 @@ from typing import Final
 
 import pytest
 import yaml
-from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
-from integration._support.database import read_rows, scratch_database
-from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
-from integration._support.upstream import delete_scenario, register_scenario
+from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
+from tests.integration._support.database import read_rows, scratch_database
+from tests.integration._support.process import owned_proxy
+from tests.integration._support.wire import Reply, Request, wire_server
+from tests.integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 from pydantic import JsonValue
 
@@ -616,25 +616,25 @@ def test_batch_end_user_budget_enforcement_and_isolation(gateway: Gateway) -> No
         current_a_spend: Final = float(str(read_rows('SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s', (user_a,))[0]["spend"]))
         assert current_a_spend == spend_a_initial, "Customer A must be billed exactly once"
 
-        # --- EXPLICIT SECOND RE-POLL PASS (IDEMPOTENCY VERIFICATION) ---
-        # Re-trigger batch retrieve to ensure no duplicate CheckBatchCost debit occurs
-        re_retrieve = gateway.request(
+        # --- POST-SETTLEMENT OBSERVATION IDEMPOTENCY ---
+        # Verify that subsequent read/GET requests on a terminal batch do not trigger billing side effects
+        re_retrieve: Final = gateway.request(
             "GET",
             f"/batches/{batch_a_id}",
             key=key,
         )
         assert re_retrieve.status_code == 200, re_retrieve.text
 
-        # Verify spend logs count remains strictly 1 (no double spend row appended)
-        recheck_spend_logs: Final = read_rows(
+        # Verify spend logs count remains strictly 1 (GET observation does not append spend rows)
+        post_observation_spend_logs: Final = read_rows(
             'SELECT spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s AND call_type=\'aretrieve_batch\' AND end_user=%s',
             (sha256(key.encode()).hexdigest(), user_a),
         )
-        assert len(recheck_spend_logs) == 1, "Duplicate spend log detected after re-poll"
+        assert len(post_observation_spend_logs) == 1, "Observation side-effect: duplicate spend row appended on terminal batch GET"
 
-        # Verify EndUserTable spend has not doubled
-        post_repoll_spend: Final = float(str(read_rows('SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s', (user_a,))[0]["spend"]))
-        assert post_repoll_spend == current_a_spend, f"Double charge detected! {post_repoll_spend} != {current_a_spend}"
+        # Verify EndUserTable spend has not incremented
+        post_observation_spend: Final = float(str(read_rows('SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s', (user_a,))[0]["spend"]))
+        assert post_observation_spend == current_a_spend, f"Observation side-effect: spend increased from {current_a_spend} to {post_observation_spend}"
 
         # Verify Customer A remains strictly budget-denied
         recheck_denied: Final = gateway.request(
