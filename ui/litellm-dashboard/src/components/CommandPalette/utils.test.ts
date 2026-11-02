@@ -57,13 +57,12 @@ describe("visibleMenuGroups", () => {
     expect(flattenNavItems(visible).map(({ route }) => route)).toEqual(["api-keys"]);
   });
 
-  it("hides Projects when its UI setting is disabled", () => {
-    const projectAdminContext = { ...context, userRole: "Admin", isTeamAdmin: true };
-    const visibleWithFlag = visibleMenuGroups(menuGroups, { ...projectAdminContext, enableProjectsUI: true });
-    const visibleWithoutFlag = visibleMenuGroups(menuGroups, { ...projectAdminContext, enableProjectsUI: false });
+  it("shows Projects to admins and hides it from internal users who administer no team", () => {
+    const visibleToAdmin = visibleMenuGroups(menuGroups, { ...context, userRole: "Admin" });
+    const visibleToMember = visibleMenuGroups(menuGroups, context);
 
-    expect(flattenNavItems(visibleWithFlag).some(({ route }) => route === "projects")).toBe(true);
-    expect(flattenNavItems(visibleWithoutFlag).some(({ route }) => route === "projects")).toBe(false);
+    expect(flattenNavItems(visibleToAdmin).some(({ route }) => route === "projects")).toBe(true);
+    expect(flattenNavItems(visibleToMember).some(({ route }) => route === "projects")).toBe(false);
   });
 
   it("keeps admin pages visible despite the internal-user page allowlist", () => {

@@ -241,7 +241,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const { data: projects, isLoading: isProjectsLoading } = useProjects();
   const { data: uiSettingsData } = useUISettings();
   const { data: tagsData } = useTags();
-  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const disableCustomApiKeys = Boolean(uiSettingsData?.values?.disable_custom_api_keys);
   const tagOptions = tagsData ? Object.values(tagsData).map((tag) => ({ value: tag.name, label: tag.name })) : [];
   const queryClient = useQueryClient();
@@ -884,31 +883,29 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   )}
                 </MountedFormField>
                 {ownerLimitedToTeamMembers && ownerField}
-                {enableProjectsUI && (
-                  <MountedFormField
-                    label={
-                      <span>
-                        Project{" "}
-                        <SimpleTooltip content="Assign this key to a project. Selecting a project will lock the team to the project's team.">
-                          <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                        </SimpleTooltip>
-                      </span>
-                    }
-                    name="project_id"
-                    className="mt-4"
-                  >
-                    {(control) => (
-                      <ProjectDropdown
-                        id={control.id}
-                        value={typeof control.value === "string" ? control.value : null}
-                        projects={projects}
-                        teamId={selectedCreateKeyTeam?.team_id}
-                        loading={isProjectsLoading || !teams}
-                        onChange={changeProject(control.onChange)}
-                      />
-                    )}
-                  </MountedFormField>
-                )}
+                <MountedFormField
+                  label={
+                    <span>
+                      Project{" "}
+                      <SimpleTooltip content="Assign this key to a project. Selecting a project will lock the team to the project's team.">
+                        <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                      </SimpleTooltip>
+                    </span>
+                  }
+                  name="project_id"
+                  className="mt-4"
+                >
+                  {(control) => (
+                    <ProjectDropdown
+                      id={control.id}
+                      value={typeof control.value === "string" ? control.value : null}
+                      projects={projects}
+                      teamId={selectedCreateKeyTeam?.team_id}
+                      loading={isProjectsLoading || !teams}
+                      onChange={changeProject(control.onChange)}
+                    />
+                  )}
+                </MountedFormField>
               </div>
 
               {/* Show message when team selection is required */}
