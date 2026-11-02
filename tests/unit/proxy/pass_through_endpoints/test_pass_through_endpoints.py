@@ -41,6 +41,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
@@ -7395,6 +7396,7 @@ async def test_websocket_passthrough_forwards_non_ascii_first_frame():
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
         mock_proxy_logging.post_call_success_hook = AsyncMock()
         mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_proxy_logging.arelease_responses_websocket_slot = AsyncMock()
         mock_worker.ensure_initialized_and_enqueue = MagicMock(
             side_effect=lambda async_coroutine: async_coroutine.close()
         )
@@ -7447,6 +7449,7 @@ async def test_websocket_passthrough_propagates_active_trace_context(
     mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
     mock_proxy_logging.post_call_success_hook = AsyncMock()
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging.arelease_responses_websocket_slot = AsyncMock()
     mock_worker = MagicMock()
     mock_worker.ensure_initialized_and_enqueue = MagicMock(side_effect=lambda async_coroutine: async_coroutine.close())
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
@@ -7513,6 +7516,7 @@ async def test_websocket_passthrough_never_forwards_caller_credentials_upstream(
     mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
     mock_proxy_logging.post_call_success_hook = AsyncMock()
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging.arelease_responses_websocket_slot = AsyncMock()
     mock_worker = MagicMock()
     mock_worker.ensure_initialized_and_enqueue = MagicMock(side_effect=lambda async_coroutine: async_coroutine.close())
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
@@ -7606,6 +7610,7 @@ def _patched_websocket_passthrough_environment(upstream_ws):
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
         mock_proxy_logging.post_call_success_hook = AsyncMock()
         mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_proxy_logging.arelease_responses_websocket_slot = AsyncMock()
         mock_worker.ensure_initialized_and_enqueue = MagicMock(
             side_effect=lambda async_coroutine: async_coroutine.close()
         )
@@ -8559,6 +8564,105 @@ async def test_websocket_passthrough_holds_the_keys_parallel_slot_until_the_sess
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "models, upstream_refuses, while_open",
+    [
+        ((), False, [False]),
+        (("gpt-5.4-mini",), False, [False]),
+        (("gpt-5.4-mini", "gpt-5.4"), False, [False]),
+        ((), True, []),
+    ],
+    ids=["no-turn", "one-turn", "two-turns", "upstream-refused"],
+)
+async def test_websocket_passthrough_frees_one_legacy_parallel_slot_only_when_the_session_ends(
+    models: tuple[str, ...], upstream_refuses: bool, while_open: list[bool]
+):
+    limiter: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=lambda: datetime(2026, 1, 31, 23, 59, 30)
+    )
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    key: Final = UserAPIKeyAuth(api_key=hash_token("sk-legacy-socket"), max_parallel_requests=2)
+    logged_rows: Final[list[asyncio.Task[None]]] = []
+    seen_while_open: Final[list[bool]] = []
+
+    async def admit(user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=call_type
+        )
+
+    async def log_row(**row: object) -> None:
+        await limiter.async_log_success_event(
+            kwargs=row, response_obj=None, start_time=row["start_time"], end_time=row["end_time"]
+        )
+
+    async def opens_another_session() -> bool:
+        await asyncio.gather(*logged_rows)
+        try:
+            await admit(key, {}, "pass_through_endpoint")
+        except ProxyRateLimitError:
+            return False
+        return True
+
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create", "model": model}) for model in models],
+        answered_by='"response.completed"',
+    )
+    take_frame: Final = client.receive
+
+    async def receive() -> Mapping[str, str | bytes]:
+        message: Final = await take_frame()
+        if message["type"] == "websocket.disconnect":
+            seen_while_open.append(await opens_another_session())
+        return message
+
+    client.receive = receive
+    await admit(key, {}, "pass_through_endpoint")
+
+    with ExitStack() as stack:
+        proxy_logging: Final = stack.enter_context(
+            _patched_websocket_passthrough_environment(
+                ScriptedUpstreamWebSocket(replies=[_responses_turn(model) for model in models])
+            )
+        )
+        worker: Final = stack.enter_context(
+            patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER")
+        )
+        stack.enter_context(patch(SUCCESS_HANDLER, new_callable=AsyncMock, side_effect=log_row))
+        if upstream_refuses:
+            stack.enter_context(
+                patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+                    side_effect=OSError("upstream refused the socket"),
+                )
+            )
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=admit)
+        proxy_logging.arelease_responses_websocket_slot = proxy_logging_obj.arelease_responses_websocket_slot
+        worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: logged_rows.append(asyncio.create_task(async_coroutine))
+        )
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=client,
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                client_frame_model_gate=RecordingFrameModelGate(),
+                upstream_frame_kind=openai_websocket_frame_kind,
+                walkout_turn_drain_seconds=0.05,
+            ),
+            timeout=10,
+        )
+    after_close: Final = (await opens_another_session(), await opens_another_session())
+
+    assert len(logged_rows) == len(models)
+    assert (seen_while_open, after_close) == (while_open, (True, False))
+
+
+@pytest.mark.asyncio
 async def test_websocket_passthrough_charges_pipelined_turns_to_the_frame_that_asked_for_each():
     """
     A client can send its next response.create before the provider finished the
@@ -8685,6 +8789,28 @@ async def test_websocket_passthrough_charges_turns_on_parallel_lanes_to_the_fram
         ["tier-a"],
         ["tier-b"],
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream_id", ["", 7])
+async def test_websocket_passthrough_refuses_a_frame_on_a_lane_the_provider_error_cannot_name(stream_id):
+    """
+    The provider refuses a frame with an invalid stream_id through an error that
+    names no lane (OpenAI WebSocket mode guide, "Errors to handle", read
+    2026-11-02, which also says an empty stream_id is invalid). Relayed, that
+    error would refuse a turn waiting on the default lane instead, and that turn
+    would reach spend without the groups its own frame asked for.
+    """
+    gate: Final = RecordingFrameModelGate()
+    allowed: Final = json.dumps({"type": "response.create", "model": "gpt-5.4-mini"})
+
+    relayed: Final = await _relay_client_frames(
+        [allowed, json.dumps({"type": "response.create", "stream_id": stream_id, "model": "gpt-5.4-mini"})], gate
+    )
+
+    assert [sent.args[0] for sent in relayed.upstream.send.await_args_list] == [allowed]
+    assert json.loads(relayed.client.send_text.await_args.args[0])["type"] == "error"
+    assert relayed.client.close.await_args.kwargs["code"] == 1008
 
 
 @pytest.mark.asyncio
@@ -9224,7 +9350,20 @@ async def test_websocket_passthrough_keeps_the_session_update_a_clip_ran_under_u
 
 
 @pytest.mark.asyncio
-async def test_websocket_passthrough_still_bills_the_answer_in_flight_when_a_later_frame_is_refused():
+@pytest.mark.parametrize(
+    "later_frame",
+    [
+        json.dumps({"type": "response.create", "model": "gpt-5.4"}),
+        '{"type": "response.create", "model": "gpt-5.4-mini", "metadata": ' + "[" * 100_000 + "]" * 100_000 + "}",
+        (
+            '{"type": "response.create", "model": "gpt-5.4-mini", "seed": '
+            + "9" * (sys.get_int_max_str_digits() + 1)
+            + "}"
+        ),
+    ],
+    ids=["names_a_denied_model", "nests_too_deep_to_parse", "holds_a_number_too_long_to_parse"],
+)
+async def test_websocket_passthrough_still_bills_the_answer_in_flight_when_a_later_frame_is_refused(later_frame: str):
     """
     A refused frame closes the client while the provider may still be sending the
     answer to an earlier, allowed frame. That answer cannot go to a closed client,
@@ -9233,10 +9372,7 @@ async def test_websocket_passthrough_still_bills_the_answer_in_flight_when_a_lat
     """
     gate: Final = RecordingFrameModelGate(MappingProxyType({"gpt-5.4": KEY_MODEL_REFUSAL}))
     client: Final = _turn_taking_client(
-        [
-            json.dumps({"type": "response.create", "model": "gpt-5.4-mini"}),
-            json.dumps({"type": "response.create", "model": "gpt-5.4"}),
-        ],
+        [json.dumps({"type": "response.create", "model": "gpt-5.4-mini"}), later_frame],
         answered_by='"response.created"',
     )
     refused: Final = asyncio.Event()

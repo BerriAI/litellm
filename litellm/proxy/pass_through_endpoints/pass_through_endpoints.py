@@ -2705,6 +2705,12 @@ _NO_CLIENT_FRAME_REQUESTS: Final = _ClientFrameRequests(
     starts_turn=False, lane=None, turn_model=None, models=(), unverifiable_model_refusal=None
 )
 _FORWARD_WITHOUT_TURN: Final = _ForwardClientFrame(starts_turn=False, turn=None, lane=None)
+_UNREADABLE_CLIENT_FRAME: Final = _RefuseClientFrame(
+    refusal=WebsocketFrameModelRefused(
+        message="The gateway cannot parse this frame, so it cannot check which model it asks for.",
+        error_type="invalid_request_error",
+    )
+)
 _TURN_STARTING_FRAME: Final = "response.create"
 _FRAME_TEXT_WORTH_PARSING: Final = (f'"{_TURN_STARTING_FRAME}"', '"model"', '"prompt"', '"tools"', "\\")
 _TURN_MODEL_PLACEMENTS: Final = (("model",), ("response", "model"), ("session", "model"))
@@ -2725,6 +2731,16 @@ _UNNAMED_TOOL_MODEL_REFUSAL: Final = (
     "The gateway cannot check which model an unnamed one runs."
 )
 _FIRST_SENTENCE: Final = re.compile(r".*?[.!?](?=\s|$)")
+_LANE_NAME: Final = re.compile(r"[A-Za-z0-9_.-]{1,256}")
+_UNROUTABLE_LANE_REFUSAL: Final = _RefuseClientFrame(
+    refusal=WebsocketFrameModelRefused(
+        message=(
+            "This stream_id is not a lane name the provider accepts. "
+            "The provider's error for it names no lane, so the gateway cannot tell which turn it refuses."
+        ),
+        error_type="invalid_request_error",
+    )
+)
 
 
 def _may_name_a_model(text_data: str) -> bool:
@@ -2734,6 +2750,11 @@ def _may_name_a_model(text_data: str) -> bool:
 def _frame_lane(frame: Mapping[str, object]) -> str | None:
     stream_id: Final = frame.get("stream_id")
     return stream_id if isinstance(stream_id, str) else None
+
+
+def _names_an_unroutable_lane(frame: Mapping[str, object]) -> bool:
+    stream_id: Final = frame.get("stream_id")
+    return stream_id is not None and not (isinstance(stream_id, str) and _LANE_NAME.fullmatch(stream_id) is not None)
 
 
 def _frames_of_lane(lane: str | None) -> Callable[[Mapping[str, object]], bool]:
@@ -2795,12 +2816,17 @@ def _unverifiable_model_refusal(frame: Mapping[str, object], tools: Sequence[Map
     return None
 
 
-def _client_frame_requests(frame_data: str | bytes) -> _ClientFrameRequests:
+def _client_frame_requests(frame_data: str | bytes) -> _ClientFrameRequests | _RefuseClientFrame:
     if isinstance(frame_data, str) and not _may_name_a_model(frame_data):
         return _NO_CLIENT_FRAME_REQUESTS
-    frame: Final = _json_object_frame(frame_data)
+    try:
+        frame: Final = _json_object_frame(frame_data)
+    except (RecursionError, ValueError):
+        return _UNREADABLE_CLIENT_FRAME
     if frame is None:
         return _NO_CLIENT_FRAME_REQUESTS
+    if _names_an_unroutable_lane(frame):
+        return _UNROUTABLE_LANE_REFUSAL
     turn_models: Final = _placed_models(frame, _TURN_MODEL_PLACEMENTS)
     tools: Final = _placed_tools(frame)
     tool_models: Final = (model for model in (tool.get("model") for tool in tools) if isinstance(model, str))
@@ -2827,6 +2853,8 @@ async def _client_frame_verdict(
     if gate is None:
         return _FORWARD_WITHOUT_TURN
     requests: Final = _client_frame_requests(frame_data)
+    if isinstance(requests, _RefuseClientFrame):
+        return requests
     verdicts: Final = tuple([await gate(websocket, model) for model in requests.models])
     refusal: Final = next((verdict for verdict in verdicts if isinstance(verdict, WebsocketFrameModelRefused)), None)
     if refusal is not None:
@@ -3535,6 +3563,7 @@ async def websocket_passthrough_request(
         if _client_socket_is_open(websocket):
             await websocket.close(code=1011, reason="WebSocket passthrough error")
     finally:
+        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
         if _client_socket_is_open(websocket):
             await websocket.close()
 
