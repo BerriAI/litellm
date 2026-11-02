@@ -284,7 +284,11 @@ def _guardrail_response_headers(
         for field, entries in groupby(sorted(recorded, key=lambda entry: entry[0]), key=lambda entry: entry[0])
     }
     headers: Final = _RESPONSE_HEADERS.validate_python(get_logging_caching_headers({"metadata": merged}) or {})
-    sendable: Final = ((name, value) for name, value in headers.items() if _is_sendable_header_value(value))
+    sendable: Final = (
+        (name, value)
+        for name, value in headers.items()
+        if len(value) <= _GUARDRAIL_HEADERS_MAX_BYTES and _is_sendable_header_value(value)
+    )
     no_headers: Final[Mapping[str, str]] = MappingProxyType({})
     return reduce(_with_header_in_budget, sendable, no_headers)
 

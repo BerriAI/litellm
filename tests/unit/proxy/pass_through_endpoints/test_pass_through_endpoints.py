@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import time
 import uuid
 import zlib
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
@@ -13723,6 +13724,23 @@ class TestGuardrailResponseHeaders:
 
         assert headers == {"x-litellm-applied-policies": "tag-policy"}
         assert h11.Response(status_code=200, headers=[*headers.items()]).status_code == 200
+
+    def test_guardrail_header_past_the_size_budget_is_left_out_without_scanning_its_characters(self):
+        names: Final = [f"g{index}" for index in range(300_000)]
+
+        def _best_cpu_seconds(run: Callable[[], object]) -> float:
+            def _timed() -> float:
+                started: Final = time.process_time()
+                run()
+                return time.process_time() - started
+
+            return min(_timed() for _ in range(3))
+
+        metadata: Final = {"metadata": {"applied_guardrails": names}}
+        assert _guardrail_response_headers(metadata) == {}
+        assert _best_cpu_seconds(lambda: _guardrail_response_headers(metadata)) < 15 * _best_cpu_seconds(
+            lambda: ",".join(names)
+        )
 
     def test_guardrail_headers_past_the_size_budget_are_left_out_so_a_client_can_read_the_response(self):
         names: Final = [f"caller-named-{index}" for index in range(10_000)]
