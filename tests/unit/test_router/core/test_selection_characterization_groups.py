@@ -535,13 +535,13 @@ async def test_pass_through_selection_without_pass_through_deployments_raises_ba
     with pytest.raises(litellm.BadRequestError) as raised:
         await core.select("g", kind="pass_through")
     assert str(raised.value) == (
-        "litellm.BadRequestError: Model g has no deployment configured with use_in_pass_through=True. "
-        "Please add use_in_pass_through: true in the deployment configuration"
+        "litellm.BadRequestError: Model g has no deployments configured with use_in_pass_through=True. "
+        "Please add use_in_pass_through: true to the deployment configuration"
     )
 
 
 @pytest.mark.asyncio
-async def test_async_pass_through_selection_words_the_missing_deployment_error_differently(
+async def test_async_pass_through_selection_words_the_missing_deployment_error_the_same_way(
     make_core: MakeCore,
 ) -> None:
     core: Final = make_core(model_list=[deployment("g", "a")])

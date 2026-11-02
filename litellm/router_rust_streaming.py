@@ -55,7 +55,8 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
 )
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, set_hidden_params
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.types.utils import ModelResponseStream, Usage
+from litellm.router_utils.fallback_event_handlers import non_stream_fallback_answer_as_chunk
+from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
 if TYPE_CHECKING:
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -617,6 +618,17 @@ def _adopt_fallback_response_headers(
     return prepared
 
 
+def _non_stream_fallback_item(
+    wrapper_ref: "weakref.ref[FallbackAwareStreamWrapper]", fallback_response: object
+) -> object:
+    """The one item a stream yields for a fallback that answered without a stream: its response as
+    a stream chunk, carrying the fallback's hidden params and headers."""
+    prepared: Final = _adopt_fallback_response_headers(wrapper_ref, fallback_response)
+    item: Final = non_stream_fallback_answer_as_chunk(fallback_response)
+    _apply_fallback_hidden_params_to_item(item, prepared)
+    return item
+
+
 def _chat_wrapper_init(
     wrapper: FallbackAwareStreamWrapper, stream: object, model_response: CustomStreamWrapper
 ) -> None:
@@ -748,8 +760,7 @@ def wrap_chat_stream(  # noqa: C901  # one function per Python wrapper it ports
                             )
                         yield fallback_item
                 else:
-                    # A fallback that answers without a stream yields None (an oddity kept as is).
-                    yield None
+                    yield _non_stream_fallback_item(wrapper_ref, fallback_response)
             except Exception as fallback_error:
                 verbose_router_logger.error("Fallback also failed: %s", fallback_error)
                 if isinstance(trigger, MidStreamFallbackError) and trigger.original_exception is not None:
@@ -801,7 +812,7 @@ def wrap_chat_stream_sync(
             trigger: Final = _fallback_trigger(e, (litellm_exceptions.ContextWindowExceededError,))
             try:
                 fallback_response = attempt.fallback_sync(trigger)  # rebind-ok: rebound as the stream advances
-                if hasattr(fallback_response, "__iter__"):
+                if hasattr(fallback_response, "__iter__") and not isinstance(fallback_response, ModelResponse):
                     prepared = _adopt_fallback_response_headers(wrapper_ref, fallback_response)  # rebind-ok: re-adopted
                     settled = False  # rebind-ok: rebound as the stream advances
                     for fallback_item in cast("Iterable[object]", fallback_response):  # cast-ok: checked
@@ -817,7 +828,7 @@ def wrap_chat_stream_sync(
                             _combine_fallback_usage(fallback_item, None)
                         yield fallback_item
                 else:
-                    yield None
+                    yield _non_stream_fallback_item(wrapper_ref, fallback_response)
             except Exception as fallback_error:
                 verbose_router_logger.error("Fallback also failed: %s", fallback_error)
                 if isinstance(trigger, MidStreamFallbackError) and trigger.original_exception is not None:

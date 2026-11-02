@@ -195,15 +195,23 @@ async def test_selecting_a_marker_by_its_id_refuses_it_naming_its_litellm_model(
     assert str(raised.value) == ONLY_MARKERS_MESSAGE.format(model="auto_router/complexity_router")
 
 
-@pytest.mark.parametrize("entry", ["get_available_deployment", "completion"])
-def test_the_sync_path_never_runs_pre_routing_and_refuses_the_marker(
-    make_core: MakeCore, host: ScriptedHost, entry: str
+@pytest.mark.parametrize("model", ["smart", "al"])  # pyright: ignore[reportUnknownMemberType, reportUntypedFunctionDecorator]  # pytest and the cores' untyped members
+def test_sync_get_available_deployment_runs_pre_routing_like_the_async_pick(make_core: MakeCore, model: str) -> None:
+    core: Final = make_core(model_list=_tiered(), model_group_alias={"al": "smart"})
+    request: Final[dict[str, object]] = {}
+    chosen: Final = core.get_available_deployment(model, messages=MESSAGES, request_kwargs=request)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
+    assert chosen["model_info"]["id"] == "s"
+    assert _metadata(request)["routing_decision"]["router_model_name"] == "smart"  # pyright: ignore[reportIndexIssue]
+
+
+@pytest.mark.parametrize(("model", "messages", "expected"), [("smart", MESSAGES, "s"), ("al", HARD_MESSAGES, "b")])  # pyright: ignore[reportUnknownMemberType, reportUntypedFunctionDecorator]  # pytest and the cores' untyped members
+def test_sync_completion_routes_through_a_complexity_router_like_acompletion(
+    make_core: MakeCore, host: ScriptedHost, model: str, messages: list[dict[str, str]], expected: str
 ) -> None:
-    core: Final = make_core(model_list=_tiered())
-    with pytest.raises(litellm.BadRequestError) as raised:
-        _sync_entry(core, entry, "smart")
-    assert str(raised.value) == ONLY_MARKERS_MESSAGE.format(model="smart")
-    assert host.calls == []
+    core: Final = make_core(model_list=_tiered(), model_group_alias={"al": "smart"})
+    core.completion(model=model, messages=messages)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    assert host.deployments_called() == [expected]
+    assert host.calls[-1].model_group == model
 
 
 # --- choosing among tag-scoped markers -----------------------------------------------------------------

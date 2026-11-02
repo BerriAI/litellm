@@ -1033,7 +1033,7 @@ class RustCore(
         # Settings the Python core keeps as plain attributes, and settings deleted with `del`.
         self._plain: Final = initial_plain(config)
         self._deleted: frozenset[str] = frozenset()
-        self._request_timeout: Final = request_timeout(config)
+        self._request_timeout: Final = request_timeout(config, host)
         legacy: Final[dict[str, object]] = {"deployment_stats": {}}  # mutable-ok: the core's own legacy attributes
         self._legacy: Final = legacy
         self._health_view: RustHealth | None = None
@@ -2018,8 +2018,8 @@ class RustCore(
             **self._routing_fields(prepared),
             **pinned_video_deployment(plan, request),
             **unrouted_fields(plan),
-            # The sync path never runs pre-routing; a custom strategy picks on both.
-            **({} if plan.sync and self._custom_strategy is None else {"pre_routes": True}),
+            # A custom strategy picks on both paths; the sync path pre-routes when it can.
+            **({"pre_routes": True} if not plan.sync or self._sync_pick_pre_routes() else {}),
             **({"mock_failure": mock} if mock is not None else {}),
             # Every target of the walk is refused.
             **({"fallbacks": []} if rejected_fallback_target(request) is not None else {}),
@@ -2389,6 +2389,14 @@ class RustCore(
             messages,
         )
 
+    def _sync_pick_pre_routes(self) -> bool:
+        """Whether a sync pick asks for the ``pre_route`` step: always for a custom strategy, else
+        when a strategy router is registered. A router with routing plugins never pre-routes a sync
+        pick, so router-core refuses it (the pipeline only runs on the async path)."""
+        if self._custom_strategy is not None:
+            return True
+        return not self._resolved.routing_plugins and self._prerouter.has_strategy_routers()
+
     def _custom_pick_sync(
         self,
         step: Mapping[str, object],
@@ -2397,10 +2405,15 @@ class RustCore(
         input: object = _NO_INPUT,
         specific_deployment: object = _NO_INPUT,
     ) -> object:
-        """A custom strategy's sync pick (``get_available_deployment``); without one, no pre-routing."""
+        """A custom strategy's sync pick (``get_available_deployment``); without one, the async
+        pre-routing hook run to completion (``_pre_route``)."""
         custom: Final = self._custom_strategy
         if custom is None:
-            return None
+            from litellm.litellm_core_utils import asyncify
+
+            return asyncify.run_async_function(  # pyright: ignore[reportUnknownMemberType]  # the untyped sync bridge
+                partial(self._pre_route, step, request, messages, input, specific_deployment)
+            )
         picked: Final[object] = custom.get_available_deployment(  # pyright: ignore[reportUnknownMemberType]  # the strategy's untyped pick
             model=str(step.get("model")),
             messages=request.get("messages") if messages is _NO_INPUT else messages,  # pyright: ignore[reportArgumentType]  # see _pre_route
@@ -2665,9 +2678,6 @@ class RustCore(
             message: Final = (
                 f"Model {model} has no deployments configured with use_in_pass_through=True. "
                 "Please add use_in_pass_through: true to the deployment configuration"
-                if pass_through == "async_pass_through"
-                else f"Model {model} has no deployment configured with use_in_pass_through=True. "
-                "Please add use_in_pass_through: true in the deployment configuration"
             )
             return litellm_exceptions.BadRequestError(message=message, model=model, llm_provider="")
         if kind == "context_window_exceeded":
@@ -2805,7 +2815,7 @@ class _Selection:
             fields["specific_deployment"] = True
         if probe:
             fields["health_check_probe"] = True
-        if kind == "pick" or (kind == "sync_pick" and core._custom_strategy is not None):  # pyright: ignore[reportPrivateUsage]  # the selection serves its own core
+        if kind == "pick" or (kind == "sync_pick" and core._sync_pick_pre_routes()):  # pyright: ignore[reportPrivateUsage]  # the selection serves its own core
             fields["pre_routes"] = True
         self._specific_deployment: Final = specific_deployment
         # The error a callback filter raised, which a failed selection raises.
@@ -3262,15 +3272,35 @@ class _Driver:
         """A routing pre-call check refused the attempt (``async_routing_strategy_pre_call_checks``):
         a rate limit cools the deployment down (``set_cooldown_deployments``); the attempt's failure
         is recorded by nothing else."""
+        report: Final = self._refusal_report(deployment, error)
+        if report is not None:
+            await self._core._drive_cache_steps(report)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        return {**self._failed(step, deployment, call, error), "recorded": True}
+
+    def _refused_sync(
+        self,
+        step: Mapping[str, object],
+        deployment: Mapping[str, object],
+        call: "AttemptCall",
+        error: BaseException,
+    ) -> Mapping[str, object]:
+        """``_refused`` on the sync path (``routing_strategy_pre_call_checks``): a rate limit cools
+        the deployment down here too."""
+        report: Final = self._refusal_report(deployment, error)
+        if report is not None:
+            self._core._drive_sync_steps(report)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        return {**self._failed(step, deployment, call, error), "recorded": True}
+
+    def _refusal_report(self, deployment: Mapping[str, object], error: BaseException) -> "RouterCall | None":
+        """The uncounted failure report that cools down a deployment a pre-call check rate-limited."""
         import litellm.exceptions as litellm_exceptions
 
-        core: Final = self._core
-        if isinstance(error, litellm_exceptions.RateLimitError):
-            deployment_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
-            if isinstance(deployment_id, str):
-                report: Final = core._handle.report_failure(deployment_id, dict(attempt_failure(error)), uncounted=True)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-                await core._drive_cache_steps(report)  # pyright: ignore[reportPrivateUsage]  # see above
-        return {**self._failed(step, deployment, call, error), "recorded": True}
+        if not isinstance(error, litellm_exceptions.RateLimitError):
+            return None
+        deployment_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
+        if not isinstance(deployment_id, str):
+            return None
+        return self._core._handle.report_failure(deployment_id, dict(attempt_failure(error)), uncounted=True)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
 
     def _pick_kwargs(self, step: Mapping[str, object]) -> Mapping[str, object]:
         """The request kwargs the pick sees: the request with its level's retry count."""
@@ -3365,8 +3395,7 @@ class _Driver:
             try:
                 self._core._endpoints.sync_pre_call_checks(self._plan, deployment, self._request)  # pyright: ignore[reportPrivateUsage]  # see above
             except Exception as refused:  # noqa: BLE001  # handed to the Rust call loop like any attempt failure
-                # The sync path records no outcome for a refused pre-call check: no cooldown.
-                return {**self._failed(step, deployment, call, refused), "recorded": True}
+                return self._refused_sync(step, deployment, call, refused)
             answered: Final = self._core._host.invoke(call.host_op)(**call.kwargs)  # pyright: ignore[reportPrivateUsage]  # a sync endpoint
             if inspect.isawaitable(answered):
                 raise _NotSynchronous(f"the host's {call.host_op} endpoint is not synchronous")

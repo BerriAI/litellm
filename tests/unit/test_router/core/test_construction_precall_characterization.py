@@ -263,22 +263,30 @@ def test_request_timeout_is_unset_without_a_router_timeout(
     assert _one(make_core).request_timeout is None  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def test_request_timeout_reads_litellm_request_timeout_directly_when_a_router_timeout_is_set(
+def test_request_timeout_reads_the_host_request_timeout_when_a_router_timeout_is_set(
     make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Oddity: this one setting is read from ``litellm.request_timeout`` itself, not from the host's
-    process settings (which say 33 here)."""
+    """Read from the host's process settings (33 here), not from ``litellm.request_timeout`` itself."""
     host.set_dynamic(request_timeout=33.0)
     monkeypatch.setattr(litellm, "request_timeout", 77.0)
-    assert _one(make_core, timeout=10).request_timeout == 77.0  # pyright: ignore[reportAttributeAccessIssue]
+    assert _one(make_core, timeout=10).request_timeout == 33.0  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
 
 
-def test_request_timeout_is_unset_when_litellm_request_timeout_is_its_untouched_default(
-    make_core: MakeCore, monkeypatch: pytest.MonkeyPatch
+def test_request_timeout_is_unset_when_the_host_request_timeout_is_its_untouched_default(
+    make_core: MakeCore,
+    host: ScriptedHost,
+    monkeypatch: pytest.MonkeyPatch,  # pyright: ignore[reportUnknownMemberType, reportUnknownParameterType]  # pytest and the cores' untyped members
 ) -> None:
-    monkeypatch.setattr(litellm, "request_timeout", 6000)
-    monkeypatch.setattr(litellm, "request_timeout_explicitly_set", False, raising=False)
+    host.set_dynamic(request_timeout=6000.0, request_timeout_explicitly_set=False)
+    monkeypatch.setattr(litellm, "request_timeout", 77.0)  # pyright: ignore[reportUnknownMemberType]  # pytest and the cores' untyped members
     assert _one(make_core, timeout=10).request_timeout is None  # pyright: ignore[reportAttributeAccessIssue]
+
+
+def test_request_timeout_keeps_the_default_value_when_the_host_marks_it_explicitly_set(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.set_dynamic(request_timeout=6000.0, request_timeout_explicitly_set=True)
+    assert _one(make_core, timeout=10).request_timeout == 6000.0  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
 
 
 def test_stream_timeout_is_kept_as_given(make_core: MakeCore) -> None:
