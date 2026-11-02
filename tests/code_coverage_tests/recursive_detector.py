@@ -3,6 +3,7 @@ import os
 
 IGNORE_FUNCTIONS = [
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
+    "detached",  # router_config: copies only the plain containers of the router's own constructor arguments, once per build or changeset
     "_format_type",
     "remove_additional_properties",
     "remove_strict_from_schema",
@@ -85,6 +86,7 @@ IGNORE_FUNCTIONS = [
     "_sort_processed_sets",  # bounded by the nesting depth of the log-record extra it walks (a finite JSON tree, no cycles possible).
     "scrub_json_strings",  # max depth set (MAX_SCRUB_DEPTH); fails closed by returning "[Filtered]" for anything nested past the cap.
     "_without_requester_ip_address",  # walks only the fresh tree _sanitize_request_body_for_spend_logs_payload returns (mapping cycles already cut), so it never goes deeper than that sanitizer did.
+    "_merge_session_fields",  # max depth set (_SESSION_MERGE_MAX_DEPTH); deeper mappings are replaced wholesale by the later session.update.
 ]
 
 

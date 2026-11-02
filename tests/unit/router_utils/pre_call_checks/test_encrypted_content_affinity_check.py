@@ -24,6 +24,7 @@ import pytest
 import litellm
 from litellm.models.credentials import CredentialItem
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_api import RoutingContext
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 
@@ -1016,13 +1017,13 @@ async def test_affinity_falls_back_to_same_boundary_on_alias_switch():
 def test_boundary_fallback_no_router_ref_returns_empty():
     """
     Standalone use (no router wired in) -> the boundary lookup short-circuits
-    to ``[]`` instead of crashing on ``None.get_deployment``.
+    to ``[]`` instead of crashing on ``None.registry()``.
     """
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
     )
 
-    check = EncryptedContentAffinityCheck(router=None)
+    check = EncryptedContentAffinityCheck(ctx=None)
     healthy = [
         {
             "model_info": {"id": "dep-1"},
@@ -1040,7 +1041,7 @@ def test_boundary_fallback_no_router_ref_returns_empty():
 def test_boundary_fallback_originating_deployment_removed_returns_empty():
     """
     If the originating deployment has been removed from the router (e.g. via
-    /model/delete), ``router.get_deployment`` returns None and we return [] so
+    /model/delete), ``ctx.registry().deployment`` returns None and we return [] so
     the caller falls back to the full healthy_deployments list.
     """
     from unittest.mock import MagicMock
@@ -1049,10 +1050,10 @@ def test_boundary_fallback_originating_deployment_removed_returns_empty():
         EncryptedContentAffinityCheck,
     )
 
-    mock_router = MagicMock()
-    mock_router.get_deployment.return_value = None
+    mock_ctx = MagicMock()
+    mock_ctx.registry.return_value.deployment.return_value = None
 
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
     healthy = [
         {
             "model_info": {"id": "dep-1"},
@@ -1065,7 +1066,7 @@ def test_boundary_fallback_originating_deployment_removed_returns_empty():
     )
     assert matches == []
     assert originating is None
-    mock_router.get_deployment.assert_called_once_with(model_id="dep-removed")
+    mock_ctx.registry().deployment.assert_called_once_with("dep-removed")
 
 
 def test_boundary_key_accepts_pydantic_litellm_params_instance():
@@ -1241,7 +1242,7 @@ def test_boundary_fallback_matches_deployments_with_same_named_credential_values
             ],
             num_retries=0,
         )
-        check = EncryptedContentAffinityCheck(router=router)
+        check = EncryptedContentAffinityCheck(ctx=RoutingContext(router))
         healthy_deployments = [
             {
                 "model_info": {"id": "peer-same-boundary"},
@@ -1308,19 +1309,21 @@ def _make_router_mock_with_cooldown(
     routed_group_model_ids: list[str] | None = None,
 ):
     """
-    Build a MagicMock router whose ``cooldown_cache.async_get_active_cooldowns``
+    Build a MagicMock routing context whose ``health().cooldowns.async_get_active_cooldowns``
     returns ``cooldown_entries`` (defaulting to ``[]`` — no active cooldown), and
-    whose ``get_candidate_model_ids_for_route`` returns ``routed_group_model_ids``
+    whose ``registry().names(model, kind="route_candidates")`` returns ``routed_group_model_ids``
     (the deployment ids the router resolves for the routed model; defaulting to ``[]``
     — origin absent from the routed group, i.e. a tier change).
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    mock_router = MagicMock()
-    mock_router.get_deployment.return_value = originating
-    mock_router.cooldown_cache.async_get_active_cooldowns = AsyncMock(return_value=list(cooldown_entries or []))
-    mock_router.get_candidate_model_ids_for_route.return_value = frozenset(routed_group_model_ids or [])
-    return mock_router
+    mock_ctx = MagicMock()
+    mock_ctx.registry.return_value.deployment.return_value = originating
+    mock_ctx.health.return_value.cooldowns.async_get_active_cooldowns = AsyncMock(
+        return_value=list(cooldown_entries or [])
+    )
+    mock_ctx.registry.return_value.names.return_value = frozenset(routed_group_model_ids or [])
+    return mock_ctx
 
 
 @pytest.mark.asyncio
@@ -1336,7 +1339,7 @@ async def test_affinity_strips_and_dispatches_when_origin_cooled_for_non_429():
     )
 
     originating = _make_originating_mock("https://account-a.openai.azure.com/", "key-a")
-    mock_router = _make_router_mock_with_cooldown(
+    mock_ctx = _make_router_mock_with_cooldown(
         originating,
         cooldown_entries=[
             (
@@ -1352,7 +1355,7 @@ async def test_affinity_strips_and_dispatches_when_origin_cooled_for_non_429():
         routed_group_model_ids=["deployment-a-cooled", "deployment-b"],
     )
 
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
     encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-a-cooled", "rs_test")
     healthy_only_b = [
         {
@@ -1402,7 +1405,7 @@ async def test_affinity_strips_and_dispatches_when_origin_cooled_for_429():
 
     originating = _make_originating_mock("https://account-a.openai.azure.com/", "key-a")
     cooldown_started = time.time() - 5.0
-    mock_router = _make_router_mock_with_cooldown(
+    mock_ctx = _make_router_mock_with_cooldown(
         originating,
         cooldown_entries=[
             (
@@ -1418,7 +1421,7 @@ async def test_affinity_strips_and_dispatches_when_origin_cooled_for_429():
         routed_group_model_ids=["deployment-a-cooled-429", "deployment-b"],
     )
 
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
     encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-a-cooled-429", "rs_test")
     healthy_only_b = [
         {
@@ -1457,11 +1460,11 @@ async def test_affinity_strips_and_dispatches_when_origin_filtered_without_coold
     )
 
     originating = _make_originating_mock("https://account-a.openai.azure.com/", "key-a")
-    mock_router = _make_router_mock_with_cooldown(
+    mock_ctx = _make_router_mock_with_cooldown(
         originating, cooldown_entries=[], routed_group_model_ids=["deployment-a-filtered", "deployment-b"]
     )
 
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
     encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-a-filtered", "rs_test")
     healthy_only_b = [
         {
@@ -1501,10 +1504,10 @@ async def test_affinity_serves_sibling_when_candidate_origin_has_no_boundary_pee
     )
 
     originating = _make_originating_mock("https://region-a.example.com/v1", "shared-key")
-    mock_router = _make_router_mock_with_cooldown(
+    mock_ctx = _make_router_mock_with_cooldown(
         originating, cooldown_entries=[], routed_group_model_ids=["region-a", "region-b", "region-c"]
     )
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
     wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-blob", "region-a")
     siblings = [
         {
@@ -1563,10 +1566,10 @@ async def test_affinity_strips_and_dispatches_when_origin_is_unknown_or_removed(
         EncryptedContentAffinityCheck,
     )
 
-    mock_router = MagicMock()
-    mock_router.get_deployment.return_value = None
+    mock_ctx = MagicMock()
+    mock_ctx.registry.return_value.deployment.return_value = None
 
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
     wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-removed")
     routed_pool = [
         {
@@ -1601,7 +1604,7 @@ async def test_affinity_strips_and_dispatches_when_origin_is_unknown_or_removed(
 
     assert result is routed_pool
     assert not any(isinstance(item, dict) and item.get("encrypted_content") for item in request_kwargs["input"])
-    mock_router.get_candidate_model_ids_for_route.assert_not_called()
+    mock_ctx.registry().names.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1622,10 +1625,10 @@ async def test_affinity_does_not_raise_when_boundary_peer_available():
         "api_base": "https://account-a.openai.azure.com/",
         "api_key": "key-a",
     }
-    mock_router = MagicMock()
-    mock_router.get_deployment.return_value = originating
+    mock_ctx = MagicMock()
+    mock_ctx.registry.return_value.deployment.return_value = originating
 
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
     encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-a", "rs_test")
     peer = {
         "model_info": {"id": "deployment-a-peer"},
@@ -1881,10 +1884,10 @@ async def test_encrypted_content_affinity_strips_bridge_reasoning_from_messages_
     same way they reject a foreign one.
     """
     originating = _make_originating_mock(None, "key-a", model_name="gpt-reasoning-tier")
-    mock_router = _make_router_mock_with_cooldown(
+    mock_ctx = _make_router_mock_with_cooldown(
         originating, cooldown_entries=[], routed_group_model_ids=["openai-org-b"]
     )
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
     routed_pool = [{"model_info": {"id": "openai-org-b"}, "litellm_params": {"model": "openai/gpt-5-nano"}}]
     messages = _bridge_replayed_anthropic_messages(minted_by="openai-org-a")
     assistant_content = messages[1]["content"]
@@ -2134,7 +2137,7 @@ async def test_affinity_keeps_mixed_origins_on_the_same_encryption_boundary():
     shared_api_base = "https://account-a.openai.azure.com/"
     shared_api_key = "shared-key"
     origin_d2 = _make_originating_mock(shared_api_base, shared_api_key)
-    mock_router = _make_router_mock_with_cooldown(origin_d2, cooldown_entries=[], routed_group_model_ids=["d1", "d2"])
+    mock_ctx = _make_router_mock_with_cooldown(origin_d2, cooldown_entries=[], routed_group_model_ids=["d1", "d2"])
     deployment_d1 = {
         "model_info": {"id": "d1"},
         "litellm_params": {"api_base": shared_api_base, "api_key": shared_api_key},
@@ -2158,8 +2161,8 @@ async def test_affinity_keeps_mixed_origins_on_the_same_encryption_boundary():
             d2_item.copy(),
         ]
     }
-    mock_router.get_deployment.side_effect = lambda model_id: origin_d2 if model_id == "d2" else None
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    mock_ctx.registry.return_value.deployment.side_effect = lambda model_id: origin_d2 if model_id == "d2" else None
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
 
     result = await check.async_filter_deployments(
         model="gpt-5.4",
@@ -2180,8 +2183,11 @@ async def test_boundary_pin_strips_reasoning_from_a_different_origin():
 
     origin_a = _make_originating_mock("https://account-a.openai.azure.com/", "key-a")
     origin_b = _make_originating_mock("https://account-b.openai.azure.com/", "key-b")
-    mock_router = _make_router_mock_with_cooldown(origin_a, cooldown_entries=[], routed_group_model_ids=["peer-a"])
-    mock_router.get_deployment.side_effect = lambda model_id: {"origin-a": origin_a, "origin-b": origin_b}.get(model_id)
+    mock_ctx = _make_router_mock_with_cooldown(origin_a, cooldown_entries=[], routed_group_model_ids=["peer-a"])
+    mock_ctx.registry.return_value.deployment.side_effect = lambda model_id: {
+        "origin-a": origin_a,
+        "origin-b": origin_b,
+    }.get(model_id)
     peer_a = {
         "model_info": {"id": "peer-a"},
         "litellm_params": {"api_base": "https://account-a.openai.azure.com/", "api_key": "key-a"},
@@ -2204,7 +2210,7 @@ async def test_boundary_pin_strips_reasoning_from_a_different_origin():
             },
         ]
     }
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
 
     result = await check.async_filter_deployments(
         model="gpt-5.4",
@@ -2234,8 +2240,11 @@ async def test_affinity_keeps_only_anthropic_reasoning_from_the_pinned_origin():
 
     origin_a = _make_originating_mock("https://account-a.openai.azure.com/", "key-a")
     origin_b = _make_originating_mock("https://account-b.openai.azure.com/", "key-b")
-    mock_router = _make_router_mock_with_cooldown(origin_b, cooldown_entries=[], routed_group_model_ids=["origin-a"])
-    mock_router.get_deployment.side_effect = lambda model_id: {"origin-a": origin_a, "origin-b": origin_b}.get(model_id)
+    mock_ctx = _make_router_mock_with_cooldown(origin_b, cooldown_entries=[], routed_group_model_ids=["origin-a"])
+    mock_ctx.registry.return_value.deployment.side_effect = lambda model_id: {
+        "origin-a": origin_a,
+        "origin-b": origin_b,
+    }.get(model_id)
     deployment_a = {
         "model_info": {"id": "origin-a"},
         "litellm_params": {"api_base": "https://account-a.openai.azure.com/", "api_key": "key-a"},
@@ -2248,7 +2257,7 @@ async def test_affinity_keeps_only_anthropic_reasoning_from_the_pinned_origin():
     foreign_messages = _bridge_replayed_anthropic_messages(minted_by="origin-b")
     assistant_content = messages[1]["content"]
     assistant_content.insert(3, foreign_messages[1]["content"][1])
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
 
     result = await check.async_filter_deployments(
         model="gpt-5.4",
@@ -2288,8 +2297,8 @@ async def test_affinity_strips_unknown_origins_but_leaves_unmarked_encrypted_con
         EncryptedContentAffinityCheck,
     )
 
-    mock_router = MagicMock()
-    mock_router.get_deployment.return_value = None
+    mock_ctx = MagicMock()
+    mock_ctx.registry.return_value.deployment.return_value = None
     deployment_a = {
         "model_info": {"id": "origin-a"},
         "litellm_params": {"api_base": "https://account-a.openai.azure.com/", "api_key": "key-a"},
@@ -2316,7 +2325,7 @@ async def test_affinity_strips_unknown_origins_but_leaves_unmarked_encrypted_con
             },
         ]
     }
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
 
     result = await check.async_filter_deployments(
         model="gpt-5.4",
@@ -2354,11 +2363,13 @@ def _router_without_the_origin():
     )
 
 
-@pytest.mark.parametrize("router", [None, _router_without_the_origin()], ids=["no router", "origin removed"])
+@pytest.mark.parametrize(
+    "ctx", [None, RoutingContext(_router_without_the_origin())], ids=["no router", "origin removed"]
+)
 @pytest.mark.parametrize(
     "unmarked_origin", ["origin-removed", None], ids=["failed deployment named", "failed deployment unknown"]
 )
-def test_hop_strip_drops_unmarked_reasoning_whose_origin_cannot_be_resolved(router, unmarked_origin):
+def test_hop_strip_drops_unmarked_reasoning_whose_origin_cannot_be_resolved(ctx, unmarked_origin):
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
     )
@@ -2378,7 +2389,7 @@ def test_hop_strip_drops_unmarked_reasoning_whose_origin_cannot_be_resolved(rout
     }
 
     EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
-        router, request_input, None, (target,), unmarked_origin=unmarked_origin
+        ctx, request_input, None, (target,), unmarked_origin=unmarked_origin
     )
 
     assert request_input == [
@@ -2417,10 +2428,10 @@ async def test_affinity_strips_encrypted_reasoning_when_routed_to_another_model_
     )
 
     originating = _make_originating_mock(None, "key-a", model_name="gpt-reasoning-tier")
-    mock_router = _make_router_mock_with_cooldown(
+    mock_ctx = _make_router_mock_with_cooldown(
         originating, cooldown_entries=[], routed_group_model_ids=["deployment-b"]
     )
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
     routed_pool = [
         {
             "model_info": {"id": "deployment-b"},
@@ -2475,10 +2486,10 @@ async def test_affinity_degrades_within_the_origins_own_group():
     originating = _make_originating_mock(
         "https://account-a.openai.azure.com/", "key-a", model_name="gpt-reasoning-tier"
     )
-    mock_router = _make_router_mock_with_cooldown(
+    mock_ctx = _make_router_mock_with_cooldown(
         originating, cooldown_entries=[], routed_group_model_ids=["deployment-a", "deployment-a2"]
     )
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
     sibling_pool = [
         {
             "model_info": {"id": "deployment-a2"},
@@ -2517,10 +2528,10 @@ async def test_affinity_strips_when_group_is_spelled_differently_but_same_by_id(
     )
 
     originating = _make_originating_mock(None, "key-a", model_name="openai/gpt-5.4-mini")
-    mock_router = _make_router_mock_with_cooldown(
+    mock_ctx = _make_router_mock_with_cooldown(
         originating, cooldown_entries=[], routed_group_model_ids=["deployment-mini-a", "deployment-mini-b"]
     )
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
     wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-mini-a")
     sibling_pool = [
         {
@@ -2569,10 +2580,10 @@ async def test_affinity_strips_for_team_and_pattern_routes():
     )
 
     originating = _make_originating_mock(None, "key-a", model_name="model_name_teamA_uuid")
-    mock_router = _make_router_mock_with_cooldown(
+    mock_ctx = _make_router_mock_with_cooldown(
         originating, cooldown_entries=[], routed_group_model_ids=["deployment-team-a", "deployment-team-b"]
     )
-    check = EncryptedContentAffinityCheck(router=mock_router)
+    check = EncryptedContentAffinityCheck(ctx=mock_ctx)
     wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-team-a")
     sibling_pool = [
         {
@@ -2657,7 +2668,7 @@ async def test_affinity_strips_and_dispatches_when_origin_already_failed_this_re
     group: Final = router.model_list
     reasoning_input: Final = _reasoning_input_minted_by("region-a")
 
-    result: Final = await EncryptedContentAffinityCheck(router=router).async_filter_deployments(
+    result: Final = await EncryptedContentAffinityCheck(ctx=RoutingContext(router)).async_filter_deployments(
         model="gpt-5.4",
         healthy_deployments=group,
         messages=None,
@@ -2681,7 +2692,9 @@ async def test_affinity_keeps_origin_and_reasoning_when_previous_response_id_bin
     reasoning_input: Final = _reasoning_input_minted_by("region-a")
     original_reasoning: Final = dict(reasoning_input[0])
 
-    assert await EncryptedContentAffinityCheck(router=litellm.Router(model_list=list(pool))).async_filter_deployments(
+    assert await EncryptedContentAffinityCheck(
+        ctx=RoutingContext(litellm.Router(model_list=list(pool)))
+    ).async_filter_deployments(
         model="gpt-5.4",
         healthy_deployments=list(pool),
         messages=None,
@@ -2706,7 +2719,7 @@ async def test_affinity_keeps_reasoning_when_every_deployment_already_refused_th
     reasoning_input: Final = _reasoning_input_minted_by("region-a")
     original_reasoning: Final = dict(reasoning_input[0])
 
-    result: Final = await EncryptedContentAffinityCheck(router=router).async_filter_deployments(
+    result: Final = await EncryptedContentAffinityCheck(ctx=RoutingContext(router)).async_filter_deployments(
         model="gpt-5.4",
         healthy_deployments=router.model_list,
         messages=None,

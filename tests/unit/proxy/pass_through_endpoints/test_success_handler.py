@@ -346,6 +346,7 @@ async def test_vertex_ai_anthropic_streaming_cost_injection_enabled():
 
         # Setup logging object with model info
         litellm_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+        litellm_logging_obj.model = "claude-sonnet-4@20250514"
         litellm_logging_obj.litellm_params = {}
         litellm_logging_obj.model_call_details = {"model": "claude-sonnet-4@20250514"}
         litellm_logging_obj.completion_start_time = None
@@ -544,6 +545,7 @@ async def test_vertex_ai_anthropic_streaming_model_extraction():
         response.aiter_bytes = mock_aiter_bytes
 
         litellm_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+        litellm_logging_obj.model = "claude-sonnet-4@20250514"
         litellm_logging_obj.litellm_params = {}
         litellm_logging_obj.model_call_details = {}
         litellm_logging_obj.completion_start_time = None

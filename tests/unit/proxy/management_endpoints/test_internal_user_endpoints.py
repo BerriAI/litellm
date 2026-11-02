@@ -4196,6 +4196,65 @@ async def test_add_new_user_to_default_team_string_teams_have_no_member_budget(m
 
 
 @pytest.mark.asyncio
+async def test_add_new_user_to_default_team_joins_teams_in_the_order_given_and_past_a_failing_team(
+    mocker: MockerFixture,
+) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        add_new_user_to_default_team,
+    )
+
+    requested: Final = ("team-zeta", "team-broken", "team-mu", "team-alpha")
+    seconds_per_team: Final = {"team-zeta": 0.03, "team-broken": 0.0, "team-mu": 0.02, "team-alpha": 0.0}
+    finished: Final = mocker.MagicMock()
+
+    async def join_team(*, team_id: str, **_: object) -> None:
+        await asyncio.sleep(seconds_per_team[team_id])
+        if team_id == "team-broken":
+            raise RuntimeError("team row locked")
+        finished(team_id)
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_team",
+        side_effect=join_team,
+    )
+
+    await add_new_user_to_default_team(
+        user_id="scim-user",
+        user_email=None,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        teams=list(requested),
+        prisma_client=mocker.MagicMock(),
+    )
+
+    assert [call.args[0] for call in finished.call_args_list] == ["team-zeta", "team-mu", "team-alpha"]
+
+
+@pytest.mark.asyncio
+async def test_add_new_user_to_default_team_rejects_an_invalid_team_before_joining_any(
+    mocker: MockerFixture,
+) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        add_new_user_to_default_team,
+    )
+
+    join_team: Final = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_team",
+        new_callable=mocker.AsyncMock,
+    )
+
+    with pytest.raises(ValueError, match="Invalid team type"):
+        await add_new_user_to_default_team(
+            user_id="new-user",
+            user_email=None,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            teams=["team-zeta", {"team_id": "team-mu"}],
+            prisma_client=mocker.MagicMock(),
+        )
+
+    join_team.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_add_user_to_team_logs_unknown_team_at_error(mocker, caplog):
     """A default team that no longer exists makes every membership write 404.
 

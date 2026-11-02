@@ -140,7 +140,7 @@ async def search_agents(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
 ) -> AgentSearchOutcome:
-    if embedding_model is None:
+    if embedding_model is None or not embedding_model.strip():
         return AgentSearchNotConfigured(
             reason="agent search needs litellm_settings.agent_search_embedding_model set to an embedding model from model_list"
         )

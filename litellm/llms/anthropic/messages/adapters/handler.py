@@ -118,9 +118,10 @@ def _extract_proxy_litellm_metadata(
 
 def _requested_router(kwargs: Mapping[str, object]) -> "Router | None":
     from litellm.router import Router
+    from litellm.router_python_core import PythonCore
 
     requested: Final = kwargs.get("litellm_router")
-    return requested if isinstance(requested, Router) else None
+    return requested if isinstance(requested, (Router, PythonCore)) else None  # pyright: ignore[reportReturnType]  # the router passes its core, which carries Router's members
 
 
 def request_safeguards_evaluator(
@@ -647,12 +648,14 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data["output_config"] = extra_kwargs["output_config"]
 
         custom_llm_provider: Final = extra_kwargs.get("custom_llm_provider")
+        api_base: Final = extra_kwargs.get("api_base")
         (
             openai_request,
             tool_name_mapping,
         ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
             request_data,
             custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+            api_base=api_base if isinstance(api_base, str) else None,
             drop_params=drops_unsupported_params(extra_kwargs.get("drop_params")),
         )
 
