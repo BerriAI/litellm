@@ -607,3 +607,88 @@ def test_vertex_mixed_preamble_and_tool_call_replay_defaults_store_false_while_p
     ]
     assert "store" not in gemini_mixed.optional_params
     assert vertex_explicit_store_true.optional_params == {"store": True}
+
+
+@pytest.mark.parametrize(
+    ("raw_choice", "expected_choice"),
+    (
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "auto",
+                    "tools": [
+                        {"type": "function", "function": {"name": "get_weather"}},
+                        {"type": "function", "name": "get_time"},
+                    ],
+                },
+            },
+            {"allowed_tools": {"mode": "auto", "tools": ["get_weather", "get_time"]}},
+        ),
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "required",
+                    "tools": [{"type": "custom", "custom": {"name": "code_runner"}}],
+                },
+            },
+            {"allowed_tools": {"mode": "any", "tools": ["code_runner"]}},
+        ),
+    ),
+)
+def test_openai_allowed_tools_tool_choice_translates_mode_and_names_for_interactions(
+    raw_choice: Mapping[str, object],
+    expected_choice: Mapping[str, object],
+) -> None:
+    prepared: Final = transform_chat_to_interactions_request(
+        messages=[{"role": "user", "content": "hi"}],
+        model="gemini-3-flash-preview",
+        optional_params={"tool_choice": raw_choice},
+        litellm_params={},
+    )
+    assert prepared.optional_params == {"generation_config": {"tool_choice": expected_choice}}
+
+
+@pytest.mark.parametrize(
+    "bad_choice",
+    (
+        {"allowed_tools": "not_a_dict"},
+        {"allowed_tools": ["get_weather"]},
+        {"allowed_tools": {"mode": "any"}, "extra": 1},
+        {"allowed_tools": {"mode": "invalid_mode", "tools": ["get_weather"]}},
+        {"allowed_tools": {"mode": "any", "tools": [123]}},
+        {
+            "type": "allowed_tools",
+            "allowed_tools": {"mode": "required", "tools": [{"type": "mcp", "server_label": "s"}]},
+        },
+        {
+            "type": "allowed_tools",
+            "allowed_tools": {
+                "mode": "required",
+                "tools": [{"type": "function", "name": "a", "function": {"name": "b"}}],
+            },
+        },
+    ),
+)
+def test_malformed_allowed_tools_tool_choice_is_rejected_unless_drop_params_true(
+    bad_choice: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(UnsupportedParamsError):
+        transform_chat_to_interactions_request(
+            messages=[{"role": "user", "content": "hi"}],
+            model="gemini-3-flash-preview",
+            optional_params={"tool_choice": bad_choice},
+            litellm_params={},
+        )
+
+    dropped: Final = transform_chat_to_interactions_request(
+        messages=[{"role": "user", "content": "hi"}],
+        model="gemini-3-flash-preview",
+        optional_params={"tool_choice": bad_choice},
+        litellm_params={"drop_params": True},
+    )
+    assert dropped.optional_params == {}

@@ -12,6 +12,10 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    parse_chat_allowed_tools_tool_choice,
+    responses_allowed_tools_tool_choice,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     convert_to_anthropic_image_obj,
@@ -744,14 +748,49 @@ def _convert_tools(params: JsonMapping) -> JsonValue:
     return _JSON_VALUE.validate_python(list(with_search)) if with_search else None
 
 
+def _is_valid_allowed_tools_config(cfg: JsonMapping) -> bool:
+    if not set(cfg).issubset({"mode", "tools"}):
+        return False
+    mode: Final = cfg.get("mode")
+    if mode is not None and mode not in ("auto", "any", "none", "validated"):
+        return False
+    tools: Final = cfg.get("tools")
+    return tools is None or (isinstance(tools, list) and all(isinstance(t, str) for t in tools))
+
+
+def _extract_allowed_tool_name(tool: Mapping[str, object]) -> str | None:
+    if tool.get("type") not in ("function", "custom"):
+        return None
+    name: Final = tool.get("name")
+    return name if isinstance(name, str) and name else None
+
+
+def _convert_openai_allowed_tools(raw_choice: JsonValue) -> JsonValue:
+    parsed: Final = parse_chat_allowed_tools_tool_choice(raw_choice)
+    if parsed is None:
+        return None
+    flattened: Final = responses_allowed_tools_tool_choice(parsed)
+    if flattened is None:
+        return None
+    names: Final = tuple(_extract_allowed_tool_name(tool) for tool in flattened["tools"])
+    if any(name is None for name in names):
+        return None
+    mode: Final = "any" if parsed.allowed_tools.mode == "required" else parsed.allowed_tools.mode
+    return {"allowed_tools": {"mode": mode, "tools": [name for name in names if name is not None]}}
+
+
 def _convert_tool_choice(raw_choice: JsonValue) -> JsonValue:
     match raw_choice:
         case "auto" | "none" | "validated" | "any":
             return raw_choice
         case "required":
             return "any"
-        case {"allowed_tools": _}:
-            return raw_choice
+        case {"allowed_tools": dict() as allowed_cfg} if len(raw_choice) == 1 and _is_valid_allowed_tools_config(
+            allowed_cfg
+        ):
+            return {"allowed_tools": allowed_cfg}
+        case {"type": "allowed_tools"}:
+            return _convert_openai_allowed_tools(raw_choice)
         case {"type": "function", "function": {"name": str() as fn_name}} if fn_name:
             return {"allowed_tools": {"mode": "any", "tools": [fn_name]}}
         case {"type": "function", "name": str() as fn_name} if fn_name:

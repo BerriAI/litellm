@@ -53,10 +53,16 @@ def raise_if_allowed_tools_tool_choice_unsupported(
     tool_choice: object,
     custom_llm_provider: str,
     model: str,
+    *,
+    bridges_to_interactions_api: bool = False,
 ) -> None:
     """Providers outside the set would silently send the request with no tool restriction at all, so the call stops
     here with a 400. ``drop_params`` is deliberately not consulted: dropping a restriction widens what the model may call."""
-    if not is_allowed_tools_tool_choice(tool_choice) or custom_llm_provider in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS:
+    if (
+        bridges_to_interactions_api
+        or not is_allowed_tools_tool_choice(tool_choice)
+        or custom_llm_provider in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS
+    ):
         return
     raise BadRequestError(
         message=(

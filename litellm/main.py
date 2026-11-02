@@ -1331,6 +1331,7 @@ from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
     dispatch_interactions_bridge,
     resolve_bridge_allowed_openai_params,
+    resolve_bridge_tool_choice,
     should_route_to_interactions_api,
     str_keyed_mapping,
     strip_interactions_routing_params,
@@ -5587,7 +5588,11 @@ def completion(
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
-    tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model)
+    tool_choice = validate_chat_completion_tool_choice(
+        tool_choice=tool_choice,
+        model=model,
+        allow_interactions_tool_choice=True,
+    )
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
     thinking = validate_and_fix_thinking_param(thinking=thinking)
@@ -5887,12 +5892,21 @@ def completion(
         if not is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
 
+        bridges_to_interactions_api: Final = should_route_to_interactions_api(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            optional_params=provider_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped provider_params
+            litellm_params=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped kwargs
+            deployment_model_info=model_info,  # pyright: ignore[reportUnknownArgumentType]  # untyped model_info
+            skip_bridge=skip_interactions_api_bridge,  # pyright: ignore[reportUnknownArgumentType]  # untyped skip flag
+        )
         raise_if_allowed_tools_tool_choice_unsupported(
             tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
                 object, tool_choice
             ),
             custom_llm_provider=custom_llm_provider,
             model=model,
+            bridges_to_interactions_api=bridges_to_interactions_api,
         )
 
         if provider_specific_header is not None:
@@ -5975,16 +5989,15 @@ def completion(
         bridges_to_responses_api: Final = (
             responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
         )
-        bridges_to_interactions_api: Final = should_route_to_interactions_api(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            optional_params=provider_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped provider_params
-            litellm_params=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped kwargs
-            deployment_model_info=model_info,  # pyright: ignore[reportUnknownArgumentType]  # untyped model_info
-            skip_bridge=skip_interactions_api_bridge,  # pyright: ignore[reportUnknownArgumentType]  # untyped skip flag
-        )
         cleaned_provider_params: Final = strip_interactions_routing_params(
             provider_params  # pyright: ignore[reportUnknownArgumentType]  # untyped provider_params
+        )
+        effective_tool_choice: Final = resolve_bridge_tool_choice(
+            tool_choice,  # pyright: ignore[reportUnknownArgumentType]  # untyped tool_choice local
+            bridges_to_interactions_api=bridges_to_interactions_api,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=drop_unsupported_reasoning,
         )
         allowed_openai_params: Final = resolve_bridge_allowed_openai_params(
             raw_allowed=kwargs.get("allowed_openai_params"),  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # untyped kwargs
@@ -6019,7 +6032,7 @@ def completion(
             "response_format": response_format,
             "seed": seed,
             "tools": tools,
-            "tool_choice": tool_choice,
+            "tool_choice": effective_tool_choice,
             "max_retries": max_retries,
             "logprobs": logprobs,
             "top_logprobs": top_logprobs,

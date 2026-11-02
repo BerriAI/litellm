@@ -8,6 +8,8 @@ from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.allowed_tools_tool_choice import is_allowed_tools_tool_choice
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.reasoning_effort_capability import (
@@ -445,6 +447,32 @@ def strip_interactions_routing_params(raw_params: object) -> Mapping[str, object
     if cleaned_eb:
         return MappingProxyType({**without_top, "extra_body": cleaned_eb})
     return MappingProxyType(without_top)
+
+
+def resolve_bridge_tool_choice(
+    tool_choice: object,
+    *,
+    bridges_to_interactions_api: bool,
+    model: str,
+    custom_llm_provider: str,
+    drop_params: bool,
+) -> object:
+    mapped: Final = str_keyed_mapping(tool_choice)
+    if (
+        mapped is None
+        or "allowed_tools" not in mapped
+        or bridges_to_interactions_api
+        or is_allowed_tools_tool_choice(tool_choice)
+    ):
+        return tool_choice
+    if drop_params:
+        return None
+    raise UnsupportedParamsError(
+        message=(f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec"),
+        model=model,
+        llm_provider=custom_llm_provider,
+        status_code=400,
+    )
 
 
 def _merge_vertex_bridge_params(

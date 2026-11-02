@@ -11,11 +11,15 @@ from litellm import Router
 from litellm.completion_extras.litellm_interactions_transformation import (
     InteractionsToCompletionBridgeHandler,
 )
+from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.interactions.transformation import VertexAIInteractionsConfig
 from litellm.responses.bridge_check import keep_registered_mode, should_route_to_interactions_api
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import Choices, ModelResponse
+from litellm.utils import (
+    validate_chat_completion_tool_choice,  # pyright: ignore[reportUnknownVariableType]  # upstream signature uses bare dict
+)
 
 
 def test_toggle_is_off_by_default_and_excludes_non_gemini_vertex_models(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -384,3 +388,147 @@ def test_runtime_false_toggle_overrides_env_and_interactions_mode_does_not_leak_
         {"litellm_provider": "vertex_ai", "mode": "interactions", "input_cost_per_token": 1e-7},
     )
     assert unregistered_endpoint_row == {"litellm_provider": "vertex_ai", "input_cost_per_token": 1e-7}
+
+
+@pytest.mark.parametrize(
+    ("model", "extra_kwargs", "expected_provider"),
+    (
+        ("gemini/gemini-3-flash-preview", {"use_interactions": False}, "gemini"),
+        ("anthropic/claude-sonnet-4-6", {}, "anthropic"),
+        ("openai/gpt-5.4", {}, "openai"),
+        ("bedrock/anthropic.claude-sonnet-4-6", {}, "bedrock"),
+    ),
+)
+def test_allowed_tools_tool_choice_is_rejected_for_non_bridged_providers_and_direct_validator(
+    model: str,
+    extra_kwargs: Mapping[str, object],
+    expected_provider: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
+    allowed_tools_choice: Final = {"allowed_tools": {"mode": "auto", "tools": ["get_weather"]}}
+    tools_payload: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+            },
+        }
+    ]
+
+    with pytest.raises(BadRequestError, match="Invalid tool choice") as direct_exc:
+        validate_chat_completion_tool_choice(allowed_tools_choice, model=model)
+    assert direct_exc.value.status_code == 400
+
+    with pytest.raises(UnsupportedParamsError, match="Invalid tool choice") as completion_exc:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "weather?"}],
+            tools=tools_payload,  # pyright: ignore[reportArgumentType]  # ChatCompletionToolParam dict shape
+            tool_choice=allowed_tools_choice,
+            api_key="unit-test-key",
+            **extra_kwargs,  # pyright: ignore[reportArgumentType]  # dynamic completion kwargs under test
+        )
+    assert completion_exc.value.status_code == 400
+    assert getattr(completion_exc.value, "llm_provider", None) == expected_provider
+
+
+def test_non_bridged_gemini_drops_allowed_tools_tool_choice_cleanly_when_drop_params_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
+    captured: Final[list[httpx.Request]] = []  # mutable-ok: transport spy
+
+    def responder(req: httpx.Request) -> httpx.Response:
+        captured.append(req)
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "OK"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 1, "totalTokenCount": 5},
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        resp: Final = litellm.completion(
+            model="gemini/gemini-3-flash-preview",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+            tool_choice={"allowed_tools": {"mode": "auto", "tools": ["get_weather"]}},
+            use_interactions=False,
+            drop_params=True,
+            api_key="unit-gemini-key",
+            api_base="https://generativelanguage.googleapis.com",
+            client=HTTPHandler(client=raw_client),
+        )
+
+    assert isinstance(resp, ModelResponse)
+    assert len(captured) == 1
+    assert "toolConfig" not in json.loads(captured[0].content)
+
+
+def test_bridged_gemini_translates_openai_allowed_tools_tool_choice_while_unbridged_rejects_with_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
+    captured: Final[list[httpx.Request]] = []  # mutable-ok: transport spy
+
+    def responder(req: httpx.Request) -> httpx.Response:
+        captured.append(req)
+        return httpx.Response(
+            200,
+            json={
+                "id": "v1_openai_allowed_tools",
+                "status": "completed",
+                "steps": [{"type": "model_output", "content": [{"type": "text", "text": "OK"}]}],
+                "usage": {"total_input_tokens": 4, "total_output_tokens": 1, "total_tokens": 5},
+            },
+        )
+
+    openai_allowed_tools: Final = {
+        "type": "allowed_tools",
+        "allowed_tools": {
+            "mode": "required",
+            "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+        },
+    }
+    tools_payload: Final = [
+        {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}},
+        {"type": "function", "function": {"name": "get_time", "parameters": {"type": "object"}}},
+    ]
+
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        http_handler: Final = HTTPHandler(client=raw_client)
+        bridged: Final = litellm.completion(
+            model="gemini/gemini-3-flash-preview",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=tools_payload,  # pyright: ignore[reportArgumentType]  # ChatCompletionToolParam dict shape
+            tool_choice=openai_allowed_tools,
+            use_interactions=True,
+            api_key="unit-gemini-key",
+            api_base="https://generativelanguage.googleapis.com",
+            client=http_handler,
+        )
+
+        with pytest.raises(BadRequestError, match="allowed_tools") as unbridged_exc:
+            litellm.completion(
+                model="gemini/gemini-3-flash-preview",
+                messages=[{"role": "user", "content": "hi"}],
+                tools=tools_payload,  # pyright: ignore[reportArgumentType]  # ChatCompletionToolParam dict shape
+                tool_choice=openai_allowed_tools,
+                use_interactions=False,
+                drop_params=True,
+                api_key="unit-gemini-key",
+                api_base="https://generativelanguage.googleapis.com",
+                client=http_handler,
+            )
+
+    assert isinstance(bridged, ModelResponse)
+    assert len(captured) == 1
+    assert captured[0].url.path == "/v1beta/interactions"
+    assert json.loads(captured[0].content)["generation_config"] == {
+        "tool_choice": {"allowed_tools": {"mode": "any", "tools": ["get_weather"]}}
+    }
+    assert unbridged_exc.value.status_code == 400
