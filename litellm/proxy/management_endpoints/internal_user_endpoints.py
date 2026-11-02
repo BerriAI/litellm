@@ -2257,6 +2257,7 @@ async def get_users(
         description="Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive).",
     ),
     team: str | None = fastapi.Query(default=None, description="Filter users by team id"),
+    models: str | None = fastapi.Query(default=None, description="Filter by comma-separated personal model grants"),
     page: int = fastapi.Query(default=1, ge=1, description="Page number"),
     page_size: int = fastapi.Query(default=25, ge=1, le=100, description="Number of items per page"),
     sort_by: str | None = fastapi.Query(
@@ -2290,6 +2291,8 @@ async def get_users(
             Combined search: matches users whose user_id or user_email contains the value (case-insensitive)
         team: Optional[str]
             Filter users by team id. Will match if user has this team in their teams array.
+        models: Optional[str]
+            Filter users whose personal model grants include any of the comma-separated model ids.
         page: int
             The page number to return
         page_size: int
@@ -2352,6 +2355,12 @@ async def get_users(
             "has": team  # Array contains for string arrays in Prisma
         }
 
+    model_ids: Final[tuple[str, ...]] = (
+        tuple(model_id.strip() for model_id in models.split(",") if model_id.strip()) if isinstance(models, str) else ()
+    )
+    if model_ids:
+        where_conditions["models"] = {"hasSome": list(model_ids)}
+
     if sso_user_ids is not None and isinstance(sso_user_ids, str):
         sso_id_list: Final = [sid.strip() for sid in sso_user_ids.split(",") if sid.strip()]
         where_conditions["sso_user_id"] = {
@@ -2390,6 +2399,7 @@ async def get_users(
             user_ids=user_ids,
             user_email=user_email,
             team=team,
+            models=model_ids,
             sso_user_ids=sso_user_ids,
             organization_ids=organization_ids,
             search=search,

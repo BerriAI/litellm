@@ -86,7 +86,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     setBaseUrl(getProxyBaseUrl());
   }, []);
 
-  // Fetch available models for bulk edit
   useEffect(() => {
     const fetchUserModels = async () => {
       try {
@@ -222,6 +221,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const ssoUserIdFilter = getFilterValue("sso_user_id");
   const userRoleFilter = getFilterValue("user_role");
   const teamFilter = getFilterValue("team");
+  const modelFilter = columnFilters.find((filter) => filter.id === "models");
+  const personalModels = Array.isArray(modelFilter?.value)
+    ? modelFilter.value.filter((value): value is string => typeof value === "string" && value.length > 0)
+    : [];
   const searchFilter = searchQuery.trim() || null;
 
   const userListQueryFilters = {
@@ -232,6 +235,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     ssoUserId: ssoUserIdFilter,
     role: userRoleFilter,
     team: teamFilter,
+    models: personalModels,
     sortBy,
     sortOrder,
     orgAdminOrgIds,
@@ -255,6 +259,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         sortOrder,
         orgAdminOrgIds ? orgAdminOrgIds.map((o) => o.organization_id) : null,
         searchFilter,
+        personalModels,
       );
     },
     enabled: Boolean(accessToken && token && userRole && userID),
@@ -298,6 +303,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       isLoading={userListQuery.isLoading || userListQuery.isPlaceholderData}
       possibleUIRoles={possibleUIRoles}
       teams={teams}
+      models={userModels}
       canViewUserUsage={all_admin_roles.includes(userRole ?? "")}
       sorting={sorting}
       onSortingChange={handleSortingChange}

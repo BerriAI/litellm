@@ -76,6 +76,7 @@ function Harness({
         isLoading={isLoading}
         possibleUIRoles={possibleUIRoles}
         teams={[]}
+        models={[]}
         canViewUserUsage={canViewUserUsage}
         sorting={sorting}
         onSortingChange={(updater) => {

@@ -9,6 +9,7 @@ import { renderWithProviders } from "../../../../../tests/test-utils";
 import ViewUserDashboard from "./view_users";
 
 const userListCall = vi.fn();
+const modelAvailableCall = vi.fn();
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
@@ -18,7 +19,7 @@ vi.mock("@/components/networking", () => ({
     Admin: { ui_label: "Admin" },
     User: { ui_label: "User" },
   }),
-  modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
+  modelAvailableCall: (...args: unknown[]) => modelAvailableCall(...args),
   invitationCreateCall: vi.fn().mockResolvedValue({}),
   userUpdateUserCall: vi.fn().mockResolvedValue({}),
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
@@ -95,6 +96,7 @@ const renderDashboard = (overrides: Partial<typeof defaultProps> = {}) =>
 describe("ViewUserDashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    modelAvailableCall.mockResolvedValue({ data: [{ id: "model-a" }, { id: "model-b" }] });
     userListCall.mockResolvedValue({
       users: [makeUser("user-1", "test@example.com")],
       total: 1,
@@ -292,6 +294,29 @@ describe("ViewUserDashboard", () => {
   });
 
   describe("server-side query wiring", () => {
+    it("filters users by selected personal models and keeps the filter while sorting", async () => {
+      const user = userEvent.setup();
+      renderDashboard();
+
+      expect(await screen.findByText("test@example.com")).toBeInTheDocument();
+      await user.click(screen.getByTestId("datatable-filters-trigger"));
+      await user.click(screen.getByPlaceholderText("Select personal models…"));
+      await user.click(await screen.findByText("model-a"));
+      await user.keyboard("{Escape}");
+      await user.click(screen.getByTestId("filter-drawer-apply"));
+
+      await waitFor(() => {
+        expect(userListCall.mock.calls.at(-1)?.[12]).toEqual(["model-a"]);
+      });
+
+      await user.click(screen.getByTestId("sort-header-status"));
+      await waitFor(() => {
+        const latest = userListCall.mock.calls.at(-1);
+        expect(latest?.[8]).toBe("status");
+        expect(latest?.[12]).toEqual(["model-a"]);
+      });
+    });
+
     it("requests page 1 with the default created_at desc sort", async () => {
       renderDashboard();
 

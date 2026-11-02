@@ -864,6 +864,17 @@ describe("userListCall search serialization", () => {
     expect(lastParams(mockFetch).has("search")).toBe(false);
     expect(lastParams(mockFetch).get("user_email")).toBe("ada@example.com");
   });
+
+  it("sends selected personal models as a comma-separated filter", async () => {
+    const mockFetch = mockOkFetch();
+
+    await Networking.userListCall("token", null, 1, 25, null, null, null, null, null, null, null, null, [
+      "model-a",
+      "model-b",
+    ]);
+
+    expect(lastParams(mockFetch).get("models")).toBe("model-a,model-b");
+  });
 });
 
 describe("fetchMemoryList search serialization", () => {
