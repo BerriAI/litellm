@@ -42,7 +42,11 @@ const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ??
 
 function readStoredMode(): PluginMode {
   if (typeof window === "undefined") return "ai-gateway";
-  return localStorage.getItem(STORAGE_KEY) ?? "ai-gateway";
+  try {
+    return localStorage.getItem(STORAGE_KEY) ?? "ai-gateway";
+  } catch {
+    return "ai-gateway";
+  }
 }
 
 interface PluginModeProviderProps {
@@ -59,16 +63,22 @@ export function PluginModeProvider({ children, accessToken }: PluginModeProvider
   useEffect(() => {
     // Re-fetch whenever the auth token changes (handles login/logout cycles)
     if (!accessToken) return;
+    let unmounted = false;
     pluginApiClient
       .get("/api/plugins", { accessToken })
       .then((data: Plugin[]) => {
-        setPlugins(Array.isArray(data) ? data : []);
+        if (!unmounted) setPlugins(Array.isArray(data) ? data : []);
       })
       .catch(() => {})
       // Mark loaded even on failure so a stored plugin mode still falls back to
       // ai-gateway; otherwise a failed fetch would strand the user on a blank
       // plugin view with no switcher to escape.
-      .finally(() => setLoaded(true));
+      .finally(() => {
+        if (!unmounted) setLoaded(true);
+      });
+    return () => {
+      unmounted = true;
+    };
   }, [accessToken]);
 
   // Once plugins have loaded, fall back to ai-gateway if the persisted mode is
@@ -78,7 +88,15 @@ export function PluginModeProvider({ children, accessToken }: PluginModeProvider
 
   const setMode = (m: PluginMode) => {
     setModeState(m);
-    localStorage.setItem(STORAGE_KEY, m);
+    try {
+      localStorage.setItem(STORAGE_KEY, m);
+    } catch {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        // Switching workspaces still works when browser storage is unavailable.
+      }
+    }
   };
 
   const activePlugin = plugins.find((p) => p.name === effectiveMode) ?? null;

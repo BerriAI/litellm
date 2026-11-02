@@ -70,7 +70,7 @@ class RAGQuery:
         return None
 
     @staticmethod
-    def build_context_message(context_chunks: list[Any]) -> ChatCompletionUserMessage:
+    def build_context_message(context_chunks: Sequence[_SearchResultView | str | None]) -> ChatCompletionUserMessage:
         """
         Process search results and build a context message.
         """
@@ -124,9 +124,9 @@ class RAGQuery:
     @staticmethod
     def extract_documents_from_search(
         search_response: Any,
-    ) -> list[str | dict[str, Any]]:
+    ) -> list[str | dict[str, object]]:
         """Extract text documents from vector store search response."""
-        documents: Final[list[str | dict[str, Any]]] = []
+        documents: Final[list[str | dict[str, object]]] = []
         search_data: Final[_SearchDataView] = {"results": search_response.get("data", [])}
         for result in search_data["results"]:
             content_list = result.get("content", [])

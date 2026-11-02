@@ -13,7 +13,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.realtime.transcription_protocol import (
     RealtimeTranscriptionProtocolError,
     TranscriptionAudioFormat,
-    TranscriptionSessionUpdate,
     completed_event,
     decode_pcm16_append,
     delta_event,
@@ -23,6 +22,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     speech_event,
     transcription_session,
     transcription_session_created_event,
+    uses_server_vad,
 )
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.llms.vertex_ai.audio_transcription.transformation import (
@@ -125,7 +125,7 @@ def default_session_config(model: str) -> ChirpSessionConfig:
     )
 
 
-def parse_chirp_session_update(payload: str, expected_model: str) -> ChirpSessionConfig:
+def parse_chirp_session_update(payload: str, expected_model: str, *, drop_params: bool = False) -> ChirpSessionConfig:
     update: Final = parse_transcription_session_update(payload, ChirpProtocolError)
     if update.session_type not in (None, "transcription", "realtime"):
         raise ChirpProtocolError("Speech-to-Text streaming supports transcription sessions only")
@@ -141,7 +141,7 @@ def parse_chirp_session_update(payload: str, expected_model: str) -> ChirpSessio
         model=model,
         language=None if update.language is None else normalize_transcription_language_to_bcp47(update.language),
         sample_rate=_parse_sample_rate(update.audio_format),
-        server_vad=_parse_server_vad(update),
+        server_vad=uses_server_vad(update, "Speech-to-Text streaming", drop_params, ChirpProtocolError),
     )
 
 
@@ -159,14 +159,6 @@ def _parse_sample_rate(audio_format: TranscriptionAudioFormat | None) -> int:
             f" to {MAX_SAMPLE_RATE_HERTZ} Hz"
         )
     return rate
-
-
-def _parse_server_vad(update: TranscriptionSessionUpdate) -> bool:
-    if update.turn_detection_disabled:
-        return False
-    if update.turn_detection_type not in (None, "server_vad"):
-        raise ChirpProtocolError("Speech-to-Text streaming supports server_vad turn detection or null")
-    return True
 
 
 def session_created_event(config: ChirpSessionConfig, session_id: str) -> OpenAIRealtimeTranscriptionSessionCreated:
@@ -331,11 +323,13 @@ class VertexChirpRealtimeConfig(BaseRealtimeConfig):
         project: str,
         location: str | None,
         backend_factory: Callable[[SpeechStreamingTarget], RealtimeBackend] = _default_backend_factory,
+        drop_params: bool = False,
     ) -> None:
         self._resolve_access_token: Final = resolve_access_token
         self._project: Final = validate_vertex_transcription_project_id(project)
         self._location: Final = validate_vertex_transcription_location(location, DEFAULT_SPEECH_TO_TEXT_LOCATION)
         self._backend_factory: Final = backend_factory
+        self._drop_params: Final = drop_params
         self._transformer: Final = ChirpEventTransformer()
         self._config: ChirpSessionConfig | None = None
         self._session_id: str | None = None
@@ -406,7 +400,7 @@ class VertexChirpRealtimeConfig(BaseRealtimeConfig):
         realtime_response_transform_input: RealtimeResponseTransformInput,
     ) -> RealtimeResponseTypedDict:
         frame: Final = _STREAMING_EVENT_ADAPTER.validate_json(message)
-        events: Final = list(self._transformer.transform(frame))  # mutable-ok: response field is a list
+        events: Final = list(self._transformer.transform(frame))
         result: Final[RealtimeResponseTypedDict] = {
             "response": events,
             "current_output_item_id": realtime_response_transform_input.get("current_output_item_id"),
@@ -423,7 +417,7 @@ class VertexChirpRealtimeConfig(BaseRealtimeConfig):
         if self._config is not None:
             verbose_logger.debug("Speech-to-Text streaming: ignoring session.update after the stream was configured")
             return ()
-        config: Final = parse_chirp_session_update(message, model)
+        config: Final = parse_chirp_session_update(message, model, drop_params=self._drop_params)
         self._config = config
         self._transformer.configure(config, self._session_id or f"sess_{uuid.uuid4().hex}")
         return (config.configure_command(),)

@@ -8,19 +8,18 @@ the arrays alone strands every group on a name nothing serves any more.
 from collections.abc import Sequence
 from typing import Final, Protocol
 
-from pydantic import BaseModel
-
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.management_helpers.access_group_team_sync import invalidate_access_group_caches
 from litellm.repositories.table_repositories import AccessGroupRepository
 from litellm.router import Router
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class _TouchedGroupRow(BaseModel):
+class _TouchedGroupRow(LiteLLMBaseModel):
     access_group_id: str
 
 
-class _DeploymentCountRow(BaseModel):
+class _DeploymentCountRow(LiteLLMBaseModel):
     deployment_count: int
 
 
@@ -62,7 +61,7 @@ def raw_executor(prisma_client: object) -> RawExecutor:
 def _config_sourced_sibling(llm_router: Router, deployment_id: str, model_id: str) -> bool:
     if deployment_id == model_id:
         return False
-    deployment: Final = llm_router.get_deployment(model_id=deployment_id)
+    deployment: Final = llm_router.registry().deployment(deployment_id)
     return deployment is not None and not deployment.model_info.db_model
 
 
@@ -71,7 +70,7 @@ def _served_by_a_config_deployment(llm_router: Router | None, model_name: str, m
         return False
     return any(
         _config_sourced_sibling(llm_router, deployment_id, model_id)
-        for deployment_id in llm_router.get_model_ids(model_name=model_name)
+        for deployment_id in llm_router.registry().names(model_name, kind="ids")
     )
 
 

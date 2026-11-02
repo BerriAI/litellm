@@ -1,14 +1,16 @@
-from typing import Any, Optional
+from collections.abc import Awaitable, Callable
 
 from fastapi import Request
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import ProxyException
 
 
 async def enterprise_custom_auth(
-    request: Request, api_key: str, user_custom_auth: Optional[Any]
-) -> Optional[UserAPIKeyAuth]:
+    request: Request,
+    api_key: str,
+    user_custom_auth: Callable[[Request, str], Awaitable[object]] | None,
+) -> object:
     from litellm_enterprise.proxy.proxy_server import custom_auth_settings
 
     if user_custom_auth is None:

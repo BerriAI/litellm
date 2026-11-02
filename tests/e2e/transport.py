@@ -13,6 +13,7 @@ from typing import Protocol
 import e2e_http
 from e2e_http import (
     URL,
+    AbandonedRequest,
     AuthHeaders,
     BinaryStream,
     NetworkError,
@@ -21,6 +22,7 @@ from e2e_http import (
     StreamHead,
     StreamingResponse,
 )
+from e2e_metadata import step
 from pydantic import BaseModel
 
 
@@ -57,6 +59,10 @@ class Transport(Protocol):
         params: BaseModel | None = None,
         stream: bool = False,
     ) -> StreamingResponse: ...
+
+    def abandon(
+        self, path: str, *, headers: BaseModel, json: BaseModel, after: float
+    ) -> AbandonedRequest | StreamingResponse: ...
 
     def get[R: BaseModel](
         self,
@@ -127,6 +133,7 @@ class HttpTransport:
     def master(self) -> AuthHeaders:
         return self.bearer(self.master_key)
 
+    @step("POST {path}")
     def post[R: BaseModel](
         self,
         path: str,
@@ -146,6 +153,7 @@ class HttpTransport:
             timeout=self.request_timeout if timeout is None else timeout,
         )
 
+    @step("GET {path}")
     def get[R: BaseModel](
         self,
         path: str,
@@ -165,6 +173,7 @@ class HttpTransport:
             timeout=self.request_timeout if timeout is None else timeout,
         )
 
+    @step("DELETE {path}")
     def delete[R: BaseModel](
         self,
         path: str,
@@ -183,6 +192,7 @@ class HttpTransport:
             timeout=self.request_timeout,
         )
 
+    @step("PATCH {path}")
     def patch[R: BaseModel](
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
     ) -> Result[R]:
@@ -194,6 +204,7 @@ class HttpTransport:
             timeout=self.request_timeout,
         )
 
+    @step("PUT {path}")
     def put[R: BaseModel](self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]) -> Result[R]:
         return e2e_http.put(
             self._url(path),
@@ -203,12 +214,15 @@ class HttpTransport:
             timeout=self.request_timeout,
         )
 
+    @step("Stream a POST to {path}")
     def stream(self, path: str, *, headers: BaseModel, json: BaseModel) -> StreamingResponse:
         return e2e_http.stream(self._url(path), headers=headers, json=json, timeout=self.request_timeout)
 
+    @step("Open a stream to {path}")
     def open_stream(self, path: str, *, headers: BaseModel, json: BaseModel) -> StreamHead | NetworkError:
         return e2e_http.open_stream(self._url(path), headers=headers, json=json, timeout=self.request_timeout)
 
+    @step("Stream binary from {path}")
     def stream_binary(
         self,
         path: str,
@@ -225,6 +239,7 @@ class HttpTransport:
             timeout=self.request_timeout,
         )
 
+    @step("Send a request to {path}")
     def send(
         self,
         path: str,
@@ -243,6 +258,13 @@ class HttpTransport:
             timeout=self.request_timeout,
         )
 
+    @step("Abandon the request to {path} after {after}s")
+    def abandon(
+        self, path: str, *, headers: BaseModel, json: BaseModel, after: float
+    ) -> AbandonedRequest | StreamingResponse:
+        return e2e_http.abandon(self._url(path), headers=headers, json=json, after=after)
+
+    @step("Probe {path}")
     def probe(self, path: str, *, params: BaseModel, headers: BaseModel | None = None) -> ProbeResult:
         return e2e_http.probe(
             self._url(path),
@@ -251,6 +273,7 @@ class HttpTransport:
             timeout=self.request_timeout,
         )
 
+    @step("Upload {filename} to {path}")
     def upload[R: BaseModel](
         self,
         path: str,
@@ -278,6 +301,7 @@ class HttpTransport:
             timeout=self.request_timeout if timeout is None else timeout,
         )
 
+    @step("Download {path}")
     def download(self, path: str, *, headers: BaseModel) -> StreamingResponse:
         return e2e_http.download(self._url(path), headers=headers, timeout=self.request_timeout)
 
@@ -302,7 +326,11 @@ CONTROL_PLANE_PREFIXES: tuple[str, ...] = (
     "/global",
     "/config",
     "/guardrails",
+    "/credentials",
     "/router/settings",
+    "/audit",
+    "/public",
+    "/v2/login",
     "/openapi.json",
 )
 
@@ -419,6 +447,11 @@ class SplitTransport:
         stream: bool = False,
     ) -> StreamingResponse:
         return self._route(path).send(path, headers=headers, json=json, params=params, stream=stream)
+
+    def abandon(
+        self, path: str, *, headers: BaseModel, json: BaseModel, after: float
+    ) -> AbandonedRequest | StreamingResponse:
+        return self._route(path).abandon(path, headers=headers, json=json, after=after)
 
     def probe(self, path: str, *, params: BaseModel, headers: BaseModel | None = None) -> ProbeResult:
         return self._route(path).probe(path, params=params, headers=headers)

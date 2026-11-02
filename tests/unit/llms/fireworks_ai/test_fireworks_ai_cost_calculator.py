@@ -1,4 +1,5 @@
 import math
+import re
 from collections.abc import Generator
 from datetime import datetime, timezone
 from typing import Final
@@ -326,3 +327,71 @@ def test_an_entry_without_an_input_rate_gets_no_cache_read_fallback():
 
     assert prompt_cost == 0
     assert completion_cost == 200 * 2e-06
+
+
+ROUTED_MODEL: Final = next(
+    key
+    for key, info in litellm.model_cost.items()
+    if "/" not in key
+    and info.get("litellm_provider") == "anthropic"
+    and (info.get("input_cost_per_token") or 0) > 0
+    and (info.get("output_cost_per_token") or 0) > 0
+    and f"fireworks_ai/{key}" not in litellm.model_cost
+)
+
+
+@pytest.mark.parametrize("model", [ROUTED_MODEL, f"fireworks_ai/{ROUTED_MODEL}"])
+def test_a_model_routed_to_another_provider_is_billed_at_that_models_own_rates(model: str):
+    own_rates: Final = litellm.get_model_info(model=ROUTED_MODEL, custom_llm_provider="anthropic")
+    usage: Final = _usage(prompt_tokens=23, cached_tokens=0, completion_tokens=41)
+
+    prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
+
+    assert prompt_cost == pytest.approx(23 * own_rates["input_cost_per_token"])
+    assert completion_cost == pytest.approx(41 * own_rates["output_cost_per_token"])
+    assert prompt_cost > 0 and completion_cost > 0
+
+
+def test_an_unknown_fireworks_model_still_falls_back_to_the_parameter_size_bucket():
+    prompt_cost, completion_cost = cost_per_token(
+        model="accounts/fireworks/models/not-in-the-map-13b",
+        usage=_usage(prompt_tokens=100, cached_tokens=0, completion_tokens=10),
+    )
+    bucket_prompt_cost, bucket_completion_cost = cost_per_token(
+        model="fireworks-ai-4.1b-to-16b", usage=_usage(prompt_tokens=100, cached_tokens=0, completion_tokens=10)
+    )
+
+    assert (prompt_cost, completion_cost) == (bucket_prompt_cost, bucket_completion_cost)
+    assert prompt_cost > 0
+
+
+_TIERED_INPUT_PATTERN: Final = re.compile(r"^input_cost_per_token_above_(\d+)k_tokens$")
+
+
+def _threshold_tokens(field: str) -> int:
+    match: Final = _TIERED_INPUT_PATTERN.match(field)
+    assert match is not None, field
+    return int(match.group(1)) * 1000
+
+
+def test_a_routed_xai_model_keeps_xais_inclusive_token_threshold():
+    candidate: Final = next(
+        (
+            (key, field)
+            for key, info in litellm.model_cost.items()
+            if info.get("litellm_provider") == "xai" and f"fireworks_ai/{key}" not in litellm.model_cost
+            for field in info
+            if _TIERED_INPUT_PATTERN.match(field)
+        ),
+        None,
+    )
+    if candidate is None:
+        pytest.skip("cost map has no xai entry with a tiered input rate")
+    key, field = candidate
+    usage: Final = _usage(prompt_tokens=_threshold_tokens(field), cached_tokens=0, completion_tokens=10)
+
+    routed_prompt_cost, routed_completion_cost = cost_per_token(model=f"fireworks_ai/{key}", usage=usage)
+
+    assert (routed_prompt_cost, routed_completion_cost) == generic_cost_per_token(
+        model=key, usage=usage, custom_llm_provider="xai"
+    )

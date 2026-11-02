@@ -2,6 +2,9 @@
 
 pub use litellm_auth_types::*;
 
+mod services;
+pub use services::AuthServices;
+
 #[cfg(feature = "aws")]
 pub use litellm_auth_aws as aws;
 #[cfg(feature = "azure")]

@@ -1,5 +1,7 @@
 use std::ops::Deref;
 
+use litellm_error::Source;
+
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
@@ -17,9 +19,11 @@ impl CallArguments {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("invalid argument: {path}")]
+#[error("invalid argument {path}")]
 pub struct ArgumentError {
     pub path: String,
+    #[source]
+    source: Source,
 }
 
 pub fn parse_options<T: DeserializeOwned>(arguments: &CallArguments) -> Result<T, ArgumentError> {
@@ -28,6 +32,7 @@ pub fn parse_options<T: DeserializeOwned>(arguments: &CallArguments) -> Result<T
     );
     serde_path_to_error::deserialize(deserializer).map_err(|error| ArgumentError {
         path: error.path().to_string(),
+        source: Source::new(error.into_inner()),
     })
 }
 
@@ -42,8 +47,8 @@ pub fn compose_body<B: Serialize>(
     body: &B,
     consumed: &[&str],
 ) -> Result<Value, crate::params::Error> {
-    let Value::Object(fields) =
-        serde_json::to_value(body).map_err(|_| crate::params::Error::Body)?
+    let Value::Object(fields) = serde_json::to_value(body)
+        .map_err(|error| crate::params::Error::Serialize(Source::new(error)))?
     else {
         return Err(crate::params::Error::Body);
     };
@@ -109,6 +114,7 @@ impl IntoIterator for CallArguments {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use serde_json::json;
 
     use super::*;
@@ -140,20 +146,29 @@ mod tests {
         assert_eq!(serde_json::to_value(arguments).unwrap(), original);
     }
 
-    #[test]
-    fn invalid_extra_body_is_rejected_without_coercing_it_to_empty() {
-        for value in [json!(false), json!(0), json!([]), json!("")] {
-            let arguments = serde_json::from_value(json!({"extra_body":value})).unwrap();
-            assert_eq!(
-                compose_body(&arguments, &json!({}), &[]),
-                Err(crate::params::Error::ExtraBody)
-            );
-        }
-        let arguments = serde_json::from_value(json!({"extra_body":null})).unwrap();
+    #[rstest]
+    #[case::boolean(json!(false))]
+    #[case::number(json!(0))]
+    #[case::array(json!([]))]
+    #[case::string(json!(""))]
+    fn invalid_extra_body_is_rejected_without_coercing_it_to_empty(
+        #[case] value: serde_json::Value,
+    ) {
+        let arguments = serde_json::from_value(json!({"extra_body":value})).unwrap();
         assert_eq!(
-            compose_body(&arguments, &json!({}), &[]).unwrap(),
-            json!({})
+            compose_body(&arguments, &json!({}), &[]),
+            Err(crate::params::Error::ExtraBody)
         );
+    }
+
+    #[rstest]
+    #[case::null(json!(null), json!({}))]
+    fn null_extra_body_is_coerced_to_empty_object(
+        #[case] value: serde_json::Value,
+        #[case] expected: serde_json::Value,
+    ) {
+        let arguments = serde_json::from_value(json!({"extra_body":value})).unwrap();
+        assert_eq!(compose_body(&arguments, &json!({}), &[]).unwrap(), expected);
     }
 
     #[test]
@@ -173,9 +188,9 @@ mod tests {
         assert_eq!(arguments.get("enabled"), Some(&Value::Null));
         assert_eq!(arguments.get("missing"), None);
         let invalid = serde_json::from_value(json!({"enabled":0})).unwrap();
-        assert_eq!(
-            parse_options::<Options>(&invalid).err().unwrap().path,
-            "enabled"
-        );
+        let error = parse_options::<Options>(&invalid).err().unwrap();
+        assert_eq!(error.path, "enabled");
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(report.starts_with("invalid argument enabled: invalid type"));
     }
 }

@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CircleHelp } from "lucide-react";
 import React, { useCallback, useMemo, useState } from "react";
 import { useWatch } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { toast } from "@/lib/toast";
 import { createSearchTool, fetchAvailableSearchProviders } from "@/components/networking";
@@ -71,6 +71,7 @@ const createSearchToolShape = {
     .pipe(z.string({ error: "Please select a search provider" }).min(1, "Please select a search provider")),
   api_key: z.string().optional(),
   description: z.string().optional(),
+  input_cost_per_query: z.number().nonnegative("Cost per query cannot be negative").optional(),
 };
 
 const createSearchToolSchema = z.object(createSearchToolShape);
@@ -263,6 +264,28 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                       value={value ?? ""}
                       placeholder="Enter your API key"
                       groupClassName="h-10 rounded-lg"
+                    />
+                  )}
+                </FormField>
+
+                <FormField
+                  control={form.control}
+                  name="input_cost_per_query"
+                  label={labelWithHint(
+                    "Cost per Query (USD, Optional)",
+                    "Your negotiated price per search query. It overrides the LiteLLM cost map price for this tool in the response cost header and spend logs. Leave blank to use the provider's default price.",
+                  )}
+                >
+                  {({ ref, value, onChange, ...field }) => (
+                    <Input
+                      {...field}
+                      ref={ref}
+                      type="number"
+                      step="any"
+                      value={value ?? ""}
+                      onChange={(event) => onChange(event.target.value === "" ? undefined : event.target.valueAsNumber)}
+                      placeholder="e.g., 0.007"
+                      className="rounded-lg"
                     />
                   )}
                 </FormField>

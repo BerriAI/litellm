@@ -222,7 +222,8 @@ def test_langflow_extra_body_cannot_inject_tweaks_into_run_payload():
 
     def fake_post(*args, **kwargs):
         body = kwargs.get("data")
-        posted_bodies.append(json.loads(body) if isinstance(body, str) else body)
+        if str(kwargs.get("url", "")).startswith("http://example.com"):
+            posted_bodies.append(json.loads(body) if isinstance(body, (str, bytes)) else body)
         resp = MagicMock(spec=httpx.Response)
         resp.status_code = 200
         resp.json.return_value = {"outputs": [{"outputs": [{"results": {"message": {"text": "hi"}}}]}]}

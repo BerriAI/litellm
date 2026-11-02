@@ -43,7 +43,6 @@ const totals = (overrides: Partial<AutoRouterBenchmarkGroup> = {}) => ({
   saved_spend: 2174.59,
   baseline_spend: 2534.45,
   saved_pct: 85.8,
-  saved_per_session: 23.13,
   cache: cache(),
   ...overrides,
 });

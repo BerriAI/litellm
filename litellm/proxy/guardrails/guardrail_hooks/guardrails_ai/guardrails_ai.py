@@ -80,6 +80,7 @@ class GuardrailsAI(CustomGuardrail):
             headers={
                 "Content-Type": "application/json",
             },
+            timeout=self.timeout,
         )
         verbose_proxy_logger.debug("guardrails_ai response: %s", response)
         _json_response: Final = GuardrailsAIResponse(**response.json())
@@ -117,6 +118,7 @@ class GuardrailsAI(CustomGuardrail):
             headers={
                 "Content-Type": "application/json",
             },
+            timeout=self.timeout,
         )
         verbose_proxy_logger.debug("guardrails_ai response: %s", response)
         if response.status_code == 400:

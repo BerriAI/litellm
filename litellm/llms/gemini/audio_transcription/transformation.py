@@ -3,12 +3,14 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 from httpx import Headers, Response
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.subtitle_utils import SUBTITLE_RESPONSE_FORMATS
 from litellm.litellm_core_utils.audio_utils.utils import (
     normalize_transcription_language_to_bcp47,
     process_audio_file,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -35,6 +37,7 @@ from litellm.types.utils import (
 
 INTERACTIONS_API_REVISION: Final = "2026-05-20"
 WORD_INFO_ANNOTATION_TYPE: Final = "word_info"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -47,7 +50,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> list[OpenAIAudioTranscriptionOptionalParams]:  # mutable-ok: BaseAudioTranscriptionConfig signature
-        return ["language", "response_format", "timestamp_granularities"]  # mutable-ok: base contract returns a list
+        return ["language", "response_format", "timestamp_granularities"]
 
     @property
     def supports_subtitle_synthesis(self) -> bool:
@@ -62,7 +65,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> dict:  # mutable-ok: BaseAudioTranscriptionConfig signature
         supported_params: Final = frozenset(self.get_supported_openai_params(model))
         accepted: Final = tuple((k, v) for k, v in non_default_params.items() if k in supported_params)
-        return dict((*optional_params.items(), *accepted))  # mutable-ok: base contract returns a plain dict
+        return dict((*optional_params.items(), *accepted))
 
     def get_error_class(
         self,
@@ -88,7 +91,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 status_code=401,
                 message="Google API key is required. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable.",
             )
-        return {  # mutable-ok: the http handler passes these headers straight to httpx
+        return {
             **headers,
             "Content-Type": "application/json",
             "x-goog-api-key": resolved_api_key,
@@ -104,8 +107,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
-        resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
-        return f"{resolved_api_base}/v1beta/interactions"
+        return join_api_base(GeminiModelInfo.get_api_base(api_base), "v1beta/interactions")
 
     def transform_audio_transcription_request(
         self,
@@ -125,14 +127,14 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             audio_input=audio_input,
             transcription_config=_build_transcription_config(optional_params),
         )
-        return AudioTranscriptionRequestData(data=dict(request))  # mutable-ok: AudioTranscriptionRequestData wants dict
+        return AudioTranscriptionRequestData(data=dict(request))
 
     def transform_audio_transcription_response(
         self,
         raw_response: Response,
     ) -> TranscriptionResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except ValueError:
             raise GeminiError(
                 status_code=raw_response.status_code,
@@ -159,7 +161,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             if (word := _annotation_to_word(annotation)) is not None
         )
         if words:
-            response["words"] = list(words)  # mutable-ok: verbose_json words is a JSON array
+            response["words"] = list(words)
             last_word_end: Final = words[-1].get("end")
             if last_word_end is not None:
                 response["duration"] = last_word_end
@@ -244,7 +246,7 @@ def _annotation_to_word(annotation: GeminiTranscriptionWordAnnotation) -> Mappin
         ("end", _parse_offset_seconds(annotation.end_offset)),
         ("speaker", annotation.speaker),
     )
-    return {key: value for key, value in entries if value is not None}  # mutable-ok: word entries serialize to JSON
+    return {key: value for key, value in entries if value is not None}
 
 
 def _parse_offset_seconds(offset: str | None) -> float | None:

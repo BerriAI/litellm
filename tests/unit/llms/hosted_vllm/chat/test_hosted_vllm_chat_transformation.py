@@ -1,5 +1,9 @@
+import copy
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 from litellm.constants import (
@@ -112,10 +116,10 @@ def test_hosted_vllm_supports_thinking():
     assert optional_params["reasoning_effort"] == "low"
 
 
-def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
+def test_hosted_vllm_reasoning_content_kept_and_thinking_blocks_removed():
     """
-    Test that thinking_blocks on assistant messages are removed and content
-    stays a string for vLLM compatibility.
+    Test that reasoning_content on assistant messages is forwarded to vLLM
+    while thinking_blocks are removed and content stays a string.
     """
     config = HostedVLLMChatConfig()
     messages = [
@@ -152,7 +156,36 @@ def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
     assert isinstance(assistant_msg["content"], str)
     assert assistant_msg["content"] == "Here is my answer."
     assert "thinking_blocks" not in assistant_msg
-    assert "reasoning_content" not in assistant_msg
+    assert assistant_msg["reasoning_content"] == "Let me reason about this..."
+
+
+@pytest.mark.parametrize(
+    ("reasoning_content", "expected"),
+    [
+        ("step one, then step two", "step one, then step two"),
+        ("", ""),
+        (None, "absent"),
+        (42, "absent"),
+        (["step one", "step two"], "absent"),
+        ({"text": "step one"}, "absent"),
+    ],
+)
+def test_hosted_vllm_forwards_only_string_reasoning_content(reasoning_content, expected):
+    config = HostedVLLMChatConfig()
+    transformed = config.transform_request(
+        model="hosted_vllm/qwen3",
+        messages=[
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi", "reasoning_content": reasoning_content},
+            {"role": "user", "content": "Again"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assistant_msg = transformed["messages"][1]
+    assert assistant_msg.get("reasoning_content", "absent") == expected
+    assert assistant_msg["content"] == "Hi"
 
 
 def test_hosted_vllm_thinking_blocks_with_list_content():
@@ -366,3 +399,43 @@ def test_hosted_vllm_custom_tools_use_top_level_input_schema():
     assert tools[0]["function"]["name"] == "search"
     assert tools[0]["function"]["description"] == "Search docs"
     assert tools[0]["function"]["parameters"] == input_schema
+
+
+def _strict_weather_tool() -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def test_hosted_vllm_tools_are_rewritten_without_touching_the_callers_tool() -> None:
+    tools: Final = [_strict_weather_tool()]
+    tools_before: Final = copy.deepcopy(tools)
+
+    optional_params: Final = HostedVLLMChatConfig().map_openai_params(
+        non_default_params={"tools": tools}, optional_params={}, model="gpt-oss-120b", drop_params=False
+    )
+
+    assert optional_params["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    assert tools == tools_before

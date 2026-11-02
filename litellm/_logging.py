@@ -1,14 +1,21 @@
 import ast
 import contextvars
 import functools
+import inspect
+import itertools
 import logging
 import os
 import re
 import sys
+from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
-from typing import Any, Final, TextIO
+from types import FrameType
+from typing import Final, TextIO
 from urllib.parse import unquote
+
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
@@ -21,10 +28,16 @@ from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import UNSERIALIZABLE_OBJECT, safe_dumps, safe_json_structure
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.secret_redaction import (
+    REDACTED,
+    python_redact_string,
+    python_redact_structured_value,
     redact_internal_details,
-    redact_string,
     redact_structured_value,
 )
+from litellm.litellm_core_utils.secret_redaction import (
+    redact_string as redact_secret_string,
+)
+from litellm.rust_bridge import diagnostics
 
 set_verbose = False
 
@@ -48,7 +61,7 @@ def _sanitize_correlation_id(value: str) -> str:
     pass through credential redaction.
     """
     stripped: Final = "".join(ch for ch in value if ch.isprintable())
-    return _redact_string(stripped[:_MAX_CORRELATION_ID_LENGTH])
+    return redact_string(stripped)[:_MAX_CORRELATION_ID_LENGTH]
 
 
 def set_session_id(session_id: str) -> "contextvars.Token[str]":
@@ -67,25 +80,27 @@ if set_verbose is True:
 _ENABLE_SECRET_REDACTION: Final = os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
 
 
-def _redact_string(value: str) -> str:
+def redact_string(value: str) -> str:
     if not _ENABLE_SECRET_REDACTION:
         return value
-    return redact_string(value)
+    return redact_secret_string(value)
 
 
-def _redact_structured_value(key: str | None, value: str) -> str:
-    if not _ENABLE_SECRET_REDACTION:
-        return value
-    return redact_structured_value(key, value)
+_redact_string = redact_string
 
 
 _REDACTED_RECORD_ATTR: Final = "litellm_redacted"
 _REDACTED_STAMP: Final = object()
+_DECODED_LOG_PAYLOAD: Final = TypeAdapter(object)
 _UNREDACTED_SCALAR_TYPES: Final = (bool, int, float, type(None))
 
 
 def _is_redacted(record: logging.LogRecord) -> bool:
     return getattr(record, _REDACTED_RECORD_ATTR, None) is _REDACTED_STAMP
+
+
+def _record_attributes(record: logging.LogRecord) -> Mapping[str, object]:
+    return record.__dict__
 
 
 def _scrubbing_changed_nothing(scrubbed: object, original: object) -> bool:
@@ -102,14 +117,6 @@ def _plain_text(value: object) -> str:
         return UNSERIALIZABLE_OBJECT
 
 
-def _redact_extra_value(key: str, value: object) -> object:
-    try:
-        scrubbed: Final = safe_json_structure(value, value_transform=_redact_structured_value, key=key)
-    except Exception:
-        return _redact_string(_plain_text(value))
-    return value if _scrubbing_changed_nothing(scrubbed, value) else scrubbed
-
-
 def redact_secrets(value: str) -> str:
     """Public API: redact known secret/credential patterns from an arbitrary string.
 
@@ -124,7 +131,7 @@ def redact_secrets(value: str) -> str:
     """
     if not _ENABLE_SECRET_REDACTION:
         return value
-    return _redact_string(value)
+    return redact_string(value)
 
 
 def redact_internal_details_from_client_message(value: str) -> str:
@@ -133,6 +140,32 @@ def redact_internal_details_from_client_message(value: str) -> str:
     if not _ENABLE_SECRET_REDACTION:
         return value
     return redact_internal_details(value)
+
+
+_CLIENT_FIELDS: Final = TypeAdapter(dict[str, object])
+_CLIENT_ITEMS: Final = TypeAdapter(list[object])
+
+
+def _redacted_client_field(key: str | None, value: object) -> object:
+    if isinstance(value, str):
+        return redact_internal_details(redact_structured_value(key, value))
+    if isinstance(value, dict):
+        return {
+            child_key: _redacted_client_field(child_key, child)
+            for child_key, child in _CLIENT_FIELDS.validate_python(value).items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redacted_client_field(key, child) for child in _CLIENT_ITEMS.validate_python(value)]
+    if not isinstance(value, (int, float)):
+        return value
+    text: Final = str(value)
+    return value if redact_structured_value(key, text) == text else REDACTED
+
+
+def redact_internal_details_from_client_fields(fields: Mapping[str, object]) -> object:
+    if not _ENABLE_SECRET_REDACTION:
+        return fields
+    return _redacted_client_field(None, dict(fields))
 
 
 def _substituted_color_message(record: logging.LogRecord) -> str | None:
@@ -149,7 +182,7 @@ def _substituted_color_message(record: logging.LogRecord) -> str | None:
         return None
     try:
         return color_message % record.args
-    except TypeError:
+    except Exception:
         return color_message
 
 
@@ -161,41 +194,7 @@ class SecretRedactionFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if not _ENABLE_SECRET_REDACTION or _is_redacted(record):
             return True
-
-        # Runs before args are cleared, and before the extra-field loop below
-        # that redacts the substituted result.
-        substituted_color_message: Final = _substituted_color_message(record)
-        if substituted_color_message is not None:
-            record.color_message = substituted_color_message  # rebind-ok: a Filter scrubs records in place
-
-        try:
-            record.msg = _redact_string(record.getMessage())
-            record.args = None
-        except Exception:
-            if isinstance(record.msg, str):
-                record.msg = _redact_string(record.msg)
-
-        # Redact exception tracebacks
-        if record.exc_info and record.exc_info[1] is not None:
-            try:
-                record.exc_text = _redact_string(record.exc_text or self._formatter.formatException(record.exc_info))
-            except Exception:
-                pass
-
-        if isinstance(record.stack_info, str):
-            record.stack_info = _redact_string(record.stack_info)  # rebind-ok: a Filter scrubs records in place
-
-        # Redact extra fields passed via logger.debug("msg", extra={...})
-        for key, value in list(record.__dict__.items()):
-            if key in _STANDARD_RECORD_ATTRS:
-                continue
-            if isinstance(value, str):
-                setattr(record, key, _redact_structured_value(key, value))
-            elif not isinstance(value, _UNREDACTED_SCALAR_TYPES):
-                setattr(record, key, _redact_extra_value(key, value))
-
-        setattr(record, _REDACTED_RECORD_ATTR, _REDACTED_STAMP)
-        return True
+        return _process_record(record, base64_limit=0, text_limit=0, redact=True)
 
 
 _secret_filter: Final = SecretRedactionFilter()
@@ -209,7 +208,7 @@ _REDACTION_PLACEHOLDER: Final = "REDACTED"
 def _hides_a_credential(value: str) -> bool:
     """Whether *value* only looks clean until it is percent-decoded."""
     decoded: Final = unquote(value)
-    return _redact_string(decoded) != decoded
+    return python_redact_string(decoded) != decoded
 
 
 def _drop_encoded_credential(scrubbed: str) -> str:
@@ -237,10 +236,10 @@ def _scrub_access_arg(value: str) -> str:
     pattern and would then be logged raw.
     """
     if len(value) <= _MAX_SCRUBBED_ACCESS_ARG:
-        return _drop_encoded_credential(_redact_string(value))
+        return _drop_encoded_credential(python_redact_string(value))
     head: Final = value[:_MAX_SCRUBBED_ACCESS_ARG]
     kept: Final = head[: max(head.rfind("?"), head.rfind("&"))] if "?" in head else head
-    scrubbed: Final = _drop_encoded_credential(_redact_string(kept))
+    scrubbed: Final = _drop_encoded_credential(python_redact_string(kept))
     return f"{scrubbed}... ({len(value) - len(kept)} more chars truncated) ..."
 
 
@@ -256,8 +255,17 @@ class AccessLogRedactionFilter(logging.Filter):
         if not _ENABLE_SECRET_REDACTION:
             return True
         if isinstance(record.args, tuple) and record.args:
+            strings: Final = tuple(arg for arg in record.args if isinstance(arg, str))
+            candidate: Final = diagnostics.run(
+                lambda native: native.scrub_access_arguments(strings),
+                lambda: tuple(_scrub_access_arg(arg) for arg in strings),
+            )
+            scrubbed: Final = (
+                candidate if len(candidate) == len(strings) else tuple(_scrub_access_arg(arg) for arg in strings)
+            )
+            values: Final = iter(scrubbed)
             record.args = tuple(  # rebind-ok: a Filter scrubs records in place
-                _scrub_access_arg(arg) if isinstance(arg, str) else arg for arg in record.args
+                next(values) if isinstance(arg, str) else arg for arg in record.args
             )
             return True
         # No positional args means everything is in msg, where collapsing is correct.
@@ -363,6 +371,177 @@ def _collapse_base64_runs(text: str, limit: int) -> str:
     return _base64_run_pattern(limit + 1).sub(_replace_base64_run, text)
 
 
+def _extra_structure(key: str, value: object) -> object:
+    if isinstance(value, str):
+        return value
+    try:
+        return safe_json_structure(value, key=key)
+    except Exception:
+        return _plain_text(value)
+
+
+def _string_leaves(key: str | None, value: object) -> Iterator[tuple[str | None, str]]:
+    if isinstance(value, str):
+        yield key, value
+    elif isinstance(value, dict):
+        yield from itertools.chain.from_iterable(
+            _string_leaves(child_key, child) for child_key, child in value.items() if isinstance(child_key, str)
+        )
+    elif isinstance(value, (list, tuple)):
+        yield from itertools.chain.from_iterable(_string_leaves(key, child) for child in value)
+
+
+def _replace_string_leaves(value: object, values: Iterator[str]) -> object:
+    if isinstance(value, str):
+        return next(values)
+    if isinstance(value, dict):
+        return {key: _replace_string_leaves(child, values) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_replace_string_leaves(child, values) for child in value]
+    if isinstance(value, tuple):
+        return tuple(_replace_string_leaves(child, values) for child in value)
+    return value
+
+
+def _sort_processed_sets(original: object, processed: object) -> object:
+    if isinstance(original, set) and isinstance(processed, list):
+        return sorted(processed)
+    if isinstance(original, dict) and isinstance(processed, dict):
+        return {key: _sort_processed_sets(original.get(key), value) for key, value in processed.items()}
+    if isinstance(original, list) and isinstance(processed, list):
+        return [_sort_processed_sets(before, after) for before, after in zip(original, processed)]
+    if isinstance(original, tuple) and isinstance(processed, tuple):
+        return tuple(_sort_processed_sets(before, after) for before, after in zip(original, processed))
+    return processed
+
+
+def _python_process_diagnostic(
+    message: str,
+    exception: str | None,
+    stack: str | None,
+    leaves: tuple[tuple[str | None, str], ...],
+    redact: bool,
+    base64_limit: int,
+    text_limit: int,
+) -> tuple[str, str | None, str | None, tuple[str, ...], bool]:
+    def process_text(text: str) -> str:
+        collapsed: Final = _collapse_base64_runs(text, base64_limit) if base64_limit > 0 else text
+        scrubbed: Final = python_redact_string(collapsed) if redact else collapsed
+        return _truncate_for_stdout_log(scrubbed, text_limit) if 0 < text_limit < len(scrubbed) else scrubbed
+
+    processed_message: Final = process_text(message)
+    processed_exception: Final = process_text(exception) if exception is not None else None
+    processed_stack: Final = python_redact_string(stack) if redact and stack is not None else stack
+    processed_leaves: Final = tuple(
+        python_redact_structured_value(key, text) if redact else text for key, text in leaves
+    )
+    changed: Final = (
+        processed_message != message
+        or processed_exception != exception
+        or processed_stack != stack
+        or any(processed != original for processed, (_, original) in zip(processed_leaves, leaves))
+    )
+    return processed_message, processed_exception, processed_stack, processed_leaves, changed
+
+
+def _render_message(record: logging.LogRecord) -> str:
+    try:
+        return record.getMessage()
+    except Exception:
+        return record.msg if isinstance(record.msg, str) else UNSERIALIZABLE_OBJECT
+
+
+def _render_exception(record: logging.LogRecord) -> str | None:
+    if not isinstance(record.exc_info, tuple) or len(record.exc_info) < 2 or record.exc_info[1] is None:
+        return None
+    try:
+        return record.exc_text or SecretRedactionFilter._formatter.formatException(record.exc_info)
+    except Exception:
+        return "REDACTED"
+
+
+def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit: int, redact: bool) -> bool:
+    if _is_redacted(record):
+        return True
+    message: Final = _render_message(record)
+    exception: Final = _render_exception(record)
+    stack: Final = record.stack_info if isinstance(record.stack_info, str) else None
+    substituted_color: Final = _substituted_color_message(record)
+    extras: Final = (
+        tuple(
+            (
+                key,
+                value,
+                _extra_structure(
+                    key, substituted_color if key == "color_message" and substituted_color is not None else value
+                ),
+            )
+            for key, value in _record_attributes(record).items()
+            if key not in _STANDARD_RECORD_ATTRS
+            and key != _REDACTED_RECORD_ATTR
+            and not isinstance(value, _UNREDACTED_SCALAR_TYPES)
+        )
+        if redact
+        else ()
+    )
+    extra_leaves: Final = tuple(
+        itertools.chain.from_iterable(_string_leaves(key, prepared) for key, _, prepared in extras)
+    )
+    raw_template: Final = record.msg if redact and isinstance(record.msg, str) and record.args else None
+    color_template: Final = record.__dict__.get("color_message")
+    raw_color: Final = color_template if redact and isinstance(color_template, str) and record.args else None
+    leaves: Final = (
+        extra_leaves
+        + (((None, raw_template),) if raw_template is not None else ())
+        + (((None, raw_color),) if raw_color is not None else ())
+    )
+    candidate: Final = diagnostics.run(
+        lambda native: native.process_diagnostic(message, exception, stack, leaves, (redact, base64_limit, text_limit)),
+        lambda: _python_process_diagnostic(message, exception, stack, leaves, redact, base64_limit, text_limit),
+    )
+    processed_message, processed_exception, processed_stack, processed_leaves, _ = (
+        candidate
+        if len(candidate[3]) == len(leaves)
+        else _python_process_diagnostic(message, exception, stack, leaves, redact, base64_limit, text_limit)
+    )
+    raw_template_changed: Final = raw_template is not None and processed_leaves[len(extra_leaves)] != raw_template
+    safe_message: Final = "REDACTED" if raw_template_changed and processed_message == message else processed_message
+    if redact or safe_message != message:
+        record.msg = safe_message  # rebind-ok: the Filter interface mutates the record
+        record.args = None  # rebind-ok: the rendered message replaces interpolation inputs
+    if processed_exception is not None:
+        record.exc_text = processed_exception  # rebind-ok: the Filter interface mutates the record
+    if processed_stack is not None:
+        record.stack_info = processed_stack  # rebind-ok: the Filter interface mutates the record
+    processed_values: Final = iter(processed_leaves[: len(extra_leaves)])
+    for key, original, prepared in extras:
+        replacement = _sort_processed_sets(original, _replace_string_leaves(prepared, processed_values))
+        if not _scrubbing_changed_nothing(replacement, original):
+            setattr(record, key, replacement)
+    raw_color_changed: Final = (
+        raw_color is not None and processed_leaves[len(extra_leaves) + int(raw_template is not None)] != raw_color
+    )
+    if raw_color_changed and getattr(record, "color_message", None) == substituted_color:
+        setattr(record, "color_message", "REDACTED")
+    setattr(record, _REDACTED_RECORD_ATTR, _REDACTED_STAMP)
+    return True
+
+
+def _redact_json_record(value: object) -> object:
+    prepared: Final = safe_json_structure(value)
+    leaves: Final = tuple(_string_leaves(None, prepared))
+    candidate: Final = diagnostics.run(
+        lambda native: native.process_diagnostic("", None, None, leaves, (True, 0, 0))[3],
+        lambda: tuple(python_redact_structured_value(key, text) for key, text in leaves),
+    )
+    replacements: Final = (
+        candidate
+        if len(candidate) == len(leaves)
+        else tuple(python_redact_structured_value(key, text) for key, text in leaves)
+    )
+    return _sort_processed_sets(value, _replace_string_leaves(prepared, iter(replacements)))
+
+
 class StdoutLogTruncationFilter(logging.Filter):
     """Bounds how much of an oversized log line reaches stdout.
 
@@ -410,7 +589,17 @@ class StdoutLogTruncationFilter(logging.Filter):
         return True
 
 
-_stdout_truncation_filter: Final = StdoutLogTruncationFilter()
+class DiagnosticProcessingFilter(StdoutLogTruncationFilter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return _process_record(
+            record,
+            base64_limit=_get_max_base64_length_stdout_log(),
+            text_limit=_get_max_string_length_stdout_log() if record.levelno >= logging.INFO else 0,
+            redact=_ENABLE_SECRET_REDACTION,
+        )
+
+
+_diagnostic_filter: Final = DiagnosticProcessingFilter()
 
 
 class CorrelationContextFilter(logging.Filter):
@@ -439,6 +628,7 @@ _LOG_FORMAT_PREFIX: Final = "%(asctime)s - %(name)s:%(levelname)s"
 _LOG_FORMAT_SUFFIX: Final = ": %(filename)s:%(lineno)s - %(message)s"
 _PLAIN_LOG_FORMAT: Final = _LOG_FORMAT_PREFIX + _LOG_FORMAT_SUFFIX
 _COLOR_LOG_FORMAT: Final = f"\033[92m{_LOG_FORMAT_PREFIX}\033[0m{_LOG_FORMAT_SUFFIX}"
+_ANSI_ESCAPE: Final = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _stream_is_tty(stream: TextIO | None) -> bool:
@@ -453,15 +643,28 @@ def _stream_is_tty(stream: TextIO | None) -> bool:
         return False
 
 
-def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
-    """The plain-text log format, colorized only when both streams are an interactive terminal.
+def _color_enabled(stream: TextIO | None) -> bool:
+    """True when ANSI colors written to the stream reach an interactive terminal.
 
     Honors the NO_COLOR convention from no-color.org: color is disabled when
     NO_COLOR is present with a non-empty value.
     """
-    if os.environ.get("NO_COLOR"):
-        return _PLAIN_LOG_FORMAT
-    return _COLOR_LOG_FORMAT if _stream_is_tty(stdout) and _stream_is_tty(stderr) else _PLAIN_LOG_FORMAT
+    return not os.environ.get("NO_COLOR") and _stream_is_tty(stream)
+
+
+def _terminal_colors(stdout: TextIO | None, stderr: TextIO | None) -> bool:
+    """True when both streams are an interactive color terminal, the one rule for log lines and startup prints."""
+    return _color_enabled(stdout) and _color_enabled(stderr)
+
+
+def terminal_text(message: str) -> str:
+    """The message with its ANSI colors kept only on a color terminal, by the rule the plain log format uses."""
+    return message if _terminal_colors(sys.stdout, sys.stderr) else _ANSI_ESCAPE.sub("", message)
+
+
+def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
+    """The plain-text log format, colorized only when both streams are an interactive terminal."""
+    return _COLOR_LOG_FORMAT if _terminal_colors(stdout, stderr) else _PLAIN_LOG_FORMAT
 
 
 class LevelRoutingStreamHandler(logging.StreamHandler):
@@ -477,14 +680,14 @@ class LevelRoutingStreamHandler(logging.StreamHandler):
         )
         preferred: Final = sys.stdout if is_stdout_record else sys.stderr
         if preferred is None or getattr(preferred, "closed", False):
-            self.stream = sys.stderr  # rebind-ok: fall back to the pre-fix stream rather than raising per record
+            self.stream = sys.stderr
         else:
-            self.stream = preferred  # rebind-ok: StreamHandler.emit writes self.stream under the handler lock
+            self.stream = preferred
         super().emit(record)
 
 
-def _parse_json_logs_env(value: str | None) -> bool:
-    """Strict opt-in parse for the JSON_LOGS env var: only "true" (any case) enables JSON logs.
+def _parse_env_flag(value: str | None) -> bool:
+    """Strict opt-in parse for a boolean env var such as JSON_LOGS: only "true" (any case) enables it.
 
     Matches the reader in litellm-proxy-extras/_logging.py. The previous
     bool(os.getenv(...)) treated any non-empty value, including "false" and "0",
@@ -497,7 +700,18 @@ def resolve_log_level(log_level: str) -> int:
     return getattr(logging, log_level.upper())
 
 
-json_logs: Final = _parse_json_logs_env(os.getenv("JSON_LOGS"))
+json_logs: Final = _parse_env_flag(os.getenv("JSON_LOGS"))
+suppress_startup_output: Final = _parse_env_flag(os.getenv("LITELLM_SUPPRESS_STARTUP_OUTPUT"))
+
+
+class StartupOutputSettings(TypedDict, total=False):
+    json_logs: ReadOnly[object]
+    suppress_startup_output: ReadOnly[object]
+
+
+STARTUP_OUTPUT_SETTINGS: Final = TypeAdapter(StartupOutputSettings)
+
+
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level: Final = os.getenv("LITELLM_LOG", "DEBUG")
 numeric_level: Final[int] = resolve_log_level(log_level)
@@ -507,7 +721,7 @@ handler.addFilter(_secret_filter)
 handler.addFilter(_correlation_filter)
 
 
-def _try_parse_json_message(message: str) -> dict[str, Any] | None:
+def _try_parse_json_message(message: str) -> dict[str, object] | None:
     """
     Try to parse a log message as JSON. Returns parsed dict if valid, else None.
     Handles messages that are entirely valid JSON (e.g. json.dumps output).
@@ -518,13 +732,13 @@ def _try_parse_json_message(message: str) -> dict[str, Any] | None:
     msg_stripped: Final = message.strip()
     if not (msg_stripped.startswith("{") or msg_stripped.startswith("[")):
         return None
-    parsed: Final = safe_json_loads(message, default=None)
+    parsed: Final = _DECODED_LOG_PAYLOAD.validate_python(safe_json_loads(message, default=None))
     if parsed is None or not isinstance(parsed, dict):
         return None
     return parsed
 
 
-def _try_parse_embedded_python_dict(message: str) -> dict[str, Any] | None:
+def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
     """
     Try to find and parse a Python dict repr (e.g. str(d) or repr(d)) embedded in
     the message. Handles patterns like:
@@ -548,7 +762,7 @@ def _try_parse_embedded_python_dict(message: str) -> dict[str, Any] | None:
                 if depth == 0:
                     substr = message[start : j + 1]
                     try:
-                        result = ast.literal_eval(substr)
+                        result: object = _DECODED_LOG_PAYLOAD.validate_python(ast.literal_eval(substr))
                         if isinstance(result, dict) and len(result) > 0:
                             return result
                     except (ValueError, SyntaxError, TypeError):
@@ -584,8 +798,8 @@ class JsonFormatter(Formatter):
         return dt.isoformat()
 
     def format(self, record):
-        message_str: Final = record.getMessage()
-        json_record: Final[dict[str, Any]] = {
+        message_str: Final = _ANSI_ESCAPE.sub("", record.getMessage())
+        json_record: Final[dict[str, object]] = {
             "message": message_str,
             "level": record.levelname,
             "timestamp": self.formatTime(record),
@@ -606,7 +820,7 @@ class JsonFormatter(Formatter):
                     json_record[key] = value
 
         # Include extra attributes passed via logger.debug("msg", extra={...})
-        for key, value in record.__dict__.items():
+        for key, value in _record_attributes(record).items():
             if key not in _NON_EXTRA_RECORD_ATTRS and key not in json_record:
                 json_record[key] = value
 
@@ -631,19 +845,23 @@ class JsonFormatter(Formatter):
         if record.exc_info:
             json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
 
-        return safe_dumps(json_record, value_transform=None if _is_redacted(record) else _redact_structured_value)
+        return safe_dumps(
+            json_record if _is_redacted(record) or not _ENABLE_SECRET_REDACTION else _redact_json_record(json_record)
+        )
 
 
 class CorrelationPlainFormatter(logging.Formatter):
     """Appends trace_id/session_id to plain-text log lines stamped by CorrelationContextFilter.
 
     Mirrors JsonFormatter's handling of these two fields so request_correlation_in_logs
-    behaves the same whether or not json_logs is enabled.
+    behaves the same whether or not json_logs is enabled. Unless it was built with the color format,
+    it also drops the ANSI color codes a message carries, which a piped log would store as text.
     """
 
     def format(self, record: logging.LogRecord) -> str:
         rendered: Final = super().format(record)
-        formatted: Final = rendered if _is_redacted(record) else _redact_string(rendered)
+        uncolored: Final = rendered if self._fmt == _COLOR_LOG_FORMAT else _ANSI_ESCAPE.sub("", rendered)
+        formatted: Final = uncolored if _is_redacted(record) else redact_string(uncolored)
         trace_id: Final = getattr(record, "trace_id", None)
         session_id: Final = getattr(record, "session_id", None)
         if not trace_id and not session_id:
@@ -661,7 +879,7 @@ def _setup_json_exception_handlers(formatter):
     # Create a handler with JSON formatting for exceptions
     error_handler: Final = logging.StreamHandler()
     error_handler.setFormatter(formatter)
-    error_handler.addFilter(_stdout_truncation_filter)
+    error_handler.addFilter(_diagnostic_filter)
     error_handler.addFilter(_secret_filter)
     error_handler.addFilter(_correlation_filter)
 
@@ -732,10 +950,70 @@ verbose_logger.addHandler(handler)
 
 # Filters attached to the logger, not the handler, survive callers swapping in their own
 # handlers (JSON mode, uvicorn log config, a host app's root handler).
-verbose_router_logger.addFilter(_stdout_truncation_filter)
-verbose_proxy_logger.addFilter(_stdout_truncation_filter)
-verbose_proxy_stdout_logger.addFilter(_stdout_truncation_filter)
-verbose_logger.addFilter(_stdout_truncation_filter)
+verbose_router_logger.addFilter(_diagnostic_filter)
+verbose_proxy_logger.addFilter(_diagnostic_filter)
+verbose_proxy_stdout_logger.addFilter(_diagnostic_filter)
+verbose_logger.addFilter(_diagnostic_filter)
+
+
+def print_startup_message(message: str) -> None:
+    """Write a boot-time message meant for the operator's terminal.
+
+    LITELLM_SUPPRESS_STARTUP_OUTPUT or litellm_settings.suppress_startup_output turns every one of them
+    off; a warning goes through print_startup_warning instead. Plain mode prints it with its spacing,
+    keeping the ANSI colors only on a color terminal by the same check as the plain log format, so a
+    container log never stores escape codes.
+    With JSON logs on, every line of stdout is read by a log pipeline, so the message goes out as one
+    INFO record of the proxy logger instead, on stdout like the print whatever handlers the logging
+    config gave that logger, with the ANSI color codes and surrounding blank lines removed, located at
+    the caller and emitted at any log level, whole and unredacted as the print showed it; a blank
+    spacer produces no record.
+    """
+    if litellm.suppress_startup_output is True:
+        return
+    frame: Final = inspect.currentframe()
+    _write_startup_message(message, frame.f_back if frame is not None else None, logging.INFO)
+
+
+def print_startup_warning(message: str) -> None:
+    """Write a boot-time warning as print_startup_message writes a message, even with suppress_startup_output
+    on, since it names something the operator has to fix. With JSON logs on it is a WARNING record, on
+    stdout where the print put it, so a collector that filters on the level field keeps it."""
+    frame: Final = inspect.currentframe()
+    _write_startup_message(message, frame.f_back if frame is not None else None, logging.WARNING)
+
+
+def _write_startup_message(message: str, caller: FrameType | None, level: int) -> None:
+    if not litellm.json_logs:
+        import click
+
+        click.echo(terminal_text(message))
+        return
+    text: Final = _ANSI_ESCAPE.sub("", message).strip("\n")
+    if not text:
+        return
+    record: Final = verbose_proxy_logger.makeRecord(
+        verbose_proxy_logger.name,
+        level,
+        caller.f_code.co_filename if caller is not None else __file__,
+        caller.f_lineno if caller is not None else 0,
+        text,
+        (),
+        None,
+        func=caller.f_code.co_name if caller is not None else None,
+    )
+    if not _process_record(record, base64_limit=_get_max_base64_length_stdout_log(), text_limit=0, redact=False):
+        return
+    _startup_json_handler().handle(record)
+
+
+def _startup_json_handler() -> logging.Handler:
+    """The proxy's JSON handler on stdout, filters included, for one startup message or warning."""
+    handler: Final = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JsonFormatter())
+    handler.addFilter(_secret_filter)
+    handler.addFilter(_correlation_filter)
+    return handler
 
 
 def _suppress_loggers():
@@ -840,6 +1118,8 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
         lg.handlers.clear()  # remove any existing handlers
         lg.addHandler(handler)  # add JSON formatter handler
         lg.propagate = False  # prevent bubbling to parent/root
+    if (configured_level := os.getenv("LITELLM_LOG")) is not None:
+        logging.getLogger().setLevel(resolve_log_level(configured_level))
 
 
 def _get_uvicorn_json_log_config():
@@ -902,7 +1182,7 @@ def _get_uvicorn_json_log_config():
     return log_config
 
 
-def _turn_on_json():
+def turn_on_json() -> None:
     """
     Turn on JSON logging
 
@@ -916,10 +1196,16 @@ def _turn_on_json():
     _setup_json_exception_handlers(JsonFormatter())
 
 
-def _turn_on_debug():
+_turn_on_json = turn_on_json
+
+
+def turn_on_debug() -> None:
     verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
     verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to debug
     verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
+
+
+_turn_on_debug = turn_on_debug
 
 
 def _disable_debugging():
@@ -937,16 +1223,21 @@ def _enable_debugging():
     verbose_proxy_stdout_logger.disabled = False
 
 
-def print_verbose(print_statement):
+def print_verbose(print_statement: object, *args: object) -> None:
     try:
-        if set_verbose:
-            print(redact_secrets(str(print_statement)))  # noqa: T201
+        if not set_verbose:
+            return
+        message: Final = str(print_statement) % args if args else str(print_statement)
+        print(redact_secrets(message))  # noqa: T201
     except Exception:
         pass
 
 
-def _is_debugging_on() -> bool:
+def is_debugging_on() -> bool:
     """
     Returns True if debugging is on
     """
     return verbose_logger.isEnabledFor(logging.DEBUG) or set_verbose is True
+
+
+_is_debugging_on = is_debugging_on

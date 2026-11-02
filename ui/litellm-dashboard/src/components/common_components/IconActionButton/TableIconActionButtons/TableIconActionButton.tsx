@@ -58,7 +58,7 @@ export default function TableIconActionButton({
   return (
     <TooltipProvider>
       <Tooltip>
-        <TooltipTrigger render={<span />}>{button}</TooltipTrigger>
+        <TooltipTrigger render={<span tabIndex={disabled ? 0 : undefined} />}>{button}</TooltipTrigger>
         <TooltipContent>{title}</TooltipContent>
       </Tooltip>
     </TooltipProvider>

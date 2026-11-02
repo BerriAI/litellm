@@ -10,8 +10,10 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx import Headers
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
@@ -25,6 +27,9 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
     HttpxBinaryResponseContent = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_STR: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class MinimaxException(BaseLLMException):
@@ -299,7 +304,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
         try:
             # Parse JSON response
-            response_json: Final = raw_response.json()
+            response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
             # MiniMax API response format check
             # The API can return different structures:
@@ -320,7 +325,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
             # Extract audio data
             # MiniMax returns audio in "data" field
-            data: Final = response_json.get("data", {})
+            data: Final = _JSON_OBJECT.validate_python(response_json.get("data", {}))
 
             # Check if response contains a URL (output_format='url')
             audio_url: Final = data.get("audio_url", None)
@@ -334,7 +339,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
                 )
 
             # Get hex-encoded audio data
-            audio_hex: Final = data.get("audio", "") or response_json.get("audio_file", "")
+            audio_hex: Final = _STR.validate_python(data.get("audio", "") or response_json.get("audio_file", "") or "")
 
             if not audio_hex:
                 raise MinimaxException(
@@ -400,10 +405,5 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Construct the MiniMax endpoint URL.
         """
-        base_url = api_base or get_secret_str("MINIMAX_API_BASE") or self.TTS_BASE_URL
-        base_url = base_url.rstrip("/")
-
-        # MiniMax uses a simple endpoint path
-        url: Final = f"{base_url}{self.TTS_ENDPOINT_PATH}"
-
-        return url
+        base_url: Final = api_base or get_secret_str("MINIMAX_API_BASE") or self.TTS_BASE_URL
+        return join_api_base(base_url, self.TTS_ENDPOINT_PATH)

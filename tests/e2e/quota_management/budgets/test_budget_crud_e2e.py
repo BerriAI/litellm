@@ -10,12 +10,19 @@ from datetime import datetime, timezone
 import pytest
 
 from budget_client import BudgetClient
+from e2e_metadata import Domain, Route, Subject, meta
 from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
 
 @pytest.mark.covers("mgmt.budget.new.persists")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.BUDGET_MANAGEMENT,
+    )
+)
 def test_budget_crud_roundtrip(client: BudgetClient, resources: ResourceManager) -> None:
     budget_id = client.create_budget(max_budget=12.5, soft_budget=10.0, budget_duration="30d")
     resources.defer(lambda: client.delete_budget(budget_id))
@@ -38,6 +45,12 @@ def test_budget_crud_roundtrip(client: BudgetClient, resources: ResourceManager)
 
 
 @pytest.mark.covers("mgmt.budget.delete.persists")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.BUDGET_MANAGEMENT,
+    )
+)
 def test_budget_delete_removes_it(client: BudgetClient, resources: ResourceManager) -> None:
     budget_id = client.create_budget(max_budget=1.0)
     resources.defer(lambda: client.delete_budget(budget_id))
@@ -45,6 +58,12 @@ def test_budget_delete_removes_it(client: BudgetClient, resources: ResourceManag
     assert not client.budget_info(budget_id), "budget still present after delete"
 
 
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.KEY_MANAGEMENT,
+    )
+)
 def test_budget_duration_schedules_reset_on_key(client: BudgetClient, resources: ResourceManager) -> None:
     key = client.generate_key(max_budget=10.0, budget_duration="30d")
     resources.defer(lambda: client.delete_key(key))

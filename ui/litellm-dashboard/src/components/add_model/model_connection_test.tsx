@@ -43,8 +43,12 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
     try {
       const result = await prepareModelAddRequest(formValues, accessToken, null);
 
-      if (!result) {
-        setError("Failed to prepare model data. Please check your form inputs.");
+      if (!result?.length) {
+        setError(
+          result
+            ? "Required fields are not filled in. Fill them in and test the connection again."
+            : "Failed to prepare model data. Please check your form inputs.",
+        );
         setIsSuccess(false);
         setIsLoading(false);
         return;

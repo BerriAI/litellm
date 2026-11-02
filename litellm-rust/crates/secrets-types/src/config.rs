@@ -1,24 +1,45 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use strum::IntoStaticStr;
 
-use crate::SecretValue;
+use litellm_secret_value::SecretValue;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    IntoStaticStr,
+    PartialEq,
+    Serialize,
+    strum::VariantArray,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyManagementSystem {
+    #[strum(serialize = "google_kms")]
     GoogleKms,
+    #[strum(serialize = "azure_key_vault")]
     AzureKeyVault,
+    #[strum(serialize = "aws_secret_manager")]
     AwsSecretManager,
+    #[strum(serialize = "google_secret_manager")]
     GoogleSecretManager,
+    #[strum(serialize = "hashicorp_vault")]
     HashicorpVault,
+    #[strum(serialize = "cyberark")]
     Cyberark,
+    #[strum(serialize = "local")]
     Local,
+    #[strum(serialize = "aws_kms")]
     AwsKms,
+    #[strum(serialize = "custom")]
     Custom,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccessMode {
     #[default]
@@ -33,7 +54,7 @@ impl AccessMode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(default)]
 pub struct KeyManagementSettings {
     pub hosted_keys: Option<Vec<String>>,

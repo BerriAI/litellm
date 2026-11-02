@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
+from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -139,6 +140,15 @@ def get_azure_ai_auth_headers(
 AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: Final = "azure_model_router_selected_model"
 
 
+FOUNDRY_CLASSIC_AGENT_ID_PREFIX: Final = "asst_"
+
+
+def is_foundry_project_agent(model: str | None) -> bool:
+    if model is None or AzureFoundryModelInfo.get_azure_ai_route(model) != "agents":
+        return False
+    return not model.split("agents/", 1)[1].startswith(FOUNDRY_CLASSIC_AGENT_ID_PREFIX)
+
+
 def azure_ai_supports_native_responses(model: str | None, api_base: str | None) -> bool:
     resolved_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
     if resolved_base is not None and not is_azure_openai_v1_host(resolved_base):
@@ -148,6 +158,14 @@ def azure_ai_supports_native_responses(model: str | None, api_base: str | None) 
     if "claude" in model.lower():
         return False
     return AzureFoundryModelInfo.get_azure_ai_route(model) == "default"
+
+
+def foundry_chat_rejects_function_tools_while_reasoning(
+    model: str, reasoning_effort: str | Mapping[str, object] | None
+) -> bool:
+    if reasoning_effort is None:
+        return OpenAIGPT5Config.is_model_gpt_6_plus_model(model)
+    return OpenAIGPT5Config.is_model_gpt_5_6_plus_model(model)
 
 
 class AzureFoundryModelInfo(BaseLLMModelInfo):

@@ -2,6 +2,17 @@
 
 This guide provides instructions for building and running the LiteLLM application using Docker and Docker Compose.
 
+> **Just want to run LiteLLM?** This guide builds from source. To run the published
+> image instead, use `docker-compose.quickstart.yml` in this directory — the
+> two-service stack (gateway + Postgres) that the
+> [Docker quickstart](https://docs.litellm.ai/docs/proxy/docker_quick_start) documents:
+>
+> ```bash
+> curl -sSLO https://github.com/BerriAI/litellm/raw/main/docker/docker-compose.quickstart.yml
+> printf 'LITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
+> docker compose -f docker-compose.quickstart.yml up -d
+> ```
+
 ## Prerequisites
 
 - Docker
@@ -58,6 +69,32 @@ To stop the running containers, use the following command:
 ```bash
 docker compose down
 ```
+
+## Embedded LiteAdmin MCP
+
+Source builds containing embedded LiteAdmin MCP can serve it at `/admin/mcp` on the existing LiteLLM port. This capability is unreleased. Keep your existing database, master key, and proxy configuration, then add these settings to the serving container's environment:
+
+```bash
+LITELLM_ENABLE_ADMIN_MCP=true
+LITELLM_LICENSE="your-enterprise-license"
+PROXY_BASE_URL=https://gateway.example.com
+```
+
+For the unified source deployment described above, put them in its `.env` file and rebuild:
+
+```bash
+docker compose up -d --build
+```
+
+In componentized deployments, set the flag and license on the backend container and route `/admin/mcp` to the backend service. The gateway component excludes this endpoint. The unified, database, non-root, and backend image builds bundle the connector
+
+Hosting is disabled by default. Opting in requires a valid base Enterprise license; an unlicensed opt-in or invalid flag value prevents startup. Enabling it reserves `/admin`, so rename any MCP server alias called `admin` first
+
+With native key authentication, connect with a personal proxy-admin bearer key. When `enable_oauth2_proxy_auth` is enabled, the existing trusted-proxy identity headers select the user instead; the MCP bearer is required by the connector but does not select the native user. The resolved user must have the stored `proxy_admin` role, and `trusted_proxy_ranges` applies to the original caller's direct peer
+
+Embedded responses default to `full`; selecting `LITELLM_ADMIN_RESPONSE_VIEW=compact` requires subsequent saved-result reads to reach the same worker process, including within a multi-worker pod
+
+See the [LiteAdmin MCP guide](https://docs.litellm.ai/docs/proxy/liteadmin_mcp#run-liteadmin-mcp-inside-litellm) for client configuration, tool restrictions, and verification
 
 ## Hardened / Offline Testing
 

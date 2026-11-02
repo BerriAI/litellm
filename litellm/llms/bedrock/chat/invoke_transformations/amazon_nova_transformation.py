@@ -28,7 +28,7 @@ from ..converse_transformation import AmazonConverseConfig
 from .base_invoke_transformation import AmazonInvokeConfig
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 _CachePointCarrier = TypeVar("_CachePointCarrier", SystemContentBlock, ContentBlock)
 _INJECTION_POINTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
@@ -92,8 +92,16 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        model_info: Mapping[str, object] | None = None,
     ) -> dict:
-        return AmazonConverseConfig.map_openai_params(self, non_default_params, optional_params, model, drop_params)
+        return AmazonConverseConfig.map_openai_params(
+            self,
+            {key: value for key, value in non_default_params.items() if key != "requestMetadata"},
+            optional_params,
+            model,
+            drop_params,
+            model_info,
+        )
 
     def transform_request(
         self,
@@ -107,7 +115,9 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
             self,
             model=model,
             messages=messages,
-            optional_params=_without_tool_config_injection_points(optional_params),
+            optional_params=_without_tool_config_injection_points(
+                {key: value for key, value in optional_params.items() if key != "requestMetadata"}
+            ),
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -128,7 +138,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

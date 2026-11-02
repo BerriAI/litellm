@@ -1,3 +1,4 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useState } from "react";
 import { ArrowRight, Search } from "lucide-react";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
@@ -11,6 +12,7 @@ interface GuardrailGardenProps {
 }
 
 const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardrailCreated }) => {
+  const term = useTerminology();
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCard, setSelectedCard] = useState<GuardrailCardInfo | null>(null);
   const [showAllLitellm, setShowAllLitellm] = useState(false);
@@ -22,12 +24,13 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
     const q = searchQuery.toLowerCase();
     return (
       card.name.toLowerCase().includes(q) ||
-      card.description.toLowerCase().includes(q) ||
+      term(card.description).toLowerCase().includes(q) ||
       card.tags.some((t) => t.toLowerCase().includes(q))
     );
   });
 
   const litellmCards = filteredCards.filter((c) => c.category === "litellm");
+  const decisionModelCards = filteredCards.filter((c) => c.category === "decision_model");
   const partnerCards = filteredCards.filter((c) => c.category === "partner");
 
   if (selectedCard) {
@@ -56,9 +59,11 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
         </InputGroup>
       </div>
 
-      <div className="mb-10">
+      <section className="mb-10" aria-labelledby="guardrail-garden-litellm">
         <div className="mb-1 flex items-center justify-between">
-          <h2 className="m-0 text-xl font-semibold text-foreground">LiteLLM Content Filter</h2>
+          <h2 id="guardrail-garden-litellm" className="m-0 text-xl font-semibold text-foreground">
+            LiteLLM Content Filter
+          </h2>
           <span
             className="inline-flex cursor-pointer items-center gap-1.5 text-sm text-primary"
             onClick={() => setShowAllLitellm(!showAllLitellm)}
@@ -81,19 +86,36 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
             <GuardrailCard key={card.id} card={card} onClick={() => setSelectedCard(card)} />
           ))}
         </div>
-      </div>
+      </section>
 
-      <div className="mb-10">
-        <h2 className="mt-0 mb-1 text-xl font-semibold text-foreground">Partner Guardrails</h2>
+      <section className="mb-10" aria-labelledby="guardrail-garden-decision-model">
+        <h2 id="guardrail-garden-decision-model" className="mt-0 mb-1 text-xl font-semibold text-foreground">
+          Decision Model
+        </h2>
         <p className="mt-1 mb-5 text-[13px] text-muted-foreground">
-          Third-party guardrail integrations from leading AI security providers.
+          Ask a decision model yes/no questions about each request or response, and block or log when a score reaches
+          its threshold.
+        </p>
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4">
+          {decisionModelCards.map((card) => (
+            <GuardrailCard key={card.id} card={card} onClick={() => setSelectedCard(card)} />
+          ))}
+        </div>
+      </section>
+
+      <section className="mb-10" aria-labelledby="guardrail-garden-partner">
+        <h2 id="guardrail-garden-partner" className="mt-0 mb-1 text-xl font-semibold text-foreground">
+          Partner Guardrails
+        </h2>
+        <p className="mt-1 mb-5 text-[13px] text-muted-foreground">
+          {term("Third-party guardrail integrations from leading AI security providers.")}
         </p>
         <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4">
           {partnerCards.map((card) => (
             <GuardrailCard key={card.id} card={card} onClick={() => setSelectedCard(card)} />
           ))}
         </div>
-      </div>
+      </section>
     </div>
   );
 };

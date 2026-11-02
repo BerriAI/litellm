@@ -97,7 +97,7 @@ def test_zero_false_and_empty_values_are_not_treated_as_omission(gateway: Gatewa
             "POST", "/v1/chat/completions",
             {"model": models[0], "messages": [{"role": "user", "content": "zero budget"}]}, key=key,
         )
-        assert denied.status_code == 429, denied.text
+        assert denied.status_code == 422, denied.text
         assert denied.json()["error"]["type"] == "budget_exceeded"
         gateway.post("/key/update", {"key": key, "max_budget": 1, "models": [], "metadata": {}})
         info: Final = object_value(gateway.get("/key/info", {"key": key})["info"])
@@ -127,7 +127,7 @@ def test_zero_false_and_empty_values_are_not_treated_as_omission(gateway: Gatewa
             "POST", "/v1/chat/completions",
             {"model": models[0], "messages": [{"role": "user", "content": "updated zero budget"}]}, key=key,
         )
-        assert zero_after_update.status_code == 429, zero_after_update.text
+        assert zero_after_update.status_code == 422, zero_after_update.text
         assert zero_after_update.json()["error"]["type"] == "budget_exceeded"
         gateway.post("/key/update", {"key": key, "max_budget": None})
         assert read_rows(

@@ -6,10 +6,11 @@
 # +-------------------------------------------------------------+
 import os
 import uuid
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -26,6 +27,8 @@ from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class OnyxGuardrail(CustomGuardrail):
@@ -63,7 +66,7 @@ class OnyxGuardrail(CustomGuardrail):
 
     async def _validate_with_guard_server(
         self,
-        payload: Any,
+        payload: object,
         input_type: Literal["request", "response"],
         conversation_id: str,
     ) -> dict:
@@ -115,7 +118,7 @@ class OnyxGuardrail(CustomGuardrail):
             try:
                 response: Final = ModelResponse(**request_data)
                 parsed: Final = response.json()
-                payload = parsed.get("response", {})
+                payload = _DECODED_JSON.validate_python(parsed.get("response", {}))
             except Exception as e:
                 verbose_proxy_logger.error(
                     "Error in converting request_data to ModelResponse: %s",

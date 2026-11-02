@@ -3,17 +3,23 @@ import json
 import re
 import time
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Iterator, Mapping, Sequence
 from typing import Final, Literal, cast
+
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _extract_reasoning_content,
+    extract_reasoning_content,
 )
+from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.databricks import DatabricksTool
 from litellm.types.llms.openai import (
+    ChatCompletionAnnotation,
     ChatCompletionThinkingBlock,
     ImageURLListItem,
     OpenAIModerationResponse,
@@ -53,6 +59,31 @@ _CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
 _MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
 
 
+_ANNOTATION_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+
+
+def _is_provider_specific_annotation(annotation: object) -> bool:
+    match annotation:
+        case {"type": "url_citation"}:
+            return False
+        case {"type": _}:
+            return True
+        case _:
+            return False
+
+
+def _annotation_entries(annotations: object) -> tuple[object, ...]:
+    return _ANNOTATION_ENTRIES.validate_python(annotations) if isinstance(annotations, list) else ()
+
+
+def partition_annotations(annotations: object) -> tuple[object, tuple[object, ...]]:
+    entries: Final = _annotation_entries(annotations)
+    others: Final = tuple(annotation for annotation in entries if _is_provider_specific_annotation(annotation))
+    if not others:
+        return annotations, ()
+    return [annotation for annotation in entries if not _is_provider_specific_annotation(annotation)] or None, others
+
+
 def _normalize_images_for_message(
     images: list[dict] | None,
 ) -> list[ImageURLListItem] | None:
@@ -71,7 +102,7 @@ def _normalize_images_for_message(
     return normalized
 
 
-def _safe_convert_created_field(created_value) -> int:
+def safe_convert_created_field(created_value: object) -> int:
     """
     Safely convert a 'created' field value to an integer.
 
@@ -91,19 +122,20 @@ def _safe_convert_created_field(created_value) -> int:
     elif isinstance(created_value, float):
         return int(created_value)
     else:
-        # for strings, etc
         try:
-            return int(float(created_value))
+            return int(float(cast(float | str, created_value)))
         except (ValueError, TypeError):
-            # Fallback to current time if conversion fails
             return int(time.time())
+
+
+_safe_convert_created_field = safe_convert_created_field
 
 
 def convert_tool_call_to_json_mode(
     tool_calls: list[ChatCompletionMessageToolCall],
     convert_tool_call_to_json_mode: bool,
 ) -> tuple[Message | None, str | None]:
-    if _should_convert_tool_call_to_json_mode(
+    if should_convert_tool_call_to_json_mode(
         tool_calls=tool_calls,
         convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
     ):
@@ -138,17 +170,90 @@ def _split_assembled_content_for_replay(content: str | None) -> list[str]:
     return _REPLAY_CONTENT_SLICE_RE.findall(content)
 
 
-def _clear_later_replay_slice_metadata(choice: StreamingChoices) -> None:
-    # Rebuild the delta as content-only so every accumulate-able field (role,
-    # tool_calls, reasoning_content, thinking_blocks, audio, images,
-    # annotations, ...) is dropped on later slices instead of an enumerated
-    # subset; repeating any of them makes downstream handlers that accumulate
-    # streamed deltas collect it once per slice, and a field added to Delta
-    # later can't silently re-introduce the duplication.
-    choice.delta = Delta(content=choice.delta.content)
-    choice.logprobs = None
-    if hasattr(choice, "enhancements"):
-        del choice.enhancements
+_REPLAY_REASONING_FIELDS: Final = frozenset({"reasoning_content", "thinking_blocks", "reasoning_items"})
+_REPLAY_LEAD_FIELDS: Final = _REPLAY_REASONING_FIELDS | {"role", "provider_specific_fields"}
+_REPLAY_TOOL_FIELDS: Final = frozenset({"tool_calls", "function_call"})
+_REPLAY_TEXT_FIELDS: Final = frozenset({"content", "annotations"})
+
+
+def _fields_in(fields: Mapping[str, object], keys: frozenset[str]) -> dict[str, object]:
+    return {key: value for key, value in fields.items() if key in keys}
+
+
+def _replay_deltas(delta: Delta) -> tuple[Delta, ...]:
+    fields: Final[dict[str, object]] = delta.model_dump(exclude_none=True)
+    lead: Final = _fields_in(fields, _REPLAY_LEAD_FIELDS) if _REPLAY_REASONING_FIELDS.intersection(fields) else {}
+    pieces: Final = _split_assembled_content_for_replay(delta.content) or ([delta.content] if delta.content else [])
+    if not pieces and not lead:
+        return (delta,)
+    if not pieces:
+        held_back: Final = lead.keys() | {"content"}
+        rest: Final = {key: value for key, value in fields.items() if key not in held_back}
+        return (Delta.model_validate(lead),) + ((Delta.model_validate(rest),) if rest else ())
+    tools: Final = _fields_in(fields, _REPLAY_TOOL_FIELDS)
+    annotations: Final = _fields_in(fields, frozenset({"annotations"}))
+    moved: Final = lead.keys() | _REPLAY_TOOL_FIELDS | _REPLAY_TEXT_FIELDS
+    first_slice: Final = {key: value for key, value in fields.items() if key not in moved}
+    last_index: Final = len(pieces) - 1
+    return (
+        ((Delta.model_validate(lead),) if lead else ())
+        + tuple(
+            Delta.model_validate(
+                {
+                    **(first_slice if index == 0 else {}),
+                    "content": piece,
+                    **(annotations if index == last_index else {}),
+                }
+            )
+            for index, piece in enumerate(pieces)
+        )
+        + ((Delta.model_validate(tools),) if tools else ())
+    )
+
+
+def _replay_frame(
+    response: ModelResponseStream, delta: Delta, finish_reason: str | None, keeps_choice_metadata: bool
+) -> ModelResponseStream:
+    frame: Final = response.model_copy(deep=True)
+    choice: Final = frame.choices[0]
+    choice.delta = delta
+    choice.finish_reason = finish_reason
+    if not keeps_choice_metadata:
+        choice.logprobs = None
+        if hasattr(choice, "enhancements"):
+            del choice.enhancements
+    return frame
+
+
+def _replay_frames(response: ModelResponseStream) -> Iterator[ModelResponseStream]:
+    if len(response.choices) != 1:
+        yield response
+        return
+    usage: Final = getattr(response, "usage", None)
+    if usage is not None:
+        delattr(response, "usage")
+    choice: Final = response.choices[0]
+    deltas: Final = _replay_deltas(choice.delta)
+    first_text: Final = next((index for index, delta in enumerate(deltas) if delta.content), 0)
+    for index, delta in enumerate(deltas):
+        yield _replay_frame(response, delta, finish_reason=None, keeps_choice_metadata=index == first_text)
+    finish_frame: Final = _replay_frame(
+        response, Delta(), finish_reason=choice.finish_reason, keeps_choice_metadata=False
+    )
+    if usage is not None:
+        setattr(finish_frame, "usage", usage)
+    yield finish_frame
+
+
+def _first_replay_delta(message: Mapping[str, object]) -> Delta:
+    return Delta.model_validate(
+        {
+            **message,
+            "provider_specific_fields": _cached_provider_specific_fields(
+                _CACHED_MESSAGE_PROVIDER_FIELDS.validate_python(message)
+            ),
+        }
+    )
 
 
 def _invalid_choices_message(response_object: Mapping[str, object]) -> str:
@@ -212,12 +317,7 @@ async def convert_to_streaming_response_async(
                     t["index"] = index
                 pydantic_tool_calls.append(ChatCompletionDeltaToolCall(**t))
             choice["message"]["tool_calls"] = pydantic_tool_calls
-        delta = Delta(
-            content=choice["message"].get("content", None),
-            role=choice["message"]["role"],
-            function_call=choice["message"].get("function_call", None),
-            tool_calls=choice["message"].get("tool_calls", None),
-        )
+        delta = _first_replay_delta(choice["message"])
         finish_reason = choice.get("finish_reason", None)
 
         if finish_reason is None:
@@ -234,18 +334,14 @@ async def convert_to_streaming_response_async(
         setattr(
             model_response_object,
             "usage",
-            Usage(
-                completion_tokens=response_object["usage"].get("completion_tokens", 0),
-                prompt_tokens=response_object["usage"].get("prompt_tokens", 0),
-                total_tokens=response_object["usage"].get("total_tokens", 0),
-            ),
+            _replayed_usage(_CACHED_USAGE_DETAILS.validate_python(response_object["usage"])),
         )
 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
 
     if "created" in response_object:
-        model_response_object.created = _safe_convert_created_field(response_object["created"])
+        model_response_object.created = safe_convert_created_field(response_object["created"])
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
@@ -253,41 +349,14 @@ async def convert_to_streaming_response_async(
     if "model" in response_object:
         model_response_object.model = response_object["model"]
 
-    # Replay cached content with per-word cadence so stream=true cache hits
-    # don't arrive as a single SSE frame. Multi-choice (n>1) responses and
-    # unsplittable content (None/empty/whitespace-free) keep the original
-    # single-yield behavior.
-    slices: list[str] = []
-    if len(model_response_object.choices) == 1:
-        slices = _split_assembled_content_for_replay(model_response_object.choices[0].delta.content)
-    if len(slices) <= 1:
-        yield model_response_object
-        await asyncio.sleep(0)
-        return
-
-    # Detach usage from the base object so we can re-attach it only to the
-    # final slice chunk. A non-None usage always lives in __pydantic_extra__
-    # here (set via setattr above), so delattr cannot fail.
-    original_usage: Final = getattr(model_response_object, "usage", None)
-    if original_usage is not None:
-        delattr(model_response_object, "usage")
-    original_finish_reason: Final = model_response_object.choices[0].finish_reason
-    last_idx: Final = len(slices) - 1
-    for i, piece in enumerate(slices):
-        slice_chunk = model_response_object.model_copy(deep=True)
-        slice_chunk.choices[0].delta.content = piece
-        if i > 0:
-            _clear_later_replay_slice_metadata(slice_chunk.choices[0])
-        slice_chunk.choices[0].finish_reason = original_finish_reason if i == last_idx else None
-        if i == last_idx and original_usage is not None:
-            setattr(slice_chunk, "usage", original_usage)
-        yield slice_chunk
+    for frame in _replay_frames(model_response_object):
+        yield frame
         await asyncio.sleep(0)
 
 
 def convert_to_streaming_response(
     response_object: dict | None = None,
-):
+) -> Generator[ModelResponseStream, None, None]:
     # used for yielding Cache hits when stream == True
     if response_object is None:
         raise Exception("Error in response object format")
@@ -325,16 +394,17 @@ def convert_to_streaming_response(
     model_response_object.choices = choice_list
 
     if "usage" in response_object and response_object["usage"] is not None:
-        setattr(model_response_object, "usage", Usage())
-        model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
-        model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
-        model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)
+        setattr(
+            model_response_object,
+            "usage",
+            _replayed_usage(_CACHED_USAGE_DETAILS.validate_python(response_object["usage"])),
+        )
 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
 
     if "created" in response_object:
-        model_response_object.created = _safe_convert_created_field(response_object["created"])
+        model_response_object.created = safe_convert_created_field(response_object["created"])
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
@@ -342,40 +412,112 @@ def convert_to_streaming_response(
     if "model" in response_object:
         model_response_object.model = response_object["model"]
 
-    # Replay cached content with per-word cadence on sync cache-hit paths
-    # (S3Cache, sync completion()). See convert_to_streaming_response_async
-    # for the full rationale — this mirrors its tail.
-    slices: list[str] = []
-    if len(model_response_object.choices) == 1:
-        slices = _split_assembled_content_for_replay(model_response_object.choices[0].delta.content)
-    if len(slices) <= 1:
-        yield model_response_object
-        return
-
-    original_usage: Final = getattr(model_response_object, "usage", None)
-    if original_usage is not None:
-        delattr(model_response_object, "usage")
-    original_finish_reason: Final = model_response_object.choices[0].finish_reason
-    last_idx: Final = len(slices) - 1
-    for i, piece in enumerate(slices):
-        slice_chunk = model_response_object.model_copy(deep=True)
-        slice_chunk.choices[0].delta.content = piece
-        if i > 0:
-            _clear_later_replay_slice_metadata(slice_chunk.choices[0])
-        slice_chunk.choices[0].finish_reason = original_finish_reason if i == last_idx else None
-        if i == last_idx and original_usage is not None:
-            setattr(slice_chunk, "usage", original_usage)
-        yield slice_chunk
+    yield from _replay_frames(model_response_object)
 
 
 from collections import defaultdict
 
 
-def _handle_invalid_parallel_tool_calls(
-    tool_calls: list[
-        ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
-    ],  # mutable-ok: patched in place via slice assignment
-):
+@with_config(ConfigDict(extra="allow", strict=True))
+class _FakeToolUse(TypedDict):
+    parameters: ReadOnly[object]
+    recipient_name: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _ParallelToolUseArgs(TypedDict):
+    tool_uses: ReadOnly[Sequence[_FakeToolUse]]
+
+
+_PARALLEL_TOOL_USE_ARGS: Final = TypeAdapter(_ParallelToolUseArgs)
+_DECODED_TOOL_ARGUMENTS: Final = TypeAdapter(object)
+
+
+class _CachedMessageProviderFields(TypedDict, total=False):
+    provider_specific_fields: ReadOnly[object]
+
+
+class _CachedUsageDetails(TypedDict, total=False):
+    completion_tokens: ReadOnly[object]
+    prompt_tokens: ReadOnly[object]
+    total_tokens: ReadOnly[object]
+    completion_tokens_details: ReadOnly[object]
+    prompt_tokens_details: ReadOnly[object]
+    cache_read_input_tokens: ReadOnly[object]
+    cache_creation_input_tokens: ReadOnly[object]
+
+
+class _PromptCacheTokenCounts(TypedDict, total=False):
+    cache_read_input_tokens: ReadOnly[int]
+    cache_creation_input_tokens: ReadOnly[int]
+
+
+_CACHED_MESSAGE_PROVIDER_FIELDS: Final = TypeAdapter(_CachedMessageProviderFields)
+_CACHED_USAGE_DETAILS: Final = TypeAdapter(_CachedUsageDetails)
+_FIELD_MAP: Final = TypeAdapter(dict[str, object])
+_COMPLETION_TOKENS_DETAILS: Final = TypeAdapter(CompletionTokensDetailsWrapper)
+_PROMPT_TOKENS_DETAILS: Final = TypeAdapter(PromptTokensDetailsWrapper)
+_PROMPT_CACHE_TOKEN_COUNTS: Final = TypeAdapter(_PromptCacheTokenCounts)
+_TOKEN_COUNT: Final = TypeAdapter(int)
+_PROMPT_CACHE_TOKEN_FIELDS: Final = ("cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def _cached_provider_specific_fields(message: _CachedMessageProviderFields) -> Mapping[str, object] | None:
+    fields: Final = message.get("provider_specific_fields")
+    return _FIELD_MAP.validate_python(fields) if isinstance(fields, dict) else None
+
+
+def _cached_completion_tokens_details(usage: _CachedUsageDetails) -> CompletionTokensDetailsWrapper | None:
+    details: Final = usage.get("completion_tokens_details")
+    if not isinstance(details, dict):
+        return None
+    try:
+        return _COMPLETION_TOKENS_DETAILS.validate_python(details)
+    except ValidationError:
+        return None
+
+
+def _cached_prompt_tokens_details(usage: _CachedUsageDetails) -> PromptTokensDetailsWrapper | None:
+    details: Final = usage.get("prompt_tokens_details")
+    if not isinstance(details, dict):
+        return None
+    try:
+        return _PROMPT_TOKENS_DETAILS.validate_python(details)
+    except ValidationError:
+        return None
+
+
+def _cached_token_count(count: object) -> int | None:
+    try:
+        return _TOKEN_COUNT.validate_python(count)
+    except ValidationError:
+        return None
+
+
+def _cached_prompt_cache_token_counts(usage: _CachedUsageDetails) -> _PromptCacheTokenCounts:
+    return _PROMPT_CACHE_TOKEN_COUNTS.validate_python(
+        {
+            field: count
+            for field in _PROMPT_CACHE_TOKEN_FIELDS
+            if (count := _cached_token_count(usage.get(field))) is not None
+        }
+    )
+
+
+def _replayed_usage(usage: _CachedUsageDetails) -> Usage:
+    return Usage(
+        completion_tokens=_cached_token_count(usage.get("completion_tokens")) or 0,
+        prompt_tokens=_cached_token_count(usage.get("prompt_tokens")) or 0,
+        total_tokens=_cached_token_count(usage.get("total_tokens")) or 0,
+        completion_tokens_details=_cached_completion_tokens_details(usage),
+        prompt_tokens_details=_cached_prompt_tokens_details(usage),
+        **_cached_prompt_cache_token_counts(usage),
+    )
+
+
+def handle_invalid_parallel_tool_calls(
+    tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall],
+) -> list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None:
     """
     Handle hallucinated parallel tool call from openai - https://community.openai.com/t/model-tries-to-call-unknown-function-multi-tool-use-parallel/490653
 
@@ -390,10 +532,12 @@ def _handle_invalid_parallel_tool_calls(
             if isinstance(tool_call, ChatCompletionMessageCustomToolCall):
                 continue
             current_function = tool_call.function.name
-            function_args = json.loads(tool_call.function.arguments)
+            function_args = _DECODED_TOOL_ARGUMENTS.validate_python(json.loads(tool_call.function.arguments))
             if current_function == "multi_tool_use.parallel":
                 verbose_logger.debug("OpenAI did a weird pseudo-multi-tool-use call, fixing call structure..")
-                for _fake_i, _fake_tool_use in enumerate(function_args["tool_uses"]):
+                for _fake_i, _fake_tool_use in enumerate(
+                    _PARALLEL_TOOL_USE_ARGS.validate_python(function_args)["tool_uses"]
+                ):
                     _function_args = _fake_tool_use["parameters"]
                     _current_function = _fake_tool_use["recipient_name"]
                     _current_function = _current_function.removeprefix("functions.")
@@ -414,6 +558,9 @@ def _handle_invalid_parallel_tool_calls(
     except json.JSONDecodeError:
         # if there is a JSONDecodeError, return the original tool_calls
         return tool_calls
+
+
+_handle_invalid_parallel_tool_calls = handle_invalid_parallel_tool_calls
 
 
 class LiteLLMResponseObjectHandler:
@@ -514,7 +661,8 @@ class LiteLLMResponseObjectHandler:
 
         text_completion_response["choices"] = choices_list
         text_completion_response["usage"] = response.get("usage", None)
-        text_completion_response._hidden_params = HiddenParams(**response._hidden_params)
+        response_hidden_params: Final = get_hidden_params(response) or {}
+        text_completion_response.hidden_params = HiddenParams.model_validate(response_hidden_params)
         return text_completion_response
 
     @staticmethod
@@ -532,7 +680,7 @@ class LiteLLMResponseObjectHandler:
         return transformed_logprobs
 
 
-def _should_convert_tool_call_to_json_mode(
+def should_convert_tool_call_to_json_mode(
     tool_calls: (
         Sequence[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | Sequence[DatabricksTool] | None
     ) = None,
@@ -545,6 +693,9 @@ def _should_convert_tool_call_to_json_mode(
         function: Final = tool_calls[0].get("function")
         return function is not None and function["name"] == RESPONSE_FORMAT_TOOL_NAME
     return False
+
+
+_should_convert_tool_call_to_json_mode = should_convert_tool_call_to_json_mode
 
 
 def convert_to_model_response_object(
@@ -647,14 +798,14 @@ def convert_to_model_response_object(
                     for _tc in tool_calls:
                         _openai_tc = chat_completion_tool_call_from_dict(_tc)
                         _openai_tool_calls.append(_openai_tc)
-                    fixed_tool_calls = _handle_invalid_parallel_tool_calls(_openai_tool_calls)
+                    fixed_tool_calls = handle_invalid_parallel_tool_calls(_openai_tool_calls)
 
                     if fixed_tool_calls is not None:
                         tool_calls = fixed_tool_calls
 
                 message: Message | None = None
                 finish_reason: str | None = None
-                if tool_calls is not None and _should_convert_tool_call_to_json_mode(
+                if tool_calls is not None and should_convert_tool_call_to_json_mode(
                     tool_calls=tool_calls,
                     convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
                 ):
@@ -669,9 +820,12 @@ def convert_to_model_response_object(
                     provider_specific_fields = dict(choice["message"].get("provider_specific_fields", None) or {})
                     for f in choice["message"].keys() - _MESSAGE_FIELDS:
                         provider_specific_fields[f] = choice["message"][f]
+                    annotations, other_annotations = partition_annotations(choice["message"].get("annotations", None))
+                    if other_annotations:
+                        provider_specific_fields["annotations"] = list(other_annotations)
 
                     # Handle reasoning models that display `reasoning_content` within `content`
-                    reasoning_content, content = _extract_reasoning_content(choice["message"])
+                    reasoning_content, content = extract_reasoning_content(choice["message"])
 
                     # Handle thinking models that display `thinking_blocks` within `content`
                     thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = (
@@ -683,17 +837,22 @@ def convert_to_model_response_object(
 
                     message = Message(
                         content=content,
-                        role=choice["message"]["role"] or "assistant",
+                        role=choice["message"].get("role") or "assistant",
                         function_call=choice["message"].get("function_call", None),
                         tool_calls=tool_calls,
                         audio=choice["message"].get("audio", None),
                         provider_specific_fields=provider_specific_fields,
                         reasoning_content=reasoning_content,
                         thinking_blocks=thinking_blocks,
-                        annotations=choice["message"].get("annotations", None),
+                        reasoning_items=choice["message"].get("reasoning_items", None),
+                        annotations=cast(  # cast-ok: provider annotation dicts pass through whole, keeping keys such as url_citation.content
+                            list[ChatCompletionAnnotation] | None, annotations
+                        ),
                         images=_normalize_images_for_message(choice["message"].get("images", None)),
                     )
                     finish_reason = choice.get("finish_reason", None)
+                if "refusal" in choice["message"]:
+                    message.refusal = choice["message"]["refusal"]
                 if finish_reason is None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
                     finish_reason = choice.get("finish_details") or "stop"
@@ -702,9 +861,10 @@ def convert_to_model_response_object(
 
                 ## PROVIDER SPECIFIC FIELDS ##
                 provider_specific_fields = {f: choice[f] for f in choice.keys() - _CHOICES_FIELDS}
-
                 logprobs = choice.get("logprobs", None)
+                provider_sent_logprobs = "logprobs" in choice
                 enhancements = choice.get("enhancements", None)
+
                 choice = Choices(
                     finish_reason=finish_reason,
                     index=idx,
@@ -713,6 +873,9 @@ def convert_to_model_response_object(
                     enhancements=enhancements,
                     provider_specific_fields=provider_specific_fields,
                 )
+                if provider_sent_logprobs and logprobs is None:
+                    choice.logprobs = None
+
                 choice_list.append(choice)
             model_response_object.choices = choice_list
 
@@ -720,7 +883,7 @@ def convert_to_model_response_object(
                 usage_object: Final = litellm.Usage(**response_object["usage"])
                 setattr(model_response_object, "usage", usage_object)
             if "created" in response_object:
-                model_response_object.created = _safe_convert_created_field(response_object["created"])
+                model_response_object.created = safe_convert_created_field(response_object["created"])
 
             if "id" in response_object:
                 # Preserve the auto-generated id from ModelResponse.__init__
@@ -742,9 +905,9 @@ def convert_to_model_response_object(
                     model_response_object._response_ms = (end_time - start_time).total_seconds() * 1000
 
             if hidden_params is not None:
-                if model_response_object._hidden_params is None:
-                    model_response_object._hidden_params = {}
-                model_response_object._hidden_params.update(hidden_params)
+                if model_response_object.hidden_params is None:
+                    model_response_object.hidden_params = {}
+                model_response_object.hidden_params.update(hidden_params)
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
@@ -753,7 +916,9 @@ def convert_to_model_response_object(
                 if k not in _MODEL_RESPONSE_FIELDS:
                     setattr(model_response_object, k, v)
 
-            return model_response_object
+            ollama_ids: Final = OllamaResponseIdNormalizer()
+            ollama_ids.observe(model_response_object)
+            return ollama_ids.apply(model_response_object)
         elif response_type == "embedding" and (
             model_response_object is None or isinstance(model_response_object, EmbeddingResponse)
         ):
@@ -782,7 +947,7 @@ def convert_to_model_response_object(
                 ).total_seconds() * 1000  # return response latency in ms like openai
 
             if hidden_params is not None:
-                model_response_object._hidden_params = hidden_params
+                model_response_object.hidden_params = hidden_params
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
@@ -828,13 +993,13 @@ def convert_to_model_response_object(
                     setattr(model_response_object, "usage", tr_usage_object)
 
             if hidden_params is not None:
-                model_response_object._hidden_params = hidden_params
+                model_response_object.hidden_params = hidden_params
 
             # Store internally-calculated duration in _hidden_params for cost
             # tracking without exposing it in the response body. Must be set
             # after hidden_params assignment to avoid being overwritten.
             if "_audio_transcription_duration" in response_object:
-                model_response_object._hidden_params["audio_transcription_duration"] = response_object[
+                model_response_object.hidden_params["audio_transcription_duration"] = response_object[
                     "_audio_transcription_duration"
                 ]
 

@@ -36,9 +36,7 @@ def carry_team_and_user_budget_state(
 
 def carry_organization_budget_state(valid_token: UserAPIKeyAuth, org_table: LiteLLM_OrganizationTable) -> None:
     budget_table: Final = org_table.litellm_budget_table
-    valid_token.organization_alias = (
-        org_table.organization_alias
-    )  # rebind-ok: the request credential is pinned in place
+    valid_token.organization_alias = org_table.organization_alias
     valid_token.org_budget_snapshot = OrgBudgetSnapshot(  # rebind-ok: same object the caller keeps using
         spend=org_table.spend,
         max_budget=budget_table.max_budget if budget_table is not None else None,

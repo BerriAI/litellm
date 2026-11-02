@@ -1,0 +1,16 @@
+model_list: []
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  mcp_allowed_hosts:
+    - localhost
+    - 127.0.0.1
+mcp_servers:
+  math:
+    server_id: math
+    transport: http
+    url: http://127.0.0.1:8090/mcp
+    allowed_tools:
+      - add
+      - multiply
+    timeout: 30
+    max_concurrent_requests: 8

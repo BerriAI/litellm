@@ -119,6 +119,9 @@ class PromptGuardGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
         ]
 
+    def supports_structured_messages(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -168,7 +171,7 @@ class PromptGuardGuardrail(CustomGuardrail):
                     "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=10.0,
+                timeout=self.timeout if self.timeout is not None else 10.0,
             )
             response.raise_for_status()
             view: Final[PromptGuardHTTPView] = {"guard_response": response.json()}

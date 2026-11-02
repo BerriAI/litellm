@@ -9,14 +9,17 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Generic, Protocol, TypeVar, cast, runtime_checkable
 
 from litellm import verbose_logger
+from litellm._internal_context import with_service_target
 from litellm.llms.base_llm.managed_resources.isolation import (
     build_list_page,
     build_owner_filter,
     can_access_resource,
     resolve_resource_owner_id,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.utils import SpecialEnums
+
+MANAGED_RESOURCES_TARGET: Final = "managed_resources"
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -25,7 +28,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient as _PrismaClient
     from litellm.router import Router as _Router
 
-    Span = _Span | Any
+    Span = _Span
     InternalUsageCache = _InternalUsageCache
     PrismaClient = _PrismaClient
     Router = _Router
@@ -138,7 +141,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         self,
         llm_router: Router,
         model: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         litellm_parent_otel_span: Span,
     ) -> ResourceObjectType:
         """
@@ -158,6 +161,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     #                     COMMON STORAGE OPERATIONS
     # ============================================================================
 
+    @with_service_target(MANAGED_RESOURCES_TARGET)
     async def store_unified_resource_id(
         self,
         unified_resource_id: str,
@@ -240,6 +244,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             "LiteLLM Managed %s with id=%s stored in db: %s", self.resource_type, unified_resource_id, result
         )
 
+    @with_service_target(MANAGED_RESOURCES_TARGET)
     async def get_unified_resource_id(
         self,
         unified_resource_id: str,
@@ -276,6 +281,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
         return None
 
+    @with_service_target(MANAGED_RESOURCES_TARGET)
     async def delete_unified_resource_id(
         self,
         unified_resource_id: str,
@@ -393,7 +399,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     async def create_resource_for_each_model(
         self,
         llm_router: Router,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         target_model_names_list: list[str],
         litellm_parent_otel_span: Span,
     ) -> list[ResourceObjectType]:
@@ -544,7 +550,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         limit: int | None = None,
         after: str | None = None,
         additional_filters: Mapping[str, object] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         List resources created by a user.
 

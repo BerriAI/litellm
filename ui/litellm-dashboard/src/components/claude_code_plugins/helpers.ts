@@ -2,7 +2,7 @@
  * Helper utilities for Claude Code Marketplace
  */
 
-import { PluginSource } from "./types";
+import type { Plugin, PluginSource } from "./types";
 
 export interface SkillSourcePreview {
   parsed: PluginSource;
@@ -240,7 +240,9 @@ export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourceP
  * bare `"url"` string, so the url/source pair is nested one level deeper. The key must be
  * "litellm" to match the name the proxy returns in marketplace.json.
  */
-export const buildMarketplaceSettingsSnippet = (proxyOrigin: string): string =>
+export const MARKETPLACE_KEY_PLACEHOLDER = "<your-litellm-key>";
+
+export const buildMarketplaceSettingsSnippet = (proxyOrigin: string, requiresKey: boolean): string =>
   JSON.stringify(
     {
       extraKnownMarketplaces: {
@@ -248,6 +250,7 @@ export const buildMarketplaceSettingsSnippet = (proxyOrigin: string): string =>
           source: {
             source: "url",
             url: `${proxyOrigin}/claude-code/marketplace.json`,
+            ...(requiresKey ? { headers: { Authorization: `Bearer ${MARKETPLACE_KEY_PLACEHOLDER}` } } : {}),
           },
         },
       },
@@ -277,7 +280,7 @@ export const validatePluginName = (name: string): boolean => {
 /**
  * Get human-readable source display text
  */
-export const getSourceDisplayText = (source: PluginSource): string => {
+export const getSourceDisplayText = (source: Plugin["source"]): string => {
   if (source.source === "github" && source.repo) {
     return `GitHub: ${source.repo}`;
   }
@@ -293,7 +296,7 @@ export const getSourceDisplayText = (source: PluginSource): string => {
 /**
  * Get clickable link for plugin source. Ssh clone urls are not browsable, so they yield null.
  */
-export const getSourceLink = (source: PluginSource): string | null => {
+export const getSourceLink = (source: Plugin["source"]): string | null => {
   if (source.source === "github" && source.repo) {
     return `https://github.com/${source.repo}`;
   }
@@ -305,7 +308,7 @@ export const getSourceLink = (source: PluginSource): string | null => {
  * Get badge color based on category
  */
 export const getCategoryBadgeColor = (
-  category?: string,
+  category?: string | null,
 ): "blue" | "green" | "purple" | "red" | "orange" | "yellow" | "gray" => {
   if (!category) {
     return "gray";

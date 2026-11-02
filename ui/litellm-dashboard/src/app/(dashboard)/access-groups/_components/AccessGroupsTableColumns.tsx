@@ -1,7 +1,7 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
-import { Bot, Layers, MoreHorizontal, Server, Trash2 } from "lucide-react";
+import { Bot, Layers, MoreHorizontal, Server, Sparkles, Trash2 } from "lucide-react";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { DateCell, IdentityCell } from "@/components/shared/table_cells";
@@ -21,13 +21,18 @@ interface ResourceTone {
   className: string;
 }
 
-const RESOURCE_TONES: Record<"models" | "mcpServers" | "agents", ResourceTone> = {
+const RESOURCE_TONES: Record<"models" | "mcpServers" | "agents" | "skills", ResourceTone> = {
   models: { icon: Layers, className: "bg-info/10 text-info ring-blue-600/20" },
   mcpServers: { icon: Server, className: "bg-info/10 text-info ring-cyan-600/20" },
   agents: {
     icon: Bot,
     className:
       "bg-purple-50 text-purple-700 ring-purple-600/20 dark:bg-purple-950 dark:text-purple-300 dark:ring-purple-400/30",
+  },
+  skills: {
+    icon: Sparkles,
+    className:
+      "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-400/30",
   },
 };
 
@@ -36,6 +41,7 @@ function ResourcesCell({ group }: { group: AccessGroup }) {
     { key: "models" as const, label: "Models", count: group.modelIds.length },
     { key: "mcpServers" as const, label: "MCP Servers", count: group.mcpServerIds.length },
     { key: "agents" as const, label: "Agents", count: group.agentIds.length },
+    { key: "skills" as const, label: "Skills", count: group.skillNames.length },
   ];
 
   return (

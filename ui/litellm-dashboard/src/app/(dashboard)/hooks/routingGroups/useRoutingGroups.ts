@@ -19,11 +19,12 @@ const fetchRoutingGroups = async (accessToken: string): Promise<RoutingGroupsQue
   const currentValues = data?.current_values ?? {};
   const fields = Array.isArray(data?.fields) ? data.fields : [];
   const routingStrategyField = fields.find((f: any) => f?.field_name === "routing_strategy");
+  const groupStrategies: unknown = data?.routing_group_strategies ?? routingStrategyField?.options;
 
   return {
     routingGroups: Array.isArray(currentValues.routing_groups) ? currentValues.routing_groups : [],
     routingStrategy: currentValues.routing_strategy ?? null,
-    availableStrategies: Array.isArray(routingStrategyField?.options) ? routingStrategyField.options : [],
+    availableStrategies: Array.isArray(groupStrategies) ? groupStrategies : [],
   };
 };
 

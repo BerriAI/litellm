@@ -62,6 +62,31 @@ export async function dismissFeedbackPopup(page: PlaywrightPage): Promise<void> 
   }
 }
 
+export async function setAriaHidden(page: PlaywrightPage, hidden: boolean): Promise<void> {
+  await page.getByRole("button", { name: /Account menu/i }).click();
+  const panel = page.getByTestId("sidebar-account-menu-panel");
+  await expect(panel).toBeVisible({ timeout: 5_000 });
+  const premium = await panel.getByText("Premium", { exact: true }).isVisible();
+  const toggle = panel.getByRole("switch", { name: "Toggle hide Aria Agent", exact: true });
+  if (premium) {
+    await expect(toggle).toBeVisible();
+    if ((await toggle.getAttribute("aria-checked")) !== String(hidden)) {
+      await toggle.click();
+    }
+    await expect(toggle).toHaveAttribute("aria-checked", String(hidden));
+  } else {
+    await expect(toggle).toHaveCount(0);
+  }
+  await page.keyboard.press("Escape");
+  await expect(panel).toBeHidden();
+  const aria = page.getByRole("banner").getByRole("button", { name: "Aria Agent", exact: true });
+  if (premium && hidden) {
+    await expect(aria).toBeHidden();
+  } else {
+    await expect(aria).toBeVisible();
+  }
+}
+
 /**
  * Click on a team ID in the table. Team IDs are rendered differently depending
  * on the component version — try button first (Tremor Button), fall back to
