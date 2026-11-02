@@ -1,5 +1,6 @@
 import json
 from types import MappingProxyType
+from typing import Final, Literal
 
 import pytest
 
@@ -259,9 +260,9 @@ _WIDE_STOCK = MappingProxyType(
 )
 @pytest.mark.parametrize("alias_defaults", ["codex", "deployment"])
 def test_a_known_model_and_its_alias_take_the_smallest_window_any_deployment_takes(
-    configured, expected, alias_defaults
-):
-    rows = (
+    configured: tuple[int | None, ...], expected: int, alias_defaults: Literal["codex", "deployment"]
+) -> None:
+    rows: Final = (
         _row("gpt-6-sol", max_input_tokens=1050000, configured_max_input_tokens=configured),
         _row(
             "sol-1m",
@@ -271,7 +272,9 @@ def test_a_known_model_and_its_alias_take_the_smallest_window_any_deployment_tak
         ),
     )
 
-    body = codex_models_response_json(rows, stock=_WIDE_STOCK, instructions=_PROMPT, alias_defaults=alias_defaults)
+    body: Final = codex_models_response_json(
+        rows, stock=_WIDE_STOCK, instructions=_PROMPT, alias_defaults=alias_defaults
+    )
 
     assert {entry["slug"]: entry["context_window"] for entry in json.loads(body.json)["models"]} == {
         "gpt-6-sol": expected,
@@ -279,7 +282,7 @@ def test_a_known_model_and_its_alias_take_the_smallest_window_any_deployment_tak
     }
 
 
-def test_a_configured_window_goes_past_codexs_own_when_the_stock_entry_sets_no_ceiling():
+def test_a_configured_window_goes_past_codexs_own_when_the_stock_entry_sets_no_ceiling() -> None:
     (entry,) = json.loads(
         codex_models_response_json(
             (_row("gpt-5.5", configured_max_input_tokens=(1050000,)),), stock=_WIDE_STOCK, instructions=_PROMPT
@@ -289,8 +292,8 @@ def test_a_configured_window_goes_past_codexs_own_when_the_stock_entry_sets_no_c
     assert entry["context_window"] == 1050000
 
 
-def test_a_deployment_without_a_limit_keeps_a_windowless_stock_entry_as_codex_ships_it():
-    windowless = MappingProxyType({"gpt-5.5": _stock("gpt-5.5").model_copy(update={"context_window": None})})
+def test_a_deployment_without_a_limit_keeps_a_windowless_stock_entry_as_codex_ships_it() -> None:
+    windowless: Final = MappingProxyType({"gpt-5.5": _stock("gpt-5.5").model_copy(update={"context_window": None})})
 
     (entry,) = json.loads(
         codex_models_response_json(
@@ -301,8 +304,8 @@ def test_a_deployment_without_a_limit_keeps_a_windowless_stock_entry_as_codex_sh
     assert entry["context_window"] is None
 
 
-def test_model_list_body_sizes_a_known_models_window_off_the_deployments_the_key_team_routes_to():
-    router = litellm.Router(
+def test_model_list_body_sizes_a_known_models_window_off_the_deployments_the_key_team_routes_to() -> None:
+    router: Final = litellm.Router(
         model_list=[
             {
                 "model_name": "gpt-6-astra",
@@ -322,17 +325,17 @@ def test_model_list_body_sizes_a_known_models_window_off_the_deployments_the_key
         ],
         model_group_alias={"astra-1m": "gpt-6-astra"},
     )
-    listing = tuple(
+    listing: Final = tuple(
         {"id": name, "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"}
         for name in ("gpt-6-astra", "astra-1m")
     )
-    entries = (("gpt-6-astra", "gpt-6-astra"), ("astra-1m", "astra-1m"))
-    stock = bundled_codex_models()["gpt-6-astra"]
+    entries: Final = (("gpt-6-astra", "gpt-6-astra"), ("astra-1m", "astra-1m"))
+    stock: Final = bundled_codex_models()["gpt-6-astra"]
     assert stock.context_window is not None and stock.max_context_window is not None
     assert stock.context_window < 400000 < stock.max_context_window < 922000
 
-    def windows(team_id):
-        models = json.loads(codex_model_list_body(listing, entries, router, team_id))["models"]
+    def windows(team_id: str) -> dict[str, int | None]:
+        models: Final = json.loads(codex_model_list_body(listing, entries, router, team_id))["models"]
         return {entry["slug"]: entry["context_window"] for entry in models}
 
     assert windows("team-1") == {"gpt-6-astra": stock.max_context_window, "astra-1m": stock.max_context_window}
