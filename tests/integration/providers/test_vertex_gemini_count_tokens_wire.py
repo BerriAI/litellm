@@ -1043,36 +1043,31 @@ def test_utils_token_counter_sends_a_prompt_as_the_user_turn_of_its_messages_for
 
 @pytest.mark.parametrize(
     ("conversation", "call_endpoint"),
-    (({"messages": _MESSAGES}, True), ({"contents": _CONTENTS}, True), ({"messages": _MESSAGES}, False)),
-    ids=("provider-count-messages", "provider-count-contents", "local-count-messages"),
+    (
+        ({"messages": _MESSAGES}, True),
+        ({"contents": _CONTENTS}, True),
+        ({"messages": _MESSAGES}, False),
+        ({"contents": _CONTENTS}, False),
+    ),
+    ids=("provider-count-messages", "provider-count-contents", "local-count-messages", "local-count-contents"),
 )
-def test_utils_token_counter_rejects_a_prompt_next_to_a_conversation_without_calling_the_provider(
-    gateway: Gateway, conversation: Mapping[str, JsonValue], call_endpoint: bool
+@pytest.mark.parametrize("drop_params", (False, True), ids=("no-drop", "drop"))
+def test_utils_token_counter_counts_the_conversation_regardless_of_prompt_and_drop_params(
+    gateway: Gateway, conversation: Mapping[str, JsonValue], call_endpoint: bool, drop_params: bool
 ) -> None:
     peer: Final = _GeminiPeer()
     with wire_server(peer) as wire, gateway.scenario() as scenario:
-        model: Final = _ai_studio_deployment(scenario, wire.url)
-        response: Final = _count(gateway, {"model": model, "prompt": "hi", **conversation}, call_endpoint)
-        requests: Final = _count_requests(wire)
-    assert response.status_code == 400, response.text
-    assert _JSON_OBJECT.validate_python(_JSON_OBJECT.validate_json(response.content)["error"])["param"] == "prompt"
-    assert requests == ()
-
-
-@pytest.mark.parametrize("call_endpoint", (True, False), ids=("provider-count", "local-count"))
-def test_utils_token_counter_counts_only_the_conversation_when_drop_params_drops_the_prompt(
-    gateway: Gateway, call_endpoint: bool
-) -> None:
-    peer: Final = _GeminiPeer()
-    with wire_server(peer) as wire, gateway.scenario() as scenario:
-        model: Final = _ai_studio_deployment(scenario, wire.url, drop_params=True)
-        mixed: Final = _count(gateway, {"model": model, "prompt": "hi", "messages": _MESSAGES}, call_endpoint)
+        model: Final = _ai_studio_deployment(scenario, wire.url, drop_params=drop_params)
+        mixed: Final = _count(gateway, {"model": model, "prompt": "hi", **conversation}, call_endpoint)
         mixed_requests: Final = _count_requests(wire)
-        alone: Final = _count(gateway, {"model": model, "messages": _MESSAGES}, call_endpoint)
+        alone: Final = _count(gateway, {"model": model, **conversation}, call_endpoint)
         alone_requests: Final = _count_requests(wire)
     assert mixed.status_code == 200, mixed.text
     assert alone.status_code == 200, alone.text
-    assert _total_tokens(mixed) == _total_tokens(alone)
+    mixed_tokens: Final = TypeAdapter(int).validate_python(_total_tokens(mixed))
+    alone_tokens: Final = TypeAdapter(int).validate_python(_total_tokens(alone))
+    assert mixed_tokens == alone_tokens > 0
+    assert len(mixed_requests) == len(alone_requests) == int(call_endpoint)
     assert [_counted_contents(_json_body(request)) for request in mixed_requests] == [
         _counted_contents(_json_body(request)) for request in alone_requests
     ]
