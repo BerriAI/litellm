@@ -1,10 +1,10 @@
 use std::{
     future::Future,
-    sync::Arc,
+    sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
 
-use litellm_circuit_breaker::{Admission, Breaker, Failure};
+use litellm_circuit_breaker::{Admission, Breaker, Failure, State};
 use redis::{Cmd, FromRedisValue, RedisError, ToRedisArgs, ToSingleRedisArg, Value};
 
 use crate::{
@@ -20,6 +20,8 @@ pub struct RedisClient {
     namespace: Namespace,
     breaker: Option<Breaker>,
     events: Option<Arc<dyn RedisEvents>>,
+    health_check: Option<Duration>,
+    last_used: Arc<Mutex<Instant>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -36,7 +38,14 @@ impl RedisClient {
             namespace: config.namespace,
             breaker: config.breaker,
             events: config.events,
+            health_check: config.health_check,
+            last_used: Arc::new(Mutex::new(Instant::now())),
         })
+    }
+
+    /// The breaker's current state, or none when the breaker is disabled.
+    pub fn breaker_state(&self) -> Option<State> {
+        self.breaker.as_ref().map(Breaker::state)
     }
 
     pub async fn ping(&self) -> Result<(), Error> {
@@ -159,6 +168,7 @@ impl RedisClient {
                     .collect();
             }
         };
+        self.check_health().await;
         let results = pipeline.run(&self.connection).await;
         let transport = results.iter().find_map(|result| {
             result
@@ -216,6 +226,7 @@ impl RedisClient {
         let started = Instant::now();
         let result = match self.admit() {
             Ok(admission) => {
+                self.check_health().await;
                 let result = call
                     .await
                     .map_err(|error| Error::classify(error, self.connection.deployment()));
@@ -229,12 +240,36 @@ impl RedisClient {
     }
 
     fn observe(&self, operation: Operation, started: Instant, outcome: Outcome) {
+        *self
+            .last_used
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Instant::now();
         if let Some(events) = &self.events {
             events.call(&CallEvent {
                 operation,
                 duration: started.elapsed(),
                 outcome,
             });
+        }
+    }
+
+    /// redis-py pings a connection that sat idle longer than `health_check_interval` before
+    /// sending the next command on it, and reconnects when the ping fails. The ping is not a
+    /// call of the caller's and never reaches the breaker or the events.
+    async fn check_health(&self) {
+        let Some(interval) = self.health_check else {
+            return;
+        };
+        let idle = self
+            .last_used
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .elapsed();
+        if idle < interval {
+            return;
+        }
+        if let Err(error) = self.connection.ping_every_node().await {
+            tracing::debug!(%error, "idle Redis connection failed its health check, the next command reconnects");
         }
     }
 

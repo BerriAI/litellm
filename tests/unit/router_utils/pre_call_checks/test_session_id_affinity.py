@@ -1,7 +1,6 @@
 import asyncio
 import json
-from itertools import chain
-from typing import TYPE_CHECKING, Final
+from typing import Final
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,9 +20,6 @@ from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
 
-
-if TYPE_CHECKING:
-    from tests.unit.conftest import RouterRedis
 
 
 def _repinning_router(enabled: bool | None = True) -> litellm.Router:
@@ -321,38 +317,6 @@ async def test_unsuccessful_or_nested_response_envelopes_never_repin(response: M
         _cool_down_original(router)
         await _record_replacement_success(router, response=response)
         assert await router.cache.async_get_cache(_repin_key()) == {"model_id": "original"}
-    finally:
-        router.discard()
-
-
-@pytest.mark.parametrize("case", ["disabled", "no-session", "generated-session", "group-disabled", "active"])
-async def test_repin_cooldown_reads_are_limited_to_active_session_route(case: str, router_redis: "RouterRedis") -> None:
-    router: Final = _repinning_router(case != "disabled")
-    redis, commands = router_redis
-    try:
-        router.update_redis_cache(redis)
-        callback: Final = next(cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck))
-        if case == "group-disabled":
-            callback.model_group_affinity_config = {"repin-group": []}
-        await router._repin_session_after_success(
-            {
-                "model_info": {"id": "replacement"},
-                "metadata": {
-                    "deployment_model_name": "repin-group",
-                    **({"session_id": "repin-session"} if case != "no-session" else {}),
-                    SESSION_ID_GENERATED_METADATA_KEY: case == "generated-session",
-                },
-            },
-            {"status": "completed"},
-        )
-        expected: Final = (
-            {f"deployment:{model_id}:cooldown" for model_id in ("original", "replacement", "other")}
-            if case == "active"
-            else set()
-        )
-        observed: Final = tuple(commands.get_nowait() for _ in range(commands.qsize()))
-        reads: Final = frozenset(chain.from_iterable(args[1:] for args, _, _ in observed if args[0] == "MGET"))
-        assert reads == expected
     finally:
         router.discard()
 

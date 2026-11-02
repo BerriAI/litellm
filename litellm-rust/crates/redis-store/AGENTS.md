@@ -1,0 +1,6 @@
+- One module per Redis family (`router_cooldowns.rs`, `router_usage.rs`). It is the only place that family's keys, value codec and scripts are written, and it takes domain ids, never keys
+- Python and Rust pods share these keys during a rolling deploy, so a module writes the bytes `main`'s Python writes and reads everything `main` reads. Python formats go through `litellm-python-compat` (`repr`, `literal_eval`, `json`), never a hand-rolled codec
+- A read-through family builds its own `DualCache` from a `TierPolicy` the host passes in. Its `pub const POLICY` is `main`'s defaults, and the Python host overrides what `main` reads from the environment or `litellm` globals (`litellm/rust_bridge/host/settings.py`, `router_tiers`). Callers pass a `RedisClient` (or none), never a cache. Redis-only families are plain functions over `&RedisClient`
+- Where `main` swallows a Redis failure and serves memory, the family does the same and logs. It never turns a failure into a miss that `main` would not
+- `tests/fixtures/router_wire.json` is the wire contract, checked here against real Redis and in `tests/unit/redis/stores/` against Python's own codec. Change both sides together
+- Tests run against `litellm-redis-testing` on standalone and cluster. A test is single-topology only for outages

@@ -4,7 +4,6 @@
 
 import logging
 from typing import Final, Literal
-from unittest.mock import patch
 
 import pytest
 
@@ -1846,23 +1845,20 @@ async def test_tag_fail_open_survives_deployment_narrowing(
 ) -> None:
     router: Final = _fail_open_router(route=route)
     requested_model: Final = "chat" if route == "model" else "chat-test" if route == "wildcard" else "public-chat"
-    with patch("time.time", return_value=1_700_000_000.0):
-        if narrowing == "cooldown":
-            router.cooldown_cache.add_deployment_to_cooldown(
-                model_id="opted-in",
-                original_exception=RuntimeError("unavailable"),
-                exception_status=500,
-                cooldown_time=60,
-            )
-        candidates: Final = await router.async_get_healthy_deployments(
-            model=requested_model,
-            request_kwargs={
-                "litellm_metadata": {"tags": list(tags), "inherited_tags": [], "user_api_key_team_id": "team-a"},
-                **(
-                    {"previous_response_id": _response_id_for_remaining_deployment()} if narrowing == "affinity" else {}
-                ),
-            },
+    if narrowing == "cooldown":
+        router.cooldown_cache.add_deployment_to_cooldown(
+            model_id="opted-in",
+            original_exception=RuntimeError("unavailable"),
+            exception_status=500,
+            cooldown_time=60,
         )
+    candidates: Final = await router.async_get_healthy_deployments(
+        model=requested_model,
+        request_kwargs={
+            "litellm_metadata": {"tags": list(tags), "inherited_tags": [], "user_api_key_team_id": "team-a"},
+            **({"previous_response_id": _response_id_for_remaining_deployment()} if narrowing == "affinity" else {}),
+        },
+    )
     assert isinstance(candidates, (list, tuple))
     assert tuple(deployment["model_info"]["id"] for deployment in candidates) == ("remaining",)
 

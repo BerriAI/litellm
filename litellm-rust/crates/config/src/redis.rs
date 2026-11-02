@@ -123,6 +123,8 @@ pub struct ResolvedRedis {
     pub namespace: Option<String>,
     pub timeout: Option<Duration>,
     pub connect_timeout: Option<Duration>,
+    /// redis-py's `health_check_interval`, which `_coerce_redis_kwargs_types` reads as an `int`
+    pub health_check_interval: Option<Duration>,
 }
 
 #[derive(Clone)]
@@ -182,7 +184,6 @@ impl RedisSettings {
             .filter(|(key, _)| !(key == "url" && drop_environment_url))
             .chain(block)
             .collect();
-        reject_unsupported(&merged)?;
         warn_ignored(&merged);
 
         let startup_nodes = match configured(&merged, "startup_nodes") {
@@ -247,6 +248,7 @@ impl RedisSettings {
                     port: integer(&merged, "port")?.unwrap_or(6379),
                     tls: tls()?,
                     db: db()?,
+                    unix_socket_path: text_value(&merged, "unix_socket_path").map(Into::into),
                 }),
             },
         };
@@ -263,6 +265,9 @@ impl RedisSettings {
             namespace: text_value(&merged, "namespace"),
             timeout: seconds(&merged, "socket_timeout")?,
             connect_timeout: seconds(&merged, "socket_connect_timeout")?,
+            health_check_interval: integer::<i64>(&merged, "health_check_interval")?
+                .filter(|seconds| *seconds > 0)
+                .map(|seconds| Duration::from_secs(seconds.unsigned_abs())),
         })
     }
 
@@ -383,15 +388,6 @@ pub fn environment_has_target(lookup: &dyn Lookup) -> bool {
     .any(|name| lookup.get(name).is_some())
 }
 
-fn reject_unsupported(merged: &Kwargs) -> Result<(), RedisError> {
-    match merged.iter().find(|(key, _)| is_unsupported(key)) {
-        Some((_, entry)) => Err(RedisError::Unsupported {
-            setting: entry.source.clone(),
-        }),
-        None => Ok(()),
-    }
-}
-
 fn invalid(setting: &str, expected: Expected) -> RedisError {
     RedisError::Invalid {
         setting: setting.to_owned(),
@@ -449,15 +445,15 @@ fn coerced<N: std::str::FromStr + serde::de::DeserializeOwned, T>(
 }
 
 fn warn_ignored(merged: &Kwargs) {
-    for key in merged.keys() {
+    for (key, entry) in merged {
         if keys::setting(key).is_some_and(|setting| setting.handling == Handling::Warn) {
-            tracing::warn!(setting = %key, "Redis setting is accepted but ignored");
+            tracing::warn!(
+                "Redis setting {} is not supported by the Rust client and is ignored: {}",
+                entry.source,
+                keys::consequence(key)
+            );
         }
     }
-}
-
-fn is_unsupported(key: &str) -> bool {
-    keys::setting(key).is_some_and(|setting| setting.handling == Handling::Reject)
 }
 
 fn environment_kwargs(lookup: &dyn Lookup) -> Kwargs {

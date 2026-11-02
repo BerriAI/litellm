@@ -250,9 +250,11 @@ mod tests {
     use super::{CredentialSource, Expiring, RefreshingCredentials, SourceFuture, refresh_after};
     use litellm_redis_client::{
         ClusterEndpoint, ClusterNode, Credentials, CredentialsProvider, Endpoint, Namespace,
-        RedisClient, RedisConfig, Timeouts, TlsOptions,
+        RedisClient, RedisConfig, SentinelEndpoint, Timeouts, TlsOptions,
     };
-    use litellm_redis_testing::{ClientConnection, RedisDeployment, Topology, eventually};
+    use litellm_redis_testing::{
+        ClientConnection, RedisDeployment, RedisSentinel, SERVICE_NAME, Topology, eventually,
+    };
 
     #[rstest]
     #[case::three_quarters_of_the_lifetime(
@@ -598,6 +600,7 @@ mod tests {
             timeouts: Timeouts::default(),
             breaker: None,
             events: None,
+            health_check: None,
         })
         .unwrap();
         client.set("k", "1", Duration::from_secs(60)).await.unwrap();
@@ -632,5 +635,88 @@ mod tests {
         assert!(!reconnected.is_empty());
         assert_eq!(connection_users(&reconnected), BTreeSet::from(["bob"]));
         assert!(connection_ids(&reconnected).is_disjoint(&connection_ids(&after)));
+    }
+
+    /// Cloud credentials rotate while Sentinel fails over: the refreshed user must be what the
+    /// client presents to the master Sentinel promotes, not the one it connected with first.
+    #[rstest]
+    #[tokio::test]
+    async fn a_refreshed_user_reaches_the_master_sentinel_promotes() {
+        let sentinel = RedisSentinel::start().await.unwrap();
+        sentinel
+            .cli_on_data_nodes(&[
+                "ACL", "SETUSER", "alice", "on", ">first", "~*", "&*", "+@all",
+            ])
+            .await
+            .unwrap();
+        sentinel
+            .cli_on_data_nodes(&[
+                "ACL", "SETUSER", "bob", "on", ">second", "~*", "&*", "+@all",
+            ])
+            .await
+            .unwrap();
+        let provider = RefreshingCredentials::new(Scripted {
+            replies: Mutex::new(vec![
+                user("alice", "first", Duration::from_secs(2)),
+                user("bob", "second", Duration::from_secs(3600)),
+            ]),
+            calls: Arc::new(AtomicUsize::new(0)),
+        });
+        let (host, port) = sentinel.sentinel();
+        let client = RedisClient::new(RedisConfig {
+            endpoint: Endpoint::Sentinel(SentinelEndpoint {
+                sentinels: vec![ClusterNode {
+                    host: host.to_owned(),
+                    port,
+                }],
+                service_name: SERVICE_NAME.to_owned(),
+                sentinel_password: None,
+                tls: None,
+                db: 0,
+            }),
+            credentials: Credentials::Provider(CredentialsProvider(Arc::new(provider))),
+            namespace: Namespace::default(),
+            timeouts: Timeouts::new(Duration::from_secs(1), None),
+            breaker: None,
+            events: None,
+            health_check: None,
+        })
+        .unwrap();
+        client
+            .set("before", "1", Duration::from_secs(60))
+            .await
+            .unwrap();
+        let master = sentinel.master_port().await.unwrap();
+        let app_users = |connections: &[ClientConnection]| -> BTreeSet<String> {
+            connections
+                .iter()
+                .filter(|connection| connection.user != "default")
+                .map(|connection| connection.user.clone())
+                .collect()
+        };
+        eventually(async || {
+            let connections = sentinel.clients_on(master).await.ok()?;
+            (app_users(&connections) == BTreeSet::from(["bob".to_owned()])).then_some(())
+        })
+        .await;
+        sentinel
+            .cli_on_data_nodes(&["ACL", "DELUSER", "alice"])
+            .await
+            .unwrap();
+
+        let promoted = sentinel.failover().await.unwrap();
+        eventually(async || client.set("after", "2", Duration::from_secs(60)).await.ok()).await;
+        let on_promoted = sentinel.clients_on(promoted).await.unwrap();
+
+        assert_eq!(promoted, sentinel.replica_port());
+        assert_eq!(
+            app_users(&on_promoted),
+            BTreeSet::from(["bob".to_owned()]),
+            "{on_promoted:?}"
+        );
+        assert_eq!(
+            client.get::<String>("after").await.unwrap().as_deref(),
+            Some("2")
+        );
     }
 }

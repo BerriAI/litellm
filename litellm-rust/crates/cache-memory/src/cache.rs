@@ -200,6 +200,23 @@ impl<V: Clone> InMemoryCache<V> {
             .collect())
     }
 
+    /// Every live entry, for callers that inspect the whole tier.
+    pub fn entries(&self) -> Result<Vec<(String, V)>, Error> {
+        let now = (self.now)();
+        let state = self.lock()?;
+        Ok(state
+            .values
+            .iter()
+            .filter(|(key, _)| {
+                state
+                    .expirations
+                    .get(*key)
+                    .is_none_or(|expiration| *expiration >= now)
+            })
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect())
+    }
+
     pub fn delete_cache(&self, key: &str) -> Result<(), Error> {
         let mut state = self.lock()?;
         Self::remove(&mut state, key);

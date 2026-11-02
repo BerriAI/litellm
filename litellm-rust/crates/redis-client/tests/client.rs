@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use litellm_redis_testing::{RedisDeployment, RedisServer, Topology, eventually};
+use litellm_redis_testing::{RedisCluster, RedisDeployment, RedisServer, Topology, eventually};
 use rstest::rstest;
 
 use litellm_circuit_breaker::{Breaker, Config, State};
@@ -254,6 +254,7 @@ async fn outage_events_report_the_failure_kind(
         breaker: None,
         events: Some(recorded.clone()),
         credentials: Credentials::NONE,
+        health_check: None,
     })
     .unwrap();
     client.ping().await.unwrap();
@@ -310,6 +311,7 @@ async fn every_call_reports_its_operation_and_outcome(
         timeouts: Timeouts::default(),
         breaker: None,
         events: Some(recorded.clone()),
+        health_check: None,
     })
     .unwrap();
     client.rpush("list", "item", KEEP).await.unwrap();
@@ -739,6 +741,7 @@ async fn a_host_endpoint_connects_to_its_database() {
             timeouts: Timeouts::default(),
             breaker: None,
             events: None,
+            health_check: None,
         })
     };
     let url = |url: String| Endpoint::Url {
@@ -750,6 +753,7 @@ async fn a_host_endpoint_connects_to_its_database() {
         port,
         tls: None,
         db: 3,
+        unix_socket_path: None,
     }))
     .unwrap();
     let in_db_0 = connect(url(server.url().to_owned())).unwrap();
@@ -765,4 +769,95 @@ async fn a_host_endpoint_connects_to_its_database() {
         via_url.get::<String>("k").await.unwrap().as_deref(),
         Some("3")
     );
+}
+
+async fn ping_calls(cluster: &RedisCluster) -> Vec<u64> {
+    cluster
+        .cli_outputs(&["INFO", "commandstats"])
+        .await
+        .unwrap()
+        .iter()
+        .map(|info| {
+            info.lines()
+                .find_map(|line| line.strip_prefix("cmdstat_ping:calls="))
+                .and_then(|rest| rest.split(',').next())
+                .and_then(|calls| calls.trim().parse().ok())
+                .unwrap_or(0)
+        })
+        .collect()
+}
+
+fn health_checked(
+    server: &RedisDeployment,
+    interval: Duration,
+    timeout: Duration,
+    breaker: Option<Breaker>,
+    events: Option<Arc<Recorded>>,
+) -> RedisClient {
+    RedisClient::new(RedisConfig {
+        endpoint: endpoint(server),
+        credentials: Credentials::NONE,
+        namespace: Namespace::default(),
+        timeouts: Timeouts::new(timeout, None),
+        breaker,
+        events: events.map(|events| events as Arc<dyn RedisEvents>),
+        health_check: Some(interval),
+    })
+    .unwrap()
+}
+
+// redis-py 5.3.1 redis/asyncio/connection.py check_health: a connection idle longer than
+// health_check_interval gets a PING before the next command, a busy one does not
+#[rstest]
+#[tokio::test]
+async fn an_idle_client_pings_every_node_before_the_next_command_like_redis_py() {
+    let server = RedisDeployment::start(Topology::Cluster).await.unwrap();
+    let RedisDeployment::Cluster(cluster) = &server else {
+        unreachable!("started a cluster")
+    };
+    let client = health_checked(&server, Duration::from_secs(3), DEFAULT_TIMEOUT, None, None);
+    client.set("k", "1", Duration::from_secs(60)).await.unwrap();
+    let before = ping_calls(cluster).await;
+
+    client.set("k", "2", Duration::from_secs(60)).await.unwrap();
+    let busy = ping_calls(cluster).await;
+    tokio::time::sleep(Duration::from_millis(3500)).await;
+    client.set("k", "3", Duration::from_secs(60)).await.unwrap();
+    let idle = ping_calls(cluster).await;
+
+    assert_eq!(busy, before);
+    assert_eq!(
+        idle,
+        before.iter().map(|calls| calls + 1).collect::<Vec<_>>(),
+        "before {before:?}"
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_failed_health_check_is_neither_a_call_nor_a_breaker_failure() {
+    let server = RedisDeployment::start(Topology::Cluster).await.unwrap();
+    let recorded = Arc::new(Recorded::default());
+    let breaker = breaker(2);
+    let client = health_checked(
+        &server,
+        Duration::from_millis(200),
+        Duration::from_millis(300),
+        Some(breaker.clone()),
+        Some(recorded.clone()),
+    );
+    client.set("k", "1", Duration::from_secs(60)).await.unwrap();
+
+    server.freeze().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let failed = client.get::<String>("k").await;
+    server.thaw().await.unwrap();
+
+    assert!(matches!(failed, Err(Error::Transport(_))), "{failed:?}");
+    assert!(
+        matches!(breaker.state(), State::Closed { timeouts: 1, .. }),
+        "{:?}",
+        breaker.state()
+    );
+    assert_eq!(recorded.0.lock().unwrap().len(), 2);
 }

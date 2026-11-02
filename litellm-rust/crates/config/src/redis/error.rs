@@ -1,7 +1,5 @@
 #[derive(Debug, thiserror::Error)]
 pub enum RedisError {
-    #[error("Redis host does not yet support configured setting {setting}")]
-    Unsupported { setting: String },
     #[error("invalid Redis setting {setting}: expected {expected}")]
     Invalid { setting: String, expected: Expected },
     #[error("either host or url must be specified for redis")]

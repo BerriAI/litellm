@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.custom_httpx.http_handler import default_user_agent
 from litellm.rust_bridge.host import settings
@@ -44,6 +45,26 @@ def test_http_settings_reads_the_litellm_globals(monkeypatch: pytest.MonkeyPatch
         disable_aiohttp_transport=True,
         user_agent=default_user_agent(),
     )
+
+
+def test_router_tiers_read_the_env_constants_and_the_litellm_global(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.constants
+
+    monkeypatch.setattr(litellm.constants, "DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS", 2.5)
+    monkeypatch.setattr(litellm.constants, "DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE", 42)
+    monkeypatch.setattr(litellm, "default_redis_batch_cache_expiry", 30.0)
+
+    assert settings.router_tiers() == settings.RouterTierSettings(
+        cooldown_redis_read_interval=2.5,
+        usage_redis_read_interval=30.0,
+        max_redis_batch_cache_size=42,
+    )
+
+
+def test_router_tiers_fall_back_to_dual_caches_ten_second_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "default_redis_batch_cache_expiry", None)
+
+    assert settings.router_tiers().usage_redis_read_interval == DualCache().redis_batch_cache_expiry
 
 
 def test_http_settings_ignores_environment_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,9 +135,7 @@ def test_secret_manager_is_native_only_when_a_readable_system_is_configured(
     monkeypatch.setattr(litellm, "_key_management_system", system)
     monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode=access_mode))
 
-    assert settings.secret_manager() == settings.SecretManager(
-        readable=access_mode != "write_only", native=native
-    )
+    assert settings.secret_manager() == settings.SecretManager(readable=access_mode != "write_only", native=native)
 
 
 def test_secret_manager_is_not_readable_without_a_client(monkeypatch: pytest.MonkeyPatch) -> None:

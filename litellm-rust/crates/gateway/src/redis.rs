@@ -1,9 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
-use litellm_circuit_breaker::Config as BreakerConfig;
 use litellm_config::{
-    CacheSettings, Config, Expected, RedisError, RedisSettings, ResolvedRedis, SecretSnapshot,
-    Value, environment_has_target,
+    CacheSettings, Config, RedisSettings, ResolvedRedis, SecretSnapshot, Value,
+    environment_has_target,
 };
 use litellm_core_utils::settings::Lookup;
 use litellm_redis_client::{RedisClient, RedisEvents};
@@ -72,9 +71,11 @@ pub(crate) async fn connect(
     resources: &Resources,
 ) -> Result<RedisClients, Error> {
     let plan = plan(config, lookup)?;
-    let breaker = breaker_config(lookup)?;
+    let breaker = litellm_redis_connect::breaker_config(lookup)?;
     let events: Arc<dyn RedisEvents> = Arc::new(TracingEvents::new(lookup));
-    let client = |params: Params, breaker: Option<BreakerConfig>| -> Result<RedisClient, Error> {
+    let client = |params: Params,
+                  breaker: Option<litellm_circuit_breaker::Config>|
+     -> Result<RedisClient, Error> {
         Ok(litellm_redis_connect::connect(
             params,
             HostServices {
@@ -178,62 +179,6 @@ async fn reachable(client: RedisClient) -> Option<RedisClient> {
     }
 }
 
-fn parse_seconds(text: &str) -> Option<Duration> {
-    text.parse::<f64>()
-        .ok()
-        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
-}
-
-fn breaker_config(lookup: &dyn Lookup) -> Result<Option<BreakerConfig>, Error> {
-    let enabled = lookup
-        .get("REDIS_CIRCUIT_BREAKER_ENABLED")
-        .is_none_or(|value| value.eq_ignore_ascii_case("true"));
-    if !enabled {
-        return Ok(None);
-    }
-    let defaults = BreakerConfig::default();
-    Ok(Some(BreakerConfig {
-        failure_threshold: environment_value(
-            lookup,
-            "REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
-            Expected::Integer,
-            |text| text.parse().ok(),
-        )?
-        .unwrap_or(defaults.failure_threshold),
-        recovery_timeout: environment_value(
-            lookup,
-            "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT",
-            Expected::Seconds,
-            parse_seconds,
-        )?
-        .unwrap_or(defaults.recovery_timeout),
-        timeout_min_duration: environment_value(
-            lookup,
-            "REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION",
-            Expected::Seconds,
-            parse_seconds,
-        )?
-        .unwrap_or(defaults.timeout_min_duration),
-    }))
-}
-
-fn environment_value<T>(
-    lookup: &dyn Lookup,
-    name: &str,
-    expected: Expected,
-    parse: impl Fn(&str) -> Option<T>,
-) -> Result<Option<T>, RedisError> {
-    lookup
-        .get(name)
-        .map(|value| {
-            parse(&value).ok_or_else(|| RedisError::Invalid {
-                setting: name.to_owned(),
-                expected,
-            })
-        })
-        .transpose()
-}
-
 #[cfg(test)]
 mod tests {
     use litellm_core_utils::settings::Lookup;
@@ -264,6 +209,7 @@ mod tests {
                 port,
                 tls: None,
                 db: 0,
+                unix_socket_path: None,
             }),
             auth: RedisAuth::Static {
                 username: None,
@@ -272,6 +218,7 @@ mod tests {
             namespace: None,
             timeout: None,
             connect_timeout: None,
+            health_check_interval: None,
         }
     }
 

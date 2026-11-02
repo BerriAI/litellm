@@ -1,21 +1,21 @@
-from collections.abc import Iterator
+import asyncio
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_router_logger
-from litellm.redis.stores import _routing_prefetch
-from litellm.redis.stores._routing_prefetch import TierRead, selector_read
 from litellm.router_deprecated import renamed_router_param
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
+from litellm.router_utils import routing_prefetch
+from litellm.router_utils.routing_prefetch import ROUTER_USAGE_TARGET, TierRead, selector_read
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
     from litellm.router_api import RoutingContext
 
-
-ROUTER_USAGE_TARGET: Final = "router_usage"
+__all__ = ("ROUTER_USAGE_TARGET", "RoutingPrefetch", "RoutingReadBatch")
 
 
 def _selector_keys(selector: LowestTPMLoggingHandler_v2, deployments: list) -> list[str]:
@@ -27,17 +27,21 @@ def _selector_read(selector: LowestTPMLoggingHandler_v2 | None, deployments: lis
     return None if selector is None else selector_read(selector.router_cache, _selector_keys(selector, deployments))
 
 
+async def _nothing() -> Sequence[object | None] | None:
+    return None
+
+
 class RoutingPrefetch:
     @staticmethod
     @renamed_router_param("litellm_router_instance")
     def arm(ctx: "RoutingContext", usage_selector: LowestTPMLoggingHandler_v2 | None, deployments: list) -> None:
-        ctx.health().cooldowns.cooldown_store.arm_routing_read(
-            ctx.registry().names(kind="ids"), _selector_read(usage_selector, deployments)
-        )
+        read: Final = _selector_read(usage_selector, deployments)
+        if read is not None:
+            routing_prefetch.arm(read)
 
     @staticmethod
     def armed() -> bool:
-        return _routing_prefetch.armed()
+        return routing_prefetch.armed()
 
 
 _active_routing_read_batch: Final[ContextVar["RoutingReadBatch | None"]] = ContextVar(
@@ -74,13 +78,14 @@ class RoutingReadBatch:
         self, ctx: "RoutingContext", healthy_deployments: list, parent_otel_span: "Span | None"
     ) -> list[str]:
         usage_read: Final = _selector_read(self.usage_selector, healthy_deployments)
-        read: Final = await ctx.health().cooldowns.cooldown_store.routing_read(
-            ctx.registry().names(kind="ids"), usage_read, parent_otel_span
+        cooldowns, selector_values = await asyncio.gather(
+            ctx.health().cooldowns.cooldown_store.active(ctx.registry().names(kind="ids"), parent_otel_span),
+            _nothing() if usage_read is None else routing_prefetch.read(usage_read, parent_otel_span),
         )
         if usage_read is not None:
             self.prefetched_usage = PrefetchedUsage(
                 keys=frozenset(usage_read.keys),
-                values=None if read.selector_values is None else dict(zip(usage_read.keys, read.selector_values)),
+                values=None if selector_values is None else dict(zip(usage_read.keys, selector_values)),
             )
-        verbose_router_logger.debug("retrieve cooldown models: %s", read.cooldowns)
-        return [model_id for model_id, _ in read.cooldowns]
+        verbose_router_logger.debug("retrieve cooldown models: %s", cooldowns)
+        return [model_id for model_id, _ in cooldowns]

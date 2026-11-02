@@ -1,519 +1,248 @@
-use std::{sync::Arc, time::Duration};
-
-use crate::{
-    BaseCache, BatchCache, BatchEntry, BulkDeleteCache, CacheContext, ClaimCache, CounterCache,
-    DeleteCache, Error, FlushCache, IncrementOperation, SetCache, ShortBatch, TtlCache,
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex, MutexGuard},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ReadPolicy {
-    #[default]
-    LocalThenRemote,
-    LocalOnly,
+use litellm_redis_client::{Error as RedisError, RedisClient};
+
+use crate::{BaseCache, DeleteCache, Error, ExactCacheContext, FlushCache};
+
+pub type Clock = Arc<dyn Fn() -> Duration + Send + Sync>;
+
+/// How a read-through family uses its memory tier, declared once by the family.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TierPolicy {
+    /// Python's `redis_batch_cache_expiry`: a key memory misses is read from Redis at most this often.
+    pub refresh_after: Duration,
+    /// How long a value read from Redis stays in memory.
+    pub backfill_ttl: Duration,
+    pub on_breaker_open: OnBreakerOpen,
+    /// Python's `default_max_redis_batch_cache_size`: how many keys the refresh throttle tracks.
+    pub tracked_reads: usize,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum WritePolicy {
-    #[default]
-    Both,
-    LocalOnly,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnBreakerOpen {
+    /// Serve what memory holds and let the next read try Redis again.
+    ServeMemory,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum RemoteFailurePolicy {
-    #[default]
-    Propagate,
-    UseLocal,
-}
-
+/// The memory tier in front of Redis that a read-through family builds for itself, as Python's
+/// `DualCache` with a `RedisCache` does.
 pub struct DualCache<L1, L2> {
-    l1: Arc<L1>,
-    l2: Arc<L2>,
-    read_policy: ReadPolicy,
-    write_policy: WritePolicy,
-    remote_failure_policy: RemoteFailurePolicy,
-    promotion_ttl: Option<Duration>,
-    delete_batch_size: usize,
+    memory: L1,
+    remote: Option<L2>,
+    policy: TierPolicy,
+    reads: Mutex<RecentReads>,
+    updates: Mutex<()>,
+    now: Clock,
 }
 
-/// `DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE`.
-pub const DEFAULT_DELETE_BATCH_SIZE: usize = 1000;
-
-impl<L1, L2> DualCache<L1, L2> {
-    pub fn new(l1: Arc<L1>, l2: Arc<L2>) -> Self {
-        Self {
-            l1,
-            l2,
-            read_policy: ReadPolicy::default(),
-            write_policy: WritePolicy::default(),
-            remote_failure_policy: RemoteFailurePolicy::default(),
-            promotion_ttl: None,
-            delete_batch_size: DEFAULT_DELETE_BATCH_SIZE,
-        }
-    }
-
-    pub fn with_delete_batch_size(self, delete_batch_size: usize) -> Self {
-        Self {
-            delete_batch_size,
-            ..self
-        }
-    }
-
-    pub fn with_read_policy(self, read_policy: ReadPolicy) -> Self {
-        Self {
-            read_policy,
-            ..self
-        }
-    }
-
-    pub fn with_write_policy(self, write_policy: WritePolicy) -> Self {
-        Self {
-            write_policy,
-            ..self
-        }
-    }
-
-    pub fn with_remote_failure_policy(self, remote_failure_policy: RemoteFailurePolicy) -> Self {
-        Self {
-            remote_failure_policy,
-            ..self
-        }
-    }
-
-    pub fn with_promotion_ttl(self, promotion_ttl: Duration) -> Self {
-        Self {
-            promotion_ttl: Some(promotion_ttl),
-            ..self
-        }
-    }
-
-    fn reads_remote(&self) -> bool {
-        self.read_policy == ReadPolicy::LocalThenRemote
-    }
-
-    fn writes_remote(&self) -> bool {
-        self.write_policy == WritePolicy::Both
-    }
-
-    fn remote<T>(&self, result: Result<T, Error>) -> Result<Option<T>, Error> {
-        match result {
-            Ok(value) => Ok(Some(value)),
-            Err(Error::Unavailable(_))
-                if self.remote_failure_policy == RemoteFailurePolicy::UseLocal =>
-            {
-                Ok(None)
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    fn promotion_context<C: CacheContext>(&self, context: &C) -> C {
-        context.with_ttl(self.promotion_ttl.or(context.ttl()))
-    }
+pub fn system_clock() -> Clock {
+    Arc::new(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+    })
 }
 
-impl<V, C, L1, L2> DualCache<L1, L2>
+impl<V, L1> DualCache<L1, RedisClient>
 where
     V: Clone + Send + Sync + 'static,
-    C: CacheContext,
-    L1: BaseCache<Value = V, Context = C>,
-    L2: BaseCache<Value = V, Context = C>,
+    L1: BaseCache<Value = V, Context = ExactCacheContext> + DeleteCache + FlushCache,
 {
-    fn missing(entries: &[BatchEntry<V>]) -> Vec<usize> {
-        entries
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| (!matches!(entry, BatchEntry::Hit(_))).then_some(index))
-            .collect()
+    pub fn read_through(
+        memory: L1,
+        remote: Option<RedisClient>,
+        policy: TierPolicy,
+        now: Clock,
+    ) -> Self {
+        Self {
+            memory,
+            remote,
+            reads: Mutex::new(RecentReads::new(policy.tracked_reads)),
+            policy,
+            updates: Mutex::new(()),
+            now,
+        }
     }
 
-    fn merge_batch(
+    pub fn memory(&self) -> &L1 {
+        &self.memory
+    }
+
+    pub fn remote(&self) -> Option<&RedisClient> {
+        self.remote.as_ref()
+    }
+
+    pub fn now(&self) -> Duration {
+        (self.now)()
+    }
+
+    pub fn set_memory(&self, key: &str, value: V, ttl: Duration) -> Result<(), Error> {
+        self.memory
+            .set_cache(key, value, &ExactCacheContext { ttl: Some(ttl) })
+    }
+
+    /// Read-modify-write of one memory entry, atomic against every other update of this tier.
+    pub fn update_memory(
+        &self,
+        key: &str,
+        ttl: Duration,
+        update: impl FnOnce(Option<V>) -> V,
+    ) -> Result<V, Error> {
+        let _guard = lock(&self.updates)?;
+        let value = update(self.memory.get_cache(key, &ExactCacheContext::default())?);
+        self.set_memory(key, value.clone(), ttl)?;
+        Ok(value)
+    }
+
+    /// Python's `DualCache.async_batch_get_cache`: memory first, then one MGET for the misses
+    /// whose refresh is due, written back to memory. A failed Redis read serves memory, as
+    /// `RedisCache` swallows it, and only a breaker refusal releases the refresh it reserved.
+    pub async fn get_many<E: std::fmt::Display>(
         &self,
         keys: &[String],
-        context: &C,
-        mut entries: Vec<BatchEntry<V>>,
-        missing: Vec<usize>,
-        remote: Vec<BatchEntry<V>>,
-    ) -> Result<Vec<BatchEntry<V>>, Error> {
-        if missing.len() != remote.len() {
-            return Err(Error::unavailable(ShortBatch {
-                requested: missing.len(),
-                returned: remote.len(),
-            }));
-        }
-        for (index, entry) in missing.into_iter().zip(remote) {
-            if let BatchEntry::Hit(value) = &entry {
-                let promotion_context = self.promotion_context(context);
-                self.l1
-                    .set_cache(&keys[index], value.clone(), &promotion_context)?;
-            }
-            entries[index] = entry;
-        }
-        Ok(entries)
-    }
-}
-
-impl<V, C, L1, L2> BaseCache for DualCache<L1, L2>
-where
-    V: Clone + Send + Sync + 'static,
-    C: CacheContext,
-    L1: BaseCache<Value = V, Context = C>,
-    L2: BaseCache<Value = V, Context = C>,
-{
-    type Value = V;
-    type Context = C;
-
-    fn get_ttl(&self, context: &Self::Context) -> Option<Duration> {
-        self.l2.get_ttl(context)
-    }
-
-    fn set_cache(&self, key: &str, value: V, context: &C) -> Result<(), Error> {
-        if self.writes_remote() {
-            self.remote(self.l2.set_cache(key, value.clone(), context))?;
-        }
-        self.l1.set_cache(key, value, context)
-    }
-
-    fn get_cache(&self, key: &str, context: &C) -> Result<Option<V>, Error> {
-        if let Some(value) = self.l1.get_cache(key, context)? {
-            return Ok(Some(value));
-        }
-        if !self.reads_remote() {
-            return Ok(None);
-        }
-        let value = self.remote(self.l2.get_cache(key, context))?.flatten();
-        if let Some(value) = &value {
-            let promotion_context = self.promotion_context(context);
-            self.l1.set_cache(key, value.clone(), &promotion_context)?;
-        }
-        Ok(value)
-    }
-
-    async fn async_set_cache(&self, key: &str, value: V, context: C) -> Result<(), Error> {
-        if self.writes_remote() {
-            self.remote(
-                self.l2
-                    .async_set_cache(key, value.clone(), context.clone())
-                    .await,
-            )?;
-        }
-        self.l1.async_set_cache(key, value, context).await
-    }
-
-    async fn async_get_cache(&self, key: &str, context: &C) -> Result<Option<V>, Error> {
-        if let Some(value) = self.l1.async_get_cache(key, context).await? {
-            return Ok(Some(value));
-        }
-        if !self.reads_remote() {
-            return Ok(None);
-        }
-        let value = self
-            .remote(self.l2.async_get_cache(key, context).await)?
-            .flatten();
-        if let Some(value) = &value {
-            self.l1
-                .async_set_cache(key, value.clone(), self.promotion_context(context))
-                .await?;
-        }
-        Ok(value)
-    }
-
-    async fn async_set_cache_pipeline(
-        &self,
-        entries: Vec<(String, V)>,
-        context: C,
-    ) -> Result<(), Error> {
-        if self.writes_remote() {
-            self.remote(
-                self.l2
-                    .async_set_cache_pipeline(entries.clone(), context.clone())
-                    .await,
-            )?;
-        }
-        self.l1.async_set_cache_pipeline(entries, context).await
-    }
-}
-
-impl<V, C, L1, L2> BatchCache for DualCache<L1, L2>
-where
-    V: Clone + Send + Sync + 'static,
-    C: CacheContext,
-    L1: BatchCache<Value = V, Context = C>,
-    L2: BatchCache<Value = V, Context = C>,
-{
-    fn batch_get_cache(&self, keys: &[String], context: &C) -> Result<Vec<BatchEntry<V>>, Error> {
-        let entries = self.l1.batch_get_cache(keys, context)?;
-        let missing = Self::missing(&entries);
-        if missing.is_empty() || !self.reads_remote() {
-            return Ok(entries);
-        }
-        let remote_keys = missing
+        decode: impl Fn(&[u8]) -> Result<V, E>,
+    ) -> Result<Vec<Option<V>>, Error> {
+        let context = ExactCacheContext::default();
+        let local = keys
             .iter()
-            .map(|index| keys[*index].clone())
-            .collect::<Vec<_>>();
-        match self.remote(self.l2.batch_get_cache(&remote_keys, context))? {
-            Some(remote) => self.merge_batch(keys, context, entries, missing, remote),
-            None => Ok(entries),
+            .map(|key| self.memory.get_cache(key, &context))
+            .collect::<Result<Vec<_>, _>>()?;
+        let Some(remote) = &self.remote else {
+            return Ok(local);
+        };
+        let reserved = self.reserve(keys, &local)?;
+        if reserved.keys.is_empty() {
+            return Ok(local);
         }
+        let due = reserved.keys.iter().map(String::as_str).collect::<Vec<_>>();
+        let fetched = match remote.mget::<Vec<u8>>(&due).await {
+            Ok(fetched) => fetched,
+            Err(RedisError::BreakerOpen) => {
+                self.release(reserved)?;
+                return Ok(local);
+            }
+            Err(error) => {
+                tracing::warn!(%error, "Redis read failed, serving the memory tier");
+                return Ok(local);
+            }
+        };
+        let decoded = match fetched
+            .iter()
+            .map(|raw| raw.as_deref().map(&decode).transpose())
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                tracing::warn!(%error, "a Redis value did not decode, serving the memory tier");
+                return Ok(local);
+            }
+        };
+        let read = reserved
+            .keys
+            .into_iter()
+            .zip(decoded)
+            .collect::<HashMap<_, _>>();
+        for (key, value) in &read {
+            if let Some(value) = value {
+                self.set_memory(key, value.clone(), self.policy.backfill_ttl)?;
+            }
+        }
+        Ok(keys
+            .iter()
+            .zip(local)
+            .map(|(key, local)| read.get(key).cloned().unwrap_or(local))
+            .collect())
     }
 
-    async fn async_batch_get_cache(
-        &self,
-        keys: Vec<String>,
-        context: C,
-    ) -> Result<Vec<BatchEntry<V>>, Error> {
-        let entries = self
-            .l1
-            .async_batch_get_cache(keys.clone(), context.clone())
-            .await?;
-        let missing = Self::missing(&entries);
-        if missing.is_empty() || !self.reads_remote() {
-            return Ok(entries);
-        }
-        let remote_keys = missing.iter().map(|index| keys[*index].clone()).collect();
-        match self.remote(
-            self.l2
-                .async_batch_get_cache(remote_keys, context.clone())
-                .await,
-        )? {
-            Some(remote) => self.merge_batch(&keys, &context, entries, missing, remote),
-            None => Ok(entries),
-        }
-    }
-}
-
-impl<V, C, L1, L2> DeleteCache for DualCache<L1, L2>
-where
-    V: Clone + Send + Sync + 'static,
-    C: CacheContext,
-    L1: DeleteCache<Value = V, Context = C>,
-    L2: DeleteCache<Value = V, Context = C>,
-{
-    fn delete_cache(&self, key: &str) -> Result<(), Error> {
-        if self.writes_remote() {
-            self.remote(self.l2.delete_cache(key))?;
-        }
-        self.l1.delete_cache(key)
+    pub fn delete_memory(&self, key: &str) -> Result<(), Error> {
+        self.memory.delete_cache(key)
     }
 
-    async fn async_delete_cache(&self, key: &str) -> Result<(), Error> {
-        if self.writes_remote() {
-            self.remote(self.l2.async_delete_cache(key).await)?;
-        }
-        self.l1.async_delete_cache(key).await
-    }
-}
-
-impl<V, C, L1, L2> FlushCache for DualCache<L1, L2>
-where
-    V: Clone + Send + Sync + 'static,
-    C: CacheContext,
-    L1: FlushCache<Value = V, Context = C>,
-    L2: FlushCache<Value = V, Context = C>,
-{
-    fn flush_cache(&self) -> Result<(), Error> {
-        if self.writes_remote() {
-            self.remote(self.l2.flush_cache())?;
-        }
-        self.l1.flush_cache()
+    pub fn flush_memory(&self) -> Result<(), Error> {
+        self.memory.flush_cache()
     }
 
-    async fn async_flush_cache(&self) -> Result<(), Error> {
-        if self.writes_remote() {
-            self.remote(self.l2.async_flush_cache().await)?;
-        }
-        self.l1.async_flush_cache().await
-    }
-}
-
-impl<C, L1, L2> DualCache<L1, L2>
-where
-    C: CacheContext,
-    L1: BaseCache<Value = f64, Context = C>,
-{
-    /// Python's `local_only=True` increment: the local tier alone, read then written back.
-    fn increment_local(&self, key: &str, amount: f64, context: &C) -> Result<f64, Error> {
-        let value = self.l1.get_cache(key, context)?.unwrap_or(0.0) + amount;
-        self.l1.set_cache(key, value, context)?;
-        Ok(value)
-    }
-}
-
-impl<C, L1, L2> CounterCache for DualCache<L1, L2>
-where
-    C: CacheContext,
-    L1: BaseCache<Value = f64, Context = C>,
-    L2: CounterCache<Value = f64, Context = C>,
-{
-    fn increment_cache(&self, key: &str, amount: f64, context: C) -> Result<f64, Error> {
-        if !self.writes_remote() {
-            return self.increment_local(key, amount, &context);
-        }
-        let value = self.l2.increment_cache(key, amount, context.clone())?;
-        self.l1.set_cache(key, value, &context)?;
-        Ok(value)
-    }
-
-    async fn async_increment(
-        &self,
-        key: &str,
-        amount: f64,
-        context: C,
-        refresh_ttl: bool,
-    ) -> Result<f64, Error> {
-        if !self.writes_remote() {
-            return self.increment_local(key, amount, &context);
-        }
-        let value = self
-            .l2
-            .async_increment(key, amount, context.clone(), refresh_ttl)
-            .await?;
-        self.l1.async_set_cache(key, value, context).await?;
-        Ok(value)
-    }
-
-    /// `async_increment_cache_pipeline`, L2-first like single increments: the local tier takes
-    /// each remote result.
-    async fn async_increment_pipeline(
-        &self,
-        operations: Vec<IncrementOperation>,
-    ) -> Result<Vec<f64>, Error>
-    where
-        C: Default,
-    {
-        if !self.writes_remote() {
-            return operations
-                .iter()
-                .map(|operation| {
-                    let context = C::default().with_ttl(operation.ttl);
-                    self.increment_local(&operation.key, operation.amount, &context)
+    fn reserve(&self, keys: &[String], local: &[Option<V>]) -> Result<Reservation, Error> {
+        let now = self.now();
+        let mut reads = lock(&self.reads)?;
+        let due = keys
+            .iter()
+            .zip(local)
+            .filter(|(_, value)| value.is_none())
+            .filter_map(|(key, _)| {
+                let previous = reads.get(key);
+                let due = previous
+                    .is_none_or(|read| now.saturating_sub(read) >= self.policy.refresh_after);
+                due.then(|| {
+                    reads.insert(key.clone(), now);
+                    (key.clone(), previous)
                 })
-                .collect();
-        }
-        let values = self.l2.async_increment_pipeline(operations.clone()).await?;
-        if values.len() != operations.len() {
-            return Err(Error::unavailable(ShortBatch {
-                requested: operations.len(),
-                returned: values.len(),
-            }));
-        }
-        for (operation, value) in operations.iter().zip(&values) {
-            self.l1
-                .async_set_cache(&operation.key, *value, C::default().with_ttl(operation.ttl))
-                .await?;
-        }
-        Ok(values)
+            })
+            .collect::<Vec<_>>();
+        let (keys, previous) = due.into_iter().unzip();
+        Ok(Reservation { keys, previous })
     }
-}
 
-/// `async_set_cache_sadd`: local set first, then the remote one unless writes stay local.
-impl<V, C, S, L1, L2> SetCache for DualCache<L1, L2>
-where
-    V: Clone + Send + Sync + 'static,
-    C: CacheContext,
-    S: Clone + Send + Sync + 'static,
-    L1: SetCache<Value = V, Context = C, SetValue = S>,
-    L2: SetCache<Value = V, Context = C, SetValue = S>,
-{
-    type SetValue = S;
-    type SetResult = ();
-
-    async fn async_set_cache_sadd(
-        &self,
-        key: &str,
-        values: Vec<S>,
-        ttl: Option<Duration>,
-    ) -> Result<(), Error> {
-        self.l1
-            .async_set_cache_sadd(key, values.clone(), ttl)
-            .await?;
-        if self.writes_remote() {
-            self.l2.async_set_cache_sadd(key, values, ttl).await?;
+    fn release(&self, reservation: Reservation) -> Result<(), Error> {
+        let mut reads = lock(&self.reads)?;
+        for (key, previous) in reservation.keys.into_iter().zip(reservation.previous) {
+            match previous {
+                Some(read) => reads.insert(key, read),
+                None => reads.remove(&key),
+            }
         }
         Ok(())
     }
 }
 
-/// `async_delete_cache_keys`: every key leaves the local tier, then the remote tier in chunks
-/// of `DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE`, since Redis takes a chunk as one command.
-impl<V, C, L1, L2> BulkDeleteCache for DualCache<L1, L2>
-where
-    V: Clone + Send + Sync + 'static,
-    C: CacheContext,
-    L1: DeleteCache<Value = V, Context = C>,
-    L2: BulkDeleteCache<Value = V, Context = C>,
-{
-    async fn delete_cache_keys(&self, keys: Vec<String>) -> Result<usize, Error> {
-        for key in &keys {
-            self.l1.delete_cache(key)?;
-        }
-        let mut deleted = 0;
-        for chunk in keys.chunks(self.delete_batch_size.max(1)) {
-            deleted += self.l2.delete_cache_keys(chunk.to_vec()).await?;
-        }
-        Ok(deleted)
-    }
+fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, Error> {
+    Ok(mutex.lock()?)
 }
 
-/// `async_get_ttl`: the local TTL, or the remote one when the local tier has none.
-impl<V, C, L1, L2> TtlCache for DualCache<L1, L2>
-where
-    V: Clone + Send + Sync + 'static,
-    C: CacheContext,
-    L1: TtlCache<Value = V, Context = C>,
-    L2: TtlCache<Value = V, Context = C>,
-{
-    async fn async_get_ttl(&self, key: &str) -> Result<Option<Duration>, Error> {
-        match self.l1.async_get_ttl(key).await? {
-            Some(ttl) => Ok(Some(ttl)),
-            None => self.l2.async_get_ttl(key).await,
-        }
-    }
+struct Reservation {
+    keys: Vec<String>,
+    previous: Vec<Option<Duration>>,
 }
 
-impl<V, C, L1, L2> ClaimCache for DualCache<L1, L2>
-where
-    V: Clone + PartialEq + Send + Sync + 'static,
-    C: CacheContext,
-    L1: ClaimCache<Value = V, Context = C>,
-    L2: ClaimCache<Value = V, Context = C>,
-{
-    fn claim_cache(&self, key: &str, candidate: V, eligible: &[V], context: C) -> Result<V, Error> {
-        match self.remote(
-            self.l2
-                .claim_cache(key, candidate.clone(), eligible, context.clone()),
-        )? {
-            Some(winner) => {
-                self.l1.set_cache(key, winner.clone(), &context)?;
-                Ok(winner)
-            }
-            None => self.l1.claim_cache(key, candidate, eligible, context),
+/// Python's `LimitedSizeOrderedDict`: insertion-ordered, and any write at capacity drops the
+/// oldest entry first, even when the written key is already present.
+struct RecentReads {
+    capacity: usize,
+    order: VecDeque<String>,
+    times: HashMap<String, Duration>,
+}
+
+impl RecentReads {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            order: VecDeque::new(),
+            times: HashMap::new(),
         }
     }
 
-    async fn async_claim_cache(
-        &self,
-        key: &str,
-        candidate: V,
-        eligible: Vec<V>,
-        context: C,
-    ) -> Result<V, Error> {
-        match self.remote(
-            self.l2
-                .async_claim_cache(key, candidate.clone(), eligible.clone(), context.clone())
-                .await,
-        )? {
-            Some(winner) => {
-                self.l1
-                    .async_set_cache(key, winner.clone(), context)
-                    .await?;
-                Ok(winner)
-            }
-            None => {
-                self.l1
-                    .async_claim_cache(key, candidate, eligible, context)
-                    .await
-            }
+    fn get(&self, key: &str) -> Option<Duration> {
+        self.times.get(key).copied()
+    }
+
+    fn insert(&mut self, key: String, time: Duration) {
+        if self.times.len() >= self.capacity
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.times.remove(&oldest);
+        }
+        if self.times.insert(key.clone(), time).is_none() {
+            self.order.push_back(key);
+        }
+    }
+
+    fn remove(&mut self, key: &str) {
+        if self.times.remove(key).is_some() {
+            self.order.retain(|tracked| tracked != key);
         }
     }
 }

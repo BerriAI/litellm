@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fmt::Write,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use litellm_config::{
@@ -135,14 +136,31 @@ fn resolves_redis_through_the_parsed_config(
     &[],
     "connection_pool"
 )]
-fn rejected_settings_name_their_source(
+fn unsupported_settings_resolve_with_a_warning_naming_their_source(
     #[case] yaml: &str,
     #[case] environment: &[(&str, &str)],
     #[case] expected: &str,
 ) {
-    let error = resolve(yaml, environment).unwrap_err();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(WarningCapture(events.clone()));
+    let resolved = tracing::subscriber::with_default(subscriber, || resolve(yaml, environment));
+    let warnings = events.lock().unwrap().join(" ");
 
-    assert!(matches!(error, RedisError::Unsupported { setting } if setting == expected));
+    assert_eq!(
+        resolved.unwrap().endpoint,
+        Endpoint::Host(litellm_redis_types::HostEndpoint {
+            host: "redis".into(),
+            port: 6379,
+            db: 0,
+            tls: None,
+            unix_socket_path: None,
+        })
+    );
+    assert!(
+        warnings.contains(&format!("Redis setting {expected} is not supported")),
+        "{warnings}"
+    );
+    assert!(warnings.contains("is ignored: "), "{warnings}");
 }
 
 fn static_auth(username: Option<&str>, password: Option<&str>) -> RedisAuth {
@@ -257,22 +275,22 @@ fn incomplete_aws_iam_auth_fails(#[case] yaml: &str, #[case] message: &str) {
 #[case::defaults_verify_the_certificate_but_not_the_hostname(
     "    ssl: true",
     &[],
-    Some(TlsOptions { ca_certs: None, certfile: None, keyfile: None, verify_certificate: true, check_hostname: false })
+    Some(TlsOptions { ca_certs: None, ca_data: None, ca_path: None, certfile: None, keyfile: None, verify_certificate: true, check_hostname: false })
 )]
 #[case::every_option(
     "    ssl: true\n    ssl_ca_certs: /ca.pem\n    ssl_certfile: /client.pem\n    ssl_keyfile: /client.key\n    ssl_cert_reqs: none\n    ssl_check_hostname: true",
     &[],
-    Some(TlsOptions { ca_certs: Some("/ca.pem".into()), certfile: Some("/client.pem".into()), keyfile: Some("/client.key".into()), verify_certificate: false, check_hostname: true })
+    Some(TlsOptions { ca_certs: Some("/ca.pem".into()), ca_data: None, ca_path: None, certfile: Some("/client.pem".into()), keyfile: Some("/client.key".into()), verify_certificate: false, check_hostname: true })
 )]
 #[case::options_from_the_environment(
     "    ssl: true",
     &[("REDIS_SSL_CA_CERTS", "/env-ca.pem"), ("REDIS_SSL_CERT_REQS", "optional")],
-    Some(TlsOptions { ca_certs: Some("/env-ca.pem".into()), certfile: None, keyfile: None, verify_certificate: true, check_hostname: false })
+    Some(TlsOptions { ca_certs: Some("/env-ca.pem".into()), ca_data: None, ca_path: None, certfile: None, keyfile: None, verify_certificate: true, check_hostname: false })
 )]
 #[case::gcp_ca_certs_replace_the_configured_ones(
     "    ssl: true\n    ssl_ca_certs: /ca.pem\n    gcp_service_account: account\n    gcp_ssl_ca_certs: /gcp-ca.pem",
     &[],
-    Some(TlsOptions { ca_certs: Some("/gcp-ca.pem".into()), certfile: None, keyfile: None, verify_certificate: true, check_hostname: false })
+    Some(TlsOptions { ca_certs: Some("/gcp-ca.pem".into()), ca_data: None, ca_path: None, certfile: None, keyfile: None, verify_certificate: true, check_hostname: false })
 )]
 #[case::options_without_ssl_stay_plaintext("    ssl_ca_certs: /ca.pem", &[], None)]
 fn tls_options_resolve_like_redis_py(
@@ -521,19 +539,23 @@ fn a_missing_canonical_startup_nodes_reference_shadows_the_cache_alias() {
 }
 
 #[rstest]
-fn rejected_environment_settings_never_print_the_value() {
-    let error = resolve(
-        "model_list: []",
-        &[
-            ("REDIS_HOST", "redis"),
-            ("REDIS_SSL_CIPHERS", "private-option-value"),
-        ],
-    )
-    .unwrap_err();
-    let message = error.to_string();
+fn unsupported_environment_settings_never_print_the_value() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(WarningCapture(events.clone()));
+    tracing::subscriber::with_default(subscriber, || {
+        resolve(
+            "model_list: []",
+            &[
+                ("REDIS_HOST", "redis"),
+                ("REDIS_SSL_CIPHERS", "private-option-value"),
+            ],
+        )
+        .unwrap();
+    });
+    let warnings = events.lock().unwrap().join(" ");
 
-    assert!(message.contains("REDIS_SSL_CIPHERS"));
-    assert!(!message.contains("private-option-value"));
+    assert!(warnings.contains("REDIS_SSL_CIPHERS"), "{warnings}");
+    assert!(!warnings.contains("private-option-value"), "{warnings}");
 }
 
 #[rstest]
@@ -659,20 +681,12 @@ struct ContractCase {
 
 const CONTRACT: &str = include_str!("redis_resolution.json");
 
-// Settings redis-py accepts and Rust rejects at boot on purpose, each listed in crates/config/AGENTS.md
-const DIVERGENCES: &[(&str, &str)] = &[
-    ("ssl_ciphers", "ssl_ciphers"),
-    ("unix_socket_path", "unix_socket_path"),
-    (
-        "a_url_query_setting_without_a_redis_rs_equivalent",
-        "url ?socket_timeout",
-    ),
-];
-
 fn tls_view(tls: Option<&TlsOptions>) -> serde_json::Value {
     tls.map_or(serde_json::Value::Null, |tls| {
         serde_json::json!({
             "ca_certs": tls.ca_certs,
+            "ca_data": tls.ca_data,
+            "ca_path": tls.ca_path,
             "certfile": tls.certfile,
             "keyfile": tls.keyfile,
             "verify_certificate": tls.verify_certificate,
@@ -694,6 +708,9 @@ fn expose(value: Option<&litellm_secret_value::SecretValue>) -> Option<&str> {
 
 fn view(resolved: &ResolvedRedis) -> serde_json::Value {
     let target = match &resolved.endpoint {
+        Endpoint::Host(host) if host.unix_socket_path.is_some() => serde_json::json!({
+            "mode": "unix", "path": host.unix_socket_path, "tls": null,
+        }),
         Endpoint::Host(host) => serde_json::json!({
             "mode": "host",
             "host": host.host,
@@ -748,6 +765,10 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
         "auth": auth,
         "socket_timeout": resolved.timeout.map_or(5.0, |timeout| timeout.as_secs_f64()),
         "socket_connect_timeout": resolved.connect_timeout.or(resolved.timeout).map_or(5.0, |timeout| timeout.as_secs_f64()),
+        "health_check_interval": resolved.health_check_interval
+            .or_else(|| matches!(resolved.endpoint, Endpoint::Cluster(_)).then_some(Duration::from_secs(25)))
+            .filter(|interval| !interval.is_zero())
+            .map(|interval| interval.as_secs_f64()),
     });
     let serde_json::Value::Object(rest) = rest else {
         unreachable!("the view is an object")
@@ -763,11 +784,6 @@ fn rust_outcome(case: &ContractCase) -> Result<serde_json::Value, RedisError> {
 fn matches_python_rejection(error: &RedisError, python: &serde_json::Value) -> bool {
     let rejection = &python["rejected"];
     match error {
-        RedisError::Unsupported { setting } if setting == "ssl_ca_path" => {
-            rejection["type"] == "TypeError"
-                && rejection["message"]
-                    == "Redis.__init__() got an unexpected keyword argument 'ssl_ca_path'"
-        }
         RedisError::NoTarget => {
             rejection["type"] == "ValueError"
                 && rejection["message"] == "Either 'host' or 'url' must be specified for redis."
@@ -793,23 +809,34 @@ fn matches_python_rejection(error: &RedisError, python: &serde_json::Value) -> b
 }
 
 fn mismatch(case: &ContractCase, contract: &Contract) -> Option<String> {
-    let divergence = DIVERGENCES.iter().find(|(name, _)| *name == case.name);
-    let python_rejects = case.python.get("rejected").is_some();
-    match (rust_outcome(case), divergence) {
-        (
-            Err(RedisError::Unsupported { setting } | RedisError::Invalid { setting, .. }),
-            Some((_, expected)),
-        ) if setting == *expected && !python_rejects => None,
-        (outcome, Some(_)) => Some(format!(
-            "{}: listed as a divergence, got {outcome:?}",
-            case.name
-        )),
-        (Err(ref error), None) if matches_python_rejection(error, &case.python) => None,
-        (Err(RedisError::Unsupported { setting }), None) => Some(format!(
-            "{}: Rust rejects {setting}, which Python accepts",
-            case.name
-        )),
-        (Ok(view), None)
+    match rust_outcome(case) {
+        Err(ref error) if matches_python_rejection(error, &case.python) => None,
+        Ok(view)
+            if matches!(
+                case.name.as_str(),
+                "ssl_ca_path_is_unsupported" | "ssl_ca_path_from_the_environment"
+            ) && case.python["rejected"]["type"] == "TypeError"
+                && case.python["rejected"]["message"]
+                    == "Redis.__init__() got an unexpected keyword argument 'ssl_ca_path'"
+                && view["tls"]["ca_path"]
+                    == case.kwargs.get("ssl_ca_path").cloned().unwrap_or_else(|| {
+                        serde_json::json!(case.environment["REDIS_SSL_CA_PATH"])
+                    }) =>
+        {
+            None
+        }
+        Ok(view)
+            if case.name == "a_url_query_setting_without_a_redis_rs_equivalent"
+                && view
+                    == serde_json::json!({
+                        "mode": "url", "url": case.kwargs["url"], "tls": null,
+                        "auth": case.python["auth"], "socket_timeout": 5.0,
+                        "socket_connect_timeout": 5.0, "health_check_interval": null,
+                    }) =>
+        {
+            None
+        }
+        Ok(view)
             if case.name == "retry_on_error_from_the_environment"
                 && case.python["rejected"]["type"] == "TypeError"
                 && case.python["rejected"]["message"] == "'bool' object is not iterable"
@@ -820,8 +847,8 @@ fn mismatch(case: &ContractCase, contract: &Contract) -> Option<String> {
         {
             None
         }
-        (Ok(view), None) if view == case.python => None,
-        (outcome, None) => Some(format!(
+        Ok(view) if view == case.python => None,
+        outcome => Some(format!(
             "{}: rust {outcome:?}, python {}",
             case.name, case.python
         )),
@@ -834,18 +861,11 @@ fn mismatch(case: &ContractCase, contract: &Contract) -> Option<String> {
 fn resolution_matches_python_redis() {
     let contract: Contract = serde_json::from_str(CONTRACT).unwrap();
 
-    let unknown_divergences: Vec<&str> = DIVERGENCES
-        .iter()
-        .map(|(name, _)| *name)
-        .filter(|name| !contract.cases.iter().any(|case| case.name == *name))
-        .collect();
     let mismatches: Vec<String> = contract
         .cases
         .iter()
         .filter_map(|case| mismatch(case, &contract))
         .collect();
-
-    assert_eq!(unknown_divergences, Vec::<&str>::new());
 
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }

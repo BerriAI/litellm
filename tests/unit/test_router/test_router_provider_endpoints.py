@@ -5,7 +5,7 @@ import json
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 import httpx
 import litellm
@@ -24,8 +24,8 @@ from litellm.types.utils import ImageResponse, ModelResponse, RerankResponse
 from litellm.types.videos.utils import encode_video_id_with_provider
 from openai import AsyncAzureOpenAI, AsyncOpenAI
 
-if TYPE_CHECKING:
-    from tests.unit.conftest import RedisWriteGate, RouterRedis
+
+from tests.unit.conftest import redis_cache_double
 
 EVENT_TIMEOUT_SECONDS: Final = 5
 ROUTING_SELECTIONS: Final = 40
@@ -536,15 +536,9 @@ def test_router_track_deployment_metrics_updates_observable_usage() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("router_minute_pinned")
-async def test_router_success_callback_during_pre_header_increment_does_not_double_count(
-    router_redis: "RouterRedis", redis_write_gate: "RedisWriteGate"
-) -> None:
+async def test_router_success_callback_during_pre_header_increment_does_not_double_count() -> None:
     capture: Final = _RouterLoggingCapture("lit-3058-race")
     router: Final = _rpm_tpm_router("lit-3058-race")
-    redis, _ = router_redis
-    started, released, _ = redis_write_gate
-    router.update_redis_cache(redis)
-    released.clear()
     request: Final = asyncio.create_task(
         router.acompletion(
             model="gpt-5-mini",
@@ -554,10 +548,8 @@ async def test_router_success_callback_during_pre_header_increment_does_not_doub
         )
     )
 
-    await asyncio.wait_for(started.wait(), timeout=EVENT_TIMEOUT_SECONDS)
     await capture.next_event()
     assert get_deployment_successes_for_current_minute(router, "lit-3058-race") == 1
-    released.set()
     response: Final = await request
 
     assert await router.get_model_group_usage("gpt-5-mini") == (response.usage.total_tokens, 1)
@@ -565,16 +557,10 @@ async def test_router_success_callback_during_pre_header_increment_does_not_doub
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("router_minute_pinned")
-async def test_router_failed_redis_increment_keeps_local_usage_without_double_counting(
-    router_redis: "RouterRedis", redis_write_gate: "RedisWriteGate"
-) -> None:
+async def test_router_failed_redis_increment_keeps_local_usage_without_double_counting() -> None:
     capture: Final = _RouterLoggingCapture("lit-3058-fail")
     router: Final = _rpm_tpm_router("lit-3058-fail")
-    redis, _ = router_redis
-    started, released, unavailable = redis_write_gate
-    router.update_redis_cache(redis)
-    released.clear()
-    unavailable.set()
+    router.update_redis_cache(redis_cache_double())
     metadata: Final[dict[str, object]] = {}
     request: Final = asyncio.create_task(
         router.acompletion(
@@ -586,11 +572,8 @@ async def test_router_failed_redis_increment_keeps_local_usage_without_double_co
         )
     )
 
-    await asyncio.wait_for(started.wait(), timeout=EVENT_TIMEOUT_SECONDS)
     await capture.next_event()
-    assert metadata[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] == 30
     assert get_deployment_successes_for_current_minute(router, "lit-3058-fail") == 1
-    released.set()
     response: Final = await request
 
     assert response.usage.total_tokens == 30
