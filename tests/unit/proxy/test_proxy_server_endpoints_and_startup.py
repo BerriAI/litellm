@@ -14139,6 +14139,72 @@ async def test_team_window_is_charged_when_the_cached_team_expired_before_the_re
     assert enqueued[0]["spend"] == pytest.approx(1.5)
 
 
+@pytest.mark.asyncio
+async def test_a_token_with_no_key_row_reads_the_database_once_across_requests():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    prisma_client = _prisma_with_rows()
+    find_unique: Final = prisma_client.db.litellm_verificationtoken.find_unique
+
+    with _window_spend_enqueue_env({}, prisma_client=prisma_client) as queue:
+        await increment_spend_counters(token="litellm_proxy_master_key", team_id=None, user_id=None, response_cost=0.25)
+        reads_after_first_request: Final = find_unique.await_count
+        for _ in range(3):
+            await increment_spend_counters(
+                token="litellm_proxy_master_key", team_id=None, user_id=None, response_cost=0.25
+            )
+        enqueued = await _drain(queue)
+
+    assert enqueued == []
+    assert reads_after_first_request > 0
+    assert find_unique.await_count == reads_after_first_request
+
+
+@pytest.mark.asyncio
+async def test_every_cache_miss_charges_the_windows_the_key_row_holds_at_that_moment():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=3)
+    row = MagicMock()
+    row.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
+
+    with _window_spend_enqueue_env({}, prisma_client=_prisma_with_rows(keys={"hashed-token": row})) as queue:
+        await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
+        row.budget_limits = [{"budget_duration": "7d", "max_budget": 5.0, "reset_at": reset_at.isoformat()}]
+        await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.5)
+        enqueued = await _drain(queue)
+
+    assert sorted((item["window_duration"], item["spend"]) for item in enqueued) == [
+        ("30d", pytest.approx(0.25)),
+        ("7d", pytest.approx(0.5)),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_key_row_read_skips_that_request_and_the_next_one_reads_again():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=3)
+    row = MagicMock()
+    row.budget_limits = [{"budget_duration": "7d", "max_budget": 5.0, "reset_at": reset_at.isoformat()}]
+    prisma_client = _prisma_with_rows()
+    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        side_effect=ConnectionError("database is unreachable")
+    )
+
+    with _window_spend_enqueue_env({}, prisma_client=prisma_client) as queue:
+        await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
+        after_failure = await _drain(queue)
+        prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=row)
+        await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.5)
+        after_recovery = await _drain(queue)
+
+    assert after_failure == []
+    assert [(item["entity_id"], item["window_duration"], item["spend"]) for item in after_recovery] == [
+        ("hashed-token", "7d", pytest.approx(0.5))
+    ]
+
+
 def _mock_startup_prisma_client(health_check_error=None, connect_error=None):
     client = MagicMock()
     client.connect = AsyncMock(side_effect=connect_error)
