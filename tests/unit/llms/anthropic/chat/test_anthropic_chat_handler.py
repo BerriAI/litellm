@@ -2954,15 +2954,19 @@ def test_streamed_json_mode_truncated_output_is_passed_through_untouched():
     assert "".join(contents) == '{"name": "json_tool_call", "parameters": {"tier": 3'
 
 
+def _block_events(
+    index: int, block: dict[str, object], deltas: tuple[dict[str, object], ...]
+) -> tuple[dict[str, object], ...]:
+    return (
+        {"type": "content_block_start", "index": index, "content_block": block},
+        *({"type": "content_block_delta", "index": index, "delta": delta} for delta in deltas),
+        {"type": "content_block_stop", "index": index},
+    )
+
+
 def _message_events(*blocks: tuple[dict[str, object], tuple[dict[str, object], ...]]) -> tuple[dict[str, object], ...]:
-    starts_and_deltas = tuple(
-        event
-        for index, (block, deltas) in enumerate(blocks)
-        for event in (
-            {"type": "content_block_start", "index": index, "content_block": block},
-            *({"type": "content_block_delta", "index": index, "delta": delta} for delta in deltas),
-            {"type": "content_block_stop", "index": index},
-        )
+    starts_and_deltas: Final = tuple(
+        chain.from_iterable(_block_events(index, block, deltas) for index, (block, deltas) in enumerate(blocks))
     )
     return (
         {
@@ -2979,7 +2983,11 @@ def _message_events(*blocks: tuple[dict[str, object], tuple[dict[str, object], .
             },
         },
         *starts_and_deltas,
-        {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 40}},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 40},
+        },
     )
 
 
@@ -2994,7 +3002,7 @@ _PREAMBLE_BLOCK: Final = (
 
 
 def _json_tool_block(answer: dict[str, object]) -> tuple[dict[str, object], tuple[dict[str, object], ...]]:
-    encoded = json.dumps(answer)
+    encoded: Final = json.dumps(answer)
     return (
         {"type": "tool_use", "id": "toolu_1", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {}},
         tuple({"type": "input_json_delta", "partial_json": part} for part in (encoded[:5], encoded[5:])),
@@ -3004,7 +3012,7 @@ def _json_tool_block(answer: dict[str, object]) -> tuple[dict[str, object], tupl
 def _parse_stream(
     events: tuple[dict[str, object], ...], schema: dict[str, object] | None = _STREAMED_PERSON_SCHEMA
 ) -> tuple[ModelResponseStream, ...]:
-    iterator = ModelResponseIterator(
+    iterator: Final = ModelResponseIterator(
         streaming_response=MagicMock(),
         sync_stream=True,
         json_mode=True,
@@ -3018,7 +3026,7 @@ def _joined_content(chunks: tuple[ModelResponseStream, ...]) -> str:
 
 
 def test_streamed_json_mode_drops_prose_written_before_the_json_tool():
-    chunks = _parse_stream(_message_events(_THINKING_BLOCK, _PREAMBLE_BLOCK, _json_tool_block(_STREAMED_PERSON)))
+    chunks: Final = _parse_stream(_message_events(_THINKING_BLOCK, _PREAMBLE_BLOCK, _json_tool_block(_STREAMED_PERSON)))
 
     assert json.loads(_joined_content(chunks)) == _STREAMED_PERSON
     assert "".join(getattr(chunk.choices[0].delta, "reasoning_content", None) or "" for chunk in chunks) == (
@@ -3028,32 +3036,32 @@ def test_streamed_json_mode_drops_prose_written_before_the_json_tool():
 
 
 def test_streamed_json_mode_returns_prose_when_claude_skips_the_json_tool():
-    chunks = _parse_stream(_message_events(_THINKING_BLOCK, _PREAMBLE_BLOCK))
+    chunks: Final = _parse_stream(_message_events(_THINKING_BLOCK, _PREAMBLE_BLOCK))
 
     assert _joined_content(chunks) == "**Working it out:** the count is **120**"
 
 
 def test_streamed_json_mode_sends_prose_ahead_of_a_caller_tool_call():
-    caller_tool = (
+    caller_tool: Final = (
         {"type": "tool_use", "id": "toolu_2", "name": "get_weather", "input": {}},
         ({"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},),
     )
 
-    chunks = _parse_stream(_message_events(_PREAMBLE_BLOCK, caller_tool))
-    tool_chunk_index = next(i for i, chunk in enumerate(chunks) if chunk.choices[0].delta.tool_calls)
+    chunks: Final = _parse_stream(_message_events(_PREAMBLE_BLOCK, caller_tool))
+    tool_chunk_index: Final = next(i for i, chunk in enumerate(chunks) if chunk.choices[0].delta.tool_calls)
 
     assert _joined_content(chunks[: tool_chunk_index + 1]) == "**Working it out:** the count is **120**"
     assert chunks[tool_chunk_index].choices[0].delta.tool_calls[0].function.name == "get_weather"
 
 
 def test_streamed_native_output_text_is_not_held_back():
-    answer = json.dumps(_STREAMED_PERSON)
-    text_block = (
+    answer: Final = json.dumps(_STREAMED_PERSON)
+    text_block: Final = (
         {"type": "text", "text": ""},
         tuple({"type": "text_delta", "text": part} for part in (answer[:6], answer[6:])),
     )
 
-    chunks = _parse_stream(_message_events(text_block), schema=None)
+    chunks: Final = _parse_stream(_message_events(text_block), schema=None)
 
     assert tuple(chunk.choices[0].delta.content for chunk in chunks[2:4]) == (answer[:6], answer[6:])
 
