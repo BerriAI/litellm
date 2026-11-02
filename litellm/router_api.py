@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, overload
 from litellm.router_config import detached
 
 if TYPE_CHECKING:
+    from functools import _lru_cache_wrapper
     from typing import Any  # noqa: TID251  # only to spell the cores' untyped (Unknown) containers and one Any type
 
     from opentelemetry.trace import Span
@@ -178,9 +179,9 @@ def deployment_usable_by_team(deployment: "Mapping[str, object] | Deployment", t
     Whether ``team_id`` may use ``deployment``: a team-scoped deployment (``model_info.team_id``
     set) only by that team, any other deployment by everyone. Needs no router instance.
     """
-    from litellm.router_python_core import PythonCore
+    from litellm.router_rust_registry import HostRegistry
 
-    return PythonCore._core_deployment_usable_by_team(deployment, team_id)
+    return HostRegistry._core_deployment_usable_by_team(deployment, team_id)
 
 
 def deployment_id(model_group: str, litellm_params: Mapping[str, object]) -> str:
@@ -200,11 +201,77 @@ def deployment_id(model_group: str, litellm_params: Mapping[str, object]) -> str
     return hashlib.sha256("".join(parts).encode()).hexdigest()
 
 
+# The arguments ``Router.__init__`` accepts, in its signature's order. Every core reads this list
+# (the Python core's ``get_valid_args`` reads its constructor's signature, and the core suite checks
+# that the two agree).
+ROUTER_INIT_ARGS: Final[tuple[str, ...]] = (
+    "model_list",
+    "assistants_config",
+    "search_tools",
+    "guardrail_list",
+    "redis_url",
+    "redis_host",
+    "redis_port",
+    "redis_password",
+    "redis_db",
+    "cache_responses",
+    "cache_kwargs",
+    "caching_groups",
+    "client_ttl",
+    "polling_interval",
+    "default_priority",
+    "num_retries",
+    "max_fallbacks",
+    "timeout",
+    "stream_timeout",
+    "default_litellm_params",
+    "default_max_parallel_requests",
+    "set_verbose",
+    "debug_level",
+    "default_fallbacks",
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+    "model_group_alias",
+    "enable_pre_call_checks",
+    "enable_tag_filtering",
+    "tag_filtering_match_any",
+    "tag_routing_prefix",
+    "plugins",
+    "retry_after",
+    "retry_policy",
+    "model_group_retry_policy",
+    "allowed_fails",
+    "allowed_fails_policy",
+    "cooldown_time",
+    "disable_cooldowns",
+    "fallback_on_unsupported_params",
+    "routing_strategy",
+    "optional_pre_call_checks",
+    "routing_strategy_args",
+    "routing_groups",
+    "provider_budget_config",
+    "alerting_config",
+    "router_general_settings",
+    "deployment_affinity_ttl_seconds",
+    "model_group_affinity_config",
+    "ignore_invalid_deployments",
+    "enable_health_check_routing",
+    "health_check_staleness_threshold",
+    "health_check_ignore_transient_errors",
+    "background_health_check_model_groups",
+    "enable_weighted_failover",
+    "enable_mid_stream_fallback_continuation",
+    "fallback_access_check",
+    "fallback_budget_check",
+    "auto_router_capability_limit",
+    "session_affinity_repin_on_failover",
+)
+
+
 def router_init_args() -> tuple[str, ...]:
     """The arguments ``Router.__init__`` accepts (was ``Router.get_valid_args``). Needs no router instance."""
-    from litellm.router_python_core import PythonCore
-
-    return tuple(PythonCore.get_valid_args())
+    return ROUTER_INIT_ARGS
 
 
 def mark_advisor_orchestration_failure(exception: BaseException) -> None:
@@ -268,9 +335,9 @@ def deployment_metadata(request_kwargs: Mapping[str, object]) -> Mapping[str, ob
 
 
 def _json_default_stable_id(obj: object) -> str:
-    from litellm.router_python_core import PythonCore
+    from litellm.router_rust_prerouting import _json_default_stable_id as stable_id
 
-    return PythonCore._json_default_stable_id(obj)
+    return stable_id(obj)
 
 
 class RouterRegistry:
@@ -314,6 +381,13 @@ class RouterRegistry:
         if cached:
             return self._router._core_cached_deployment_model_info(id, model_name)
         return self._router._core_get_deployment_model_info(model_id=id, model_name=model_name)
+
+    def deployment_model_info_cache(self) -> "_lru_cache_wrapper[ModelMapInfo | None]":
+        """
+        The lru cache ``deployment_model_info(..., cached=True)`` reads, called as ``(id, model_name)``
+        and cleared with ``cache_clear()`` (was the ``cached_deployment_model_info`` attribute).
+        """
+        return self._router._core_cached_deployment_model_info
 
     def router_model_info(
         self,
@@ -531,10 +605,8 @@ class RouterRegistry:
         ``should_include_deployment``), or, without ``model_name``, whether the team may use it at
         all (was ``deployment_usable_by_team``).
         """
-        from litellm.router_python_core import PythonCore
-
         if model_name is None:
-            return PythonCore._core_deployment_usable_by_team(deployment, team_id)
+            return deployment_usable_by_team(deployment, team_id)
         return self._router._core_should_include_deployment(model_name=model_name, model=deployment, team_id=team_id)
 
     @overload
@@ -1176,16 +1248,16 @@ class RouterHealth:
     @staticmethod
     def is_blocked(deployment: "Deployment") -> bool:
         """Whether an admin paused this deployment (was ``is_deployment_blocked``)."""
-        from litellm.router_python_core import PythonCore
+        from litellm.router_rust_health_routing import is_blocked as deployment_is_blocked
 
-        return PythonCore._core_is_deployment_blocked(deployment)
+        return deployment_is_blocked(deployment)
 
     @staticmethod
     def all_blocked(deployments: "Sequence[DeploymentTypedDict]") -> bool:
         """Whether every deployment in the list is paused (was ``are_all_deployments_blocked``)."""
-        from litellm.router_python_core import PythonCore
+        from litellm.router_rust_health_routing import all_blocked as deployments_all_blocked
 
-        return PythonCore._core_are_all_deployments_blocked(deployments)
+        return deployments_all_blocked(deployments)
 
     def fully_blocked_model_names(self) -> set[str]:  # mutable-ok: the core's type, a fresh set
         """Groups whose every deployment is paused (was ``get_fully_blocked_model_names``)."""

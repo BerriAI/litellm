@@ -16,6 +16,7 @@ from tests.unit.test_router.core.scripted_host import (
     ScriptedHost,
     context_window,
     deployment,
+    records_outcomes_through_callbacks,
     server_error,
 )
 
@@ -637,6 +638,8 @@ def test_retire_releases_every_callback_the_core_registered_on_its_host(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     core = make_core(model_list=_model_list())
+    if not records_outcomes_through_callbacks(core):
+        pytest.skip("this core registers no callbacks on its host")
     assert _registered(host) != {}
 
     core.retire()
@@ -646,6 +649,8 @@ def test_retire_releases_every_callback_the_core_registered_on_its_host(
 
 def test_retire_leaves_another_cores_callbacks_registered(make_core: MakeCore, host: ScriptedHost) -> None:
     kept = make_core(model_list=_model_list())
+    if not records_outcomes_through_callbacks(kept):
+        pytest.skip("this core registers no callbacks on its host")
     retired = make_core(model_list=[deployment("other", "o")])
     registered_by_both = _registered(host)
 
