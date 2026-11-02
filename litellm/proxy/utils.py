@@ -3847,7 +3847,8 @@ class ProxyLogging:
             await offload_token_count(_failure_fields_to_lift)(
                 request_data,
                 provider_billed=_provider_billed_the_failure(original_exception),
-                dispatched_call_type=dispatched_call_type or _call_type_for_route(user_api_key_dict.request_route),
+                dispatched_call_type=dispatched_call_type
+                or _call_type_for_route(route if route is not None else user_api_key_dict.request_route),
             )
         )
 
