@@ -90,9 +90,13 @@ def _stored_response(spend_log: "SpendLogsPayload") -> object:
     return spend_log.get("response")
 
 
-def _identified_output_items(spend_log: "SpendLogsPayload") -> Iterator[tuple[str, object]]:
+def _output_items(spend_log: "SpendLogsPayload") -> Iterator[tuple[str | None, object]]:
     output: Final = _stored_responses_api_output(_stored_response(spend_log)) or []
-    return ((item_id, item) for item_id, item in zip(map(_output_item_id, output), output) if item_id is not None)
+    return zip(map(_output_item_id, output), output)
+
+
+def _identified_output_items(spend_log: "SpendLogsPayload") -> Iterator[tuple[str, object]]:
+    return ((item_id, item) for item_id, item in _output_items(spend_log) if item_id is not None)
 
 
 def _output_item_ids(spend_log: "SpendLogsPayload") -> frozenset[str]:
@@ -131,7 +135,9 @@ def _with_only_new_output(
         return turn
     stored_response: Final = as_str_mapping(_stored_response(turn))
     new_output: Final = [
-        latest_copy[item_id] for item_id, _ in _identified_output_items(turn) if turn_replaying.get(item_id) == index
+        item if item_id is None else latest_copy[item_id]
+        for item_id, item in _output_items(turn)
+        if item_id is None or turn_replaying.get(item_id) == index
     ]
     if stored_response is None or not new_output:
         return None

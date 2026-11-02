@@ -302,7 +302,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         """
         Get the object name to use for the current payload
         """
-        from litellm.proxy.spend_tracking.spend_tracking_utils import logged_event_storage_name
+        from litellm.proxy.spend_tracking.spend_tracking_utils import logged_event_key
 
         current_date: Final = self._get_object_date_from_datetime(datetime.now(timezone.utc))
         metadata: Final = as_str_mapping((as_str_mapping(kwargs.get("litellm_params")) or {}).get("metadata")) or {}
@@ -318,7 +318,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         response_id: Final = raw_response_id if isinstance(raw_response_id, str) else ""
         return self._generate_success_object_name(
             request_date_str=current_date,
-            response_id=logged_event_storage_name(kwargs, response_id),
+            response_id=logged_event_key(kwargs, response_id),
         )
 
     async def get_request_response_payload(

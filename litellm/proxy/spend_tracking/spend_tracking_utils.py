@@ -367,7 +367,7 @@ def get_spend_logs_id(
     return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, kwargs)}"
 
 
-def logged_event_storage_name(kwargs: Mapping[str, object], event_id: str) -> str:
+def logged_event_key(kwargs: Mapping[str, object], event_id: str) -> str:
     call_type: Final = kwargs.get("call_type")
     litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
     metadata: Final = (

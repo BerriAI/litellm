@@ -1174,6 +1174,23 @@ async def test_an_item_a_poll_caught_half_written_replays_its_finished_text_once
 
 
 @pytest.mark.asyncio
+async def test_a_polled_output_item_without_an_id_still_replays_in_order():
+    spend_logs: Final = (
+        _stored_response_turn("resp_queued", "aresponses", "queued", [], prompt="Count to two"),
+        _stored_response_turn(
+            "resp_poll_done",
+            "aget_responses",
+            "completed",
+            [_output_message("One"), _identified_output_message("msg_two", "Two")],
+        ),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_queued")
+
+    assert _replayed_roles_and_texts(session) == [("user", "Count to two"), ("assistant", "One"), ("assistant", "Two")]
+
+
+@pytest.mark.asyncio
 async def test_a_read_that_ends_before_its_streamed_create_replays_the_answer_once_after_the_prompt():
     answer: Final = [_identified_output_message("msg_answer", "OK")]
     spend_logs: Final = (
