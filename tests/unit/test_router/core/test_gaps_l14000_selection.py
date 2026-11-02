@@ -315,6 +315,8 @@ async def test_an_access_group_only_caller_reaches_any_deployment_by_its_litellm
 
 
 # --- tier litellm_params -------------------------------------------------------------------------
+# ``select`` works on a copy of its caller's request; these read what selection pins and stamps on the
+# request the router routes (and re-routes on retries), through the cores' in-place selection.
 
 
 def _pinned(**tier_params: object) -> dict[str, object]:  # mutable-ok: tiers  # kwargs-ok: tier litellm_params
@@ -331,7 +333,7 @@ async def test_a_tier_param_no_deployment_supports_is_dropped(make_core: MakeCor
         ]
     )
     request: Final[dict[str, object]] = {}
-    chosen: Final = await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
+    chosen: Final = await core._select_in_place("smart", request, messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
     assert chosen["model_info"]["id"] == "s"  # pyright: ignore[reportIndexIssue]
     assert request["temperature"] == 0.2
     assert "logit_bias" not in request
@@ -347,7 +349,7 @@ async def test_a_tier_param_the_request_allowlists_is_kept(make_core: MakeCore) 
         ]
     )
     request: Final[dict[str, object]] = {"allowed_openai_params": ["logit_bias"]}
-    await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
+    await core._select_in_place("smart", request, messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     assert request["logit_bias"] == {"1": 2}
 
 
@@ -360,7 +362,7 @@ async def test_a_tier_reasoning_effort_removes_the_callers_other_effort_carriers
         "reasoning": {"effort": "high"},
         "max_completion_tokens": 100,
     }
-    await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
+    await core._select_in_place("smart", request, messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     assert request["reasoning_effort"] == "low"
     assert "thinking" not in request
     assert request["output_config"] == {"format": "json"}
@@ -372,7 +374,7 @@ async def test_a_tier_reasoning_effort_removes_the_callers_other_effort_carriers
 async def test_a_tier_without_an_output_ceiling_leaves_the_callers_ceiling(make_core: MakeCore) -> None:
     core: Final = make_core(model_list=_tiered(tiers=_pinned(temperature=0.1)))
     request: Final[dict[str, object]] = {"max_completion_tokens": 100}
-    await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
+    await core._select_in_place("smart", request, messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     assert request["temperature"] == 0.1
     assert request["max_completion_tokens"] == 100
     assert "max_tokens" not in request
@@ -384,12 +386,12 @@ async def test_a_tier_without_an_output_ceiling_leaves_the_callers_ceiling(make_
 async def test_a_later_pick_restores_the_callers_ceiling_a_tier_pin_replaced(make_core: MakeCore) -> None:
     core: Final = make_core(model_list=_tiered(tiers=_pinned(max_tokens=7)))
     request: Final[dict[str, object]] = {"max_completion_tokens": 100}
-    await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
+    await core._select_in_place("smart", request, messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     assert request["max_tokens"] == 7
     assert "max_completion_tokens" not in request
     assert _metadata(request)["_client_output_ceiling"] == {"max_completion_tokens": 100}
 
-    chosen: Final = await core.select("smart", request, messages=HARD_MESSAGES)  # pyright: ignore[reportCallIssue]
+    chosen: Final = await core._select_in_place("smart", request, messages=HARD_MESSAGES)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
     assert chosen["model_info"]["id"] == "b"  # pyright: ignore[reportIndexIssue]
     assert request["max_completion_tokens"] == 100
     assert "max_tokens" not in request
@@ -401,13 +403,13 @@ async def test_a_second_pick_leaves_the_first_picks_forwarded_marker_params_untr
     # next attempt, so the tracking key is dropped while the params themselves stay behind.
     core: Final = make_core(model_list=_tiered(temperature=0.3))
     request: Final[dict[str, object]] = {}
-    await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
+    await core._select_in_place("smart", request, messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     forwarded: Final = request["_alias_marker_forwarded_params"]
     assert isinstance(forwarded, tuple)
     assert "temperature" in forwarded
     assert request["temperature"] == 0.3
 
-    await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
+    await core._select_in_place("smart", request, messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     assert "_alias_marker_forwarded_params" not in request
     assert request["temperature"] == 0.3
 
@@ -419,7 +421,7 @@ async def test_a_second_pick_leaves_the_first_picks_forwarded_marker_params_untr
 async def test_the_routing_decision_keeps_its_prompt_signals_by_default(make_core: MakeCore) -> None:
     core: Final = make_core(model_list=_tiered())
     request: Final[dict[str, object]] = {}
-    await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
+    await core._select_in_place("smart", request, messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     decision: Final = _metadata(request)["routing_decision"]
     assert isinstance(decision, Mapping)
     assert "signals" in decision
@@ -429,7 +431,7 @@ async def test_the_routing_decision_keeps_its_prompt_signals_by_default(make_cor
 async def test_redacted_message_logging_drops_the_prompt_quoting_routing_decision_fields(make_core: MakeCore) -> None:
     core: Final = make_core(model_list=_tiered())
     request: Final[dict[str, object]] = {"standard_callback_dynamic_params": {"turn_off_message_logging": True}}
-    await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
+    await core._select_in_place("smart", request, messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     decision: Final = _metadata(request)["routing_decision"]
     assert isinstance(decision, Mapping)
     assert "signals" not in decision
@@ -440,7 +442,7 @@ async def test_redacted_message_logging_drops_the_prompt_quoting_routing_decisio
 async def test_routing_metadata_goes_to_litellm_metadata_when_the_request_has_it(make_core: MakeCore) -> None:
     core: Final = make_core(model_list=_tiered())
     request: Final[dict[str, object]] = {"litellm_metadata": {}}
-    await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
+    await core._select_in_place("smart", request, messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     assert "routing_decision" in _metadata(request, "litellm_metadata")
     assert "metadata" not in request
 

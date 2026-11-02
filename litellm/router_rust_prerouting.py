@@ -484,9 +484,10 @@ class PreRoutingStrategies:
 
     def _sync_adaptive_router_hooks(self) -> None:
         """One post-call hook per registered adaptive router, plus the header hook while any exists."""
-        from litellm.router_strategy.adaptive_router.hooks import (
-            AdaptiveRouterPostCallHook,
-            AdaptiveRouterResponseHeaderHook,
+        from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
+        from litellm.router_utils.global_callback_holders import (
+            adaptive_routers_on_host,
+            sync_adaptive_response_header_hook,
         )
 
         callbacks: Final = self._host.callbacks
@@ -494,8 +495,7 @@ class PreRoutingStrategies:
             callbacks.remove_callback_from_all_lists(callback)
         for tagged in chain.from_iterable(self.adaptive.values()):
             callbacks.add_litellm_callback(AdaptiveRouterPostCallHook(adaptive_router=tagged.strategy))
-        if self.adaptive:
-            callbacks.add_litellm_callback(AdaptiveRouterResponseHeaderHook())
+        sync_adaptive_response_header_hook(callbacks, bool(self.adaptive) or adaptive_routers_on_host(self._host))
 
 
 # -- the request side --------------------------------------------------------------------------

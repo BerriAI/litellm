@@ -1331,7 +1331,7 @@ class RustEndpoints:
         assert isinstance(scheduler, Scheduler)
 
         async def healthy_deployments() -> Sequence[object]:
-            healthy: Final = await self._core.select(model, dict(request), kind="healthy")
+            healthy: Final = await self._core._select_in_place(model, dict(request), kind="healthy")  # pyright: ignore[reportPrivateUsage]  # the endpoints serve their own core
             return list(healthy) if isinstance(healthy, Sequence) else [healthy]
 
         await scheduler.wait_for_turn(
@@ -1584,7 +1584,7 @@ class RustEndpoints:
         metadata_variable_name: Final = get_router_metadata_variable_name(function_name="aretrieve_batch")
         if model is not None:
             specific: Final = kwargs.pop("specific_deployment", None)
-            healthy = await self._core.select(  # rebind-ok: rebound as the Python router rebinds it
+            healthy = await self._core._select_in_place(  # pyright: ignore[reportPrivateUsage]  # rebind-ok: rebound as the Python router rebinds it
                 model, dict(kwargs), kind="healthy", specific_deployment=bool(specific) or None
             )
         else:
@@ -1674,7 +1674,7 @@ class RustEndpoints:
         )
         from litellm.types.utils import LlmProviders
 
-        healthy: Final = await self._core.select(
+        healthy: Final = await self._core._select_in_place(  # pyright: ignore[reportPrivateUsage]  # the endpoints serve their own core
             requested, dict(kwargs), kind="healthy", specific_deployment=bool(specific) or None
         )
         deployments: Final = list(healthy) if isinstance(healthy, Sequence) else [healthy]

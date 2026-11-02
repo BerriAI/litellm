@@ -370,16 +370,18 @@ async def test_order_tiers_run_before_a_plain_list_or_the_default_chain(
 # --- default fallbacks ---------------------------------------------------------------------------
 
 
-def test_default_fallbacks_are_appended_to_the_process_fallbacks_list_in_place(
+def test_default_fallbacks_extend_the_process_fallbacks_without_changing_the_process_list(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     process_fallbacks: list[object] = [{"a": ["b"]}]
     host.set_dynamic(fallbacks=process_fallbacks)
 
     core = build(make_core, default_fallbacks=["c"])
+    other = build(make_core, default_fallbacks=["d"])
 
     assert core.settings().fallbacks == [{"a": ["b"]}, {"*": ["c"]}]
-    assert process_fallbacks == [{"a": ["b"]}, {"*": ["c"]}]
+    assert other.settings().fallbacks == [{"a": ["b"]}, {"*": ["d"]}]  # pyright: ignore[reportUnknownMemberType]  # untyped in the checker's view
+    assert process_fallbacks == [{"a": ["b"]}]
 
 
 def test_default_fallbacks_leave_the_constructor_fallbacks_list_unchanged(make_core: MakeCore) -> None:

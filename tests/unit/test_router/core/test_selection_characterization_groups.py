@@ -676,7 +676,7 @@ async def test_retry_skipped_deployment_ids_given_as_a_list_are_ignored(make_cor
 
 
 @pytest.mark.asyncio
-async def test_select_pops_the_narrowing_keys_from_the_request(make_core: MakeCore) -> None:
+async def test_select_honors_the_narrowing_keys_but_leaves_them_on_the_callers_request(make_core: MakeCore) -> None:
     core: Final = make_core(model_list=list(THREE))
     request: Final[dict[str, object]] = {
         "_target_order": None,
@@ -684,6 +684,22 @@ async def test_select_pops_the_narrowing_keys_from_the_request(make_core: MakeCo
         "_retry_skipped_deployment_ids": ("b",),
     }
     assert ids_of(await core.select("g", request, kind="healthy")) == ["c"]
+    assert request == {
+        "_target_order": None,
+        "_excluded_deployment_ids": ["a"],
+        "_retry_skipped_deployment_ids": ("b",),
+    }
+
+
+@pytest.mark.asyncio  # pyright: ignore[reportUnknownMemberType, reportUntypedFunctionDecorator]  # untyped in the checker's view
+async def test_in_place_selection_pops_the_narrowing_keys_from_the_routed_request(make_core: MakeCore) -> None:
+    core: Final = make_core(model_list=list(THREE))
+    request: Final[dict[str, object]] = {
+        "_target_order": None,
+        "_excluded_deployment_ids": ["a"],
+        "_retry_skipped_deployment_ids": ("b",),
+    }
+    assert ids_of(await core._select_in_place("g", request, kind="healthy")) == ["c"]  # pyright: ignore[reportAttributeAccessIssue, reportUnknownArgumentType, reportUnknownMemberType]
     assert request == {}
 
 

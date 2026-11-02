@@ -291,20 +291,29 @@ async def test_an_anthropic_system_block_is_counted_against_the_context_window(m
 
 
 @pytest.mark.asyncio
-async def test_a_deployment_context_window_is_written_into_the_process_cost_map(make_core: MakeCore) -> None:
-    """Oddity: a deployment's declared ``max_input_tokens`` replaces the process-wide cost-map entry of its
-    model, so it outlives the router and narrows another router's deployment of the same model."""
+async def test_a_deployment_context_window_stays_out_of_the_models_shared_cost_map_entry(
+    make_core: MakeCore,
+) -> None:
+    """A deployment's declared ``max_input_tokens`` is its own: the process-wide cost-map entry of its
+    model keeps the built-in window, so neither a retired nor a live router narrows another router's
+    deployment of the same model."""
+    builtin_window: Final = litellm.model_cost[NO_JSON_MODE_MODEL.removeprefix("openai/")]["max_input_tokens"]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped in the checker's view
     first: Final = make_core(
-        model_list=[deployment("g", "declares-five", model=NO_JSON_MODE_MODEL, model_info={"max_input_tokens": 5})]
+        model_list=[deployment("g", "declares-five", model=NO_JSON_MODE_MODEL, model_info={"max_input_tokens": 5})],
+        enable_pre_call_checks=True,
     )
-    first.retire()
     other: Final = python_core(
         CallbackHost(),
         model_list=[deployment("g", "declares-nothing", model=NO_JSON_MODE_MODEL)],
         enable_pre_call_checks=True,
     )
+    for key in (NO_JSON_MODE_MODEL, NO_JSON_MODE_MODEL.removeprefix("openai/")):
+        assert litellm.model_cost.get(key, {}).get("max_input_tokens") in (None, builtin_window)  # pyright: ignore[reportUnknownMemberType]  # untyped in the checker's view
+    assert (await other.select("g", messages=LONG))["model_info"]["id"] == "declares-nothing"
     with pytest.raises(litellm.ContextWindowExceededError, match="Max Input Tokens=5"):
-        await other.select("g", messages=SHORT)
+        await first.select("g", messages=LONG)  # pyright: ignore[reportCallIssue]  # select takes messages; the checker reads an overload
+    first.retire()
+    assert (await other.select("g", messages=LONG))["model_info"]["id"] == "declares-nothing"
     other.retire()
 
 

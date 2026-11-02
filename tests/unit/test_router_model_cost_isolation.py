@@ -2081,7 +2081,8 @@ def test_add_deployment_does_not_leak_custom_metadata_to_shared_backend_key():
 
 def test_shared_backend_model_info_keeps_schema_fields_and_drops_the_rest():
     """Unit test of the whitelist helper: cost-map schema fields survive,
-    custom pricing overrides and per-deployment metadata do not.
+    custom pricing overrides, per-deployment metadata and per-deployment token
+    limits do not.
     """
     from litellm.types.utils import shared_backend_model_info
 
@@ -2106,7 +2107,6 @@ def test_shared_backend_model_info_keeps_schema_fields_and_drops_the_rest():
     assert filtered == {
         "mode": "chat",
         "litellm_provider": "openai",
-        "max_tokens": 128000,
         "supports_vision": True,
         "supported_endpoints": ["/v1/responses"],
         "use_openai_responses_path": True,
@@ -3052,7 +3052,7 @@ def test_register_deployment_in_model_cost_writes_both_key_families():
     """
     A deployment contributes its full model_info under its unique id and the
     cost-map subset under the shared backend key, and the shared key must not
-    pick up the deployment's private metadata.
+    pick up the deployment's private metadata or its declared token limits.
     """
     model_keys = {
         "both-families-id": copy.deepcopy(litellm.model_cost.get("both-families-id")),
@@ -3068,7 +3068,8 @@ def test_register_deployment_in_model_cost_writes_both_key_families():
 
         assert litellm.model_cost["both-families-id"]["max_input_tokens"] == 999
         shared = litellm.model_cost["hosted_vllm/both-families-backend"]
-        assert shared["max_input_tokens"] == 999
+        assert shared["litellm_provider"] == "hosted_vllm"
+        assert "max_input_tokens" not in shared
         assert "id" not in shared
     finally:
         _restore_model_cost_entries(model_keys)

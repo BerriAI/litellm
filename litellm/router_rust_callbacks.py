@@ -28,9 +28,14 @@ from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_utils.global_callback_holders import (
+    OUTCOME_CALLBACK_LISTS,
+    adaptive_routers_on_host,
     live_check_owners,
+    on_host,
     routers_holding_global_callbacks,
     routers_holding_global_callbacks_lock,
+    sync_adaptive_response_header_hook,
+    without_router_callbacks,
 )
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
@@ -279,7 +284,7 @@ class OptionalChecks:
         if self.optional_callbacks is None or not any(type(cb) is callback_cls for cb in self.optional_callbacks):
             return
         self.optional_callbacks = [cb for cb in self.optional_callbacks if type(cb) is not callback_cls]
-        others: Final = tuple(owner for owner in live_check_owners if id(owner) != id(self._owner))
+        others: Final = tuple(owner for owner in on_host(live_check_owners, self._host) if id(owner) != id(self._owner))
         if any(any(type(cb) is callback_cls for cb in (owner.optional_callbacks or ())) for owner in others):
             return
         callbacks: Final = _callbacks(self._host)
@@ -426,7 +431,7 @@ class OptionalChecks:
             (*dropped, *(self.optional_callbacks or ()), *slack, *adaptive), method_owners=(self._owner, *slack)
         )
         with routers_holding_global_callbacks_lock:
-            survivors: Final = tuple(routers_holding_global_callbacks)
+            survivors: Final = on_host(tuple(routers_holding_global_callbacks), self._host)
         candidates: Final = chain.from_iterable(router._global_callback_candidates() for router in survivors)  # pyright: ignore[reportPrivateUsage]  # the holder protocol
         for candidate in self._host.callbacks.with_custom_logger_keys(candidates, vacated):
             register_router_selector(self._host, candidate)
@@ -521,6 +526,22 @@ class RustOptionalChecks:
             selectors.callback_selectors(), (*selectors.callback_selectors(), *selectors.override_selectors())
         )
 
+    def _release_outcome_callbacks(self) -> None:
+        """``reset``'s callback half: this core's own entries leave the host's success and failure
+        lists; every other entry stays."""
+        checks: Final = self._opt
+        slack: Final = checks.slack_alerting_loggers
+        owned: Final = (
+            *self._sel.callback_selectors(),
+            *self._sel.override_selectors(),
+            *(checks.optional_callbacks or ()),
+            *slack,
+            *checks.own_adaptive_hooks(),
+        )
+        host: Final = checks._host  # pyright: ignore[reportPrivateUsage]  # the checks' host
+        for name in OUTCOME_CALLBACK_LISTS:
+            host.set_callback_list(name, without_router_callbacks(host.callback_list(name), owned, (self, *slack)))
+
     def _retire_callbacks(self) -> None:
         """``_core_discard``'s callback half: retire the routing state, release the callbacks."""
         live_check_owners.discard(self)
@@ -528,6 +549,9 @@ class RustOptionalChecks:
         self._opt.retire_state(selectors)
         self._opt.release(selectors)
         self._sel.clear()
+        # The shared adaptive response header hook leaves with the host's last adaptive router.
+        host: Final = self._opt._host  # pyright: ignore[reportPrivateUsage]  # the checks' host
+        sync_adaptive_response_header_hook(host.callbacks, adaptive_routers_on_host(host))
 
     async def _answer_callback_filters(
         self, step: Mapping[str, object], request: Mapping[str, object], messages: object
