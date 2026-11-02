@@ -1,13 +1,13 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { listMCPTools } from "../networking";
-import { MCPTool } from "../mcp_tools/types";
+import { providerToolChoices } from "../mcp_tools/providerTools";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPAccessGroups } from "../../app/(dashboard)/hooks/mcpServers/useMCPAccessGroups";
 import { useMCPToolsets } from "../../app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import McpCrudPermissionPanel from "../mcp_tools/McpCrudPermissionPanel";
-import { classifyToolOp } from "../../utils/mcpToolCrudClassification";
+import { classifyToolOp, type MCPToolEntry } from "../../utils/mcpToolCrudClassification";
 import { MCP_ALL_TOOLS_WILDCARD, NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import {
   EffectiveMcpServer,
@@ -71,7 +71,18 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   } = useMCPServers();
   const { data: populatedAccessGroups = [], isSuccess: accessGroupsLoaded } = useMCPAccessGroups();
   const { data: toolsets = [], isError: toolsetsFailed, isLoading: toolsetsLoading } = useMCPToolsets();
-  const [serverTools, setServerTools] = useState<Record<string, MCPTool[]>>({});
+  const [fetchedServerTools, setServerTools] = useState<Record<string, MCPToolEntry[]>>({});
+  const serverTools = useMemo(
+    () => ({
+      ...fetchedServerTools,
+      ...Object.fromEntries(
+        allServers
+          .filter((server) => server.execution_mode === "provider")
+          .map((server) => [server.server_id, providerToolChoices(server)]),
+      ),
+    }),
+    [allServers, fetchedServerTools],
+  );
   const [loadingTools, setLoadingTools] = useState<Record<string, boolean>>({});
   const [toolErrors, setToolErrors] = useState<Record<string, string>>({});
   const [viewModes, setViewModes] = useState<Record<string, "crud" | "flat">>({});
@@ -117,13 +128,16 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     setToolErrors((prev) => ({ ...prev, [serverId]: "" }));
 
     try {
-      const response = await listMCPTools(token, serverId);
+      const response =
+        entry.server.execution_mode === "provider"
+          ? { tools: providerToolChoices(entry.server), error: null }
+          : await listMCPTools(token, serverId);
 
       if (response.error) {
         setToolErrors((prev) => ({ ...prev, [serverId]: response.message || "Failed to fetch tools" }));
         setServerTools((prev) => ({ ...prev, [serverId]: [] }));
       } else {
-        const fetchedTools: MCPTool[] = response.tools || [];
+        const fetchedTools: MCPToolEntry[] = response.tools || [];
         setServerTools((prev) => ({ ...prev, [serverId]: fetchedTools }));
 
         // Default only unrestricted direct servers to non-delete tools.
@@ -163,7 +177,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     if (toolsetsLoading) return;
     servers.forEach((entry) => {
       const serverId = entry.server.server_id;
-      if (!serverTools[serverId] && !loadingTools[serverId]) {
+      if (!fetchedServerTools[serverId] && !loadingTools[serverId]) {
         fetchToolsForServer(entry, accessToken);
       }
     });

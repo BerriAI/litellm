@@ -3754,7 +3754,7 @@ class MCPRequestHandler:
         if object_permissions is None:
             return set(team_access_group_servers)
         if SpecialMCPServerName.all_proxy_servers.value in (object_permissions.mcp_servers or []):
-            return set(global_mcp_server_manager.get_registry().keys())
+            return global_mcp_server_manager.get_all_mcp_server_ids()
         legacy_access_group_servers: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups(
             object_permissions.mcp_access_groups or [],
             requires_fresh_policy=requires_fresh_policy or require_readable_policy,
@@ -4758,8 +4758,21 @@ class MCPRequestHandler:
             )
 
             snapshot: Final = global_mcp_server_manager.catalog.current()
+            provider_registrations: Final = (
+                global_mcp_server_manager.catalog.provider_registrations()
+                if snapshot is not None
+                else global_mcp_server_manager.catalog.config_registrations
+            )
+            provider_ids: Final = {
+                server.server_id
+                for server in provider_registrations.values()
+                if set(access_groups).intersection(server.mcp_access_groups)
+            }
             if snapshot is not None:
-                return list(MCPRequestHandler._get_config_server_ids_for_access_groups(snapshot.servers, access_groups))
+                return list(
+                    MCPRequestHandler._get_config_server_ids_for_access_groups(snapshot.servers, access_groups)
+                    | provider_ids
+                )
 
             # Use the new helper for config-loaded servers
             server_ids: Final = MCPRequestHandler._get_config_server_ids_for_access_groups(
@@ -4772,7 +4785,7 @@ class MCPRequestHandler:
             )
             server_ids.update(db_server_ids)
 
-            return list(server_ids)
+            return list(server_ids | provider_ids)
         except Exception as e:
             if requires_fresh_policy:
                 raise

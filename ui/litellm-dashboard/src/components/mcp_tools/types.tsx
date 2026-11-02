@@ -426,6 +426,7 @@ export const MCP_REACHABLE_DESCRIPTION = "Server responded. Authentication and t
 
 export interface MCPServer {
   server_id: string;
+  execution_mode?: "litellm" | "provider";
   is_config?: boolean;
   server_name?: string | null;
   alias?: string | null;

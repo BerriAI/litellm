@@ -1,6 +1,6 @@
 # Provider-executed MCP registration
 
-Status: database, isolation, and admin registration API slices approved and pushed through `1ba99633e4`. Provider YAML registration and the explicit provider input model are reviewed and approved for commit and push. Permission integration and native-request enforcement are next
+Status: registration API, YAML registration, execution isolation, and the explicit provider input model are approved and pushed through `a44cd0949e`. Permission integration is reviewed and approved. Native-request enforcement is next
 
 ## Implementation plan
 
@@ -10,35 +10,46 @@ Work through these layers in order on `litellm_provider_mcp_registration`. Updat
 | --- | --- | --- |
 | 1 | Settle registration fields, values, storage, and validation | Approved |
 | 2 | Implement persistence and execution-mode isolation before enabling provider registration | Database, isolation, and admin API committed; YAML registration and provider input model reviewed and approved |
-| 3 | Management UI/API, stored tool options, and existing key/team/toolset selectors | Admin CRUD and inventory API approved; UI and scoped selectors pending |
+| 3 | Management UI/API, stored tool options, and existing key/team/toolset selectors | Scoped retrieval, assignment, and stored tool selectors implemented and approved. Provider registration form remains separate |
 | 4 | Authorize effective OpenAI Responses and Anthropic Messages MCP attachments through existing MCP permissions | Pending |
 | 5 | Live provider tests, streaming admission tests, UI tests, and gateway regressions | Pending |
 
-The next phase connects existing object permissions to provider registrations and enforces native attachments before provider dispatch. Existing permission storage can represent the IDs and tools, but listing a server in the admin catalog does not complete this integration. Assignment validation still resolves config entries through executable inventory, scoped lists still retrieve executable server objects, and tool pickers still call `/mcp-rest/tools/list`. Those paths must read registration identity and stored allowed tools from management inventory for provider mode
+The next phase enforces native attachments before provider dispatch using the completed permission integration. Preserve the current sources of truth and lookup paths. Object permissions remain database-backed and use the existing auth caches. Key assignment keeps its database lookup and gains recognition of provider-only YAML records in its config fallback. Scoped lists keep their existing permission calculation and hydrate authorized provider IDs from the already-loaded registration inventory. Provider tool selectors use stored allowed tools and descriptions. Gateway lookup, discovery, and execution retain their existing paths
 
-Reuse the existing server/tool grant resolution functions, groups, toolsets, and explicit denies. Apply the agreed key/team/server ceiling to provider authorization. The current resolver also has legacy additive access-group grants and some permissive lookup-error handling, so calling it unchanged would not guarantee that contract. Native admission must resolve the canonical URL, require provider execution mode, and validate a finite requested tool scope after effective request configuration is assembled. Cover both native APIs and streaming, with denied requests producing no provider dispatch. Provider MCP discovery/execution stays outside LiteLLM
+Reuse the existing server/tool grant resolution functions, groups, toolsets, and explicit denies. The user accepted today's permission combination and error-handling semantics for v1, including existing inheritance and additive access-group behavior. Do not introduce a stricter policy or broadly replace auth lookups in this feature. Apply the provider registration's allowed-tools ceiling to the resolved permission scope. Native admission must resolve the canonical URL, require provider execution mode, and validate a finite requested tool scope after effective request configuration is assembled. Cover both native APIs and streaming, with denied requests producing no provider dispatch. Provider MCP discovery/execution stays outside LiteLLM
 
-V1 supports URL-based OpenAI Responses MCP and both Anthropic Messages connector formats. Request authorization applies to streaming and non-streaming calls before provider dispatch. Server restrictions, team permissions, and key permissions intersect. Existing applicable permission ceilings and explicit denies continue to apply
+V1 supports URL-based OpenAI Responses MCP and both Anthropic Messages connector formats. Request authorization applies to streaming and non-streaming calls before provider dispatch. Reuse today's key/team permission semantics, bounded by the registered server's allowed tools. Existing applicable permission ceilings and explicit denies continue to apply
 
 Response/SSE inspection, per-invocation argument policy inside a provider's tool loop, automatic MCP discovery for provider registrations, local MCP references, provider connector IDs, and additional API bridges are outside v1
 
+The registry design review is deferred by agreement on 2026-11-02. This batch retains the executable registry and separate provider registration inventory. A later revision may publish both modes through one registry and derive executable views at gateway boundaries. No registry consolidation is included in this approval
+
 ## Current review acceptance criteria
 
-The approved batch covered admin CRUD, input validation, cached management inventory, and execution isolation. The current batch adds YAML registration to that same catalog. Key/team-scoped retrieval, selectors, toolsets, and native-request admission remain later layers. Their absence is intentional for this batch
+This batch connects provider registrations to existing permission assignment, scoped management retrieval, and key/team/toolset tool choices. It changes no database schema or permission-combination rules. Native LLM request admission remains the next batch. The provider create/edit form, response inspection, and billing attribution remain separate work
 
-Core provider fields remain `execution_mode`, `server_name`, `url`, `allowed_tools`, and optional `tool_name_to_description`, alongside the existing shared management fields. Neutral connection values remain accepted where the shared schema permits them, but never enable MCP execution. Active credentials, transports, OAuth settings, commands, and other connection configuration are rejected. No strict five-field schema rewrite is part of this revision
-
-| Acceptance area | Required proof in this batch |
+| Area | Behavior and proof |
 | --- | --- |
-| Admin CRUD | Create, list, detail, partial update, delete, missing/deleted IDs, duplicate URL, immutable mode |
-| Input validation | Active connection settings reject; supported neutral settings succeed; rejected updates leave the row unchanged; omitted tools preserve scope and an explicit empty list stays enforced |
-| Cached inventory | Provider registrations appear in admin inventory and refresh after updates and deletion without becoming executable |
-| Execution isolation | No provider initialization, discovery, health probe, or tool call from management or gateway endpoints |
-| Compatibility | Existing LiteLLM credential merging and update transaction rules remain in place |
+| Assignment | Config provider IDs, names, and aliases retain server and tool grants during key create/update. Existing DB lookups remain in place |
+| Scoped retrieval | Team/user selectors and key-scoped list/detail include authorized provider records. Unrelated server grants do not expose them. Read grants do not authorize edits |
+| Shared permissions | Existing inheritance, key/team tool intersection, access groups, all-server grants, explicit denies, and toolset expansion resolve provider identities |
+| Tool choices | Key/team permission and toolset selectors read stored `allowed_tools` and descriptions. Registration edits, including `[]`, replace choices without discovery |
+| Execution isolation | Provider registrations remain outside the executable registry, gateway discovery, and connected-app reachability |
 
-Provider updates keep read-merge-validation atomic through the existing writer. The gateway credential path is not moved into a new blanket transaction. One initial row lookup selects the immutable execution mode and is reused when the gateway credential flow needs stored values
+Control flow for this review
 
-The later permissions layer will test matching list/detail visibility under key/team intersection, explicit denial, disjoint scopes, revocation after caching, and separation of read grants from mutation privileges. The admin-only live run is not evidence for that layer
+1. Key create/update calls `validate_key_mcp_servers_against_team`. Its existing database identity query and gateway fallback stay unchanged. The config fallback also recognizes provider records, so they are not removed as stale
+2. Existing permission expansion recognizes provider IDs, names, aliases, and access groups. Object-permission rows and auth caches still own the grants. Toolsets keep their current stored server/tool pairs and resolver
+3. Team/user-scoped lists calculate permitted IDs as before, then hydrate provider IDs from the loaded catalog alongside executable records. Unscoped lists retain the existing gateway `view_all` shortcut and add only permitted provider records for non-admins
+4. Detail resolves provider identity from the captured management inventory. Config detail uses that record directly. Database detail maps names/aliases to an ID and keeps the existing database lookup and authorization. Neither path probes a provider server
+5. `MCPToolPermissions` and the toolset picker use `providerToolChoices` for provider registrations. Gateway choices continue through `/mcp-rest/tools/list`. Stored choices are derived from current registration data rather than a stale discovery cache
+6. Connected-app annotations require LiteLLM execution mode even when the caller has a provider grant. Provider registration is an authorization resource, not a gateway connection target
+
+Validation for this permission-integration batch passed 1,384 focused Python tests, then five additional provider tool-resolution cases and targeted checks after final revisions. All 66 affected UI cases passed across the suite and final targeted run, including provider toolset creation with real hooks and components. Production dashboard build and typecheck passed. Seventy live proxy/PostgreSQL checks covered DB/config assignments, name/alias updates, scoped list/detail grants and denials, inheritance, toolsets, sentinel denial, cached grant revocation, CRUD, and gateway isolation. The upstream recorder saw zero connections
+
+The config-assignment regression fails on approved commit `a44cd0949e` for ID, name, and alias, with both server and tool grants incorrectly removed. It passes with the permission-integration changes. Changed-file type comparison introduced no diagnostics; strict Ruff and type-discipline rule counts did not grow
+
+Live browser QA remains incomplete. The browser connector was unavailable, and native Chrome automation encountered active user interaction. No successful interactive flow or screenshots are claimed. Component integration tests cover selecting provider tools and refresh behavior. Evidence is under `/Users/mchanshetty/Desktop/code/mcp-gap-matrix/permission-review/`
 
 The config slice accepts provider entries under the existing `mcp_servers` key, reuses registration validation, and publishes read-only management records in the shared catalog without constructing gateway clients. It covers startup and reload, removal, stable IDs, conflicting config/database identities or URLs, and zero upstream activity. Existing LiteLLM entries use the existing gateway loader
 
@@ -251,7 +262,7 @@ Existing `metadata.allowed_tools` remains an independent compatibility restricti
 | Schema and compatibility | Old registrations load as `litellm`; provider records round-trip with null transport, no upstream credentials, and exact allowed tools |
 | Field validation | Mode/URL/list validation; partial updates; enforced empty list; duplicate endpoint rejection |
 | Management | API and UI create/edit/select the same server and tool IDs without live MCP discovery |
-| Toolsets | Mixed-mode toolsets remain assignable; grants cannot change execution mode or exceed server/team ceilings |
+| Toolsets | Mixed-mode toolsets remain assignable; grants cannot change execution mode or exceed the server tool ceiling and existing effective permission scope |
 | Isolation | Zero outbound MCP initialize/list/call/probe activity for provider registrations, including startup, refresh, and malicious gateway references |
 | Authorization | Registered allowed native calls succeed; unknown URL, wrong mode, disallowed tools, unbounded scope, and narrower key/team grants reject before provider dispatch |
 | API coverage | OpenAI Responses and both Anthropic Messages formats; request-supplied and model-configured attachments; streaming and non-streaming |

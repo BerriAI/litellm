@@ -198,6 +198,16 @@ class CatalogSnapshots:
         scoped: Final = self._operation.get()
         return scoped[0] if scoped is not None and not scoped[1].is_set() else None
 
+    def provider_registrations(self) -> Mapping[str, LiteLLM_MCPServerTable]:
+        snapshot: Final = self.current()
+        if snapshot is not None:
+            return {
+                server_id: server
+                for server_id, server in snapshot.management_servers.items()
+                if server.execution_mode == MCPExecutionMode.provider
+            }
+        return {**self.config_registrations, **self._registration_only_servers}
+
     def routing(self) -> MutableMapping[str, str]:
         staged: Final = self._staged_routing.get()
         if staged is not None and not staged[1].is_set():

@@ -4,6 +4,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { mcpServerToolKeys, useMCPServerTools } from "./useMCPServerTools";
+import type { MCPServer } from "@/components/mcp_tools/types";
 import * as networking from "@/components/networking";
 
 vi.mock("@/components/networking", () => ({
@@ -114,5 +115,36 @@ describe("useMCPServerTools", () => {
       tools: [{ name: "a_tool", description: "from a" }],
       status: "success",
     });
+  });
+});
+
+describe("provider tool choices", () => {
+  it("reads current registered tools without discovery, including an empty allowlist", async () => {
+    vi.clearAllMocks();
+    vi.mocked(networking.listMCPTools).mockResolvedValue(toolsFor("gateway"));
+    const provider: MCPServer = {
+      server_id: "native",
+      execution_mode: "provider",
+      allowed_tools: ["search"],
+      tool_name_to_description: { search: "Search docs" },
+      created_at: "",
+      created_by: "",
+      updated_at: "",
+      updated_by: "",
+    };
+    const { result, rerender } = renderHook(
+      ({ server }) => useMCPServerTools(["native", "gateway"], new Set(["native", "gateway"]), [server]),
+      { wrapper, initialProps: { server: provider } },
+    );
+    await waitFor(() => expect(result.current.get("gateway")?.status).toBe("success"));
+    expect(result.current.get("native")).toEqual({
+      tools: [{ name: "search", description: "Search docs" }],
+      status: "success",
+    });
+    expect(networking.listMCPTools).toHaveBeenCalledTimes(1);
+    expect(networking.listMCPTools).toHaveBeenCalledWith("test-token-123", "gateway");
+    rerender({ server: { ...provider, allowed_tools: [] } });
+    expect(result.current.get("native")).toEqual({ tools: [], status: "success" });
+    expect(networking.listMCPTools).toHaveBeenCalledTimes(1);
   });
 });

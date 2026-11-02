@@ -263,7 +263,7 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
     () => serversToFetch(open, searching, serverIds, expandedServerIds),
     [open, searching, serverIds, expandedServerIds],
   );
-  const toolsByServer = useMCPServerTools(serverIds, fetchServerIds);
+  const toolsByServer = useMCPServerTools(serverIds, fetchServerIds, mcpServers);
   const serverPrefixById = React.useMemo(
     () => new Map(mcpServers.map((s) => [s.server_id, s.alias || s.server_name || s.server_id])),
     [mcpServers],

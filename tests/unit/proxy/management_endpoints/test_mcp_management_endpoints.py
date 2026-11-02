@@ -8025,7 +8025,10 @@ class TestConnectedAppViewAnnotation:
         caller_auth = self._ui_session_auth()
         admitted_auth = UserAPIKeyAuth(user_id="test_user_id")
         admitted_auth.mcp_admitted_user_subject = True
-        mock_manager = self._mock_manager(self._servers(), ["server-1"])
+        provider: Final = LiteLLM_MCPServerTable(
+            server_id="native", execution_mode="provider", transport=None, url="https://native.example/mcp",
+        )
+        mock_manager = self._mock_manager([*self._servers(), provider], ["server-1", "native"])
         reload_mock = AsyncMock(return_value=admitted_auth)
 
         with (
@@ -8049,7 +8052,7 @@ class TestConnectedAppViewAnnotation:
             result = await fetch_all_mcp_servers(user_api_key_dict=caller_auth, connected_app_view=True)
 
         flags = {server.server_id: server.connected_app_reachable for server in result}
-        assert flags == {"server-1": True, "server-2": False}
+        assert flags == {"server-1": True, "server-2": False, "native": False}
         reload_mock.assert_awaited_once_with("test_user_id", requires_fresh_policy=False)
         mock_manager.get_allowed_mcp_servers.assert_awaited_once_with(admitted_auth)
 
@@ -11797,3 +11800,43 @@ async def test_mcp_register_application_type_reaches_upstream_or_is_rejected(
             assert posted["application_type"] == application_type
     finally:
         mgmt_endpoints._temporary_mcp_servers.pop(server.server_id, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("view_mode", ["restricted", "view_all"])
+@pytest.mark.parametrize("granted", [True, False])
+async def test_provider_management_list_and_detail_share_explicit_grants(
+    monkeypatch: pytest.MonkeyPatch, view_mode: str, granted: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server import mcp_server_manager
+
+    manager: Final = MCPServerManager()
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(mgmt_endpoints, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "general_settings", {"user_mcp_management_mode": view_mode})
+    await manager.load_servers_from_config({"native_name": {
+        "server_id": "native-id", "alias": "native_alias", "execution_mode": "provider",
+        "url": "https://native.example/mcp", "allowed_tools": ["search"],
+    }})
+    auth: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="native-grant", mcp_servers=["native_alias"] if granted else [],
+        ),
+    )
+    servers: Final = await mgmt_endpoints._resolve_accessible_mcp_servers(auth)
+    assert [server.server_id for server in servers] == (["native-id"] if granted else [])
+    request: Final = Request({"type": "http", "headers": []})
+    if granted:
+        detail: Final = await mgmt_endpoints.fetch_mcp_server(request, "native_name", user_api_key_dict=auth)
+        assert detail.server_id == "native-id" and detail.allowed_tools == ["search"]
+        assert detail.last_health_check is None
+        assert [server.server_id for server in mgmt_endpoints._redacted_server_tables(iter(["native-id"]))] == ["native-id"]
+    else:
+        with pytest.raises(HTTPException) as denied:
+            await mgmt_endpoints.fetch_mcp_server(request, "native_alias", user_api_key_dict=auth)
+        assert denied.value.status_code == 403
+    assert manager.get_registry() == {}
