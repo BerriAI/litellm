@@ -10,12 +10,13 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
     BaseLLMObsOTELAttributes,
     safe_set_attribute,
 )
-from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes, subscript
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, require_attributes, subscript
 from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
+from litellm.types.decisions import DecisionsResponse
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall, StandardLoggingPayload
 
 if TYPE_CHECKING:
@@ -37,6 +38,23 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_inpu
 
 class _SupportsGetWithDefault(Protocol):
     def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def should_redact_span_content(kwargs: Mapping[str, object]) -> bool:
+    params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
+    routed_metadata: Final = as_str_mapping(params.get("litellm_metadata"))
+    if routed_metadata is None or "headers" in routed_metadata:
+        return should_redact_message_logging(dict(kwargs))
+    metadata: Final = as_str_mapping(params.get("metadata")) or {}
+    return should_redact_message_logging(
+        {
+            **kwargs,
+            "litellm_params": {
+                **params,
+                "litellm_metadata": {**routed_metadata, "headers": metadata.get("headers", {})},
+            },
+        }
+    )
 
 
 class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
@@ -263,11 +281,17 @@ def _set_usage_outputs(span: "Span", response_obj, span_attrs):
         return
 
     safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_TOTAL, _safe_get(usage, "total_tokens"))
-    completion_tokens: Final = _safe_get(usage, "completion_tokens") or _safe_get(usage, "output_tokens")
-    if completion_tokens:
+    reported_completion_tokens: Final = _safe_get(usage, "completion_tokens")
+    completion_tokens: Final = (
+        reported_completion_tokens if reported_completion_tokens is not None else _safe_get(usage, "output_tokens")
+    )
+    if completion_tokens is not None:
         safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_COMPLETION, completion_tokens)
-    prompt_tokens: Final = _safe_get(usage, "prompt_tokens") or _safe_get(usage, "input_tokens")
-    if prompt_tokens:
+    reported_prompt_tokens: Final = _safe_get(usage, "prompt_tokens")
+    prompt_tokens: Final = (
+        reported_prompt_tokens if reported_prompt_tokens is not None else _safe_get(usage, "input_tokens")
+    )
+    if prompt_tokens is not None:
         safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_PROMPT, prompt_tokens)
 
     # Reasoning tokens live in `completion_tokens_details` for Chat Completions
@@ -614,6 +638,10 @@ def _coerce_response_obj_for_attrs(response_obj):
       `id`, `model`, and `usage`. On failure the original object is returned
       so behavior is no worse than today.
     """
+    if isinstance(response_obj, DecisionsResponse):
+        from litellm.cost_calculator import get_usage_object
+
+        return {**response_obj.model_dump(), "usage": get_usage_object(response_obj)}
     if response_obj is None or hasattr(response_obj, "get"):
         return response_obj
     dumped: Final = _to_plain_dict(response_obj)
@@ -1126,7 +1154,7 @@ def _maybe_set_mcp_tool_attrs(
     if tool_name:
         safe_set_attribute(span, SpanAttributes.TOOL_NAME, tool_name)
 
-    if should_redact_message_logging(kwargs):  # pyright: ignore[reportArgumentType]  # reads, never mutates
+    if should_redact_span_content(kwargs):
         return
 
     arguments: Final[object] = mcp_meta.get("arguments")
