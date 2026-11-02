@@ -289,7 +289,19 @@ async def test_post_call_scan_reads_a_field_named_like_the_envelope_in_what_the_
     ],
 )
 async def test_post_call_scan_reads_an_integer_in_what_the_model_or_api_wrote(response, expected):
-    assert await _scanned_response_texts(response) == (expected,)
+    assert any(expected in text for text in await _scanned_response_texts(response))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"results": {"alice@example.com": "active"}},
+        {"candidates": [{"content": {"parts": [{"functionCall": {"args": {"alice@example.com": "active"}}}]}}]},
+    ],
+)
+async def test_post_call_scan_reads_a_field_name_in_what_the_model_or_api_wrote(response):
+    assert any("alice@example.com" in text for text in await _scanned_response_texts(response))
 
 
 @pytest.mark.asyncio

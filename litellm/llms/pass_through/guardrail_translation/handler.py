@@ -6,7 +6,7 @@ It uses the field targeting configuration from litellm_logging_obj
 to extract specific fields for guardrail processing.
 """
 
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, Protocol, runtime_checkable
 
@@ -73,10 +73,21 @@ def _reply_field_position(name: str, skipped: frozenset[str] | None) -> frozense
     return _REPLY_NESTED_FIELDS.get(name, _NO_FIELDS)
 
 
+def _reply_entries(
+    fields: Mapping[str, object], skipped: frozenset[str] | None
+) -> Iterator[tuple[object, frozenset[str] | None]]:
+    for name, item in fields.items():
+        if skipped is None:
+            yield name, None
+        if skipped is None or name not in skipped:
+            yield item, _reply_field_position(name, skipped)
+
+
 def _response_text(response: Mapping[str, object]) -> str:
     """The text a guardrail reads from a JSON response. In a provider's reply that is its strings without the ids and
     encoded data around them, so a timestamp or a usage count doesn't read as a phone or card number. What the model
-    wrote into a tool call, and any other API's JSON, is read whole, integers included. Floats are scores and vectors."""
+    wrote into a tool call, and any other API's JSON, is read whole, field names and integers included. Floats are
+    scores and vectors."""
     top_level: Final = _REPLY_TOP_LEVEL_FIELDS if _is_provider_reply(response) else None
     pending: Final[list[tuple[object, frozenset[str] | None]]] = [(response, top_level)]  # mutable-ok: stack
     texts: Final[list[str]] = []  # mutable-ok: local to this walk
@@ -89,15 +100,7 @@ def _response_text(response: Mapping[str, object]) -> str:
         elif skipped is None and isinstance(value, int) and not isinstance(value, bool):
             texts.append(str(value))
         elif fields is not None:
-            pending.extend(
-                reversed(
-                    [
-                        (item, _reply_field_position(name, skipped))
-                        for name, item in fields.items()
-                        if skipped is None or name not in skipped
-                    ]
-                )
-            )
+            pending.extend(reversed(tuple(_reply_entries(fields, skipped))))
         elif items is not None:
             pending.extend((item, skipped) for item in reversed(items))
     return "\n".join(text for text in texts if text)

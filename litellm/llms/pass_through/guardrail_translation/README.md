@@ -24,7 +24,7 @@ litellm/proxy/pass_through_endpoints/
 The `PassThroughEndpointHandler` enables guardrails to run on passthrough endpoint requests by:
 
 1. **Field Targeting**: Extracts specific fields from the request/response using JSONPath expressions configured in `request_fields` / `response_fields`
-2. **Full Payload Fallback**: If no field targeting is configured, processes the entire request payload. A response is read whole, integers included, except a provider's reply, where the ids, timestamps and usage counts around the text are left out
+2. **Full Payload Fallback**: If no field targeting is configured, processes the entire request payload. A response is read whole, field names and integers included, except a provider's reply, where the ids, timestamps and usage counts around the text are left out
 3. **Config Access**: Uses `get_passthrough_guardrails_config()` / `set_passthrough_guardrails_config()` helpers to access the passthrough guardrails configuration stored in request metadata
 
 ## Example Config
