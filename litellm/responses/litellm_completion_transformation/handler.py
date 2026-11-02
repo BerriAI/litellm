@@ -35,6 +35,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_METADATA_ADAPTER: Final = TypeAdapter[dict[object, object] | None](dict[object, object] | None)
 _BRIDGE_TRANSFORM_KEYWORDS: Final = frozenset({"caller_input", "names_non_string_fields"})
 
 
@@ -124,7 +125,7 @@ class LiteLLMCompletionTransformationHandler:
         bridged: Final = _bridged_request(hoisted, responses_api_request, ())
         bridged_input: Final = bridged.input
         bridged_request: Final = bridged.responses_api_request
-        litellm_completion_request: Final[dict] = {
+        litellm_completion_request: Final[dict[str, object]] = {
             **LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                 model=model,
                 input=bridged_input,
@@ -187,7 +188,7 @@ class LiteLLMCompletionTransformationHandler:
                 request_input=bridged_input,
                 responses_api_request=bridged_request,
                 custom_llm_provider=custom_llm_provider,
-                litellm_metadata=kwargs.get("litellm_metadata", {}),
+                litellm_metadata=_METADATA_ADAPTER.validate_python(kwargs.get("litellm_metadata", {})),
                 tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(
                     _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
                 ),
@@ -291,7 +292,7 @@ class LiteLLMCompletionTransformationHandler:
                 request_input=request_input,
                 responses_api_request=responses_api_request,
                 custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
-                litellm_metadata=kwargs.get("litellm_metadata", {}),
+                litellm_metadata=_METADATA_ADAPTER.validate_python(kwargs.get("litellm_metadata", {})),
                 tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(
                     _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
                 ),
