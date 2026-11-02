@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 import types
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
@@ -50,6 +50,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.login_throttle import LoginThrottle
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendUpdateQueue
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -14062,17 +14063,16 @@ def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
 
 
 @contextlib.contextmanager
-def _window_spend_enqueue_env(cached_objects: dict, prisma_client=None):
+def _window_spend_enqueue_env(
+    cached_objects: Mapping[str, object], prisma_client: MagicMock | None = None
+) -> Iterator[WindowSpendUpdateQueue]:
     """Point increment_spend_counters at throwaway caches and a real
     WindowSpendUpdateQueue, and hand back the queue to inspect."""
     import litellm.proxy.proxy_server as ps
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
-        WindowSpendUpdateQueue,
-    )
 
-    user_api_key_cache = UserApiKeyCache()
+    user_api_key_cache: Final = UserApiKeyCache()
     for key, value in cached_objects.items():
         user_api_key_cache.set_cache(key=key, value=value)
 
