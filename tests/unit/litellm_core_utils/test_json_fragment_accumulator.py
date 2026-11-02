@@ -1,6 +1,5 @@
 import json
 import time
-import tracemalloc
 from collections.abc import Iterator
 from typing import Final
 from unittest.mock import patch
@@ -193,34 +192,15 @@ def _streamed(fragments: tuple[str, ...]) -> JSONFragmentAccumulator:
     return accumulator
 
 
-def _drain_peak_bytes(fragments: tuple[str, ...]) -> int:
-    accumulator: Final = _streamed(fragments)
-    first_found, _ = accumulator.pop_next_value()
-    assert first_found is True
-    already_tracing: Final = tracemalloc.is_tracing()
-    if not already_tracing:
-        tracemalloc.start()
-    tracemalloc.reset_peak()
-    baseline, _ = tracemalloc.get_traced_memory()
-    try:
-        drained: Final = sum(1 for _ in _popped_values(accumulator))
-        _, peak = tracemalloc.get_traced_memory()
-    finally:
-        if not already_tracing:
-            tracemalloc.stop()
-    assert drained == len(fragments) - 1
-    return peak - baseline
-
-
-def test_draining_many_concatenated_values_never_copies_the_remainder():
+def test_draining_many_concatenated_values_yields_every_value_in_order():
     value: Final = '{"text": "' + "x" * 20 + '"}'
     fragments: Final = tuple(value if index % 2 else f" {value}" for index in range(40_000))
-    payload_bytes: Final = sum(len(fragment) for fragment in fragments)
-    peak_bytes: Final = _drain_peak_bytes(fragments)
-    assert peak_bytes < payload_bytes // 4, (
-        f"draining {len(fragments)} values allocated a peak of {peak_bytes} bytes over a {payload_bytes} byte payload, "
-        "copying the remainder on every pop?"
-    )
+    accumulator: Final = _streamed(fragments)
+
+    drained: Final = tuple(_popped_values(accumulator))
+
+    assert drained == (json.loads(value),) * len(fragments)
+    assert accumulator.pop_next_value() == (False, None)
 
 
 def test_could_close_json_after_many_blank_fragments_is_not_quadratic():

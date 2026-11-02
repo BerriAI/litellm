@@ -2,7 +2,9 @@ import copy
 import json
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from functools import partial
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
@@ -27,7 +29,10 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
+    invalid_type_message,
     is_object_schema,
+    is_present_non_string,
+    is_unhashable_value_behind,
     sanitize_input_schema_for_anthropic,
     schema_fragment_ref,
     schema_grammar_branch_count,
@@ -45,6 +50,8 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     inline_remote_image_urls,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    message_field,
+    parts_of,
     place_mid_conversation_system,
     split_leading_system_run,
 )
@@ -120,13 +127,14 @@ from litellm.utils import (
 )
 
 from ..common_utils import (
-    REFUSAL_STOP_FIELDS,
+    STOP_REASON_FIELDS,
     AnthropicError,
     AnthropicModelInfo,
     eager_input_streaming_flag,
     process_anthropic_headers,
-    refusal_provider_specific_fields,
+    refusal_params,
     requires_native_compaction_beta,
+    stop_reason_provider_specific_fields,
     strip_advisor_blocks_from_messages,
     tools_marked_for_a_tool_config_point,
 )
@@ -167,6 +175,8 @@ _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_RESPONSE_BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_PENDING_WEB_SEARCH_RESULT: Final = MappingProxyType({"content": ()})
 _REQUEST_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
@@ -174,6 +184,76 @@ _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
 NATIVE_OUTPUT_MAX_UNION_PARAMETERS: Final = 16
 NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS: Final = 24
 NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES: Final = 2048
+
+
+def _tool_call_ids_failing(
+    index: int, tool_calls: object, fails: Callable[[object], bool]
+) -> Iterator[tuple[str, object]]:
+    ids: Final = ((position, message_field(tool_call, "id")) for position, tool_call in enumerate(parts_of(tool_calls)))
+    return (
+        (f"messages[{index}].tool_calls[{position}].id", tool_call_id)
+        for position, tool_call_id in ids
+        if fails(tool_call_id)
+    )
+
+
+def _roles_failing(messages: Sequence[object], fails: Callable[[object], bool]) -> Iterator[tuple[str, object]]:
+    roles: Final = ((index, message_field(message, "role")) for index, message in enumerate(messages))
+    return ((f"messages[{index}].role", role) for index, role in roles if fails(role))
+
+
+def _is_non_empty_non_string(value: object) -> bool:
+    return bool(value) and is_present_non_string(value)
+
+
+def _assistant_tool_call_ids_failing(
+    messages: Sequence[object], fails: Callable[[object], bool]
+) -> Iterator[tuple[str, object]]:
+    assistant_turns: Final = (
+        (index, message) for index, message in enumerate(messages) if message_field(message, "role") == "assistant"
+    )
+    return chain.from_iterable(
+        _tool_call_ids_failing(index, message_field(message, "tool_calls"), fails) for index, message in assistant_turns
+    )
+
+
+def _tool_answer_ids_failing(
+    messages: Sequence[object], fails: Callable[[object], bool]
+) -> Iterator[tuple[str, object]]:
+    answers: Final = (
+        (index, message_field(message, "tool_call_id"))
+        for index, message in enumerate(messages)
+        if message_field(message, "role") in ("tool", "function")
+    )
+    return ((f"messages[{index}].tool_call_id", tool_call_id) for index, tool_call_id in answers if fails(tool_call_id))
+
+
+def _is_non_string_value_behind(error: AttributeError, value: object) -> bool:
+    return is_present_non_string(value) and value is error.obj
+
+
+def _fields_behind(messages: Sequence[object], error: Exception) -> Iterable[tuple[str, object]]:
+    match error:
+        case TypeError():
+            caused_error: Final = partial(is_unhashable_value_behind, error)
+            return chain(
+                _assistant_tool_call_ids_failing(messages, caused_error),
+                _tool_answer_ids_failing(messages, caused_error),
+                _roles_failing(messages, caused_error),
+            )
+        case AttributeError():
+            return _assistant_tool_call_ids_failing(messages, partial(_is_non_string_value_behind, error))
+        case _:
+            return ()
+
+
+def non_string_message_field_error(messages: Sequence[object], error: Exception) -> AnthropicError | None:
+    malformed_field: Final = next(
+        chain(_roles_failing(messages, _is_non_empty_non_string), _fields_behind(messages, error)), None
+    )
+    if malformed_field is None:
+        return None
+    return AnthropicError(status_code=400, message=invalid_type_message(*malformed_field))
 
 
 def _tool_type(tool: object) -> str | None:
@@ -2367,12 +2447,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Handling anthropic API Prompt Caching
         if len(anthropic_system_message_list) > 0:
             optional_params["system"] = anthropic_system_message_list
-        conversation: Final = place_mid_conversation_system(
-            later_messages,
-            supports_mid_conversation_system=supports_mid_conversation_system(
-                model=model, custom_llm_provider=self.custom_llm_provider
-            ),
-        )
+        try:
+            conversation: Final = place_mid_conversation_system(
+                later_messages,
+                supports_mid_conversation_system=supports_mid_conversation_system(
+                    model=model, custom_llm_provider=self.custom_llm_provider
+                ),
+            )
+        except TypeError as error:
+            field_error: Final = non_string_message_field_error(messages, error)
+            if field_error is None:
+                raise
+            raise field_error from error
         # Format rest of message according to anthropic guidelines
         try:
             anthropic_messages = anthropic_messages_pt(
@@ -2382,7 +2468,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 drop_params=drop_params,
             )
         except Exception as e:
-            raise AnthropicError(
+            conversion_field_error: Final = non_string_message_field_error(messages, e)
+            raise conversion_field_error or AnthropicError(
                 status_code=400,
                 message=f"{e}\nReceived Messages={request_messages}",
             )  # don't use verbose_logger.exception, if exception is raised
@@ -2919,28 +3006,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         web_search_results: Sequence[object],
         completion_response: Mapping[str, object],
     ) -> list[object]:
-        content: Final = completion_response.get("content")
-        blocks: Final = content if isinstance(content, Sequence) else ()
-        inputs: Final = {
-            call_id: tool_input
-            for block in blocks
-            if isinstance(block, Mapping)
-            and block.get("type") == "server_tool_use"
-            and block.get("name") == "web_search"
-            and isinstance((call_id := block.get("id")), str)
-            and isinstance((tool_input := block.get("input")), Mapping)
+        blocks: Final = _RESPONSE_BLOCKS.validate_python(completion_response.get("content") or ())
+        results_by_id: Final = {
+            tool_use_id: result
+            for result in _RESPONSE_BLOCKS.validate_python(web_search_results)
+            if result.get("type") == "web_search_tool_result"
+            and isinstance((tool_use_id := result.get("tool_use_id")), str)
         }
         return [
             build_web_search_call(
-                tool_id=tool_use_id,
-                tool_input=inputs.get(tool_use_id, {}),
-                result=result,
+                tool_id=call_id,
+                tool_input=block.get("input"),
+                result=results_by_id.get(call_id, _PENDING_WEB_SEARCH_RESULT),
+                status=None if call_id in results_by_id else "in_progress",
             )
-            for result in web_search_results
-            if isinstance(result, dict)
-            and result.get("type") == "web_search_tool_result"
-            and isinstance((tool_use_id := result.get("tool_use_id")), str)
-            and tool_use_id in inputs
+            for block in blocks
+            if block.get("type") == "server_tool_use"
+            and block.get("name") == "web_search"
+            and isinstance((call_id := block.get("id")), str)
         ]
 
     def _build_provider_specific_fields(
@@ -2964,10 +3047,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if web_search_results is not None:
             provider_specific_fields["web_search_results"] = web_search_results
-            provider_specific_fields["web_search_calls"] = self._build_web_search_calls(
-                web_search_results,
-                completion_response,
-            )
+
+        web_search_calls: Final = self._build_web_search_calls(web_search_results or (), completion_response)
+        if web_search_results is not None or web_search_calls:
+            provider_specific_fields["web_search_calls"] = web_search_calls
 
         if tool_results is not None:
             provider_specific_fields["tool_results"] = tool_results
@@ -2989,10 +3072,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if compaction_blocks is not None:
             provider_specific_fields["compaction_blocks"] = compaction_blocks
 
-        refusal_fields: Final = refusal_provider_specific_fields(
-            REFUSAL_STOP_FIELDS.validate_python(completion_response)
+        stop_reason_fields: Final = stop_reason_provider_specific_fields(
+            STOP_REASON_FIELDS.validate_python(completion_response)
         )
-        return {**provider_specific_fields, **refusal_fields}
+        return {**provider_specific_fields, **stop_reason_fields}
 
     def transform_parsed_response(
         self,
@@ -3067,22 +3150,26 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if json_extra_content:
             merged_text = merged_text + json_extra_content if merged_text else json_extra_content
 
+        refusal_fields: Final = refusal_params(STOP_REASON_FIELDS.validate_python(completion_response))
         _message = litellm.Message(
             tool_calls=tool_calls_for_message,
             content=merged_text or None,
             provider_specific_fields=provider_specific_fields,
             thinking_blocks=thinking_blocks,
             reasoning_content=reasoning_content,
+            **refusal_fields,
         )
         _message.provider_specific_fields = provider_specific_fields
 
         if json_mode_message is not None:
-            refusal_fields: Final = refusal_provider_specific_fields(
-                REFUSAL_STOP_FIELDS.validate_python(completion_response)
+            stop_reason_fields: Final = stop_reason_provider_specific_fields(
+                STOP_REASON_FIELDS.validate_python(completion_response)
             )
             completion_response["stop_reason"] = "stop"
-            if refusal_fields:
-                json_mode_message.provider_specific_fields = dict(refusal_fields)
+            if stop_reason_fields:
+                json_mode_message.provider_specific_fields = dict(stop_reason_fields)
+            if "refusal" in refusal_fields:
+                json_mode_message.refusal = refusal_fields["refusal"]
             if thinking_blocks:
                 json_mode_message.thinking_blocks = thinking_blocks
                 json_mode_message.reasoning_content = reasoning_content

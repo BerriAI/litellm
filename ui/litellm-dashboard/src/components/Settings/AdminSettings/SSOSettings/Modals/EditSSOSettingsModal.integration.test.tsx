@@ -49,7 +49,7 @@ describe("EditSSOSettingsModal (real form tree)", () => {
     expect(mutateAsync).not.toHaveBeenCalled();
   });
 
-  it("sends only the mounted fields when the form is valid", async () => {
+  it("sends only the changed field and leaves the masked secret out", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderWithProviders(<EditSSOSettingsModal isVisible={true} onCancel={vi.fn()} onSuccess={vi.fn()} />);
 
@@ -58,12 +58,54 @@ describe("EditSSOSettingsModal (real form tree)", () => {
     await user.click(saveButton());
 
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
-    expect(mutateAsync.mock.calls[0][0]).toEqual({
-      sso_provider: "google",
-      google_client_id: "rotated-client-id",
-      google_client_secret: "stored-client-secret",
+    expect(mutateAsync.mock.calls[0][0]).toEqual({ google_client_id: "rotated-client-id" });
+  });
+
+  it("sends an empty patch when nothing changed", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderWithProviders(<EditSSOSettingsModal isVisible={true} onCancel={vi.fn()} onSuccess={vi.fn()} />);
+
+    await screen.findByLabelText("Google Client ID");
+    await user.click(saveButton());
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(mutateAsync.mock.calls[0][0]).toEqual({});
+  });
+
+  it("sends a new secret when the admin types one", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderWithProviders(<EditSSOSettingsModal isVisible={true} onCancel={vi.fn()} onSuccess={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText("Google Client Secret"), { target: { value: "new-secret" } });
+    await user.click(saveButton());
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(mutateAsync.mock.calls[0][0]).toEqual({ google_client_secret: "new-secret" });
+  });
+
+  it("sends role_mappings null when the admin unchecks role mappings", async () => {
+    seed({
+      generic_client_id: "stored-client-id",
+      generic_client_secret: "kc-s****6e0d",
+      generic_authorization_endpoint: "https://idp.example.com/authorize",
+      generic_token_endpoint: "https://idp.example.com/token",
+      generic_userinfo_endpoint: "https://idp.example.com/userinfo",
       user_email: "admin@example.com",
       proxy_base_url: "https://gateway.example.com",
+      role_mappings: {
+        provider: "generic",
+        group_claim: "groups",
+        default_role: "internal_user",
+        roles: { proxy_admin: ["admins"], proxy_admin_viewer: [], internal_user: [], internal_user_viewer: [] },
+      },
     });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderWithProviders(<EditSSOSettingsModal isVisible={true} onCancel={vi.fn()} onSuccess={vi.fn()} />);
+
+    await user.click((await screen.findAllByLabelText("Use Role Mappings"))[0]);
+    await user.click(saveButton());
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(mutateAsync.mock.calls[0][0]).toEqual({ role_mappings: null });
   });
 });

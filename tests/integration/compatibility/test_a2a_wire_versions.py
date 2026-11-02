@@ -348,13 +348,117 @@ _TRANSPORT_HEADERS: Final = frozenset(
 )
 
 
+def _a2a_auth_requests(
+    gateway: Gateway, method: str, agent_options: dict[str, JsonValue], client_headers: dict[str, str]
+) -> tuple[Request, ...]:
+    marker: Final = "a2akey" + uuid.uuid4().hex[:12]
+
+    def upstream(request: Request) -> Reply:
+        if request.method == "GET":
+            return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
+        body: Final = json.loads(request.body)
+        if body["method"] == "message/stream":
+            frames: Final = tuple(
+                f"data: {json.dumps({'jsonrpc': '2.0', 'id': body['id'], 'result': event})}\n\n".encode()
+                for event in _STREAM_EVENTS
+            )
+            return Reply(content_type="text/event-stream", chunks=frames)
+        if body["method"] == "tasks/get":
+            return Reply(
+                body=json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {"kind": "task", "id": "t1", "contextId": "c1", "status": {"state": "completed"}},
+                    }
+                ).encode()
+            )
+        return _message_reply(body, "key test")
+
+    with wire_server(upstream) as wire, gateway.scenario() as scenario:
+        identity: Final = _register_agent(
+            gateway,
+            scenario,
+            {"agent_name": marker, "agent_card_params": _peer_card(wire.url, marker, "1.0"), **agent_options},
+        )
+        params: Final = {"id": "t1"} if method == "tasks/get" else {"message": _MESSAGE_V10}
+        headers: Final = {
+            "Authorization": f"Bearer {gateway.key}",
+            "a2a-version": "1.0",
+            **{name.replace("{agent}", marker): value for name, value in client_headers.items()},
+        }
+        response: Final = gateway.client.post(
+            f"/a2a/{identity}/message/send",
+            headers=headers,
+            json={"jsonrpc": "2.0", "id": marker, "method": method, "params": params},
+        )
+        assert response.status_code == 200, response.text
+        assert "error" not in response.text, response.text
+        return wire.drain()
+
+
+@pytest.mark.parametrize(
+    ("method", "observed_method"),
+    (("SendMessage", "GET"), ("SendMessage", "POST"), ("SendStreamingMessage", "POST"), ("tasks/get", "POST")),
+    ids=("card", "send", "stream", "task"),
+)
+def test_regression_db_agent_api_key_is_bearer_on_each_a2a_hop(
+    gateway: Gateway, method: str, observed_method: str
+) -> None:
+    key: Final = "synthetic-backend-" + uuid.uuid4().hex
+    requests: Final = _a2a_auth_requests(gateway, method, {"litellm_params": {"api_key": key}}, {})
+    observed: Final = tuple(request for request in requests if request.method == observed_method)
+    assert len(observed) == 1, requests
+    assert observed[0].headers.get("authorization") == f"Bearer {key}", observed[0].headers
+
+
+@pytest.mark.parametrize("header_name", ("Authorization", "aUtHoRiZaTiOn"))
+def test_guard_static_authorization_overrides_api_key(gateway: Gateway, header_name: str) -> None:
+    requests: Final = _a2a_auth_requests(
+        gateway,
+        "SendMessage",
+        {"litellm_params": {"api_key": "backend-key"}, "static_headers": {header_name: "Bearer static-key"}},
+        {},
+    )
+    assert tuple(request.method for request in requests) == ("GET", "POST"), requests
+    assert tuple(request.headers.get("authorization") for request in requests) == ("Bearer static-key",) * 2
+
+
+@pytest.mark.parametrize("forwarding", ("configured", "convention"))
+def test_guard_forwarded_authorization_arrives_with_api_key(gateway: Gateway, forwarding: str) -> None:
+    options: Final = {
+        "litellm_params": {"api_key": "backend-key"},
+        **({"extra_headers": ["authorization"]} if forwarding == "configured" else {}),
+    }
+    client_headers: Final = (
+        {"x-litellm-api-key": gateway.key, "Authorization": "Bearer client-agent-key"}
+        if forwarding == "configured"
+        else {"x-a2a-{agent}-authorization": "Bearer client-agent-key"}
+    )
+    requests: Final = _a2a_auth_requests(gateway, "SendMessage", options, client_headers)
+    assert tuple(request.method for request in requests) == ("GET", "POST"), requests
+    assert tuple(request.headers.get("authorization") for request in requests) == ("Bearer client-agent-key",) * 2
+
+
+def test_guard_no_agent_key_or_proxy_caller_key_is_sent(gateway: Gateway) -> None:
+    requests: Final = _a2a_auth_requests(gateway, "SendMessage", {}, {})
+    assert tuple(request.method for request in requests) == ("GET", "POST"), requests
+    assert tuple(request.headers.get("authorization") for request in requests) == (None, None)
+    assert all(gateway.key not in value for request in requests for value in request.headers.values()), requests
+
+
 @pytest.mark.parametrize(
     ("version", "method", "message"),
     (("0.3", "message/stream", _MESSAGE_V03), ("1.0", "SendStreamingMessage", _MESSAGE_V10)),
     ids=("v0.3", "v1.0"),
 )
+@pytest.mark.parametrize(
+    "path",
+    ("/a2a/{identity}", "/a2a/{identity}/message/stream", "/v1/a2a/{identity}/message/stream"),
+    ids=("bare", "message_stream", "v1_message_stream"),
+)
 def test_a2a_stream_relays_each_upstream_event_as_its_own_sse_frame_in_the_pinned_dialect(
-    gateway: Gateway, version: str, method: str, message: dict[str, JsonValue]
+    gateway: Gateway, version: str, method: str, message: dict[str, JsonValue], path: str
 ) -> None:
     marker: Final = "a2astream" + uuid.uuid4().hex
     first_frame_seen: Final = threading.Event()
@@ -383,7 +487,7 @@ def test_a2a_stream_relays_each_upstream_event_as_its_own_sse_frame_in_the_pinne
         )
         with gateway.client.stream(
             "POST",
-            f"/a2a/{identity}",
+            path.format(identity=identity),
             headers={
                 "Authorization": f"Bearer {key}",
                 "a2a-version": version,
@@ -753,6 +857,59 @@ def test_a2a_message_send_aliases_and_agent_name_reach_the_same_agent_with_the_s
             }
             for post in posts
         ), posts
+
+
+def test_a2a_data_part_skill_call_and_data_artifact_reach_each_side_unchanged(gateway: Gateway) -> None:
+    marker: Final = "a2adata" + uuid.uuid4().hex
+    invocation: Final[dict[str, JsonValue]] = {"skill": "search_items", "params": {"region": "emea", "limit": 3}}
+    found: Final[dict[str, JsonValue]] = {
+        "total": 2,
+        "count": 2,
+        "listings": [{"id": marker + "-1", "region": "emea"}, {"id": marker + "-2", "region": "emea"}],
+    }
+    task: Final[dict[str, JsonValue]] = {
+        "kind": "task",
+        "id": marker + "-task",
+        "contextId": marker + "-context",
+        "status": {"state": "completed"},
+        "artifacts": [
+            {"artifactId": marker + "-artifact", "name": "search_results", "parts": [{"kind": "data", "data": found}]}
+        ],
+    }
+
+    def upstream(request: Request) -> Reply:
+        if request.method == "GET":
+            return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
+        body: Final = json.loads(request.body)
+        return Reply(body=json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": task}).encode())
+
+    with wire_server(upstream) as wire, gateway.scenario() as scenario:
+        identity: Final = _register_agent(
+            gateway, scenario, {"agent_name": marker, "agent_card_params": _peer_card(wire.url, marker)}
+        )
+        response: Final = gateway.client.post(
+            f"/a2a/{identity}",
+            headers={"Authorization": f"Bearer {gateway.key}"},
+            json={
+                "jsonrpc": "2.0",
+                "id": marker,
+                "method": "message/send",
+                "params": {
+                    "message": {
+                        "kind": "message",
+                        "role": "user",
+                        "messageId": marker + "-in",
+                        "parts": [{"kind": "data", "data": invocation}],
+                    }
+                },
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {"jsonrpc": "2.0", "id": marker, "result": task}, response.text
+        posts: Final = tuple(json.loads(item.body) for item in wire.drain() if item.method == "POST")
+        assert len(posts) == 1, posts
+        assert posts[0]["method"] == "message/send", posts
+        assert posts[0]["params"]["message"]["parts"] == [{"kind": "data", "data": invocation}], posts
 
 
 def test_a2a_task_methods_pass_through_verbatim_and_push_callbacks_are_validated_before_forwarding(

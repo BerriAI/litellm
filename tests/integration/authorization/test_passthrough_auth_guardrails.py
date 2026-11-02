@@ -21,7 +21,9 @@ GUARDRAIL: Final = "passthrough-auth-guardrail"
 GLOBAL_POST_CALL: Final = "passthrough-global-post-call"
 KEY_POST_CALL: Final = "passthrough-key-post-call"
 GENERIC_POST_CALL: Final = "passthrough-generic-post-call"
+MODEL_POST_CALL: Final = "passthrough-model-post-call"
 GUARDED_MODEL: Final = "passthrough-guarded-model"
+POST_CALL_GUARDED_MODEL: Final = "passthrough-post-call-guarded-model"
 BLOCK_MARKER: Final = "block-this-prompt"
 OPENAI_ROUTE: Final = "/openai/v1/chat/completions"
 ANTHROPIC_ROUTE: Final = "/anthropic/v1/messages"
@@ -104,6 +106,7 @@ class AuthGuardrailRig:
     post_call_vendor: Wire
     key_post_call_vendor: Wire
     generic_post_call_vendor: Wire
+    model_post_call_vendor: Wire
     upstreams: Mapping[str, Wire]
 
 
@@ -115,6 +118,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
         post_call_vendor: Final = stack.enter_context(wire_server(_lakera_clean))
         key_post_call_vendor: Final = stack.enter_context(wire_server(_lakera_flagged))
         generic_post_call_vendor: Final = stack.enter_context(wire_server(_verdict))
+        model_post_call_vendor: Final = stack.enter_context(wire_server(_verdict))
         upstreams: Final = MappingProxyType(
             {
                 OPENAI_ROUTE: stack.enter_context(wire_server(_openai_reply)),
@@ -147,6 +151,14 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                                 "model": "openai/gpt-5.6",
                                 "api_key": "synthetic-openai-key",
                                 "guardrails": [GUARDRAIL],
+                            },
+                        },
+                        {
+                            "model_name": POST_CALL_GUARDED_MODEL,
+                            "litellm_params": {
+                                "model": "openai/gpt-5.6",
+                                "api_key": "synthetic-openai-key",
+                                "guardrails": [MODEL_POST_CALL],
                             },
                         },
                     ],
@@ -182,6 +194,16 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                             },
                         },
                         {
+                            "guardrail_name": MODEL_POST_CALL,
+                            "litellm_params": {
+                                "guardrail": "generic_guardrail_api",
+                                "mode": "post_call",
+                                "default_on": False,
+                                "api_base": model_post_call_vendor.url,
+                                "api_key": "synthetic-guardrail-key",
+                            },
+                        },
+                        {
                             "guardrail_name": GLOBAL_POST_CALL,
                             "litellm_params": {
                                 "guardrail": "lakera_v2",
@@ -205,7 +227,13 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
         }
         owned: Final = stack.enter_context(owned_proxy_process(session_gateway, directory, environment, config=path))
         yield AuthGuardrailRig(
-            owned, vendor, post_call_vendor, key_post_call_vendor, generic_post_call_vendor, upstreams
+            owned,
+            vendor,
+            post_call_vendor,
+            key_post_call_vendor,
+            generic_post_call_vendor,
+            model_post_call_vendor,
+            upstreams,
         )
 
 
@@ -230,6 +258,7 @@ def _drain(rig: AuthGuardrailRig) -> None:
     rig.post_call_vendor.drain()
     rig.key_post_call_vendor.drain()
     rig.generic_post_call_vendor.drain()
+    rig.model_post_call_vendor.drain()
     for upstream in rig.upstreams.values():
         upstream.drain()
 
@@ -381,3 +410,77 @@ def test_guardrail_the_client_names_in_metadata_still_runs_for_a_guarded_key(rig
         assert response.status_code == 400, response.text
         assert [BLOCK_MARKER.encode() in request.body for request in rig.vendor.drain()] == [True]
         assert rig.upstreams[route].drain() == ()
+
+
+@pytest.mark.parametrize("settings", [{}, True])
+@pytest.mark.parametrize("route", [OPENAI_ROUTE, ANTHROPIC_ROUTE, GEMINI_ROUTE])
+def test_guardrail_the_client_names_in_the_dict_form_still_runs_for_a_guarded_key(
+    rig: AuthGuardrailRig, route: str, settings: JsonValue
+) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": [GENERIC_POST_CALL]})
+        _drain(rig)
+
+        response: Final = _send(
+            gateway, route, {**_route_body(route, BLOCK_MARKER), "metadata": {"guardrails": {GUARDRAIL: settings}}}, key
+        )
+
+        assert response.status_code == 400, response.text
+        assert [BLOCK_MARKER.encode() in request.body for request in rig.vendor.drain()] == [True]
+        assert rig.upstreams[route].drain() == ()
+
+
+def _key_with_opt_out(scenario: Scenario, opt_out: str) -> str:
+    guarded: Final[dict[str, JsonValue]] = {"guardrails": [GENERIC_POST_CALL]}
+    match opt_out:
+        case "key_disable":
+            return scenario.key(metadata=guarded, disable_global_guardrails=True)
+        case "key_opted_out":
+            return scenario.key(metadata={**guarded, "opted_out_global_guardrails": [GLOBAL_POST_CALL]})
+        case "team_disable":
+            return scenario.key(team_id=scenario.team(disable_global_guardrails=True), metadata=guarded)
+        case "team_opted_out":
+            return scenario.key(
+                team_id=scenario.team(metadata={"opted_out_global_guardrails": [GLOBAL_POST_CALL]}), metadata=guarded
+            )
+        case _:
+            return scenario.key(metadata=guarded)
+
+
+@pytest.mark.parametrize(
+    ("opt_out", "global_vendor_calls"),
+    [("key_disable", 0), ("key_opted_out", 0), ("team_disable", 0), ("team_opted_out", 0), ("none", 1)],
+)
+@pytest.mark.parametrize("route", [OPENAI_ROUTE, "/v1/chat/completions"])
+def test_post_call_pass_honors_a_global_guardrail_opt_out_as_the_native_route_does(
+    rig: AuthGuardrailRig, route: str, opt_out: str, global_vendor_calls: int
+) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = _key_with_opt_out(scenario, opt_out)
+        _drain(rig)
+
+        response: Final = _send(gateway, route, _route_body(OPENAI_ROUTE, "What is the capital of France?"), key)
+
+        assert response.status_code == 200, response.text
+        assert len(rig.generic_post_call_vendor.drain()) == 1
+        assert len(rig.post_call_vendor.drain()) == global_vendor_calls
+
+
+def test_model_guardrail_does_not_run_on_pass_through_traffic_that_names_the_model(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": [GENERIC_POST_CALL]})
+        _drain(rig)
+
+        response: Final = _send(
+            gateway,
+            OPENAI_ROUTE,
+            {**_route_body(OPENAI_ROUTE, "What is the capital of France?"), "model": POST_CALL_GUARDED_MODEL},
+            key,
+        )
+
+        assert response.status_code == 200, response.text
+        assert len(rig.generic_post_call_vendor.drain()) == 1
+        assert rig.model_post_call_vendor.drain() == ()
