@@ -41,6 +41,7 @@ impl Sink for StderrSink {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    litellm_gateway::install_crypto_provider();
     let settings: Settings = settings::from_iter(std::env::vars_os())?;
     let level = settings.log_level();
     Logger::new(StderrSink { level }).install_global()?;

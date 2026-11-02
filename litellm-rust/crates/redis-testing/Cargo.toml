@@ -6,6 +6,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+rcgen = "0.14.10"
+tempfile.workspace = true
 testcontainers-modules = { workspace = true, features = ["redis"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "time"] }

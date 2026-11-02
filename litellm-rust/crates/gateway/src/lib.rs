@@ -68,6 +68,12 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     Ok(Arc::new(Gateway::new(resources, http, secrets, router)?))
 }
 
+pub fn install_crypto_provider() {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+}
+
 pub async fn build_redis(config: &Config) -> Result<RedisClients, Error> {
     let environment = secrets::environment_values(&config.environment_variables)?;
     let lookup = |name: &str| {

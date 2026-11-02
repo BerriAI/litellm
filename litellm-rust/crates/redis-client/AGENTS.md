@@ -6,7 +6,7 @@
 
 ## Errors
 - `Transport`, `Server`, `Decode`, each wrapping the redis-rs error as `#[source]`. `ConnectError` is separate because only `connect` returns it
-- Classify with `Error::classify(error, deployment)`, never a bare `From<RedisError>`, because redis-py (5.3.1) decides by topology. `Transport` is what Python's `_redis_health_error_types` counts: LOADING everywhere, CLUSTERDOWN and MASTERDOWN only on cluster (only `ClusterParser` maps them), plus NOAUTH, WRONGPASS and the `ERR` messages redis-py maps to `ConnectionError`, matched exactly like `parse_error`. TRYAGAIN is `Server`, since the cluster client already retried it. Each code gets its own rstest case built from a parsed RESP error
+- Classify with `Error::classify(error, deployment)`, never a bare `From<RedisError>`, because redis-py (5.3.1) decides by topology. `Transport` is what Python's `_redis_health_error_types` counts: LOADING everywhere, CLUSTERDOWN and MASTERDOWN only on cluster (only `ClusterParser` maps them), READONLY only under Sentinel (where `SentinelManagedConnection` turns it into `ConnectionError` and rediscovers), plus NOAUTH, WRONGPASS and the `ERR` messages redis-py maps to `ConnectionError`, matched exactly like `parse_error`. TRYAGAIN is `Server`, since the cluster client already retried it. Each code gets its own rstest case built from a parsed RESP error
 - A `Server` error never drops the connection
 - `Transport` includes timeouts, where the command may still have applied. Callers of counters and locks treat it as an unknown outcome
 - Never swallow an error or turn it into a miss. The caller picks the fallback
@@ -45,3 +45,11 @@
 - Every command test runs on each topology through `#[values(Topology::Standalone, Topology::Cluster)]`. A test is single-topology only when the behavior exists on one (a `db` number has no cluster meaning)
 - Assert values and Redis state. Outages come from the container (`restart`, `freeze` / `thaw`), not `DEBUG`, which the official image disables
 - Use a short client timeout in outage tests so they stay fast. Never sleep to wait for a state; poll with a deadline
+
+## TLS, credentials and Sentinel
+- `TlsOptions` follows redis-py 5.3.1. It verifies the certificate by default, skips the hostname check by default (`ssl_check_hostname=False`), and trusts the system roots plus `ca_certs`
+- redis-rs loads the system trust store for every TLS connection and fails if that fails, even with `ca_certs` set. Where the macOS keychain is blocked (agent sandboxes), run the TLS tests with `SSL_CERT_FILE=/etc/ssl/cert.pem`
+- `Credentials` are static and sent at connect. URL userinfo wins over them, like redis-py's `from_url`
+- Sentinel discovers the master on each new connection and drops it on a transport failure or READONLY, like redis-py's `SentinelConnectionPool`
+- Sentinel monitors get `sentinel_password`, the data username when that password is set, and the TLS mode and certificates. Python's `_sentinel_auth_kwargs` forwards every other connection kwarg too, and it sends the username even without a sentinel password
+- A `Debug` impl never shows a secret. Follow `.agents/skills/rust-redaction`

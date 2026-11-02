@@ -73,7 +73,9 @@ litellm-host-python = { path = "crates/host-python" }
 litellm-python-compat = { path = "crates/python-compat" }
 litellm-circuit-breaker = { path = "crates/circuit-breaker" }
 litellm-redis-client = { path = "crates/redis-client" }
+litellm-redis-connect = { path = "crates/redis-connect" }
 litellm-redis-testing = { path = "crates/redis-testing" }
+litellm-redis-types = { path = "crates/redis-types" }
 litellm-cost = { path = "crates/cost" }
 litellm-model-catalog = { path = "crates/model-catalog" }
 litellm-model-catalog-refresh = { path = "crates/model-catalog-refresh" }

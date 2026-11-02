@@ -5,13 +5,11 @@ use std::{
 };
 
 use litellm_circuit_breaker::{Admission, Breaker, Failure};
-use redis::{
-    Cmd, FromRedisValue, IntoConnectionInfo, RedisError, ToRedisArgs, ToSingleRedisArg, Value,
-};
+use redis::{Cmd, FromRedisValue, RedisError, ToRedisArgs, ToSingleRedisArg, Value};
 
 use crate::{
-    CallEvent, ConnectError, Endpoint, Error, Expiry, FailureKind, Namespace, Operation, Outcome,
-    Pipeline, RedisConfig, RedisEvents, Script,
+    CallEvent, ConnectError, Error, Expiry, FailureKind, Namespace, Operation, Outcome, Pipeline,
+    RedisConfig, RedisEvents, Script,
     commands::{self, ScriptCall},
     connection::Connection,
 };
@@ -33,17 +31,8 @@ pub enum Ttl {
 
 impl RedisClient {
     pub fn new(config: RedisConfig) -> Result<Self, ConnectError> {
-        let connection = match &config.endpoint {
-            Endpoint::Url(url) => {
-                Connection::standalone(url.expose().into_connection_info()?, config.timeouts)?
-            }
-            Endpoint::Host(host) => {
-                Connection::standalone(host.connection_info()?, config.timeouts)?
-            }
-            Endpoint::Cluster(cluster) => Connection::cluster(cluster, config.timeouts)?,
-        };
         Ok(Self {
-            connection,
+            connection: Connection::new(&config.endpoint, &config.credentials, config.timeouts)?,
             namespace: config.namespace,
             breaker: config.breaker,
             events: config.events,
