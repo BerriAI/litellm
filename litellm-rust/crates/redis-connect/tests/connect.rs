@@ -1,10 +1,13 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use litellm_config::{RedisSettings, ResolvedRedis, SecretSnapshot};
-use litellm_redis_connect::{Error, HostServices, connect};
-use litellm_redis_testing::{
-    RedisDeployment, RedisSentinel, RedisTlsServer, SERVICE_NAME, Topology, eventually,
+use litellm_redis_connect::{
+    CredentialSource, Error, Expiring, HostServices, SourceFuture, connect,
 };
+use litellm_redis_testing::{
+    RedisDeployment, RedisSentinel, RedisServer, RedisTlsServer, SERVICE_NAME, Topology, eventually,
+};
+use litellm_secret_value::SecretValue;
 use rstest::rstest;
 
 fn resolved(kwargs: serde_json::Value, environment: &[(&str, &str)]) -> ResolvedRedis {
@@ -25,6 +28,21 @@ fn services() -> HostServices {
         breaker: None,
         http: litellm_http::Client::for_test(),
         environment: Arc::new(|_: &str| None),
+        credential_provider: None,
+    }
+}
+
+struct HostPassword(&'static str);
+
+impl CredentialSource for HostPassword {
+    fn fetch(&self) -> SourceFuture<'_> {
+        Box::pin(async move {
+            Ok(Expiring {
+                username: None,
+                password: SecretValue::new(self.0),
+                expires_at: None,
+            })
+        })
     }
 }
 
@@ -132,7 +150,7 @@ async fn python_sentinel_kwargs_follow_the_master_through_a_failover() {
 }
 
 #[rstest]
-fn a_python_credential_provider_fails_at_boot() {
+fn a_python_credential_provider_without_a_host_source_fails_at_boot() {
     let error = connect(
         resolved(
             serde_json::json!({"host": "redis", "credential_provider": true}),
@@ -177,4 +195,39 @@ fn config_only_aws_identities_fail_before_connecting(#[case] setting: &'static s
         error,
         Error::ProcessEnvironmentRequired { setting: rejected } if rejected == setting
     ));
+}
+
+#[rstest]
+#[case::right_password("right", true)]
+#[case::wrong_password("wrong", false)]
+#[tokio::test]
+async fn a_python_credential_provider_authenticates_through_the_host_source(
+    #[case] password: &'static str,
+    #[case] connects: bool,
+) {
+    let server = RedisServer::start().await.unwrap();
+    server
+        .cli(&["ACL", "SETUSER", "default", "on", ">right"])
+        .await
+        .unwrap();
+    let kwargs = serde_json::json!({
+        "host": "127.0.0.1",
+        "port": port(server.url()),
+        "password": "ignored",
+        "credential_provider": true,
+        "socket_timeout": 2,
+    });
+
+    let pinged = connect(
+        resolved(kwargs, &[]),
+        HostServices {
+            credential_provider: Some(Arc::new(HostPassword(password))),
+            ..services()
+        },
+    )
+    .unwrap()
+    .ping()
+    .await;
+
+    assert_eq!(pinged.is_ok(), connects, "{pinged:?}");
 }

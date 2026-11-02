@@ -7,4 +7,5 @@ mod sources;
 pub use connect::{HostServices, SharedEnvironment, breaker_config, connect};
 pub use error::{CredentialStage, Error};
 pub use events::TracingEvents;
-pub(crate) use refresh::{CredentialSource, Expiring, RefreshingCredentials, SourceFuture};
+pub(crate) use refresh::RefreshingCredentials;
+pub use refresh::{CredentialSource, Expiring, SourceFuture};

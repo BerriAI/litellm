@@ -171,7 +171,7 @@ def test_the_wire_cases_are_what_mains_codec_writes_and_reads(case: _WireCooldow
 
 @pytest.mark.parametrize(
     "setting",
-    ({"ssl_ciphers": "HIGH"}, {"ssl": True, "ssl_validate_ocsp": True}, {"credential_provider": object()}),
+    ({"ssl_ciphers": "HIGH"}, {"ssl": True, "ssl_validate_ocsp": True}, {"credential_provider": "not-a-provider"}),
 )
 def test_a_redis_setting_the_native_client_cannot_honor_never_fails_construction(
     setting: dict[str, object], caplog: pytest.LogCaptureFixture
