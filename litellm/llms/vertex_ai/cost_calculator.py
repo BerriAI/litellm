@@ -207,6 +207,7 @@ def cost_per_token(
     usage: Usage,
     service_tier: str | None = None,
     vertex_location: str | None = None,
+    deployment_model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -229,7 +230,11 @@ def cost_per_token(
     """
 
     ## GET MODEL INFO
-    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    model_info: Final = (
+        deployment_model_info
+        if deployment_model_info is not None
+        else litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    )
 
     ## HANDLE 128k+ PRICING
     input_cost_per_token_above_128k_tokens: Final = model_info.get("input_cost_per_token_above_128k_tokens")
@@ -248,4 +253,5 @@ def cost_per_token(
         usage=usage,
         service_tier=service_tier,
         vertex_location=vertex_location,
+        model_info=model_info,
     )

@@ -8,11 +8,13 @@ from typing import Final
 
 from litellm.litellm_core_utils.core_helpers import finite_reported_cost
 from litellm.litellm_core_utils.llm_cost_calc.utils import TokenRates, apply_off_peak_pricing
-from litellm.types.utils import Usage
+from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
 
 
-def cost_per_token(model: str, usage: Usage, current_time: datetime | None = None) -> tuple[float, float]:
+def cost_per_token(
+    model: str, usage: Usage, current_time: datetime | None = None, deployment_model_info: ModelInfo | None = None
+) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
     The manual fallback swaps in the model's off_peak_pricing rates while one of its windows is open.
@@ -35,13 +37,19 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         total_cost = cost_info.get("total_cost")
     elif isinstance(cost_info, (int, float)) and not isinstance(cost_info, bool):
         total_cost = float(cost_info)
-    reported_cost: Final = None if total_cost is None else finite_reported_cost(float(total_cost))
+    reported_cost: Final = (
+        None if total_cost is None or deployment_model_info is not None else finite_reported_cost(float(total_cost))
+    )
     if reported_cost is not None:
         return (0.0, reported_cost)
 
     ## FALLBACK: Calculate cost manually if Perplexity doesn't provide it
     ## GET MODEL INFO
-    model_info: Final = get_model_info(model=model, custom_llm_provider="perplexity")
+    model_info: Final = (
+        deployment_model_info
+        if deployment_model_info is not None
+        else get_model_info(model=model, custom_llm_provider="perplexity")
+    )
 
     def _safe_float_cast(value: str | float | None | object, default: float = 0.0) -> float:
         """Safely cast a value to float with proper type handling for mypy."""

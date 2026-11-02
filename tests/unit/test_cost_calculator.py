@@ -3,6 +3,7 @@ import asyncio
 import datetime
 import time
 from collections.abc import Iterator, Mapping
+from itertools import product
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal, cast
 
@@ -9408,12 +9409,21 @@ def isolated_pricing_registry(local_model_cost_map: None, monkeypatch: pytest.Mo
     monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
 
 
-@pytest.mark.parametrize("adapter", ("anthropic", "openai"))
-@pytest.mark.parametrize("pricing", ("flat", "zero", "off_peak", "priority", "tiered"))
+@pytest.mark.parametrize(
+    ("adapter", "pricing"),
+    tuple(product(
+        ("anthropic", "openai", "azure", "azure_ai", "gemini", "databricks", "bedrock", "vertex_ai", "bigmodel"),
+        ("flat", "zero", "off_peak", "priority", "tiered"),
+    )) + tuple(product(
+        ("deepseek", "tencent", "fireworks_ai", "xai", "dashscope", "lemonade"),
+        ("flat", "zero", "off_peak", "tiered"),
+    )),
+)
 @pytest.mark.parametrize("legacy_flat_price", (False, True))
+@pytest.mark.parametrize("custom_pricing", (False, True))
 @pytest.mark.usefixtures("isolated_pricing_registry")
 def test_selected_deployment_prices_survive_transport_provider_changes(
-    adapter: str, pricing: str, legacy_flat_price: bool
+    adapter: str, pricing: str, legacy_flat_price: bool, custom_pricing: bool
 ) -> None:
     from litellm._internal_context import pinned_billing_time
 
@@ -9473,7 +9483,7 @@ def test_selected_deployment_prices_survive_transport_provider_changes(
                 custom_llm_provider=adapter,
                 call_type="completion",
                 optional_params={},
-                custom_pricing=True,
+                custom_pricing=custom_pricing,
                 custom_cost_per_token=(
                     {"input_cost_per_token": rates["input_cost_per_token"], "output_cost_per_token": rates["output_cost_per_token"]}
                     if legacy_flat_price
@@ -9489,7 +9499,7 @@ def test_selected_deployment_prices_survive_transport_provider_changes(
         assert logging_obj.cost_breakdown.get("cache_read_cost", 0.0) == pytest.approx(10 * effective_rates["cache_read_input_token_cost"])
         assert logging_obj.cost_breakdown.get("cache_creation_cost", 0.0) == pytest.approx(6 * effective_rates["cache_creation_input_token_cost"])
         assert litellm.model_cost[deployment_id]["litellm_provider"] == provider
-        if provider != adapter:
+        if provider != adapter and adapter in ("openai", "anthropic"):
             with pytest.raises(litellm.ModelNotMappedError, match="isn't mapped yet"):
                 litellm.get_model_info(model=deployment_id, custom_llm_provider=adapter)
 
@@ -9543,7 +9553,10 @@ def test_deployment_partial_prices_keep_public_rates_and_sibling_isolation(field
         + 2 * effective_rates["cache_creation_input_token_cost"]
         + 5 * effective_rates["output_cost_per_token"]
     )
-    for deployment_id in ("partial-price-deployment", "public-price-deployment"):
+    for deployment_id, selected_rates in (
+        ("partial-price-deployment", effective_rates),
+        ("public-price-deployment", public_rates),
+    ):
         assert completion_cost(
             completion_response=response,
             model=public_model,
@@ -9551,11 +9564,137 @@ def test_deployment_partial_prices_keep_public_rates_and_sibling_isolation(field
             custom_pricing=False,
             router_model_id=deployment_id,
         ) == pytest.approx(
-            4 * public_rates["input_cost_per_token"]
-            + 4 * public_rates["cache_read_input_token_cost"]
-            + 2 * public_rates["cache_creation_input_token_cost"]
-            + 5 * public_rates["output_cost_per_token"]
+            4 * selected_rates["input_cost_per_token"]
+            + 4 * selected_rates["cache_read_input_token_cost"]
+            + 2 * selected_rates["cache_creation_input_token_cost"]
+            + 5 * selected_rates["output_cost_per_token"]
         )
+
+
+@pytest.mark.parametrize("pricing", ("input", "zero", "cache", "complete", "off_peak"))
+@pytest.mark.parametrize("prefixed_model", (False, True))
+@pytest.mark.parametrize("custom_pricing", (False, True))
+@pytest.mark.usefixtures("isolated_pricing_registry")
+def test_deployment_prices_fill_only_missing_components_from_the_pricing_provider(
+    pricing: str, prefixed_model: bool, custom_pricing: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm._internal_context import pinned_billing_time
+
+    public_model: Final = "owned-partial-pricing-model"
+    public_rates: Final = {
+        "input_cost_per_token": 0.005,
+        "output_cost_per_token": 0.008,
+        "cache_read_input_token_cost": 0.0005,
+        "cache_creation_input_token_cost": 0.00625,
+    }
+    monkeypatch.setitem(litellm.model_cost, f"deepseek/{public_model}", {**public_rates, "litellm_provider": "deepseek", "mode": "chat"})
+    monkeypatch.setitem(litellm.model_cost, f"anthropic/{public_model}", {**{field: value * 10 for field, value in public_rates.items()}, "litellm_provider": "anthropic", "mode": "chat"})
+    overrides: Final = (
+        {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+        if pricing == "complete"
+        else {"cache_read_input_token_cost": 0.0001}
+        if pricing == "cache"
+        else {"input_cost_per_token": 0.0 if pricing == "zero" else 0.001}
+        if pricing != "off_peak"
+        else {}
+    )
+    off_peak_rates: Final = {field: value / 2 for field, value in public_rates.items()}
+    effective_rates: Final = off_peak_rates if pricing == "off_peak" else {**public_rates, **overrides}
+    deployment_id: Final = "owned-partial-price-deployment"
+    litellm.register_model({deployment_id: {
+        **overrides,
+        **({"off_peak_pricing": {"hours_utc": "00:00-00:00", **off_peak_rates}} if pricing == "off_peak" else {}),
+        "litellm_provider": "deepseek",
+        "mode": "chat",
+    }})
+    response: Final = ModelResponse(model=public_model, usage=Usage(
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=4, cached_tokens=4, cache_creation_tokens=2),
+        cost=99.0,
+    ))
+    response._hidden_params["response_cost"] = 99.0
+    with pinned_billing_time(datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)):
+        cost: Final = response_cost_calculator(
+            response_object=response,
+            model=f"deepseek/{public_model}" if prefixed_model else public_model,
+            custom_llm_provider="anthropic",
+            pricing_provider=None if prefixed_model else "deepseek",
+            router_model_id=deployment_id,
+            custom_pricing=custom_pricing,
+            call_type="completion",
+            optional_params={},
+        )
+    assert cost == pytest.approx(
+        4 * effective_rates["input_cost_per_token"]
+        + 4 * effective_rates["cache_read_input_token_cost"]
+        + 2 * effective_rates["cache_creation_input_token_cost"]
+        + 5 * effective_rates["output_cost_per_token"]
+    )
+    assert litellm.model_cost[f"deepseek/{public_model}"]["input_cost_per_token"] == public_rates["input_cost_per_token"]
+    assert litellm.model_cost[deployment_id]["litellm_provider"] == "deepseek"
+
+
+@pytest.mark.parametrize("custom_pricing", (False, True))
+@pytest.mark.usefixtures("isolated_pricing_registry")
+def test_perplexity_deployment_prices_keep_citation_reasoning_and_search_charges(custom_pricing: bool) -> None:
+    deployment_id: Final = "perplexity-deployment-pricing"
+    litellm.register_model({deployment_id: {
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+        "output_cost_per_reasoning_token": 0.003,
+        "citation_cost_per_token": 0.004,
+        "search_queries_cost_per_query": 0.005,
+        "litellm_provider": "deepseek",
+        "mode": "chat",
+    }})
+    response: Final = ModelResponse(model="owned-perplexity-model", usage=Usage(
+        prompt_tokens=10, completion_tokens=5, total_tokens=15,
+        citation_tokens=3, reasoning_tokens=2, cost={"total_cost": 99.0},
+        prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=2),
+    ))
+    assert completion_cost(
+        completion_response=response,
+        model="owned-perplexity-model",
+        custom_llm_provider="perplexity",
+        router_model_id=deployment_id,
+        custom_pricing=custom_pricing,
+    ) == pytest.approx(10 * 0.001 + 3 * 0.004 + 3 * 0.002 + 2 * 0.003 + 2 * 0.005)
+
+
+@pytest.mark.parametrize("pricing", ("off_peak", "priority", "tiered", "reasoning", "long_context"))
+@pytest.mark.usefixtures("isolated_pricing_registry")
+def test_deployment_flat_prices_override_public_rate_variants(pricing: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm._internal_context import pinned_billing_time
+
+    public_model: Final = "deepseek/owned-public-rate-variants"
+    public_rates: Final = {"input_cost_per_token": 0.005, "output_cost_per_token": 0.008}
+    variant: Final = (
+        {"off_peak_pricing": {"hours_utc": "00:00-00:00", **public_rates}}
+        if pricing == "off_peak"
+        else {"tiered_pricing": [{"range": [0, 1000], **public_rates}]}
+        if pricing == "tiered"
+        else {"output_cost_per_reasoning_token": 0.01}
+        if pricing == "reasoning"
+        else {f"{field}_priority": rate for field, rate in public_rates.items()}
+        if pricing == "priority"
+        else {f"{field}_above_100_tokens": rate for field, rate in public_rates.items()}
+    )
+    monkeypatch.setitem(litellm.model_cost, public_model, {**public_rates, **variant, "litellm_provider": "deepseek", "mode": "chat"})
+    deployment_id: Final = "owned-flat-price-deployment"
+    litellm.register_model({deployment_id: {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "litellm_provider": "deepseek", "mode": "chat"}})
+    response: Final = ModelResponse(model=public_model, usage=Usage(prompt_tokens=200, completion_tokens=20, total_tokens=220, completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=5)))
+    with pinned_billing_time(datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)):
+        cost: Final = completion_cost(
+            completion_response=response,
+            model=public_model,
+            custom_llm_provider="openai",
+            router_model_id=deployment_id,
+            custom_pricing=True,
+            service_tier="priority" if pricing == "priority" else None,
+        )
+    assert cost == pytest.approx(200 * 0.001 + 20 * 0.002)
 
 
 _CUSTOM_PRICING_MODEL: Final = "migration-custom-pricing-chat"

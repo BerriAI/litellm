@@ -7,7 +7,7 @@ from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.types.utils import Usage
+from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
 
 
@@ -63,10 +63,12 @@ def calculate_azure_model_router_flat_cost(model: str, prompt_tokens: int) -> fl
     return 0.0
 
 
-def _response_model_cost(model: str, usage: Usage, service_tier: str | None) -> tuple[float, float]:
+def _response_model_cost(
+    model: str, usage: Usage, service_tier: str | None, model_info: ModelInfo | None
+) -> tuple[float, float]:
     try:
         return generic_cost_per_token(
-            model=model, usage=usage, custom_llm_provider="azure_ai", service_tier=service_tier
+            model=model, usage=usage, custom_llm_provider="azure_ai", service_tier=service_tier, model_info=model_info
         )
     except Exception as e:
         if not is_azure_model_router(model):
@@ -93,6 +95,7 @@ def cost_per_token(
     response_time_ms: float | None = 0.0,
     request_model: str | None = None,
     service_tier: str | None = None,
+    model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Price the response model's own tokens for Azure AI, plus the Model Router fee exactly once when either the
@@ -111,6 +114,7 @@ def cost_per_token(
         response_time_ms: Optional response time in milliseconds
         request_model: Optional[str], the original request model name; a Model Router name adds the routing fee
         service_tier: Optional service tier the request was priced on
+        model_info: Optional resolved deployment prices
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -118,7 +122,9 @@ def cost_per_token(
     Raises:
         ValueError: If a model that is not a Model Router name is missing from the cost map
     """
-    prompt_cost, completion_cost = _response_model_cost(model=model, usage=usage, service_tier=service_tier)
+    prompt_cost, completion_cost = _response_model_cost(
+        model=model, usage=usage, service_tier=service_tier, model_info=model_info
+    )
     fee_name: Final = _router_fee_name(model=model, request_model=request_model)
     if fee_name is None:
         return prompt_cost, completion_cost
