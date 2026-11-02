@@ -7,6 +7,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_gated_fields import log_beta_gated_strips, strip_beta_gated_native_request
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
@@ -101,6 +102,9 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def should_strip_billing_metadata(self) -> bool:
         return True
+
+    def tools_for_upstream(self, tools: Sequence[object], model: str, drop_params: object) -> Sequence[object]:
+        return tools
 
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return True
@@ -546,6 +550,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             "edits": retained_edits,
         }
 
+    def strips_beta_gated_fields_from_final_headers(self) -> bool:
+        return False
+
     def _get_bedrock_invoke_anthropic_beta_headers(
         self,
         model: str,
@@ -581,9 +588,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             ),
             custom_llm_provider="bedrock",
             is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
-            is_thinking_display_updates_used=anthropic_model_info.is_thinking_display_updates_used(
-                anthropic_messages_request.get("thinking")
-            ),
+            thinking=anthropic_messages_request.get("thinking"),
             is_mid_conversation_tool_change_used=anthropic_model_info.is_mid_conversation_tool_change_used(
                 outgoing_messages_typed
             ),
@@ -754,7 +759,9 @@ class AmazonAnthropicClaudeMessagesConfig(
                 ),
                 "display": "updates",
             }
-        self._normalize_system_role_messages(anthropic_messages_request, model=model)
+        self._normalize_system_role_messages(
+            anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
+        )
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
         #########################################################
@@ -821,6 +828,20 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
+
+        final_request: Final = OBJECT_MAPPING_ADAPTER.validate_python(anthropic_messages_request)  # pyright: ignore[reportUnknownArgumentType]  # built from the base signature's bare dict
+        gated: Final = strip_beta_gated_native_request(
+            {},
+            final_request,
+            final_request.get("messages"),
+            body_betas=filtered_betas,
+            drop_params=getattr(litellm_params, "drop_params", None),
+        )
+        log_beta_gated_strips(gated.stripped, model=model, provider="bedrock_invoke")
+        if gated.thinking_stripped:
+            anthropic_messages_request["thinking"] = gated.thinking
+        if gated.messages_stripped:
+            anthropic_messages_request["messages"] = list(gated.messages)
 
         outbound_tools: Final = tools_without_eager_input_streaming(anthropic_messages_request)
         if outbound_tools is not None:
