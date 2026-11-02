@@ -170,6 +170,7 @@ class CodexStockCatalog(LiteLLMBaseModel):
 
 CodexCatalogEntry = CodexFallbackModel | CodexStockModel
 CodexAliasDefaults: TypeAlias = Literal["codex", "deployment"]
+_NATIVE_ALIAS_DEFAULTS: Final[CodexAliasDefaults] = "deployment"
 
 
 @dataclass(frozen=True, slots=True)
@@ -542,7 +543,7 @@ def merged_codex_catalog(
     slugs: Final = frozenset(model.get("slug") for model in upstream)
     added: Final = tuple(row for row in rows if _codex_can_drive(row.id, row.mode) and row.id not in slugs)
     first_priority: Final = max((_priority(model) for model in upstream), default=-1) + 1
-    entries: Final = _entries(added, stock, instructions, first_priority, "deployment", client_version)
+    entries: Final = _entries(added, stock, instructions, first_priority, _NATIVE_ALIAS_DEFAULTS, client_version)
     added_models: Final = tuple(_entry_json(entry) for entry in entries)
     serialized: Final = tuple(_compact_json(model) for model in added_models)
     budget: Final = byte_limit - len(_compact_json({**top, "models": upstream}))
@@ -650,11 +651,16 @@ def codex_model_list_body(
 def codex_entry_names_default_reasoning_level(
     model_id: str, llm_router: Router, team_id: str | None, client_version: str | None
 ) -> bool:
-    """Whether the catalog entry for `model_id` names a `default_reasoning_level`. Codex's model picker
+    """Whether the native catalog entry for `model_id` names a `default_reasoning_level`. Codex's model picker
     sends reasoning effort `none` for a model whose entry names none, while showing that choice as
     "default"."""
     listed: Final[ModelInfoResponse] = {"id": model_id, "object": "model", "created": 0, "owned_by": ""}
     (entry,) = _entries(
-        (_catalog_row(listed, model_id, model_id, llm_router, team_id),), None, "", 0, "codex", client_version
+        (_catalog_row(listed, model_id, model_id, llm_router, team_id),),
+        None,
+        "",
+        0,
+        _NATIVE_ALIAS_DEFAULTS,
+        client_version,
     )
     return _entry_json(entry).get("default_reasoning_level") is not None

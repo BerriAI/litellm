@@ -477,7 +477,7 @@ def test_litellm_model_on_native_route_keeps_chatgpt_credentials_out_of_hook_raw
         pytest.param("open-weights", "none", "deployment", None, id="none under the deployment's drop_params"),
         pytest.param("open-weights", "none", "request", None, id="none under the request's drop_params"),
         pytest.param("open-weights", "high", "global", "high", id="effort set for a model without a default effort"),
-        pytest.param("coding-model", "none", "global", "none", id="none on a model whose entry names a default effort"),
+        pytest.param("coding-model", "none", "global", None, id="none on an alias whose native entry names no effort"),
         pytest.param("api-model", "none", "global", "none", id="none on a model that supports it"),
         pytest.param("glm-model", "none", "global", None, id="none on a model that does not support it"),
         pytest.param("declared-model", "none", "global", "none", id="none on a deployment whose model_info allows it"),
@@ -503,7 +503,10 @@ def test_litellm_model_on_native_route_gets_the_reasoning_effort_codex_m_would_s
                     **open_weights,
                     "litellm_params": {**open_weights["litellm_params"], "drop_params": drop_params == "deployment"},
                 },
-                _open_weights("coding-model", upstream="gpt-5.5"),
+                {
+                    **_open_weights("coding-model", upstream="gpt-5.5"),
+                    "model_info": {"supports_none_reasoning_effort": False},
+                },
                 _open_weights("glm-model", upstream="glm-5p3"),
                 {**_open_weights("declared-model"), "model_info": {"supports_none_reasoning_effort": True}},
                 {

@@ -809,7 +809,7 @@ def test_catalog_rows_without_a_router_carry_only_the_listing():
 
 
 @pytest.mark.parametrize("client_version", [None, "0.165.0"])
-def test_entry_names_a_default_reasoning_level_exactly_when_the_served_entry_carries_one(client_version):
+def test_entry_names_a_default_reasoning_level_exactly_when_the_native_entry_carries_one(client_version):
     router = litellm.Router(
         model_list=[
             {"model_name": "open-weights", "litellm_params": {"model": "fireworks_ai/open-weights"}},
@@ -825,14 +825,15 @@ def test_entry_names_a_default_reasoning_level_exactly_when_the_served_entry_car
     listing = tuple(
         {"id": name, "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"} for name in names
     )
-    served = json.loads(
-        codex_model_list_body(listing, tuple((name, name) for name in names), router, client_version=client_version)
-    )["models"]
+    upstream = json.dumps({"models": [{"slug": "upstream-model", "priority": 0}]}).encode()
+    rows = codex_catalog_rows(listing, tuple((name, name) for name in names), router)
+    served = json.loads(merged_codex_catalog(upstream, rows, client_version=client_version))["models"][1:]
+    served_names_one = [entry.get("default_reasoning_level") is not None for entry in served]
 
     assert [
         codex_entry_names_default_reasoning_level(entry["slug"], router, None, client_version) for entry in served
-    ] == ["default_reasoning_level" in entry for entry in served]
-    assert ["default_reasoning_level" in entry for entry in served] == [False, True, client_version is not None]
+    ] == served_names_one
+    assert served_names_one == [False, False, client_version is not None]
 
 
 def test_codex_tool_search_is_offered_off_the_route_and_model_info_and_only_when_every_deployment_answers_it():
