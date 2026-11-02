@@ -167,7 +167,7 @@ def _load_windows_process_api() -> _WindowsProcessApi:  # pragma: no cover - ker
     kernel32.CloseHandle.restype = wintypes.BOOL
 
     def exit_code(handle: int) -> int | None:
-        code = wintypes.DWORD()
+        code: Final = wintypes.DWORD()
         if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
             return None
         return code.value
