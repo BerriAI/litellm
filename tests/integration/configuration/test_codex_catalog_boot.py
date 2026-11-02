@@ -275,7 +275,7 @@ def test_catalog_survives_a_worker_kill(gateway: Gateway, tmp_path: Path) -> Non
 
 def _install_shim(directory: Path, stock: Mapping[str, JsonValue]) -> tuple[Path, dict[str, str]]:
     shim_dir: Final = directory / "bin"
-    shim_dir.mkdir()
+    shim_dir.mkdir(parents=True)
     script: Final = directory / "codex_shim.py"
     script.write_text(SHIM_SCRIPT, encoding="utf-8")
     shim: Final = shim_dir / "codex"
@@ -341,8 +341,9 @@ def _catalog_override(argv: Sequence[JsonValue]) -> str | None:
 
 def test_lite_codex_writes_the_shared_catalog(gateway: Gateway, tmp_path: Path) -> None:
     """`lite codex` writes the installed Codex's own entry for a proxy model whose name is a stock slug and
-    the fallback entry for any other; the proxy's configured tiers never reach the file (Decision 17)."""
+    the fallback entry for any other, each under the display name and service tiers the proxy serves for it."""
     stock_slug: Final = f"codex-stock-{uuid.uuid4().hex}"
+    stock_display_name: Final = "Stock Model via LiteLLM"
     stock_tiers: Final = [{"id": "priority", "name": "Fast", "description": "1.5x speed"}]
     stock: Final = {
         "models": [
@@ -360,7 +361,7 @@ def test_lite_codex_writes_the_shared_catalog(gateway: Gateway, tmp_path: Path) 
     }
     launch_path, environment = _install_shim(tmp_path, stock)
     with gateway.scenario() as scenario:
-        _new_model(scenario, stock_slug, {"service_tiers": ["ultrafast"]})
+        _new_model(scenario, stock_slug, {"service_tiers": ["ultrafast"], "display_name": stock_display_name})
         fallback: Final = scenario.model(model_info={"service_tiers": ["priority"]})
         key: Final = scenario.key(models=[stock_slug, fallback])
         completed: Final = _run_lite_codex(gateway, key, environment)
@@ -390,18 +391,70 @@ def test_lite_codex_writes_the_shared_catalog(gateway: Gateway, tmp_path: Path) 
             seconds=CONVERGENCE_SECONDS,
         )
         assert list(file_entries) == list(served), (list(file_entries), list(served))
-        assert file_entries[stock_slug]["service_tiers"] == stock_tiers, file_entries[stock_slug]
+        assert file_entries[stock_slug]["service_tiers"] == [_generic_tier("ultrafast")], file_entries[stock_slug]
+        assert file_entries[stock_slug]["display_name"] == stock_display_name, file_entries[stock_slug]
         assert file_entries[stock_slug]["visibility"] == "list", file_entries[stock_slug]
         assert file_entries[stock_slug]["supported_in_api"] is True, file_entries[stock_slug]
         assert file_entries[stock_slug]["priority"] == list(file_entries).index(stock_slug), file_entries[stock_slug]
         assert file_entries[stock_slug]["supported_reasoning_levels"] == [
             {"effort": "high", "description": "thinks longer"}
         ]
-        assert file_entries[fallback]["service_tiers"] == [], file_entries[fallback]
+        assert file_entries[fallback]["service_tiers"] == [_generic_tier("priority")], file_entries[fallback]
         assert file_entries[fallback]["display_name"] == fallback, file_entries[fallback]
         assert string_value(file_entries[fallback]["base_instructions"]), fallback
         assert served[stock_slug]["service_tiers"] == [_generic_tier("ultrafast")], served[stock_slug]
+        assert served[stock_slug]["display_name"] == stock_display_name, served[stock_slug]
         assert served[fallback]["service_tiers"] == [_generic_tier("priority")], served[fallback]
+
+
+def test_lite_codex_writes_the_tiers_each_key_routes_to_on_a_name_a_team_also_deploys(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    """A team deploys its own copy of a model name that a key with no team calls too: `lite codex` writes the
+    tiers the proxy serves each key, the team deployment's for the team's key and the shared one's for the other."""
+    stock: Final = {
+        "models": [
+            {
+                "slug": f"codex-unrelated-{uuid.uuid4().hex}",
+                "display_name": "Unrelated",
+                "priority": 0,
+                "visibility": "list",
+                "supported_in_api": True,
+                "service_tiers": [],
+                "default_service_tier": None,
+                "supported_reasoning_levels": [],
+            }
+        ]
+    }
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team()
+        shared: Final = scenario.model(model_info={"service_tiers": ["flex"]})
+        _new_model(scenario, shared, {"team_id": team, "service_tiers": ["priority"]})
+        expected: Final = {
+            scenario.key(team_id=team, models=[shared]): [_generic_tier("priority")],
+            scenario.key(models=[shared]): [_generic_tier("flex")],
+        }
+        for index, (key, tiers) in enumerate(expected.items()):
+            _, environment = _install_shim(tmp_path / f"key-{index}", stock)
+
+            def file_tiers(key: str = key, environment: Mapping[str, str] = environment) -> JsonValue:
+                completed: Final = _run_lite_codex(gateway, key, environment)
+                assert completed.returncode == 0, (completed.stdout, completed.stderr)
+                written: Final = JSON_OBJECT.validate_json(
+                    (Path(environment["CODEX_HOME"]) / CATALOG_FILENAME).read_bytes()
+                )
+                models: Final = written["models"]
+                assert isinstance(models, list), written
+                return _by_slug([object_value(entry) for entry in models])[shared]["service_tiers"]
+
+            served: Final = eventually(
+                lambda key=key: _by_slug(_entries(_catalog_response(gateway, key=key))).get(shared, {}),
+                lambda entry, tiers=tiers: entry.get("service_tiers") == tiers,
+                seconds=CONVERGENCE_SECONDS,
+            )
+            assert eventually(file_tiers, lambda value, tiers=tiers: value == tiers, seconds=CONVERGENCE_SECONDS) == (
+                served["service_tiers"]
+            )
 
 
 def test_lite_codex_skips_a_stock_dump_without_display_name(gateway: Gateway, tmp_path: Path) -> None:
