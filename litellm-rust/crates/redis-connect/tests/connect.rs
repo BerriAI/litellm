@@ -1,8 +1,10 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use litellm_config::{RedisSettings, ResolvedRedis, SecretSnapshot};
-use litellm_redis_connect::{Error, connect};
-use litellm_redis_testing::{RedisSentinel, RedisServer, RedisTlsServer, SERVICE_NAME, eventually};
+use litellm_redis_connect::{Error, HostServices, connect};
+use litellm_redis_testing::{
+    RedisDeployment, RedisSentinel, RedisTlsServer, SERVICE_NAME, Topology, eventually,
+};
 use rstest::rstest;
 
 fn resolved(kwargs: serde_json::Value, environment: &[(&str, &str)]) -> ResolvedRedis {
@@ -15,6 +17,15 @@ fn resolved(kwargs: serde_json::Value, environment: &[(&str, &str)]) -> Resolved
             &lookup,
         )
         .unwrap()
+}
+
+fn services() -> HostServices {
+    HostServices {
+        events: None,
+        breaker: None,
+        http: litellm_http::Client::for_test(),
+        environment: Arc::new(|_: &str| None),
+    }
 }
 
 fn port(url: &str) -> u16 {
@@ -38,7 +49,10 @@ async fn python_tls_kwargs_reach_the_server(#[case] with_ca: bool, #[case] conne
         "socket_timeout": 2,
     });
 
-    let pinged = connect(resolved(kwargs, &[]), None).unwrap().ping().await;
+    let pinged = connect(resolved(kwargs, &[]), services())
+        .unwrap()
+        .ping()
+        .await;
 
     assert_eq!(pinged.is_ok(), connects, "{pinged:?}");
 }
@@ -52,20 +66,31 @@ async fn static_credentials_from_kwargs_or_environment_authenticate(
     #[case] password: Option<&str>,
     #[case] environment: &[(&str, &str)],
     #[case] connects: bool,
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
 ) {
-    let server = RedisServer::start().await.unwrap();
+    let server = RedisDeployment::start(topology).await.unwrap();
     server
-        .cli(&["CONFIG", "SET", "requirepass", "right"])
+        .cli_on_every_node(&["ACL", "SETUSER", "default", "on", ">right"])
         .await
         .unwrap();
-    let kwargs = serde_json::json!({
-        "host": "127.0.0.1",
-        "port": port(server.url()),
-        "password": password,
-        "socket_timeout": 2,
-    });
+    let kwargs = match &server {
+        RedisDeployment::Standalone(server) => serde_json::json!({
+            "host": "127.0.0.1",
+            "port": port(server.url()),
+            "password": password,
+            "socket_timeout": 2,
+        }),
+        RedisDeployment::Cluster(cluster) => serde_json::json!({
+            "startup_nodes": cluster.nodes().map(|(host, port)| serde_json::json!({
+                "host": host,
+                "port": port,
+            })).collect::<Vec<_>>(),
+            "password": password,
+            "socket_timeout": 2,
+        }),
+    };
 
-    let pinged = connect(resolved(kwargs, environment), None)
+    let pinged = connect(resolved(kwargs, environment), services())
         .unwrap()
         .ping()
         .await;
@@ -83,7 +108,7 @@ async fn python_sentinel_kwargs_follow_the_master_through_a_failover() {
         "service_name": SERVICE_NAME,
         "socket_timeout": 1,
     });
-    let client = connect(resolved(kwargs, &[]), None).unwrap();
+    let client = connect(resolved(kwargs, &[]), services()).unwrap();
     client
         .set("before", "1", Duration::from_secs(600))
         .await
@@ -107,24 +132,49 @@ async fn python_sentinel_kwargs_follow_the_master_through_a_failover() {
 }
 
 #[rstest]
-#[case::credential_provider(serde_json::json!({"host": "redis", "credential_provider": true}), &[], None)]
-#[case::gcp(serde_json::json!({"host": "redis", "gcp_service_account": "account"}), &[], Some("gcp_service_account"))]
-#[case::azure(serde_json::json!({"host": "redis"}), &[("REDIS_AZURE_AD_TOKEN", "true")], Some("azure_redis_ad_token"))]
-#[case::aws(
-    serde_json::json!({"host": "cache", "ssl": true, "aws_iam_auth": true, "aws_iam_user_name": "user", "aws_iam_cache_name": "cache", "aws_iam_region": "us-east-1"}),
-    &[],
-    Some("aws_iam_auth")
-)]
-fn auth_this_host_cannot_build_fails_at_boot_naming_the_setting(
-    #[case] kwargs: serde_json::Value,
-    #[case] environment: &[(&str, &str)],
-    #[case] cloud_setting: Option<&str>,
-) {
-    let error = connect(resolved(kwargs, environment), None).err().unwrap();
+fn a_python_credential_provider_fails_at_boot() {
+    let error = connect(
+        resolved(
+            serde_json::json!({"host": "redis", "credential_provider": true}),
+            &[],
+        ),
+        services(),
+    )
+    .err()
+    .unwrap();
 
-    match (error, cloud_setting) {
-        (Error::NoHostCredentialProvider, None) => {}
-        (Error::CloudAuth { setting }, Some(expected)) => assert_eq!(setting, expected),
-        (error, _) => panic!("unexpected {error:?}"),
-    }
+    assert!(
+        matches!(error, Error::NoHostCredentialProvider),
+        "{error:?}"
+    );
+}
+
+#[rstest]
+#[case::profile("AWS_PROFILE")]
+#[case::role("AWS_ROLE_ARN")]
+#[case::web_identity("AWS_WEB_IDENTITY_TOKEN_FILE")]
+fn config_only_aws_identities_fail_before_connecting(#[case] setting: &'static str) {
+    let configured = format!("{}-override", std::env::var(setting).unwrap_or_default());
+    let host = HostServices {
+        environment: Arc::new(move |name: &str| (name == setting).then(|| configured.clone())),
+        ..services()
+    };
+    let error = connect(
+        resolved(
+            serde_json::json!({
+                "host": "redis", "ssl": true, "aws_iam_auth": true,
+                "aws_iam_user_name": "user", "aws_iam_cache_name": "cache",
+                "aws_iam_region": "us-east-1",
+            }),
+            &[],
+        ),
+        host,
+    )
+    .err()
+    .expect("must not select ambient credentials");
+
+    assert!(matches!(
+        error,
+        Error::ProcessEnvironmentRequired { setting: rejected } if rejected == setting
+    ));
 }

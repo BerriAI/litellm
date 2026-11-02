@@ -1,9 +1,13 @@
 use std::time::Duration;
 
+use litellm_circuit_breaker::{State, Transition};
+
 use crate::Error;
 
 pub trait RedisEvents: Send + Sync {
     fn call(&self, event: &CallEvent);
+
+    fn breaker(&self, transition: &Transition<State>);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

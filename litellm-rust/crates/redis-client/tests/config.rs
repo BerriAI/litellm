@@ -5,7 +5,7 @@ use litellm_secret_value::SecretValue;
 
 #[rstest]
 #[case::url(format!("{:?}", Endpoint::Url { url: SecretValue::new("redis://user:credential-value@cache:6379/0"), tls: TlsOptions::verified() }))]
-#[case::static_password(format!("{:?}", Credentials { username: None, password: Some(SecretValue::new("credential-value")) }))]
+#[case::static_password(format!("{:?}", Credentials::Static { username: None, password: Some(SecretValue::new("credential-value")) }))]
 #[case::sentinel_password(format!("{:?}", Endpoint::Sentinel(SentinelEndpoint {
     sentinels: Vec::new(),
     service_name: "primary".to_owned(),

@@ -7,7 +7,8 @@ use testcontainers_modules::testcontainers::{
 };
 
 use crate::{
-    Error,
+    ClientConnection, Error,
+    deployment::parse_client_list,
     exec::{cli, run},
     ports::{HOST, start_on_free_ports, wait_for_pong},
     standalone::REDIS_TAG,
@@ -69,6 +70,21 @@ impl RedisSentinel {
 
     pub fn sentinel(&self) -> (&'static str, u16) {
         (HOST, self.ports[2])
+    }
+
+    /// Runs one redis-cli command on the primary and the replica, which keep their own ACLs.
+    pub async fn cli_on_data_nodes(&self, args: &[&str]) -> Result<(), Error> {
+        for port in [self.ports[0], self.ports[1]] {
+            run(&self.container, cli(port, args)).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn clients_on(&self, port: u16) -> Result<Vec<ClientConnection>, Error> {
+        Ok(parse_client_list(
+            port,
+            &run(&self.container, cli(port, &["CLIENT", "LIST"])).await?,
+        ))
     }
 
     pub fn primary_port(&self) -> u16 {

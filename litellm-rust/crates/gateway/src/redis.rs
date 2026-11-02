@@ -1,14 +1,20 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use litellm_circuit_breaker::{Breaker, Config as BreakerConfig, State};
+use litellm_circuit_breaker::Config as BreakerConfig;
 use litellm_config::{
     CacheSettings, Config, Expected, RedisError, RedisSettings, ResolvedRedis, SecretSnapshot,
     Value, environment_has_target,
 };
 use litellm_core_utils::settings::Lookup;
-use litellm_redis_client::RedisClient;
+use litellm_redis_client::{RedisClient, RedisEvents};
+use litellm_redis_connect::{HostServices, SharedEnvironment, TracingEvents};
 
 use crate::Error;
+
+pub(crate) struct Resources {
+    pub(crate) http: litellm_http::Client,
+    pub(crate) lookup: SharedEnvironment,
+}
 
 const ENVIRONMENT_PING_TIMEOUT: Duration = Duration::from_secs(2);
 type Params = ResolvedRedis;
@@ -60,13 +66,23 @@ pub(crate) fn plan(config: &Config, lookup: &dyn Lookup) -> Result<Plan, Error> 
     })
 }
 
-pub async fn connect(config: &Config, lookup: &dyn Lookup) -> Result<RedisClients, Error> {
+pub(crate) async fn connect(
+    config: &Config,
+    lookup: &dyn Lookup,
+    resources: &Resources,
+) -> Result<RedisClients, Error> {
     let plan = plan(config, lookup)?;
     let breaker = breaker_config(lookup)?;
+    let events: Arc<dyn RedisEvents> = Arc::new(TracingEvents::new(lookup));
     let client = |params: Params, breaker: Option<BreakerConfig>| -> Result<RedisClient, Error> {
         Ok(litellm_redis_connect::connect(
             params,
-            breaker.map(|config| Breaker::new(config, Box::new(log_transition))),
+            HostServices {
+                events: Some(events.clone()),
+                breaker,
+                http: resources.http.clone(),
+                environment: resources.lookup.clone(),
+            },
         )?)
     };
     let coordination = match plan.coordination {
@@ -162,23 +178,6 @@ async fn reachable(client: RedisClient) -> Option<RedisClient> {
     }
 }
 
-fn log_transition(transition: &litellm_circuit_breaker::Transition<State>) {
-    match transition.to {
-        State::Open { .. } => tracing::warn!(
-            generation = transition.generation,
-            "redis circuit breaker opened, fast-failing redis calls"
-        ),
-        State::HalfOpen => tracing::info!(
-            generation = transition.generation,
-            "redis circuit breaker half open, probing redis"
-        ),
-        State::Closed { .. } => tracing::info!(
-            generation = transition.generation,
-            "redis circuit breaker closed, redis recovered"
-        ),
-    }
-}
-
 fn parse_seconds(text: &str) -> Option<Duration> {
     text.parse::<f64>()
         .ok()
@@ -237,6 +236,7 @@ fn environment_value<T>(
 
 #[cfg(test)]
 mod tests {
+    use litellm_core_utils::settings::Lookup;
     use std::{collections::HashMap, time::Duration};
 
     use litellm_config::{Config, RedisAuth, RedisError};
@@ -244,8 +244,18 @@ mod tests {
     use litellm_redis_testing::RedisServer;
     use rstest::rstest;
 
-    use super::{Params, Plan, Target, connect, plan};
+    use std::sync::Arc;
+
+    use super::{Params, Plan, Resources, Target, plan};
     use crate::Error;
+
+    async fn connect(config: &Config, lookup: &dyn Lookup) -> Result<super::RedisClients, Error> {
+        let resources = Resources {
+            http: litellm_http::Client::for_test(),
+            lookup: Arc::new(|_: &str| None),
+        };
+        super::connect(config, lookup, &resources).await
+    }
 
     fn host(name: &str, port: u16) -> Params {
         Params {
