@@ -15,7 +15,7 @@ from typing import Final, cast
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.anthropic_beta_headers_manager import aload_beta_headers_config
+from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, resolve_beta_provider
 from litellm.constants import PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -540,11 +540,16 @@ async def anthropic_messages(
     if short_circuit_response is not None:
         return short_circuit_response
 
+    serving_provider: Final = (
+        resolve_beta_provider(custom_llm_provider, AnthropicModelInfo.get_api_base(api_base))
+        if custom_llm_provider
+        else None
+    )
     # Run registered MessagesInterceptors (e.g. advisor orchestration loop).
     # Named params on `anthropic_messages` are bound to locals, not `**kwargs`,
     # so forward them explicitly — otherwise interceptor sub-calls drop them.
     for interceptor in get_messages_interceptors():
-        if interceptor.can_handle(tools, custom_llm_provider):
+        if interceptor.can_handle(tools, serving_provider):
             return await interceptor.handle(
                 model=model,
                 messages=messages,

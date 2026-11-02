@@ -51,9 +51,9 @@ _interceptors = [
 
 ### `AdvisorOrchestrationHandler`
 
-Handles `advisor_20260301` tool for providers that don't support it natively (all non-Anthropic providers for now).
+Handles `advisor_20260301` tool for providers that don't support it natively (every provider but Anthropic itself, including an `anthropic/` deployment on an Azure AI Foundry host).
 
-**Triggers when:** `advisor_20260301` is in `tools` AND `custom_llm_provider` is not in `ADVISOR_NATIVE_PROVIDERS`.
+**Triggers when:** `advisor_20260301` is in `tools` AND the deployment's beta row (`resolve_beta_provider`, which maps an `anthropic` deployment on a Foundry host to `azure_ai`) is not in `ADVISOR_NATIVE_PROVIDERS`.
 
 **What it does:**
 - Translates the advisor tool to a regular function tool the provider understands.

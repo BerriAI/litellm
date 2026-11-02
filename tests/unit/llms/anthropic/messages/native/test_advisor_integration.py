@@ -190,6 +190,46 @@ async def test_anthropic_provider_bypasses_interceptor():
     assert any("Native anthropic" in b.get("text", "") for b in text_blocks)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "api_base",
+    ["https://res.services.ai.azure.com/anthropic", "https://res.cognitiveservices.azure.com/anthropic"],
+)
+async def test_anthropic_deployment_on_foundry_runs_the_advisor_loop(api_base):
+    from litellm.llms.anthropic.messages.native.handler import (
+        anthropic_messages,
+    )
+
+    sent_tool_types = []
+
+    async def mock_handler(model, messages, tools, stream, max_tokens, **kwargs):
+        sent_tool_types.append([t.get("type") for t in tools or []])
+        if len(sent_tool_types) == 1:
+            return _advisor_call_resp()
+        if len(sent_tool_types) == 2:
+            return _text_resp("Use trial division.", model="claude-opus-4-6")
+        return _text_resp("def is_prime(n): ...")
+
+    with patch(
+        "litellm.llms.anthropic.messages.native.interceptors.advisor._call_messages_handler",
+        side_effect=mock_handler,
+    ):
+        result = await anthropic_messages(
+            model="claude-sonnet-4-6",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="anthropic",
+            api_base=api_base,
+        )
+
+    assert len(sent_tool_types) == 3
+    assert all("advisor_20260301" not in types for types in sent_tool_types)
+    assert isinstance(result, dict)
+    assert not [b for b in result.get("content", []) if b.get("type") == "tool_use" and b.get("name") == "advisor"]
+
+
 # ---------------------------------------------------------------------------
 # 4. Regression: top-level named params must be forwarded into executor sub-call
 # ---------------------------------------------------------------------------
