@@ -1,5 +1,6 @@
 import json
 from typing import Final, Literal
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from typing_extensions import ReadOnly, TypedDict
@@ -226,3 +227,42 @@ def test_passthrough_route_block_before_any_invoke_frame_is_a_whole_message_in_c
         "message_stop",
     ]
     assert events[2]["delta"]["text"] == "blocked"
+
+
+async def _scanned_response_texts(response: dict[str, object]) -> tuple[str, ...]:
+    guardrail: Final = MagicMock(guardrail_name="post-call", apply_guardrail=AsyncMock())
+    await PassThroughEndpointHandler().process_output_response(response, guardrail, request_data={})
+    return tuple(text for call in guardrail.apply_guardrail.await_args_list for text in call.kwargs["inputs"]["texts"])
+
+
+@pytest.mark.asyncio
+async def test_post_call_scan_reads_the_reply_text_and_not_the_numbers_around_it():
+    response: Final = {
+        "id": "chatcmpl-1793600123",
+        "object": "chat.completion",
+        "created": 1793600123,
+        "model": "gpt-5.6",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "Paris."}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 4111111111111111, "total_tokens": 5551234567},
+    }
+
+    assert await _scanned_response_texts(response) == ("Paris.",)
+
+
+@pytest.mark.asyncio
+async def test_post_call_scan_still_reads_every_string_a_reply_carries():
+    response: Final = {
+        "choices": [
+            {"message": {"content": "call 555-123-4567", "tool_calls": [{"function": {"arguments": '{"a": "b"}'}}]}}
+        ],
+        "candidates": [{"content": {"parts": [{"text": "card 4111 1111 1111 1111"}]}}],
+    }
+
+    assert await _scanned_response_texts(response) == ('call 555-123-4567\n{"a": "b"}\ncard 4111 1111 1111 1111',)
+
+
+@pytest.mark.asyncio
+async def test_post_call_scan_skips_a_reply_with_no_text():
+    response: Final = {"object": "list", "data": [{"object": "embedding", "embedding": [0.4111111111111111]}]}
+
+    assert await _scanned_response_texts(response) == ()
