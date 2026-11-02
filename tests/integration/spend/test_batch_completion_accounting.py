@@ -581,10 +581,43 @@ def test_batch_end_user_budget_enforcement_and_isolation(gateway: Gateway) -> No
         )
         assert b_request.status_code != denied_a.status_code or "budget" not in b_request.text.lower()
 
-        # 9. Observation Immutability: Retrieve Customer A's batch as another authorized key
+        # 9. Creation vs Observation Immutability: Assert stored creator attribution before and after viewer read
+        creator_before: Final = read_rows(
+            'SELECT end_user_id FROM "LiteLLM_ManagedObjectTable" WHERE object_id=%s',
+            (batch_a_id,),
+        )[0]["end_user_id"]
+        assert creator_before == user_a, f"Expected creator {user_a}, got {creator_before}"
+
+        # Retrieve Customer A's batch using an alternate authorized key
         retrieval_by_viewer: Final = gateway.request("GET", f"/v1/batches/{batch_a_id}", key=viewer_key)
         assert retrieval_by_viewer.status_code == 200, retrieval_by_viewer.text
 
-        # 10. Replay Control: Verify single billing idempotency (no double-counting)
-        spend_a_after_replay: Final = float(str(read_rows('SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s', (user_a,))[0]["spend"]))
-        assert spend_a_after_replay == spend_a_initial, "Replay/retrieval must not double-bill customer A"
+        # Assert creator attribution remains intact and unmutated by observation
+        creator_after: Final = read_rows(
+            'SELECT end_user_id FROM "LiteLLM_ManagedObjectTable" WHERE object_id=%s',
+            (batch_a_id,),
+        )[0]["end_user_id"]
+        assert creator_after == user_a, "Observation must not overwrite stored creator end_user_id"
+
+        # 10. Replay / Single Billing Control: Verify spend row is exactly once and A remains over budget
+        a_spend_logs: Final = read_rows(
+            'SELECT spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s AND call_type=\'aretrieve_batch\'',
+            (sha256(key.encode()).hexdigest(),),
+        )
+        assert len(a_spend_logs) >= 1
+        current_a_spend: Final = float(str(read_rows('SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s', (user_a,))[0]["spend"]))
+        assert current_a_spend == spend_a_initial, "Customer A must be billed exactly once"
+
+        # Verify Customer A remains strictly budget-denied
+        recheck_denied: Final = gateway.request(
+            "POST",
+            "/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "ping"}],
+            },
+            key=key,
+            headers={"x-litellm-end-user-id": user_a},
+        )
+        assert recheck_denied.status_code in [400, 422], recheck_denied.text
+        assert "budget" in recheck_denied.text.lower(), recheck_denied.text
