@@ -588,14 +588,15 @@ def test_custom_tokenizer_partner_counts_locally_on_every_count_route(gateway: G
         assert isinstance(total, int) and total >= len(_COUNTED_TEXT), local
         counts: Final = tuple(_route_count(owned.gateway, route, model) for route in _COUNT_ROUTES)
         assert counts == ((200, total),) * len(_COUNT_ROUTES), counts
-        contents_only: Final = owned.gateway.request(
-            "POST",
-            "/utils/token_counter",
-            {"model": model, "contents": [{"role": "user", "parts": [{"text": _COUNTED_TEXT}]}]},
-            params={"call_endpoint": "true"},
+        contents_only: Final = _payload(
+            owned.gateway.request(
+                "POST",
+                "/utils/token_counter",
+                {"model": model, "contents": [{"role": "user", "parts": [{"text": _COUNTED_TEXT}]}]},
+                params={"call_endpoint": "true"},
+            )
         )
-        assert contents_only.status_code == 400, contents_only.text
-        assert _GLM_BACKEND in _error_message(_JSON_OBJECT.validate_json(contents_only.content)), contents_only.text
+        assert contents_only["total_tokens"] == total, contents_only
         assert vertex.drain() == ()
         assert {request.target for request in hub.drain()} >= {_TOKENIZER_TARGET}
 
