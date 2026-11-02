@@ -272,6 +272,12 @@
       "/v1/messages"
     ]
   },
+  "linkrra": {
+    "base_url": "https://pool.linkrra.com/v1",
+    "api_key_env": "LINKRRA_API_KEY",
+    "api_base_env": "LINKRRA_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/messages"]
+  },
   "refuseless": {
     "base_url": "https://api.refuseless.com/v1",
     "api_key_env": "REFUSELESS_API_KEY",
