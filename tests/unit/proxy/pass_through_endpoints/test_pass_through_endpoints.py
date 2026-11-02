@@ -532,15 +532,15 @@ async def test_guardrail_proxy_exception_carries_the_guardrails_that_ran():
         patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside pass_through_request
             "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
         ),
-        pytest.raises(ProxyException) as exc,
     ):
         litellm_patch.setattr(litellm, "callbacks", [guardrail])
-        await pass_through_request(
-            request=mock_request,
-            target="http://test.com/v1/chat/completions",
-            custom_headers={},
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
-        )
+        with pytest.raises(ProxyException) as exc:
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com/v1/chat/completions",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            )
 
     assert exc.value.headers["x-litellm-applied-guardrails"] == "passed-guard"
 
