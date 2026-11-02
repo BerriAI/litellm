@@ -23,7 +23,7 @@ from litellm.cost_calculator import infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, single_log_line
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
@@ -116,8 +116,8 @@ def _warn_untranslated_call_type(
         "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; "
         "skipping %s scanning.",
         guardrail_name,
-        request_route,
-        call_type,
+        single_log_line(request_route),
+        single_log_line(call_type),
         stage,
     )
 

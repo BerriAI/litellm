@@ -3339,6 +3339,27 @@ async def test_a_route_without_a_call_type_passes_input_guardrails_unscanned(
     )
 
 
+@pytest.mark.asyncio
+async def test_the_skip_warning_keeps_a_route_and_call_type_with_line_breaks_on_one_log_line(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+    guardrail: Final = RecordingGuardrail()
+    data: Final = {"model": "gpt-4o", "input": "Remember forbiddenword", "guardrail_to_apply": guardrail}
+    user_api_key_dict: Final = UserAPIKeyAuth(token="hashed-key", request_route="/v1/vector_stores\r\nFORGED route")
+
+    with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type="not_a\ncall_type"
+        )
+
+    messages: Final = [record.getMessage() for record in caplog.records]
+    warnings: Final = [message for message in messages if "has no guardrail translation handler" in message]
+    assert len(warnings) == 1
+    assert "\n" not in warnings[0] and "\r" not in warnings[0]
+    assert "route '/v1/vector_storesFORGED route' but call type 'not_acall_type'" in warnings[0]
+
+
 @pytest.mark.parametrize("hook", ["async_pre_call_hook", "async_moderation_hook"])
 @pytest.mark.parametrize(
     ("call_type", "request_route"),
