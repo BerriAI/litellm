@@ -1,10 +1,12 @@
 import json
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final, Literal
 
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy.common_utils.codex_model_catalog import (
     CODEX_CATALOG_BYTE_LIMIT,
     CodexCatalogRow,
@@ -341,6 +343,31 @@ def test_model_list_body_sizes_a_known_models_window_off_the_deployments_the_key
     assert windows("team-1") == {"gpt-6-astra": stock.max_context_window, "astra-1m": stock.max_context_window}
     assert windows("team-2") == {"gpt-6-astra": 400000, "astra-1m": 400000}
     assert windows("team-3") == {"gpt-6-astra": stock.context_window, "astra-1m": stock.context_window}
+
+
+def test_model_list_body_skips_a_limit_a_saved_model_info_response_copied_from_the_cost_map() -> None:
+    catalog_limit: Final = GetModelCostMap.loaded_model_cost_map()["gpt-6-astra"]["max_input_tokens"]
+    stock: Final = bundled_codex_models()["gpt-6-astra"]
+    assert isinstance(catalog_limit, int) and stock.max_context_window is not None
+    assert stock.context_window is not None and stock.context_window < 600000 < stock.max_context_window
+
+    def window(model_info: Mapping[str, object]) -> int | None:
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-6-astra",
+                    "litellm_params": {"model": "openai/gpt-6-astra"},
+                    "model_info": dict(model_info),
+                }
+            ]
+        )
+        listing: Final = ({"id": "gpt-6-astra", "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"},)
+        (entry,) = json.loads(codex_model_list_body(listing, (("gpt-6-astra", "gpt-6-astra"),), router))["models"]
+        return entry["context_window"]
+
+    assert window({"key": "gpt-6-astra", "max_input_tokens": catalog_limit}) == stock.context_window
+    assert window({"key": "gpt-6-astra", "max_input_tokens": 600000}) == 600000
+    assert window({"max_input_tokens": catalog_limit}) == min(catalog_limit, stock.max_context_window)
 
 
 def test_alias_with_deployment_defaults_drops_codexs_tier_and_upgrade_while_the_native_name_keeps_them():
