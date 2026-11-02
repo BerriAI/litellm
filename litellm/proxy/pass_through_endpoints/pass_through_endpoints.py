@@ -3384,7 +3384,9 @@ async def websocket_passthrough_request(
                         websocket_messages[:] = _without_earlier_session_updates(
                             upstream_frame_kind, websocket_messages, message_data
                         )
-                    case "ends_turn":
+                    case "ends_turn" if upstream_frame_kind is not None:
+                        if _frame_lane(message_data) not in _lanes_in_flight(upstream_frame_kind, websocket_messages):
+                            ledger.start_turn()
                         log_turn(_frame_lane(message_data), _frames_of_lane(_frame_lane(message_data)))
                     case "bills_usage" if not _turn_in_flight(upstream_frame_kind, websocket_messages):
                         log_turn(_frame_lane(message_data), _frames_of_lane(_frame_lane(message_data)))

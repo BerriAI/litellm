@@ -8917,23 +8917,27 @@ def _walking_out_client(
 
 
 @pytest.mark.asyncio
-async def test_websocket_passthrough_bills_the_turn_a_client_walked_out_of_before_the_provider_started_it():
+@pytest.mark.parametrize("turns", [1, 2], ids=["one_turn", "two_turns_asked_at_once"])
+async def test_websocket_passthrough_bills_the_turn_a_client_walked_out_of_before_the_provider_started_it(turns: int):
     """
-    A client can ask for a turn and leave before the provider says it started.
-    The provider still runs and bills that turn, so the gateway keeps reading
-    until it ends and logs its usage.
+    A client can ask for turns and leave before the provider says they started.
+    The provider still runs and bills each one, so the gateway keeps reading
+    until the last one ends and logs each one's usage.
     """
     client_left: Final = asyncio.Event()
     client: Final = _walking_out_client(
-        [json.dumps({"type": "response.create", "model": "gpt-5.4"})], '"response.created"', (0, 0), client_left
+        [json.dumps({"type": "response.create", "model": "gpt-5.4"})] * turns,
+        '"response.created"',
+        (0,) * (turns + 1),
+        client_left,
     )
     upstream_ws: Final = UpstreamFinishingTheTurnAfterTheClientLeft(
-        client_left, None, (_responses_turn_started("gpt-5.4"), _responses_turn_ended("gpt-5.4"))
+        client_left, None, (_responses_turn_started("gpt-5.4"), _responses_turn_ended("gpt-5.4")) * turns
     )
 
     relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), walkout_turn_drain_seconds=5)
 
-    assert _logged_frame_types(relayed) == [["response.created", "response.completed"]]
+    assert _logged_frame_types(relayed) == [["response.created", "response.completed"]] * turns
     upstream_ws.close.assert_awaited()
 
 
@@ -9010,8 +9014,12 @@ async def test_websocket_passthrough_bills_a_realtime_turn_a_client_walked_out_o
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "answer",
-    [_responses_turn("gpt-5.4"), [_responses_error("previous_response_not_found")]],
-    ids=["finished", "refused"],
+    [
+        _responses_turn("gpt-5.4"),
+        [_responses_turn_ended("gpt-5.4")],
+        [_responses_error("previous_response_not_found")],
+    ],
+    ids=["finished", "finished_with_no_start_frame", "refused"],
 )
 async def test_websocket_passthrough_lets_go_of_the_provider_at_once_when_a_client_leaves_owing_no_turn(
     answer: Sequence[str],
