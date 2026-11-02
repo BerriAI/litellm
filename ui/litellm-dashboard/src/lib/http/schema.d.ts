@@ -38949,6 +38949,11 @@ export interface components {
              */
             supports_background_chat: boolean;
             /**
+             * Supports Continuation
+             * @default false
+             */
+            supports_continuation: boolean;
+            /**
              * Supports Fast Mode
              * @default false
              */
