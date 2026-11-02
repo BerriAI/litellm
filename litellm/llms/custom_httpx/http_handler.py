@@ -312,6 +312,10 @@ def _prepare_request_data_and_content(
     return request_data, request_content
 
 
+def _connection_error_resend_allowed() -> bool:
+    return litellm.num_retries is None or litellm.num_retries > 0
+
+
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
 _ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None, bool], ssl.SSLContext]] = {}
 
@@ -969,6 +973,8 @@ class AsyncHTTPHandler:
             response.raise_for_status()
             return response
         except httpx.ConnectError:
+            if not _connection_error_resend_allowed():
+                raise
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
@@ -1027,6 +1033,8 @@ class AsyncHTTPHandler:
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
+            if not _connection_error_resend_allowed():
+                raise
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
@@ -1089,6 +1097,8 @@ class AsyncHTTPHandler:
             response.raise_for_status()
             return response
         except httpx.ConnectError:
+            if not _connection_error_resend_allowed():
+                raise
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
@@ -1146,6 +1156,8 @@ class AsyncHTTPHandler:
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
+            if not _connection_error_resend_allowed():
+                raise
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
