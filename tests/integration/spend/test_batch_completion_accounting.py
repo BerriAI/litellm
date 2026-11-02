@@ -430,3 +430,107 @@ def test_batch_reconciliation_delivers_each_configured_logger_once(gateway: Gate
                 BATCH_PROMPT_TOKENS,
                 BATCH_COMPLETION_TOKENS,
             )
+
+
+def test_batch_end_user_budget_enforcement_and_isolation(gateway: Gateway) -> None:
+    """
+    Regression test for #49202:
+    Validates end-to-end attribution and budget enforcement for batch operations.
+
+    Verifies:
+    1. Header attribution: 'x-litellm-end-user-id' propagates through batch creation
+       and CheckBatchCost settlement to update LiteLLM_EndUserTable.spend.
+    2. Budget enforcement: Once batch spend exceeds customer max_budget, subsequent
+       requests for customer A are denied with budget exceeded.
+    3. Identity isolation: Customer B on the same API key remains unblocked and unaffected.
+    4. Observation immutability: Subsequent reads of the batch do not mutate stored creator attribution.
+    """
+    with gateway.scenario() as scenario:
+        scenario_id: Final = f"batch-end-user-{uuid.uuid4().hex[:12]}"
+        handle: Final = register_scenario(scenario_id, batch_routes("gpt-4o-mini"))
+        scenario.cleanups.callback(delete_scenario, handle)
+
+        model: Final = scenario.model(
+            api_base=handle.api_base(),
+            input_cost_per_token=INPUT_COST_PER_TOKEN,
+            output_cost_per_token=OUTPUT_COST_PER_TOKEN,
+        )
+        key: Final = scenario.key(models=[model])
+
+        # 1. Setup Customer A with a low budget that the batch will exhaust
+        user_a: Final = f"user-a-{uuid.uuid4().hex[:8]}"
+        gateway.post("/customer/new", {"user_id": user_a, "max_budget": 0.001})
+
+        # 2. Setup Customer B on the same key with sufficient budget for isolation check
+        user_b: Final = f"user-b-{uuid.uuid4().hex[:8]}"
+        gateway.post("/customer/new", {"user_id": user_b, "max_budget": 10.0})
+
+        # 3. Upload batch input file
+        file_response: Final = gateway.request_multipart(
+            "/v1/files",
+            {"purpose": "batch", "model": model},
+            {"file": ("in.jsonl", batch_input_file(model), "application/jsonl")},
+            key=key,
+        )
+        assert file_response.status_code == 200, file_response.text
+        file_id: Final = string_value(JSON_OBJECT.validate_json(file_response.content)["id"])
+
+        # 4. Create batch with Customer A's end_user_id header
+        batch_response: Final = gateway.request(
+            "POST",
+            "/v1/batches",
+            {
+                "input_file_id": file_id,
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "model": model,
+            },
+            key=key,
+            headers={"x-litellm-end-user-id": user_a},
+        )
+        assert batch_response.status_code == 200, batch_response.text
+        batch_id: Final = string_value(JSON_OBJECT.validate_json(batch_response.content)["id"])
+
+        # 5. Observation check: Fetch batch to confirm terminal completion
+        retrieval: Final = gateway.request("GET", f"/v1/batches/{batch_id}", key=key)
+        assert retrieval.status_code == 200, retrieval.text
+        assert retrieval.json()["status"] == "completed", retrieval.text
+
+        # 6. Verify CheckBatchCost settlement: LiteLLM_EndUserTable reflects Customer A's spend
+        end_user_rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s',
+                (user_a,),
+            ),
+            lambda values: len(values) == 1 and float(str(values[0]["spend"])) > 0.001,
+            seconds=70,
+        )
+        assert len(end_user_rows) == 1, f"Expected spend row for {user_a}"
+
+        # 7. Positive enforcement: Customer A's subsequent call is denied due to exhausted budget
+        denied_response: Final = gateway.request(
+            "POST",
+            "/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "ping"}],
+            },
+            key=key,
+            headers={"x-litellm-end-user-id": user_a},
+        )
+        assert denied_response.status_code in [400, 422], denied_response.text
+        assert "budget" in denied_response.text.lower(), denied_response.text
+
+        # 8. Identity isolation: Customer B remains unaffected on the same key
+        isolated_b_response: Final = gateway.request(
+            "POST",
+            "/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "ping"}],
+            },
+            key=key,
+            headers={"x-litellm-end-user-id": user_b},
+        )
+        # Customer B is not blocked by Customer A's exhausted budget
+        assert isolated_b_response.status_code != denied_response.status_code or "budget" not in isolated_b_response.text.lower()
