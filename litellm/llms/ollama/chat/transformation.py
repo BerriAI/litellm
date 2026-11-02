@@ -235,6 +235,19 @@ class OllamaChatConfig(BaseConfig):
         litellm_params["function_name"] = function_name
         tools: Final = optional_params.pop("tools", None)
 
+        def transform_tool_call(typed_tool: ChatCompletionAssistantToolCall) -> OllamaToolCall:
+            function: Final = OllamaToolCallFunction(
+                name=typed_tool["function"].get("name") or "",
+                arguments=json.loads(typed_tool["function"]["arguments"])
+                if "arguments" in typed_tool["function"]
+                else {},
+            )
+            tool_id: Final = typed_tool.get("id")
+            ollama_tool_call: Final = (
+                OllamaToolCall(function=function) if tool_id is None else OllamaToolCall(id=tool_id, function=function)
+            )
+            return ollama_tool_call
+
         new_messages: Final = []
         for m in messages:
             if isinstance(
@@ -248,16 +261,7 @@ class OllamaChatConfig(BaseConfig):
                 for tool in tool_calls:
                     typed_tool = ChatCompletionAssistantToolCall(**tool)
                     if typed_tool["type"] == "function":
-                        arguments = {}
-                        if "arguments" in typed_tool["function"]:
-                            arguments = json.loads(typed_tool["function"]["arguments"])
-                        ollama_tool_call = OllamaToolCall(
-                            function=OllamaToolCallFunction(
-                                name=typed_tool["function"].get("name") or "",
-                                arguments=arguments,
-                            )
-                        )
-                        new_tools.append(ollama_tool_call)
+                        new_tools.append(transform_tool_call(typed_tool))
             reasoning_content, parsed_content = extract_reasoning_content(cast(dict, m))
             content_str = convert_content_list_to_str(cast(AllMessageValues, m))
             images = extract_images_from_message(cast(AllMessageValues, m))

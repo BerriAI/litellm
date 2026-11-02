@@ -440,6 +440,67 @@ def test_gemini_context_window_error_mapping(error_message, should_raise_context
             )
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("streaming", [True, False])
+@pytest.mark.parametrize(
+    ("error_message", "expected_type"),
+    [
+        (
+            (
+                "Requested token count exceeds the model's maximum context length of 131072 tokens. "
+                "You requested a total of 140000 tokens: 130000 tokens from the input messages and "
+                "10000 tokens for the completion. Please reduce the number of tokens in the input "
+                "messages or the completion to fit within the limit."
+            ),
+            litellm.ContextWindowExceededError,
+        ),
+        (
+            (
+                "requested token count exceeds the model's maximum context length of 8192 tokens. "
+                "you requested a total of 9000 tokens"
+            ),
+            litellm.ContextWindowExceededError,
+        ),
+        ("max_tokens must be a positive integer", litellm.BadRequestError),
+    ],
+    ids=["sglang-context-overflow", "lowercase-context-overflow", "unrelated-bad-request"],
+)
+@pytest.mark.asyncio
+async def test_sglang_context_window_error_mapping(
+    sync_mode: bool,
+    streaming: bool,
+    error_message: str,
+    expected_type: type[litellm.BadRequestError],
+) -> None:
+    def reject_request(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            request=request,
+            json={"object": "error", "message": error_message, "type": "BadRequestError", "param": None, "code": 400},
+        )
+
+    transport: Final = httpx.MockTransport(reject_request)
+    if sync_mode:
+        with (
+            httpx.Client(transport=transport) as http_client,
+            OpenAI(api_key="sk-test", max_retries=0, http_client=http_client) as client,
+            pytest.raises(litellm.BadRequestError) as caught,
+        ):
+            _call_openai_api_sync("openai/sglang-model", "chat_completion", streaming, client)
+    else:
+        async with (
+            httpx.AsyncClient(transport=transport) as async_http_client,
+            AsyncOpenAI(api_key="sk-test", max_retries=0, http_client=async_http_client) as async_client,
+        ):
+            with pytest.raises(litellm.BadRequestError) as caught:
+                await _call_openai_api_async("openai/sglang-model", "chat_completion", streaming, async_client)
+
+    assert type(caught.value) is expected_type
+    assert caught.value.status_code == 400
+    assert error_message in str(caught.value)
+    assert caught.value.llm_provider == "openai"
+
+
 def test_lemonade_context_window_error_mapping():
     """Lemonade's llama.cpp backend should map context overflows to LiteLLM's standard error."""
 
