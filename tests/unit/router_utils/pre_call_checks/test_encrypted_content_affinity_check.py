@@ -3138,6 +3138,7 @@ def test_hop_strip_keeps_reasoning_a_target_can_decrypt_beside_a_target_with_unr
 
     assert request_input[0] == original_reasoning
 
+
 def test_boundary_key_puts_pydantic_and_plain_params_on_one_default_endpoint_boundary():
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
@@ -3203,8 +3204,44 @@ async def test_affinity_pins_to_the_same_key_peer_on_the_default_endpoint_when_t
     assert reasoning_input[0] == original_reasoning
 
 
+class _HandAdvancedClock:
+    def __init__(self) -> None:
+        self.now: float = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _count_secret_reads(monkeypatch: pytest.MonkeyPatch) -> _SecretReadCounter:
+    secret_reads: Final = _SecretReadCounter()
+    monkeypatch.setattr(litellm, "secret_manager_client", secret_reads)
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+    return secret_reads
+
+
+async def _pin_a_turn_minted_by_the_origin(
+    affinity: object, healthy_deployments: list[dict[str, object]]
+) -> tuple[list[dict[str, object]], Mapping[str, object]]:
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    assert isinstance(affinity, EncryptedContentAffinityCheck)
+    reasoning_input: Final = _reasoning_input_minted_by("origin")
+    result: Final[list[dict[str, object]]] = await affinity.async_filter_deployments(
+        model="gpt-5.5",
+        healthy_deployments=list(healthy_deployments),
+        messages=None,
+        request_kwargs={"litellm_metadata": {}, "input": reasoning_input},
+    )
+    return result, reasoning_input[0]
+
+
 @pytest.mark.asyncio
-async def test_repeated_pins_to_a_default_endpoint_peer_ask_the_secret_manager_once(monkeypatch: pytest.MonkeyPatch):
+async def test_repeated_pins_to_a_default_endpoint_peer_ask_the_secret_manager_once_a_minute(
+    monkeypatch: pytest.MonkeyPatch,
+):
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
     )
@@ -3219,28 +3256,62 @@ async def test_repeated_pins_to_a_default_endpoint_peer_ask_the_secret_manager_o
     ctx: Final = RoutingContext(router)
     peer: Final = _deployment_of(ctx, "peer")
     healthy_deployments: Final = [peer, _deployment_of(ctx, "other-org")]
-    secret_reads: Final = _SecretReadCounter()
-    monkeypatch.setattr(litellm, "secret_manager_client", secret_reads)
-    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
-    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+    secret_reads: Final = _count_secret_reads(monkeypatch)
     EncryptedContentAffinityCheck._encryption_boundary_in_refresh_window.cache_clear()
-    affinity: Final = EncryptedContentAffinityCheck(ctx=ctx)
+    clock: Final = _HandAdvancedClock()
+    affinity: Final = EncryptedContentAffinityCheck(ctx=ctx, clock=clock)
 
-    async def pin_a_turn_minted_by_the_origin() -> tuple[list[dict[str, object]], Mapping[str, object]]:
-        reasoning_input: Final = _reasoning_input_minted_by("origin")
-        result: Final[list[dict[str, object]]] = await affinity.async_filter_deployments(
-            model="gpt-5.5",
-            healthy_deployments=list(healthy_deployments),
-            messages=None,
-            request_kwargs={"litellm_metadata": {}, "input": reasoning_input},
-        )
-        return result, reasoning_input[0]
-
-    first_pin, first_reasoning = await pin_a_turn_minted_by_the_origin()
+    first_pin, first_reasoning = await _pin_a_turn_minted_by_the_origin(affinity, healthy_deployments)
     reads_for_the_first_pin: Final = secret_reads.reads
-    second_pin, second_reasoning = await pin_a_turn_minted_by_the_origin()
+    clock.now = 59.0
+    second_pin, second_reasoning = await _pin_a_turn_minted_by_the_origin(affinity, healthy_deployments)
+    reads_within_the_minute: Final = secret_reads.reads
+    clock.now = 60.0
+    third_pin, third_reasoning = await _pin_a_turn_minted_by_the_origin(affinity, healthy_deployments)
 
-    assert first_pin == second_pin == [peer]
-    assert first_reasoning == second_reasoning == _reasoning_input_minted_by("origin")[0]
+    assert first_pin == second_pin == third_pin == [peer]
+    assert first_reasoning == second_reasoning == third_reasoning == _reasoning_input_minted_by("origin")[0]
     assert reads_for_the_first_pin > 0
-    assert secret_reads.reads == reads_for_the_first_pin
+    assert reads_within_the_minute == reads_for_the_first_pin
+    assert secret_reads.reads > reads_within_the_minute
+
+
+@pytest.mark.asyncio
+async def test_a_changed_named_credential_moves_the_pin_within_the_secret_manager_refresh_minute(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    def origin_credential(api_key: str) -> list[CredentialItem]:
+        return [
+            CredentialItem(credential_name="origin-account", credential_values={"api_key": api_key}, credential_info={})
+        ]
+
+    monkeypatch.setattr(litellm, "credential_list", origin_credential("shared-key"))
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment(
+                "origin", {"model": "openai/gpt-5.5", "litellm_credential_name": "origin-account"}
+            ),
+            _default_endpoint_deployment("peer", OPENAI_SHARED_KEY),
+            _default_endpoint_deployment("other-org", {**OPENAI_SHARED_KEY, "api_key": "other-key"}),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    peer: Final = _deployment_of(ctx, "peer")
+    other_org: Final = _deployment_of(ctx, "other-org")
+    _count_secret_reads(monkeypatch)
+    EncryptedContentAffinityCheck._encryption_boundary_in_refresh_window.cache_clear()
+    affinity: Final = EncryptedContentAffinityCheck(ctx=ctx, clock=_HandAdvancedClock())
+
+    pin_before_the_change, _ = await _pin_a_turn_minted_by_the_origin(affinity, [peer, other_org])
+    monkeypatch.setattr(litellm, "credential_list", origin_credential("other-key"))
+    pin_after_the_change, reasoning_after_the_change = await _pin_a_turn_minted_by_the_origin(
+        affinity, [peer, other_org]
+    )
+
+    assert pin_before_the_change == [peer]
+    assert pin_after_the_change == [other_org]
+    assert reasoning_after_the_change == _reasoning_input_minted_by("origin")[0]

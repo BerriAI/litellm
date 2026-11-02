@@ -127,9 +127,11 @@ class EncryptedContentAffinityCheck(CustomLogger):
         ctx: Optional["RoutingContext"] = None,
         enable_global_affinity: bool = True,
         model_group_affinity_config: dict[str, list[str]] | None = None,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         super().__init__()
         self.ctx = ctx
+        self._clock = clock
         self.enable_global_affinity = enable_global_affinity
         self.model_group_affinity_config: dict[str, list[str]] = model_group_affinity_config or {}
 
@@ -253,6 +255,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
     @staticmethod
     def _encryption_boundary_key(
         litellm_params: object,
+        clock: Callable[[], float] = monotonic,
     ) -> _EncryptionBoundary | None:
         """
         The upstream encryption boundary a deployment's encrypted reasoning belongs to. The values
@@ -269,19 +272,21 @@ class EncryptedContentAffinityCheck(CustomLogger):
         boundary matching and fall back to the full pool — i.e. trigger the
         exact ``invalid_encrypted_content`` failure this check exists to prevent.
 
-        When a secret manager would be asked for the provider defaults, a deployment's boundary is
-        reused for up to a minute, so a run of pin misses does not ask it again for every candidate.
+        When a secret manager would be asked for the provider defaults, the boundary of one set of
+        deployment and named credential values is reused for up to a minute, so a run of pin misses
+        does not ask it again for every candidate, while a changed credential resolves at once.
         """
         params: Final = EncryptedContentAffinityCheck._params_mapping(litellm_params)
         if params is None:
             return None
+        effective_params: Final = with_named_credential(params)
         if not any(secret_manager_would_be_consulted(name) for name in _DEFAULT_ROUTE_SECRETS):
-            return EncryptedContentAffinityCheck._resolve_encryption_boundary(params)
+            return EncryptedContentAffinityCheck._resolve_encryption_boundary(effective_params)
         return EncryptedContentAffinityCheck._encryption_boundary_in_refresh_window(
             _ParamsInRefreshWindow(
-                hashlib.sha256(repr(params).encode()).hexdigest(),
-                int(monotonic() // _SECRET_MANAGER_REFRESH_SECONDS),
-                params,
+                hashlib.sha256(repr(effective_params).encode()).hexdigest(),
+                int(clock() // _SECRET_MANAGER_REFRESH_SECONDS),
+                effective_params,
             )
         )
 
@@ -291,8 +296,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         return EncryptedContentAffinityCheck._resolve_encryption_boundary(key.params)
 
     @staticmethod
-    def _resolve_encryption_boundary(params: Mapping[str, object]) -> _EncryptionBoundary | None:
-        effective_params: Final = with_named_credential(params)
+    def _resolve_encryption_boundary(effective_params: Mapping[str, object]) -> _EncryptionBoundary | None:
         explicit_api_key: Final = effective_params.get("api_key")
         explicit_api_base: Final = effective_params.get("api_base")
         account_scope: Final = EncryptedContentAffinityCheck._account_scope(effective_params)
@@ -417,13 +421,15 @@ class EncryptedContentAffinityCheck(CustomLogger):
         originating: Final = self.ctx.registry().deployment(model_id)
         if originating is None:
             return [], None
-        boundary: Final = self._encryption_boundary_key(originating.litellm_params.model_dump(exclude_none=True))
+        boundary: Final = self._encryption_boundary_key(
+            originating.litellm_params.model_dump(exclude_none=True), self._clock
+        )
         if boundary is None:
             return [], originating
         matches: Final = [
             d
             for d in healthy_deployments
-            if (candidate := self._encryption_boundary_key(d.get("litellm_params", {}))) is not None
+            if (candidate := self._encryption_boundary_key(d.get("litellm_params", {}), self._clock)) is not None
             and boundary.is_shared_with(candidate)
         ]
         return matches, originating
@@ -437,6 +443,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         target_deployments: Sequence[Mapping[str, object]],
         *,
         unmarked_origin: str | None,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         """
         Drop the encrypted reasoning that none of ``target_deployments`` minted or shares an
@@ -456,7 +463,11 @@ class EncryptedContentAffinityCheck(CustomLogger):
             return tuple(
                 boundary
                 for target in target_deployments
-                if (boundary := EncryptedContentAffinityCheck._encryption_boundary_key(target.get("litellm_params")))
+                if (
+                    boundary := EncryptedContentAffinityCheck._encryption_boundary_key(
+                        target.get("litellm_params"), clock
+                    )
+                )
                 is not None
             )
 
@@ -472,7 +483,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             origin: Final = ctx.registry().deployment(origin_model_id)
             origin_boundary: Final = (
                 EncryptedContentAffinityCheck._encryption_boundary_key(
-                    origin.litellm_params.model_dump(exclude_none=True)
+                    origin.litellm_params.model_dump(exclude_none=True), clock
                 )
                 if origin is not None
                 else None
@@ -586,7 +597,12 @@ class EncryptedContentAffinityCheck(CustomLogger):
             )
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             self.strip_reasoning_the_targets_cannot_decrypt(
-                self.ctx, request_input, anthropic_messages, (deployment,), unmarked_origin=model_id
+                self.ctx,
+                request_input,
+                anthropic_messages,
+                (deployment,),
+                unmarked_origin=model_id,
+                clock=self._clock,
             )
             return [deployment]
 
@@ -604,7 +620,12 @@ class EncryptedContentAffinityCheck(CustomLogger):
             )
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             self.strip_reasoning_the_targets_cannot_decrypt(
-                self.ctx, request_input, anthropic_messages, boundary_matches, unmarked_origin=model_id
+                self.ctx,
+                request_input,
+                anthropic_messages,
+                boundary_matches,
+                unmarked_origin=model_id,
+                clock=self._clock,
             )
             return boundary_matches
 
