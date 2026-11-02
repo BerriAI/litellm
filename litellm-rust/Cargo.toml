@@ -13,6 +13,7 @@ litellm-config = { path = "crates/config" }
 litellm-error = { path = "crates/error" }
 litellm-router = { path = "crates/router" }
 litellm-router-types = { path = "crates/router-types" }
+litellm-router-core = { path = "crates/router-core" }
 litellm-tracing = { path = "crates/tracing" }
 litellm-spend-clickhouse = { path = "crates/spend-clickhouse" }
 litellm-storage-clickhouse = { path = "crates/storage-clickhouse" }
@@ -78,6 +79,8 @@ litellm-cost = { path = "crates/cost" }
 litellm-model-catalog = { path = "crates/model-catalog" }
 litellm-model-catalog-refresh = { path = "crates/model-catalog-refresh" }
 
+arc-swap = "1.9.2"
+async-trait = "0.1.91"
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 tracing = "0.1"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "multipart"] }

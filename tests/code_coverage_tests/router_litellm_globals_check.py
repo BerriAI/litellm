@@ -21,6 +21,7 @@ CHECKED = (
     "litellm/router_core.py",
     "litellm/router_deprecated.py",
     "litellm/router_python_core.py",
+    "litellm/router_rust_core.py",
 )
 
 
