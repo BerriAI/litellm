@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from litellm.messages.dispatch import MessagesResult
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
     from litellm.router import Router
+    from litellm.router_python_host import PythonHost
     from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
     from litellm.router_strategy.auto_router.auto_router import AutoRouter
     from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -1473,6 +1474,16 @@ class RoutingContext:
 
     def belongs_to(self, router: "Router") -> bool:
         return self._router is router or router.__dict__.get("_core") is self._router
+
+    def host(self) -> "PythonHost":
+        """The router core's host: the process settings (``dynamic()``) and litellm functions
+        (``invoke``) a plugin reads go through it, never ``litellm.*`` directly."""
+        from litellm.router_python_host import PythonHost, python_host
+
+        core: Final[object] = self._router.__dict__.get("_core", self._router)  # pyright: ignore[reportAny]  # __dict__ is untyped
+        host: Final[object] = getattr(core, "_host", None)
+        # Every core keeps its host as _host; a stand-in router without one reads the process host.
+        return host if isinstance(host, PythonHost) else python_host
 
     @property
     def explicit_allowed_fails(self) -> int | None:

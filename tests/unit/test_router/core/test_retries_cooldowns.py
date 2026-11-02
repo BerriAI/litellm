@@ -531,6 +531,9 @@ async def test_a_deployment_cools_down_once_its_failures_pass_allowed_fails(
 
 @pytest.mark.asyncio
 async def test_process_allowed_fails_is_the_default(make_core: MakeCore, host: ScriptedHost) -> None:
+    """The host's process ``allowed_fails`` is the router's default, and a router left on the default
+    does not count it as set on the router: one failure cools nothing down, as in a process whose
+    ``litellm.allowed_fails`` is 0."""
     host.set_dynamic(allowed_fails=0)
     core: Final = make_core(model_list=two_deployments(), num_retries=0)
     host.answer("*", fresh(server_error))
@@ -538,6 +541,20 @@ async def test_process_allowed_fails_is_the_default(make_core: MakeCore, host: S
     await attempt(core)
 
     assert core.settings().allowed_fails == 0
+    assert list(cooled_down(core, ["a", "b"])) == []
+
+
+@pytest.mark.asyncio
+async def test_an_allowed_fails_set_on_the_router_cools_down_after_that_many_failures(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    """An ``allowed_fails`` passed to the router counts as set on it, even when it equals the host's default."""
+    host.set_dynamic(allowed_fails=0)
+    core: Final = make_core(model_list=two_deployments(), num_retries=0, allowed_fails=0)
+    host.answer("*", fresh(server_error))
+
+    await attempt(core)
+
     assert list(cooled_down(core, ["a", "b"])) == host.deployments_called("acompletion")
 
 

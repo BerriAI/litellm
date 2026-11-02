@@ -453,7 +453,9 @@ def _has_fallback_group(ctx: "RoutingContext", requested_model_group: str | None
     chains: Final = tuple(
         chain for chain in map(_fallback_chain_names, _fallback_entries(configured)) if chain is not None
     )
-    fallback_group, _ = get_fallback_model_group(fallbacks=chains, model_group=requested_model_group)
+    fallback_group, _ = get_fallback_model_group(
+        fallbacks=chains, model_group=requested_model_group, provider_list=ctx.host().dynamic().provider_list
+    )
     return bool(fallback_group)
 
 
@@ -544,7 +546,7 @@ def _should_cooldown_deployment(
             # Only apply error rate cooldown when we have enough requests to make the percentage meaningful
             return True
 
-        elif litellm.should_retry(status_code=exception_status_int) is False:
+        elif ctx.host().invoke("should_retry")(status_code=exception_status_int) is False:  # pyright: ignore[reportUnknownMemberType]  # the host op table
             return True
 
         return False
@@ -819,7 +821,7 @@ def _is_allowed_fails_set_on_router(
         return False
     if ctx.explicit_allowed_fails is not None:
         return True
-    if ctx.settings().allowed_fails != litellm.allowed_fails:
+    if ctx.settings().allowed_fails != ctx.host().dynamic().allowed_fails:
         return True
     return False
 

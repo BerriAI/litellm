@@ -23,6 +23,7 @@ from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
+    from litellm.router_python_host import PythonHost
 
 
 _REFERENCE_REQUEST: Final = Usage(
@@ -46,7 +47,7 @@ class Baseline(NamedTuple):
     deployment_id: str | None = None
 
 
-def canonical_model(model: str, custom_llm_provider: str | None = None) -> str | None:
+def canonical_model(model: str, custom_llm_provider: str | None = None, host: "PythonHost | None" = None) -> str | None:
     """``provider/model``, or ``None`` when the pair names no known provider.
 
     A deployment may name its vendor in the model prefix or in a separate
@@ -56,15 +57,19 @@ def canonical_model(model: str, custom_llm_provider: str | None = None) -> str |
     A github_copilot or chatgpt candidate is qualified by string alone: resolving either
     provider runs its OAuth device flow, and for a declared pair the resolver's answer is
     the declaration itself, so asking it buys nothing but the block.
+
+    The provider is resolved through ``host`` (the router core's host; the process host when none is given).
     """
-    import litellm
     from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+    from litellm.router_python_host import python_host
 
     declared: Final = declared_authenticating_provider(model, custom_llm_provider)
     if declared is not None:
         return f"{declared}/{model.removeprefix(f'{declared}/')}"
     try:
-        resolved, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        resolved, provider, _, _ = (python_host if host is None else host).invoke("get_llm_provider")(  # pyright: ignore[reportUnknownMemberType]  # the host op table
+            model=model, custom_llm_provider=custom_llm_provider
+        )
     except Exception as e:  # noqa: BLE001  # an unroutable candidate cannot be the baseline
         verbose_router_logger.debug("savings baseline: cannot resolve candidate %s (%s)", model, e)
         return None
@@ -83,7 +88,7 @@ def _models_in(ctx: "RoutingContext", group_name: str) -> tuple[Baseline, ...]:
     """
     deployments: Final = ctx.registry().deployments(group_name, source="named")
     if not deployments:
-        return (Baseline(qualified),) if (qualified := canonical_model(group_name)) else ()
+        return (Baseline(qualified),) if (qualified := canonical_model(group_name, host=ctx.host())) else ()
 
     def candidate(deployment: Mapping[str, object]) -> Baseline | None:
         params: Final = deployment.get("litellm_params")
@@ -92,7 +97,7 @@ def _models_in(ctx: "RoutingContext", group_name: str) -> tuple[Baseline, ...]:
         info: Final = deployment.get("model_info")
         base: Final = info.get("base_model") if isinstance(info, dict) else None
         model: Final = base or params.get("base_model") or params.get("model")
-        qualified: Final = canonical_model(model, params.get("custom_llm_provider")) if model else None
+        qualified: Final = canonical_model(model, params.get("custom_llm_provider"), ctx.host()) if model else None
         if qualified is None:
             return None
         deployment_id: Final = info.get("id") if isinstance(info, dict) else None

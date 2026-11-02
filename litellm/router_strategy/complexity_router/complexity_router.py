@@ -2410,7 +2410,12 @@ class ComplexityRouter(CustomLogger):
             )
 
         budgeted: Final = await offload_token_count(fit_jev_request)(
-            build_request, prompt, system_prompt, jev_input_targets(self.ctx, config), _truncate
+            build_request,
+            prompt,
+            system_prompt,
+            jev_input_targets(self.ctx, config),
+            _truncate,
+            self.ctx.host().dynamic().disable_token_counter,
         )
         request: Final = budgeted.request
         if request is None:
@@ -2457,7 +2462,10 @@ class ComplexityRouter(CustomLogger):
                 cost=response.classifier_cost
                 if config.deployment_name
                 else jev_classifier_cost(
-                    response, config.model, "typesafe" if config.provider == "jev" else config.provider
+                    response,
+                    config.model,
+                    "typesafe" if config.provider == "jev" else config.provider,
+                    cost_map=self.ctx.host().dynamic().model_cost,
                 ),
                 provider=accounting_provider,
             )
@@ -3597,15 +3605,15 @@ class ComplexityRouter(CustomLogger):
     ) -> int | None:
         """Real-tokenizer count of the resolved messages plus the out-of-band carriers, off the
         event loop; None when counting fails, and the gate then leaves the placement alone."""
-        import litellm
         from litellm.litellm_core_utils.token_counter import offload_token_count
 
+        token_counter: Final = self.ctx.host().invoke("token_counter")  # pyright: ignore[reportUnknownMemberType]  # the host op table
         out_of_band: Final = self._out_of_band_request_text(request_kwargs)
         try:
-            counted: Final = await offload_token_count(litellm.token_counter)(
+            counted: Final = await offload_token_count(token_counter)(
                 messages=cast(list, resolved_messages)  # cast-ok: token_counter only iterates the sequence
             )
-            return counted + (await offload_token_count(litellm.token_counter)(text=out_of_band) if out_of_band else 0)
+            return counted + (await offload_token_count(token_counter)(text=out_of_band) if out_of_band else 0)
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.debug("ComplexityRouter: context-window token count failed. Got - %s", e)
             return None

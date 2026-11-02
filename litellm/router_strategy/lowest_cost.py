@@ -2,10 +2,9 @@
 #   picks based on response time (for streaming, this is time to first token)
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
-import litellm
-from litellm import ModelResponse, token_counter, verbose_logger
+from litellm import ModelResponse, Usage, token_counter, verbose_logger
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
@@ -13,20 +12,19 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.litellm_core_utils.deployment_pricing import deployment_pricing_models, str_keyed
 
+if TYPE_CHECKING:
+    from litellm.router_python_host import PythonHost
 
-def _deployment_cost_map_rates(deployment: object) -> tuple[float | None, float | None]:
-    """Input and output per-token prices from the first cost-map row among the deployment's
+
+def _deployment_cost_map_rates(deployment: object, cost_map: Mapping[str, object]) -> tuple[float | None, float | None]:
+    """Input and output per-token prices from the first ``cost_map`` row among the deployment's
     pricing models that carries one; (None, None) when no row does, so the caller falls back to
     its unmapped default."""
-    rows: Final = (str_keyed(_cost_map().get(model)) for model in deployment_pricing_models(deployment))
+    rows: Final = (str_keyed(cost_map.get(model)) for model in deployment_pricing_models(deployment))
     row: Final = next((row for row in rows if _declares_token_price(row)), None)
     if row is None:
         return None, None
     return _as_rate(row.get("input_cost_per_token")), _as_rate(row.get("output_cost_per_token"))
-
-
-def _cost_map() -> Mapping[str, object]:
-    return litellm.model_cost
 
 
 def _declares_token_price(row: Mapping[str, object]) -> bool:
@@ -42,8 +40,12 @@ class LowestCostLoggingHandler(CustomLogger):
     logged_success: int = 0
     logged_failure: int = 0
 
-    def __init__(self, router_cache: DualCache, routing_args: dict = {}):
+    def __init__(self, router_cache: DualCache, routing_args: dict = {}, host: "PythonHost | None" = None):
+        from litellm.router_python_host import python_host
+
         self.router_cache = router_cache
+        # The router core's host: the cost map is read through it.
+        self._host: Final = python_host if host is None else host
 
     @with_service_target("router_usage")
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -86,7 +88,7 @@ class LowestCostLoggingHandler(CustomLogger):
 
                 if isinstance(response_obj, ModelResponse):
                     _usage: Final = getattr(response_obj, "usage", None)
-                    if _usage is not None and isinstance(_usage, litellm.Usage):
+                    if _usage is not None and isinstance(_usage, Usage):
                         total_tokens = _usage.total_tokens
 
                 # ------------
@@ -163,7 +165,7 @@ class LowestCostLoggingHandler(CustomLogger):
 
                 if isinstance(response_obj, ModelResponse):
                     _usage: Final = getattr(response_obj, "usage", None)
-                    if _usage is not None and isinstance(_usage, litellm.Usage):
+                    if _usage is not None and isinstance(_usage, Usage):
                         total_tokens = _usage.total_tokens
 
                 # ------------
@@ -286,7 +288,9 @@ class LowestCostLoggingHandler(CustomLogger):
                 or float("inf")
             )
             deployment_view: object = _deployment
-            map_input_cost, map_output_cost = _deployment_cost_map_rates(deployment_view)
+            map_input_cost, map_output_cost = _deployment_cost_map_rates(
+                deployment_view, self._host.dynamic().model_cost
+            )
 
             # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
             item_input_cost = None

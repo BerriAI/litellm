@@ -425,10 +425,10 @@ class FallbackEvents(CustomLogger):
 
 @pytest.mark.asyncio
 async def test_fallback_events_reach_the_process_custom_loggers_innermost_hop_first(
-    make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
+    make_core: MakeCore, host: ScriptedHost
 ) -> None:
     events = FallbackEvents()
-    monkeypatch.setattr(litellm, "callbacks", [events])
+    host.callbacks.add_litellm_callback(events)
     core = build(make_core, fallbacks=[{"a": ["b", "c"]}])
     host.answer("openai/a", rate_limit())
     host.answer("openai/b", server_error())
@@ -443,10 +443,10 @@ async def test_fallback_events_reach_the_process_custom_loggers_innermost_hop_fi
 
 @pytest.mark.asyncio
 async def test_a_fallback_that_fails_everywhere_logs_failure_events(
-    make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
+    make_core: MakeCore, host: ScriptedHost
 ) -> None:
     events = FallbackEvents()
-    monkeypatch.setattr(litellm, "callbacks", [events])
+    host.callbacks.add_litellm_callback(events)
     core = build(make_core, fallbacks=[{"a": ["b"]}])
     host.answer("*", rate_limit())
 

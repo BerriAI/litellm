@@ -58,7 +58,9 @@ def normalize_strategy(strategy: object) -> str | None:
     return strategy if isinstance(strategy, str) else None
 
 
-def build_selector(strategy: str | None, args: Mapping[str, object], cache: "DualCache") -> Selector | None:
+def build_selector(
+    strategy: str | None, args: Mapping[str, object], cache: "DualCache", host: "PythonHost"
+) -> Selector | None:
     """``_build_strategy_selector`` without registering: ``None`` for simple-shuffle and every
     strategy without a selector."""
     routing_args: Final = dict(args)
@@ -72,7 +74,7 @@ def build_selector(strategy: str | None, args: Mapping[str, object], cache: "Dua
         case "latency-based-routing":
             return LowestLatencyLoggingHandler(router_cache=cache, routing_args=routing_args)
         case "cost-based-routing":
-            return LowestCostLoggingHandler(router_cache=cache, routing_args={})
+            return LowestCostLoggingHandler(router_cache=cache, routing_args={}, host=host)
         case _:
             return None
 
@@ -122,7 +124,7 @@ class StrategySelectors:
         self._unregister([self._default, *self._overrides.values()])
         self._overrides = {}
         self._strategy = normalize_strategy(strategy)
-        self._default = build_selector(self._strategy, args, self._cache)
+        self._default = build_selector(self._strategy, args, self._cache, self._host)
         if self._default is not None:
             self._register(self._default)
 
@@ -136,7 +138,7 @@ class StrategySelectors:
         if self._default is None:
             return
         try:
-            rebuilt: Final = build_selector(self._strategy, args, self._cache)
+            rebuilt: Final = build_selector(self._strategy, args, self._cache, self._host)
         except (TypeError, ValidationError):
             verbose_router_logger.exception(
                 "Invalid routing_strategy_args %s for '%s'; keeping the previous ones", dict(args), self._strategy
@@ -153,7 +155,8 @@ class StrategySelectors:
         built: Final = {
             name: selector
             for name, strategy, args in groups
-            if (selector := build_selector(None if strategy == "priority" else strategy, args, self._cache)) is not None
+            if (selector := build_selector(None if strategy == "priority" else strategy, args, self._cache, self._host))
+            is not None
         }
         for selector in built.values():
             self._register(selector)
@@ -211,7 +214,7 @@ class StrategySelectors:
             return self._default
         with self._lock:
             if strategy not in self._overrides:
-                self._overrides[strategy] = build_selector(strategy, {}, self._cache)
+                self._overrides[strategy] = build_selector(strategy, {}, self._cache, self._host)
             selector: Final = self._overrides[strategy]
         if selector is not None and request is not None and strategy not in self._registered_strategies():
             from litellm.litellm_core_utils.litellm_logging import Logging

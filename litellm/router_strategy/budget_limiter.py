@@ -26,11 +26,10 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import groupby
 from types import MappingProxyType
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import TypeAdapter
 
-import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
@@ -49,6 +48,9 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, RouterErrors
 from litellm.types.utils import BudgetConfig, GenericBudgetConfigType, StandardLoggingPayload
 from litellm.types.utils import BudgetConfig as GenericBudgetInfo
+
+if TYPE_CHECKING:
+    from litellm.router_python_host import PythonHost
 
 DEFAULT_REDIS_SYNC_INTERVAL: Final = 1
 _CALLBACK_FIELDS: Final = TypeAdapter(dict[str, object])
@@ -121,7 +123,12 @@ class RouterBudgetLimiting(CustomLogger):
         provider_budget_config: dict | None,
         model_list: list[DeploymentTypedDict | dict[str, Any]] | None = None,
         clock: Callable[[], float] = time.time,
+        host: "PythonHost | None" = None,
     ):
+        from litellm.router_python_host import python_host
+
+        # The router core's host: the process settings and litellm functions are read through it.
+        self._host: Final = python_host if host is None else host
         self.dual_cache = dual_cache
         self._clock = clock
         self.redis_increment_operation_queue: list[RedisPipelineIncrementOperation] = []
@@ -141,8 +148,8 @@ class RouterBudgetLimiting(CustomLogger):
         self._start_background_work()
 
         # Add self to litellm callbacks if it's a list
-        if isinstance(litellm.callbacks, list):
-            litellm.logging_callback_manager.add_litellm_callback(self)
+        if isinstance(self._host.dynamic().callbacks, list):
+            self._host.callbacks.add_litellm_callback(self)
 
     def _start_background_work(self) -> None:
         """Start the periodic Redis sync and the provider budget cache seeding once a loop runs.
@@ -810,7 +817,7 @@ class RouterBudgetLimiting(CustomLogger):
                 model = ""
                 provider_resolution_params = _LiteLLMParamsDictView({})
 
-            _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            _, custom_llm_provider, _, _ = self._host.invoke("get_llm_provider")(  # pyright: ignore[reportUnknownMemberType]  # the host op table
                 model=str(model),
                 litellm_params=provider_resolution_params,
             )
@@ -826,7 +833,7 @@ class RouterBudgetLimiting(CustomLogger):
         This is helpful for debugging and monitoring provider budget limits.
         """
 
-        prometheus_logger: Final = get_prometheus_logger_from_callbacks()
+        prometheus_logger: Final = get_prometheus_logger_from_callbacks(self._host)
         if prometheus_logger:
             prometheus_logger.track_provider_remaining_budget(
                 provider=provider,
@@ -906,6 +913,7 @@ class RouterBudgetLimiting(CustomLogger):
     def should_init_router_budget_limiter(
         provider_budget_config: dict | None,
         model_list: list[DeploymentTypedDict] | list[dict[str, Any]] | None = None,
+        host: "PythonHost | None" = None,
     ):
         """
         Returns `True` if the router budget routing settings are set and RouterBudgetLimiting should be initialized
@@ -918,7 +926,9 @@ class RouterBudgetLimiting(CustomLogger):
         if provider_budget_config is not None:
             return True
 
-        if litellm.tag_budget_config is not None:
+        from litellm.router_python_host import python_host
+
+        if (python_host if host is None else host).dynamic().tag_budget_config is not None:
             return True
 
         if model_list is None:
@@ -995,7 +1005,8 @@ class RouterBudgetLimiting(CustomLogger):
             self.deployment_budget_config = None
 
     def _init_tag_budgets(self):
-        if litellm.tag_budget_config is None:
+        tag_budget_config: Final = self._host.dynamic().tag_budget_config
+        if tag_budget_config is None:
             return
         from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
 
@@ -1005,7 +1016,7 @@ class RouterBudgetLimiting(CustomLogger):
         if self.tag_budget_config is None:
             self.tag_budget_config = {}
 
-        for _tag, _tag_budget_config in litellm.tag_budget_config.items():
+        for _tag, _tag_budget_config in tag_budget_config.items():
             if isinstance(_tag_budget_config, dict):
                 _tag_budget_config = BudgetConfig(**_tag_budget_config)
             _generic_budget_config = GenericBudgetInfo(

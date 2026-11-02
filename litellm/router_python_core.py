@@ -2185,7 +2185,7 @@ class PythonCore(DeprecatedRouterMembers):
         self._core_provider_budget_config = provider_budget_config
         self.router_budget_logger: RouterBudgetLimiting | None = None
         if RouterBudgetLimiting.should_init_router_budget_limiter(
-            model_list=model_list, provider_budget_config=self._core_provider_budget_config
+            model_list=model_list, provider_budget_config=self._core_provider_budget_config, host=self._host
         ):
             if optional_pre_call_checks is not None:
                 optional_pre_call_checks.append("router_budget_limiting")
@@ -2473,6 +2473,7 @@ class PythonCore(DeprecatedRouterMembers):
                 selector = LowestCostLoggingHandler(
                     router_cache=self._core_cache,
                     routing_args={},
+                    host=self._host,
                 )
             case _:
                 pass
@@ -3204,10 +3205,11 @@ class PythonCore(DeprecatedRouterMembers):
                     dual_cache=self._core_cache,
                     provider_budget_config=self._core_provider_budget_config,
                     model_list=self._core_model_list,
+                    host=self._host,
                 )
                 self.router_budget_logger = _callback
             elif pre_call_check == "enforce_model_rate_limits":
-                _callback = ModelRateLimitingCheck(dual_cache=self._core_cache)
+                _callback = ModelRateLimitingCheck(dual_cache=self._core_cache, host=self._host)
 
             if _callback is None:
                 continue
@@ -3898,6 +3900,7 @@ class PythonCore(DeprecatedRouterMembers):
                             complete_response_object,
                             checks_post_call_rules=initial_kwargs.get(MID_STREAM_CONTINUATION_KWARG)
                             is not MID_STREAM_CONTINUATION_MARKER,
+                            host=self._host,
                         )
                         if continuation_messages is not None
                         else None
@@ -4177,7 +4180,7 @@ class PythonCore(DeprecatedRouterMembers):
             request_kwargs, requested_group if isinstance(requested_group, str) else None
         )
         targets: Final = continuation_fallback_targets(
-            request_kwargs.get("fallbacks", self._core_fallbacks), lookup_groups
+            request_kwargs.get("fallbacks", self._core_fallbacks), lookup_groups, self._host.dynamic().provider_list
         )
         if any(fallback_target_overrides_request_params(target) for target in targets):
             return False
@@ -5740,7 +5743,10 @@ class PythonCore(DeprecatedRouterMembers):
 
     def _drops_params(self, model: str, kwargs: Mapping[str, object]) -> bool:
         return request_drops_params(
-            kwargs, self._core_default_litellm_params, self._request_deployment_params(model=model, kwargs=kwargs)
+            kwargs,
+            self._core_default_litellm_params,
+            self._request_deployment_params(model=model, kwargs=kwargs),
+            self._host,
         )
 
     async def _schedule_factory(
@@ -8852,6 +8858,7 @@ class PythonCore(DeprecatedRouterMembers):
                     external_fallback_group, generic_idx = get_fallback_model_group_for_lookup_groups(
                         fallbacks=fallbacks,
                         lookup_groups=lookup_groups,
+                        provider_list=self._host.dynamic().provider_list,
                     )
                     if external_fallback_group is None and generic_idx is not None:
                         external_fallback_group = fallbacks[generic_idx]["*"]
@@ -8981,6 +8988,7 @@ class PythonCore(DeprecatedRouterMembers):
                 ) = get_fallback_model_group_for_lookup_groups(
                     fallbacks=fallbacks,  # if fallbacks = [{"gpt-3.5-turbo": ["claude-3-haiku"]}]
                     lookup_groups=lookup_groups,
+                    provider_list=self._host.dynamic().provider_list,
                 )
                 ## if none, check for generic fallback
                 if fallback_model_group is None and generic_fallback_idx is not None:
@@ -9537,7 +9545,7 @@ class PythonCore(DeprecatedRouterMembers):
         lookup_groups: tuple[str, ...],
     ) -> list[str] | None:  # mutable-ok: mirrors the shared resolver's contract
         fallback_model_group, _ = get_fallback_model_group_for_lookup_groups(
-            fallbacks=fallbacks, lookup_groups=lookup_groups
+            fallbacks=fallbacks, lookup_groups=lookup_groups, provider_list=self._host.dynamic().provider_list
         )
         return fallback_model_group
 
@@ -10143,6 +10151,7 @@ class PythonCore(DeprecatedRouterMembers):
         resolved, _ = get_fallback_model_group_for_lookup_groups(
             fallbacks=fallbacks,
             lookup_groups=fallback_lookup_groups(kwargs, model_group),
+            provider_list=self._host.dynamic().provider_list,
         )
         return has_unattempted_fallback_target(resolved, kwargs)
 
@@ -10193,6 +10202,7 @@ class PythonCore(DeprecatedRouterMembers):
         resolved, _ = get_fallback_model_group_for_lookup_groups(
             fallbacks=fallbacks,
             lookup_groups=fallback_lookup_groups(kwargs, model_group),
+            provider_list=self._host.dynamic().provider_list,
         )
         return has_unattempted_fallback_target(resolved, kwargs)
 

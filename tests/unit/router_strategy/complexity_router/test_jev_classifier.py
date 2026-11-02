@@ -874,7 +874,7 @@ def test_jev_classifier_cost_uses_registry_pricing(monkeypatch: pytest.MonkeyPat
         answers={"tier": _answer()},
         usage=JevUsage(input_tokens=3, output_tokens=4),
     )
-    assert jev_classifier_cost(response, "jev-latest") == pytest.approx(0.0011)
+    assert jev_classifier_cost(response, "jev-latest", cost_map=litellm.model_cost) == pytest.approx(0.0011)
 
 
 def test_jev_classifier_cost_is_none_without_registry_pricing() -> None:
@@ -883,7 +883,7 @@ def test_jev_classifier_cost_is_none_without_registry_pricing() -> None:
         answers={"tier": _answer()},
         usage=JevUsage(input_tokens=3, output_tokens=4),
     )
-    assert jev_classifier_cost(response, "jev-unpriced") is None
+    assert jev_classifier_cost(response, "jev-unpriced", cost_map=litellm.model_cost) is None
 
 
 @pytest.mark.asyncio

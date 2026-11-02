@@ -1,11 +1,14 @@
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+
+if TYPE_CHECKING:
+    from litellm.router_python_host import PythonHost
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,9 +87,15 @@ def request_drops_params(
     kwargs: Mapping[str, object],
     router_defaults: Mapping[str, object],
     deployment_params: Iterable[Mapping[str, object]],
+    host: "PythonHost | None" = None,
 ) -> bool:
+    """``host`` is the router core's host, whose process ``drop_params`` counts (the process host when none is given)."""
+    from litellm.router_python_host import python_host
+
     deployments: Final = tuple(deployment_params)
-    if litellm.drop_params is True or any(_drops_priority_by_name(s) for s in (kwargs, router_defaults, *deployments)):
+    if (python_host if host is None else host).dynamic().drop_params is True or any(
+        _drops_priority_by_name(s) for s in (kwargs, router_defaults, *deployments)
+    ):
         return True
     request_flag: Final = _explicit_drop_params(kwargs)
     if request_flag is not None:
