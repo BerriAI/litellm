@@ -77,6 +77,24 @@ def test_staging_stamps_release_version_without_modifying_sources(
     assert all((stage / name).read_bytes() == (source / name).read_bytes() for name in expected)
 
 
+def test_gateway_staging_refuses_manifest_without_in_tree_rust_path(tmp_path: Path, source_repository: Path) -> None:
+    from scripts.build_core_distribution import SOURCES, stage_core_distribution
+
+    source: Final = source_repository
+    for name in SOURCES:
+        (source / name).write_text(f"shared {name}")
+    (source / "pyproject.toml").write_text('[project]\nname = "litellm"\nversion = "9.8.7"\n')
+    manifest: Final = source / "packaging" / "litellm-gateway" / "pyproject.toml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        (ROOT / "packaging" / "litellm-gateway" / "pyproject.toml")
+        .read_text()
+        .replace("../../litellm-rust/", "../../rust/")
+    )
+    with pytest.raises(SystemExit, match="no longer points at"):
+        stage_core_distribution(source, tmp_path / "stage", package="litellm-gateway")
+
+
 @pytest.fixture(scope="module")
 def distribution_directory() -> Path:
     directory: Final = os.environ.get("CORE_DISTRIBUTION_DIR")

@@ -19,6 +19,8 @@ SOURCES: Final = (
     "LICENSE",
 )
 
+IN_TREE_RUST_PATH: Final = "../../litellm-rust/"
+
 
 class BuildOptions(argparse.Namespace):
     package: str
@@ -69,17 +71,9 @@ def stage_core_distribution(source: Path, destination: Path, *, package: str = "
         else:
             shutil.copy2(path, destination / name)
     template: Final = (source / "packaging" / package / "pyproject.toml").read_text()
-    metadata: Final = (
-        template.replace("../../litellm-rust/", "litellm-rust/")
-        + "\ninclude = [\n"
-        + ",\n".join(
-            f'    {{ path = "{name}", format = "sdist" }}'
-            for name in ("rust-toolchain.toml", ".cargo/config.toml", "model_prices_and_context_window.json")
-        )
-        + "\n]\n"
-        if package == "litellm-gateway"
-        else template
-    )
+    if package == "litellm-gateway" and IN_TREE_RUST_PATH not in template:
+        raise SystemExit(f"packaging/{package}/pyproject.toml no longer points at {IN_TREE_RUST_PATH}")
+    metadata: Final = template.replace(IN_TREE_RUST_PATH, "litellm-rust/")
     (destination / "pyproject.toml").write_text(metadata)
     subprocess.run(["uv", "version", version, "--frozen"], cwd=destination, check=True)
 
