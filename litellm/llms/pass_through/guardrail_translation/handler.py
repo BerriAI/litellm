@@ -34,21 +34,26 @@ if TYPE_CHECKING:
 # under, and the fields that hold what the model wrote, which are read whole.
 _REPLY_TOP_LEVEL_FIELDS: Final = frozenset(
     (
+        "finish_reason",
         "id",
         "model",
         "modelVersion",
         "object",
         "responseId",
+        "role",
         "service_tier",
         "status",
+        "stop_reason",
+        "stop_sequence",
         "system_fingerprint",
+        "type",
     )
 )
 _REPLY_NESTED_FIELDS: Final = MappingProxyType(
     {
         "candidates": frozenset(("finishReason",)),
         "choices": frozenset(("finish_reason",)),
-        "content": frozenset(("role", "type")),
+        "content": frozenset(("id", "role", "type")),
         "data": frozenset(("b64_json", "embedding", "object")),
         "message": frozenset(("role",)),
         "output": frozenset(("id", "role", "status", "type")),
@@ -58,7 +63,19 @@ _REPLY_NESTED_FIELDS: Final = MappingProxyType(
     }
 )
 _REPLY_MODEL_OUTPUT_FIELDS: Final = frozenset(("args", "arguments", "input", "parameters"))
-_REPLY_MARKER_FIELDS: Final = frozenset(("candidates", "choices", "object", "output", "predictions"))
+_REPLY_MARKER_FIELDS: Final = frozenset(
+    (
+        "candidates",
+        "choices",
+        "finish_reason",
+        "object",
+        "output",
+        "predictions",
+        "stop_reason",
+        "usage",
+        "usageMetadata",
+    )
+)
 _IMAGE_REPLY_FIELDS: Final = frozenset(("created", "data"))
 _NO_FIELDS: Final[frozenset[str]] = frozenset()
 
