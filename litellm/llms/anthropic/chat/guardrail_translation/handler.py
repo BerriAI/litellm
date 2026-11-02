@@ -25,7 +25,8 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, anthropic_inlines_remote_media
 from litellm.llms.anthropic.messages.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
@@ -944,12 +945,15 @@ class AnthropicMessagesHandler(BaseTranslation):
             ):
                 self._write_back_structured_messages(
                     data,
-                    guardrailed_structured_messages
-                    if guardrail_to_apply.structured_messages_cover_full_request()
-                    else merge_guardrailed_scoped_messages(
-                        full_messages=full_structured_messages,
-                        scoped_indices=scoped_message_indices,
-                        guardrailed_scoped=guardrailed_structured_messages,
+                    await async_inline_remote_media(
+                        guardrailed_structured_messages
+                        if guardrail_to_apply.structured_messages_cover_full_request()
+                        else merge_guardrailed_scoped_messages(
+                            full_messages=full_structured_messages,
+                            scoped_indices=scoped_message_indices,
+                            guardrailed_scoped=guardrailed_structured_messages,
+                        ),
+                        should_inline=anthropic_inlines_remote_media,
                     ),
                     hoisted_system_message=hoisted_system_message,
                     preserve_system_messages=has_midturn_system_message,

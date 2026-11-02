@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     RemoteMedia,
     async_inline_remote_media,
     inline_remote_image_urls,
+    is_unformatted_pdf_link,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     place_mid_conversation_system,
@@ -445,6 +446,14 @@ def tools_without_unsupported_tool_search(
         )
     litellm.verbose_logger.warning(DROP_UNSUPPORTED_TOOL_SEARCH_WARNING, model, route)
     return [_without_deferral(tool) for tool in tools if not _is_openai_tool_search_tool(tool)]
+
+
+def anthropic_inlines_remote_media(media: RemoteMedia) -> bool:
+    image_format: Final = media.fields.get("format")
+    return inline_remote_image_urls(media) and (
+        media.url.startswith("http://")
+        or is_unformatted_pdf_link(media.url, image_format if isinstance(image_format, str) else None)
+    )
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
@@ -2234,7 +2243,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return headers
 
     def inlines_remote_media(self, media: RemoteMedia) -> bool:
-        return inline_remote_image_urls(media) and media.url.startswith("http://")
+        return anthropic_inlines_remote_media(media)
 
     async def async_transform_request(
         self,

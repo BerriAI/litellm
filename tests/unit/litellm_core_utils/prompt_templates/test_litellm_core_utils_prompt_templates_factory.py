@@ -1305,10 +1305,12 @@ def test_anthropic_messages_pt_uses_pdf_format_for_generic_mime_data_uri(llm_pro
         ({"url": "https://example.com/download?id=7", "format": "Application/PDF; charset=binary"}, "document"),
         ({"url": "https://example.com/files/report.pdf", "format": "image/png"}, "image"),
         ({"url": "https://example.com/pdf/photo.png"}, "image"),
+        ({"url": "https://example.com/pdf/photo.png", "format": 5}, "image"),
+        ({"url": "https://example.com/pdf/photo.png", "format": ["application/pdf"]}, "image"),
     ),
 )
 def test_anthropic_messages_pt_picks_block_type_for_https_image_url(
-    image_url: dict[str, str], expected_type: str
+    image_url: dict[str, object], expected_type: str
 ) -> None:
     result: Final = anthropic_messages_pt(
         messages=[

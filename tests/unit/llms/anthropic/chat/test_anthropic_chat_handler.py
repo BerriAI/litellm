@@ -253,6 +253,7 @@ def test_anthropic_tool_call_error_is_mapped_from_the_provider_response():
 async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop(async_only_image_fetch):
     http_image_url = f"http://img.example/{uuid.uuid4()}.png"
     https_image_url = f"https://img.example/{uuid.uuid4()}.png"
+    https_pdf_link = f"https://img.example/{uuid.uuid4()}/page.pdf?w=600"
     captured = {}
 
     def handle(request):
@@ -282,6 +283,7 @@ async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop
                     {"type": "text", "text": "What colour is this?"},
                     {"type": "image_url", "image_url": {"url": http_image_url}},
                     {"type": "image_url", "image_url": {"url": https_image_url}},
+                    {"type": "image_url", "image_url": {"url": https_pdf_link}},
                 ],
             }
         ],
@@ -290,11 +292,12 @@ async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop
     )
 
     assert response.choices[0].message.content == "Green"
-    assert async_only_image_fetch.fetched == [http_image_url]
+    assert async_only_image_fetch.fetched == [http_image_url, https_pdf_link]
     sources = [part["source"] for part in captured["body"]["messages"][0]["content"] if part["type"] == "image"]
     assert sources == [
         {"type": "base64", "media_type": "image/png", "data": async_only_image_fetch.base64_png},
         {"type": "url", "url": https_image_url},
+        {"type": "base64", "media_type": "image/png", "data": async_only_image_fetch.base64_png},
     ]
 
 

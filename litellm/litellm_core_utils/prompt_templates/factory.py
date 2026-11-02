@@ -11,7 +11,6 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from types import MappingProxyType
 from typing import Annotated, Any, Final, TypeAlias, TypedDict, TypeVar, cast, overload
-from urllib.parse import urlparse
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
@@ -75,7 +74,7 @@ from .common_utils import (
     parse_tool_call_arguments,
     salvage_concatenated_tool_arguments,
 )
-from .image_handling import convert_url_to_base64
+from .image_handling import convert_url_to_base64, is_unformatted_pdf_link
 
 
 def default_pt(messages):
@@ -916,7 +915,7 @@ def _is_pdf_media_type(media_type: str) -> bool:
 def _anthropic_https_url_block(
     image_url: str, image_format: str | None
 ) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
-    if not image_format and urlparse(image_url).path.lower().endswith(".pdf"):
+    if is_unformatted_pdf_link(image_url, image_format):
         return anthropic_content_element_factory(
             convert_to_anthropic_image_obj(openai_image_url=image_url, format=None)
         )
@@ -944,7 +943,8 @@ def create_anthropic_image_param(
     url_value: Final = image_url_input if isinstance(image_url_input, str) else image_url_input.get("url")
     format_value: Final = None if isinstance(image_url_input, str) else image_url_input.get("format")
     image_url: Final = url_value if isinstance(url_value, str) else ""
-    image_format: Final = format if format is not None else (format_value if isinstance(format_value, str) else None)
+    explicit_format: Final = format if format is not None else format_value
+    image_format: Final = explicit_format if isinstance(explicit_format, str) else None
 
     # Check if the image URL is an HTTP/HTTPS URL
     if image_url.startswith("http://") or image_url.startswith("https://"):

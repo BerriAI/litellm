@@ -200,3 +200,34 @@ async def test_write_back_keeps_real_tool_results_under_modify_params():
     assert "skipped" not in serialized
     assert "Please continue" not in serialized
     assert [m["role"] for m in written] == ["user", "assistant", "user", "user"]
+
+
+@pytest.mark.asyncio
+async def test_write_back_downloads_a_pdf_path_link_off_the_event_loop(async_only_image_fetch):
+    link = "https://img.example/presskit/page.pdf?fm=png"
+
+    written = await _write_back_identity(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe this"},
+                    {"type": "image", "source": {"type": "url", "url": link}},
+                ],
+            }
+        ]
+    )
+
+    assert async_only_image_fetch.fetched == [link]
+    assert written == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe this"},
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": async_only_image_fetch.base64_png},
+                },
+            ],
+        }
+    ]

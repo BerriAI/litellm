@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
+from urllib.parse import urlparse
 
 import httpx
 from httpx import Response
@@ -207,6 +208,10 @@ def inline_every_remote_url(_media: RemoteMedia) -> bool:
 
 def inline_remote_image_urls(media: RemoteMedia) -> bool:
     return media.part_type == "image_url"
+
+
+def is_unformatted_pdf_link(url: str, image_format: str | None) -> bool:
+    return not image_format and urlparse(url).path.lower().endswith(".pdf")
 
 
 def _parse_remote_image(fields: Mapping[str, object]) -> _RemoteImage | None:
