@@ -3476,13 +3476,13 @@ def _has_budget_windows(budget_limits: object) -> bool:
 
 async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str) -> object:
     """Read only: caching the row here could race a delete and put a just-deleted key back into the auth cache."""
+    if prisma_client is None:
+        return None
     absent_key: Final = budget_windows_absent_cache_key(entity_type.value, entity_id)
     known_absent: Final[object] = _UNTYPED_VALUE.validate_python(
-        await user_api_key_cache.async_get_cache(key=absent_key, local_only=True)
+        user_api_key_cache.budget_windows_absent_cache.get_cache(key=absent_key)
     )
     if known_absent is not None:
-        return None
-    if prisma_client is None:
         return None
     try:
         row: Final[SupportsModelDump | None] = (
@@ -3500,7 +3500,7 @@ async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str)
         return None
     budget_limits: Final[object] = None if row is None else _cached_budget_limits(row)
     if not _has_budget_windows(budget_limits):
-        await user_api_key_cache.async_set_cache(key=absent_key, value=True, local_only=True)
+        user_api_key_cache.budget_windows_absent_cache.set_cache(key=absent_key, value=True)
     return budget_limits
 
 

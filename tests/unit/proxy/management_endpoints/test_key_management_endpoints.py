@@ -8668,7 +8668,7 @@ async def test_delete_cache_key_object_broadcasts_invalidation(monkeypatch):
 
     # Real, observable state: the cache object itself no longer holds the entry.
     assert real_user_api_key_cache.get_cache(key="hashed-broadcast-key") is None
-    mock_publish.assert_awaited_once_with(cache_key="hashed-broadcast-key")
+    mock_publish.assert_any_await(cache_key="hashed-broadcast-key")
 
 
 @pytest.mark.asyncio

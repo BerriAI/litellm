@@ -24,6 +24,7 @@ T = TypeVar("T", bound=BaseModel)
 from litellm.constants import AUTH_OBJECTS_TARGET as AUTH_OBJECTS_TARGET  # noqa: E402, PLC0414  # public re-export
 
 _HASHED_TOKEN_CACHE_KEY: Final = re.compile(r"[0-9a-f]{64}")
+_BUDGET_WINDOWS_ABSENT_PREFIX: Final = "budget_windows_absent:"
 
 
 def is_user_key_cache_key(key: str) -> bool:
@@ -83,8 +84,13 @@ class UserApiKeyCache(DualCache):
             default_in_memory_ttl=default_in_memory_ttl,
             default_redis_ttl=default_redis_ttl,
         )
+        self.budget_windows_absent_cache: Final = InMemoryCache(
+            default_ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+        )
 
     def in_memory_cache_for(self, key: str) -> InMemoryCache:
+        if key.startswith(_BUDGET_WINDOWS_ABSENT_PREFIX):
+            return self.budget_windows_absent_cache
         return self.key_object_cache.in_memory_cache if is_user_key_cache_key(key) else self.in_memory_cache
 
     def update_cache_ttl(self, default_in_memory_ttl: float | None, default_redis_ttl: float | None) -> None:
@@ -272,6 +278,7 @@ class UserApiKeyCache(DualCache):
     def flush_cache(self) -> None:
         super().flush_cache()
         self.key_object_cache.in_memory_cache.flush_cache()
+        self.budget_windows_absent_cache.flush_cache()
 
     async def async_set_cache_pipeline(
         self, cache_list: Sequence[tuple[str, object]], local_only: bool = False, **kwargs: object
@@ -402,7 +409,7 @@ NO_TEAM_MEMBERSHIP_SENTINEL: Final = "__no_team_membership__"
 
 def budget_windows_absent_cache_key(entity_type: str, entity_id: str) -> str:
     """Cache key marking a key or team that holds no budget windows, so the spend fallback skips its row read."""
-    return f"budget_windows_absent:{entity_type}:{entity_id}"
+    return f"{_BUDGET_WINDOWS_ABSENT_PREFIX}{entity_type}:{entity_id}"
 
 
 def get_management_object_ttl(cache: DualCache) -> float:
