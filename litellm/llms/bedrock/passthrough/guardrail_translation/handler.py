@@ -14,6 +14,7 @@ from pydantic import InstanceOf, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
@@ -61,6 +62,7 @@ if TYPE_CHECKING:
 _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _INVOKE_STREAM_ACTION: Final = "invoke-with-response-stream"
 _INVOKE_ACTIONS: Final = frozenset({"invoke", _INVOKE_STREAM_ACTION})
+_BLOCK_TYPES_THE_ANTHROPIC_HANDLER_DOES_NOT_SCAN: Final = frozenset({"document", "search_result"})
 _EVENT_STREAM_CONTENT_TYPE: Final = "vnd.amazon.eventstream"
 _EVENT_STREAM_MEDIA_TYPE: Final = "application/vnd.amazon.eventstream"
 
@@ -87,7 +89,29 @@ def _anthropic_invoke_body(
     invoke_body: Final = _BODY_BY_REFERENCE.validate_python(body)
     if not isinstance(invoke_body.get("anthropic_version"), str) or not isinstance(invoke_body.get("messages"), list):
         return None
+    blocks: Final = _anthropic_message_blocks(_ARRAY_BY_REFERENCE.validate_python(invoke_body["messages"]))
+    if any(block.get("type") in _BLOCK_TYPES_THE_ANTHROPIC_HANDLER_DOES_NOT_SCAN for block in blocks):
+        return None
     return invoke_body
+
+
+def _anthropic_message_blocks(messages: Sequence[object]) -> tuple[Mapping[str, object], ...]:
+    fields: Final = (as_str_mapping(message) for message in messages)
+    return tuple(chain.from_iterable(_anthropic_content_blocks(field.get("content")) for field in fields if field))
+
+
+def _anthropic_content_blocks(content: object) -> tuple[Mapping[str, object], ...]:
+    if not isinstance(content, list):
+        return ()
+    blocks: Final = tuple(
+        block
+        for block in (as_str_mapping(item) for item in _ARRAY_BY_REFERENCE.validate_python(content))
+        if block is not None
+    )
+    nested: Final = (
+        _anthropic_content_blocks(block.get("content")) for block in blocks if block.get("type") == "tool_result"
+    )
+    return (*blocks, *chain.from_iterable(nested))
 
 
 def _anthropic_invoke_reply(
