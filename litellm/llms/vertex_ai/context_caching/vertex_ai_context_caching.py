@@ -351,6 +351,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_auth_header: str | None,
         extra_headers: dict | None = None,
         cached_content: str | None = None,
+        context_caching: bool = True,
     ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
@@ -362,7 +363,7 @@ class ContextCachingEndpoints(VertexBase):
 
         Follows - https://ai.google.dev/api/caching#request-body
         """
-        if cached_content is not None:
+        if cached_content is not None or not context_caching:
             return messages, optional_params, cached_content
 
         cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
@@ -517,6 +518,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_auth_header: str | None,
         extra_headers: dict | None = None,
         cached_content: str | None = None,
+        context_caching: bool = True,
     ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
@@ -528,7 +530,7 @@ class ContextCachingEndpoints(VertexBase):
 
         Follows - https://ai.google.dev/api/caching#request-body
         """
-        if cached_content is not None:
+        if cached_content is not None or not context_caching:
             return messages, optional_params, cached_content
 
         cached_messages, non_cached_messages = separate_cached_messages(messages=messages)

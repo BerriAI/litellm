@@ -1338,9 +1338,6 @@ def get_dummy_thought_signature() -> str:
     return base64.b64encode(dummy_data).decode("utf-8")
 
 
-_get_dummy_thought_signature: Final = get_dummy_thought_signature
-
-
 def convert_to_gemini_tool_call_invoke(
     message: ChatCompletionAssistantMessage,
     model: str | None = None,

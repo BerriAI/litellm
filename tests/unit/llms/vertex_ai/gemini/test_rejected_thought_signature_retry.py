@@ -1,12 +1,14 @@
 import base64
 import json
 from collections.abc import Callable, Mapping, Sequence
+from itertools import chain
 from typing import Final
 
 import httpx
 import pytest
 
 import litellm
+from litellm.google_genai import agenerate_content, agenerate_content_stream, generate_content, generate_content_stream
 from litellm.litellm_core_utils.prompt_templates.factory import get_dummy_thought_signature
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.gemini.rejected_thought_signature_retry import with_placeholder_thought_signatures
@@ -92,11 +94,11 @@ def _replay(
     return handler
 
 
-def _signatures_of(body: Mapping[str, object]) -> list[str]:
+def _signatures_of(body: Mapping[str, object], key: str = "thoughtSignature") -> list[str]:
     contents: Final = body["contents"]
     assert isinstance(contents, list)
-    parts: Final = [part for content in contents for part in content["parts"]]
-    return [part["thoughtSignature"] for part in parts if "thoughtSignature" in part]
+    parts: Final = chain.from_iterable(content["parts"] for content in contents)
+    return [part[key] for part in parts if key in part]
 
 
 def _text_of(response: ModelResponse) -> str:
@@ -113,8 +115,7 @@ def _delta_text_of(chunk: object) -> str:
 
 async def _complete(
     messages: Sequence[Mapping[str, object]],
-    answers: Sequence[httpx.Response],
-    sent: list[dict[str, object]],
+    backend: Callable[[httpx.Request], httpx.Response],
     is_async: bool,
     stream: bool,
 ) -> str:
@@ -125,14 +126,11 @@ async def _complete(
         "stream": stream,
         "api_key": "unit-test-key",
     }
-    if is_async:
-        response = await litellm.acompletion(
-            **kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay(answers, sent)))
-        )
-    else:
-        response = litellm.completion(
-            **kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_replay(answers, sent))))
-        )
+    response: Final = (
+        await litellm.acompletion(**kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(backend)))
+        if is_async
+        else litellm.completion(**kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(backend))))
+    )
     if isinstance(response, ModelResponse):
         return _text_of(response)
     assert isinstance(response, CustomStreamWrapper), response
@@ -154,7 +152,7 @@ async def test_signature_rejected_by_the_other_backend_is_resent_once_with_the_p
 ):
     sent: Final[list[dict[str, object]]] = []
     answer: Final = await _complete(
-        HISTORY_WITH_FOREIGN_SIGNATURES, (_rejected(rejection), _answer(stream)), sent, is_async, stream
+        HISTORY_WITH_FOREIGN_SIGNATURES, _replay((_rejected(rejection), _answer(stream)), sent), is_async, stream
     )
     assert answer == "Berlin is 12C."
     assert len(sent) == 2
@@ -172,8 +170,7 @@ async def test_placeholder_rejected_too_is_raised_after_the_second_post(is_async
     with pytest.raises(litellm.BadRequestError, match="thought signature"):
         await _complete(
             HISTORY_WITH_FOREIGN_SIGNATURES,
-            (_rejected(AI_STUDIO_REJECTION), _rejected(AI_STUDIO_REJECTION)),
-            sent,
+            _replay((_rejected(AI_STUDIO_REJECTION), _rejected(AI_STUDIO_REJECTION)), sent),
             is_async,
             stream,
         )
@@ -186,7 +183,7 @@ async def test_placeholder_rejected_too_is_raised_after_the_second_post(is_async
 async def test_unrelated_400_is_raised_without_a_resend(is_async: bool, stream: bool):
     sent: Final[list[dict[str, object]]] = []
     with pytest.raises(litellm.BadRequestError, match="Unknown name"):
-        await _complete(HISTORY_WITH_FOREIGN_SIGNATURES, (_rejected(UNRELATED_REJECTION),), sent, is_async, stream)
+        await _complete(HISTORY_WITH_FOREIGN_SIGNATURES, _replay((_rejected(UNRELATED_REJECTION),), sent), is_async, stream)
     assert len(sent) == 1
 
 
@@ -198,7 +195,7 @@ async def test_signature_400_on_a_history_carrying_only_the_placeholder_is_raise
 ):
     sent: Final[list[dict[str, object]]] = []
     with pytest.raises(litellm.BadRequestError, match="thought signature"):
-        await _complete(HISTORY_WITHOUT_SIGNATURES, (_rejected(AI_STUDIO_REJECTION),), sent, is_async, stream)
+        await _complete(HISTORY_WITHOUT_SIGNATURES, _replay((_rejected(AI_STUDIO_REJECTION),), sent), is_async, stream)
     assert len(sent) == 1
     assert set(_signatures_of(sent[0])) <= {get_dummy_thought_signature()}
 
@@ -226,3 +223,180 @@ def test_body_without_a_foreign_signature_has_nothing_to_resend():
         ]
     }
     assert with_placeholder_thought_signatures(body) is None
+
+
+CACHE_CONTROL: Final = {"type": "ephemeral"}
+
+
+def _cached_history(tag: str) -> tuple[Mapping[str, object], ...]:
+    prefix: Final = " ".join(f"Reference paragraph {i} for {tag}: weather values are in Celsius." for i in range(600))
+    return (
+        {"role": "system", "content": [{"type": "text", "text": prefix, "cache_control": CACHE_CONTROL}]},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "What is the weather in Paris?", "cache_control": CACHE_CONTROL}],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Calling the tool.", "cache_control": CACHE_CONTROL}],
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                    "provider_specific_fields": {"thought_signature": VERTEX_MINTED},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "text", "text": "18C and sunny", "cache_control": CACHE_CONTROL}],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "Got it.", "cache_control": CACHE_CONTROL}]},
+        {"role": "assistant", "content": "Noted."},
+        {"role": "user", "content": "And in Berlin?"},
+    )
+
+
+def _google_ai_studio(stream: bool, generated: list[dict[str, object]]) -> Callable[[httpx.Request], httpx.Response]:
+    """Rejects a generateContent call whose own contents or referenced cache carry a signature AI Studio did not mint,
+    the way the live backend answered on 2026-11-02."""
+    caches: Final[dict[str, object]] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/cachedContents"):
+            if request.method == "GET":
+                return httpx.Response(200, json={})
+            caches["cachedContents/prefix"] = json.loads(request.content)
+            return httpx.Response(
+                200, json={"name": "cachedContents/prefix", "usageMetadata": {"totalTokenCount": 9000}}
+            )
+        body: Final = json.loads(request.content)
+        generated.append(body)
+        cache: Final = caches.get(body.get("cachedContent"), {"contents": []})
+        assert isinstance(cache, dict)
+        signatures: Final = {*_signatures_of(body), *_signatures_of(cache)}
+        if signatures - {get_dummy_thought_signature()}:
+            return _rejected(AI_STUDIO_REJECTION)
+        return _answer(stream)
+
+    return handler
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.asyncio
+async def test_signature_inside_a_cached_prefix_is_resent_inline_with_the_placeholder(is_async: bool, stream: bool):
+    generated: Final[list[dict[str, object]]] = []
+    answer: Final = await _complete(
+        _cached_history(f"async={is_async} stream={stream}"),
+        _google_ai_studio(stream, generated),
+        is_async,
+        stream,
+    )
+    assert answer == "Berlin is 12C."
+    assert len(generated) == 2
+    assert generated[0]["cachedContent"] == "cachedContents/prefix"
+    assert _signatures_of(generated[0]) == []
+    assert "cachedContent" not in generated[1]
+    assert _signatures_of(generated[1]) == [get_dummy_thought_signature()]
+
+
+NATIVE_QUESTION: Final = {"role": "user", "parts": [{"text": "What is the weather in Paris?"}]}
+NATIVE_TOOL_RESULT: Final = {
+    "role": "user",
+    "parts": [{"functionResponse": {"name": "get_weather", "response": {"result": "18C and sunny"}}}],
+}
+
+
+def _native_contents(signature_key: str) -> list[Mapping[str, object]]:
+    return [
+        NATIVE_QUESTION,
+        {
+            "role": "model",
+            "parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}, signature_key: VERTEX_MINTED}],
+        },
+        NATIVE_TOOL_RESULT,
+    ]
+
+
+async def _generate(
+    contents: list[Mapping[str, object]],
+    backend: Callable[[httpx.Request], httpx.Response],
+    is_async: bool,
+    stream: bool,
+) -> str:
+    kwargs: Final = {"model": MODEL, "contents": contents, "api_key": "unit-test-key"}
+    sync_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(backend)))
+    async_client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(backend))
+    match is_async, stream:
+        case True, True:
+            chunks = await agenerate_content_stream(**kwargs, client=async_client)
+            return b"".join([chunk async for chunk in chunks]).decode()
+        case True, False:
+            return json.dumps((await agenerate_content(**kwargs, client=async_client)).model_dump(mode="json"))
+        case False, True:
+            return b"".join(generate_content_stream(**kwargs, client=sync_client)).decode()
+        case False, False:
+            return json.dumps(generate_content(**kwargs, client=sync_client).model_dump(mode="json"))
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize("signature_key", ["thoughtSignature", "thought_signature"])
+@pytest.mark.asyncio
+async def test_native_generate_content_resends_a_rejected_signature_with_the_placeholder(
+    is_async: bool, stream: bool, signature_key: str
+):
+    sent: Final[list[dict[str, object]]] = []
+    output: Final = await _generate(
+        _native_contents(signature_key),
+        _replay((_rejected(AI_STUDIO_REJECTION), _answer(stream)), sent),
+        is_async,
+        stream,
+    )
+    assert "Berlin is 12C." in output
+    assert len(sent) == 2
+    assert _signatures_of(sent[0], signature_key) == [VERTEX_MINTED]
+    assert _signatures_of(sent[1], signature_key) == [get_dummy_thought_signature()]
+    assert {**sent[1], "contents": None} == {**sent[0], "contents": None}
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.asyncio
+async def test_native_generate_content_raises_an_unrelated_400_without_a_resend(is_async: bool, stream: bool):
+    sent: Final[list[dict[str, object]]] = []
+    with pytest.raises(litellm.BadRequestError, match="Unknown name"):
+        await _generate(
+            _native_contents("thoughtSignature"), _replay((_rejected(UNRELATED_REJECTION),), sent), is_async, stream
+        )
+    assert len(sent) == 1
+
+
+def _history_signed_after_the_cached_prefix(tag: str) -> tuple[Mapping[str, object], ...]:
+    prefix: Final = " ".join(f"Reference paragraph {i} for {tag}: weather values are in Celsius." for i in range(600))
+    return (
+        {"role": "system", "content": [{"type": "text", "text": prefix, "cache_control": CACHE_CONTROL}]},
+        {"role": "user", "content": [{"type": "text", "text": "Hello.", "cache_control": CACHE_CONTROL}]},
+        *HISTORY_WITH_FOREIGN_SIGNATURES,
+    )
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.asyncio
+async def test_signature_after_the_cached_prefix_is_resent_with_the_cache_kept(is_async: bool, stream: bool):
+    generated: Final[list[dict[str, object]]] = []
+    answer: Final = await _complete(
+        _history_signed_after_the_cached_prefix(f"async={is_async} stream={stream}"),
+        _google_ai_studio(stream, generated),
+        is_async,
+        stream,
+    )
+    assert answer == "Berlin is 12C."
+    assert len(generated) == 2
+    assert generated[1]["cachedContent"] == generated[0]["cachedContent"] == "cachedContents/prefix"
+    assert set(_signatures_of(generated[0])) == {VERTEX_MINTED, VERTEX_MINTED_TEXT}
+    assert _signatures_of(generated[1]) == [get_dummy_thought_signature()] * 2

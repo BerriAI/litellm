@@ -393,6 +393,20 @@ def _google_genai_streaming_hidden_params(
     }
 
 
+def _log_generate_content_request(
+    logging_obj: LiteLLMLoggingObj,
+    contents: object,
+    api_base: str,
+    headers: Mapping[str, object],
+    body: Mapping[str, object],
+) -> None:
+    logging_obj.pre_call(
+        input=contents,
+        api_key="",
+        additional_args={"complete_input_dict": body, "api_base": api_base, "headers": headers},
+    )
+
+
 @lru_cache(maxsize=None)
 def _responses_api_optional_request_param_names() -> frozenset[str]:
     return frozenset(get_type_hints(ResponsesAPIOptionalRequestParams).keys())
@@ -12283,6 +12297,10 @@ class BaseLLMHTTPHandler:
         from litellm.google_genai.streaming_iterator import (
             GoogleGenAIGenerateContentStreamingIterator,
         )
+        from litellm.llms.vertex_ai.gemini.rejected_thought_signature_retry import (
+            post_with_accepted_thought_signatures_sync,
+            with_placeholder_native_thought_signatures,
+        )
 
         if _is_async:
             return self.async_generate_content_handler(
@@ -12334,27 +12352,19 @@ class BaseLLMHTTPHandler:
         if extra_body:
             data.update(extra_body)
 
-        ## LOGGING
-        logging_obj.pre_call(
-            input=contents,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_content_request, logging_obj, contents, api_base, headers)
+        log_request(data)
+
+        def post(body: Mapping[str, object]) -> httpx.Response:
+            return sync_httpx_client.post(
+                url=api_base, headers=headers, json=dict(body), timeout=timeout, stream=stream
+            )
 
         try:
+            sent_body, response = post_with_accepted_thought_signatures_sync(
+                data, with_placeholder_native_thought_signatures, None, post, log_request
+            )
             if stream:
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                    stream=True,
-                )
-                # Return streaming iterator
                 return GoogleGenAIGenerateContentStreamingIterator(
                     response=response,
                     model=model,
@@ -12362,20 +12372,13 @@ class BaseLLMHTTPHandler:
                     generate_content_provider_config=generate_content_provider_config,
                     litellm_metadata=litellm_metadata or {},
                     custom_llm_provider=custom_llm_provider,
-                    request_body=data,
+                    request_body=dict(sent_body),
                     hidden_params=_google_genai_streaming_hidden_params(
                         api_base=api_base,
                         litellm_params=litellm_params,
                         logging_obj=logging_obj,
                         response_headers=response.headers,
                     ),
-                )
-            else:
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
                 )
         except Exception as e:
             raise self._handle_error(
@@ -12414,6 +12417,10 @@ class BaseLLMHTTPHandler:
         from litellm.google_genai.streaming_iterator import (
             AsyncGoogleGenAIGenerateContentStreamingIterator,
         )
+        from litellm.llms.vertex_ai.gemini.rejected_thought_signature_retry import (
+            post_with_accepted_thought_signatures_async,
+            with_placeholder_native_thought_signatures,
+        )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -12449,27 +12456,19 @@ class BaseLLMHTTPHandler:
         if extra_body:
             data.update(extra_body)
 
-        ## LOGGING
-        logging_obj.pre_call(
-            input=contents,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_content_request, logging_obj, contents, api_base, headers)
+        log_request(data)
+
+        async def post(body: Mapping[str, object]) -> httpx.Response:
+            return await async_httpx_client.post(
+                url=api_base, headers=headers, json=dict(body), timeout=timeout, stream=stream
+            )
 
         try:
+            sent_body, response = await post_with_accepted_thought_signatures_async(
+                data, with_placeholder_native_thought_signatures, None, post, log_request
+            )
             if stream:
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                    stream=True,
-                )
-                # Return async streaming iterator
                 return AsyncGoogleGenAIGenerateContentStreamingIterator(
                     response=response,
                     model=model,
@@ -12477,20 +12476,13 @@ class BaseLLMHTTPHandler:
                     generate_content_provider_config=generate_content_provider_config,
                     litellm_metadata=litellm_metadata or {},
                     custom_llm_provider=custom_llm_provider,
-                    request_body=data,
+                    request_body=dict(sent_body),
                     hidden_params=_google_genai_streaming_hidden_params(
                         api_base=api_base,
                         litellm_params=litellm_params,
                         logging_obj=logging_obj,
                         response_headers=response.headers,
                     ),
-                )
-            else:
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
                 )
         except Exception as e:
             raise self._handle_error(
