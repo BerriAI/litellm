@@ -583,7 +583,7 @@ def test_batch_end_user_budget_enforcement_and_isolation(gateway: Gateway) -> No
 
         # 9. Creation vs Observation Immutability: Assert stored creator attribution before and after viewer read
         creator_before: Final = read_rows(
-            'SELECT end_user_id FROM "LiteLLM_ManagedObjectTable" WHERE object_id=%s',
+            'SELECT end_user_id FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id=%s',
             (batch_a_id,),
         )[0]["end_user_id"]
         assert creator_before == user_a, f"Expected creator {user_a}, got {creator_before}"
@@ -592,21 +592,49 @@ def test_batch_end_user_budget_enforcement_and_isolation(gateway: Gateway) -> No
         retrieval_by_viewer: Final = gateway.request("GET", f"/v1/batches/{batch_a_id}", key=viewer_key)
         assert retrieval_by_viewer.status_code == 200, retrieval_by_viewer.text
 
-        # Assert creator attribution remains intact and unmutated by observation
+        # Invariant 3: Unified Object Table creator immutability
         creator_after: Final = read_rows(
-            'SELECT end_user_id FROM "LiteLLM_ManagedObjectTable" WHERE object_id=%s',
+            'SELECT end_user_id FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id=%s',
             (batch_a_id,),
         )[0]["end_user_id"]
         assert creator_after == user_a, "Observation must not overwrite stored creator end_user_id"
 
-        # 10. Replay / Single Billing Control: Verify spend row is exactly once and A remains over budget
+        # 10. Replay / Single Billing Control: Scoped to Batch A settlement identity (Exactly-Once)
         a_spend_logs: Final = read_rows(
-            'SELECT spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s AND call_type=\'aretrieve_batch\'',
-            (sha256(key.encode()).hexdigest(),),
+            'SELECT spend, end_user FROM "LiteLLM_SpendLogs" WHERE api_key=%s AND call_type=\'aretrieve_batch\' AND end_user=%s',
+            (sha256(key.encode()).hexdigest(), user_a),
         )
-        assert len(a_spend_logs) >= 1
+        assert len(a_spend_logs) == 1, f"Expected exactly 1 spend log for Batch A, got {len(a_spend_logs)}"
+
+        # Verify batch_processed is marked True on ManagedObjectTable
+        batch_a_processed: Final = read_rows(
+            'SELECT batch_processed FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id=%s',
+            (batch_a_id,),
+        )[0]["batch_processed"]
+        assert bool(batch_a_processed) is True, "batch_processed must be True after completion"
+
         current_a_spend: Final = float(str(read_rows('SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s', (user_a,))[0]["spend"]))
         assert current_a_spend == spend_a_initial, "Customer A must be billed exactly once"
+
+        # --- EXPLICIT SECOND RE-POLL PASS (IDEMPOTENCY VERIFICATION) ---
+        # Re-trigger batch retrieve to ensure no duplicate CheckBatchCost debit occurs
+        re_retrieve = gateway.request(
+            "GET",
+            f"/batches/{batch_a_id}",
+            key=key,
+        )
+        assert re_retrieve.status_code == 200, re_retrieve.text
+
+        # Verify spend logs count remains strictly 1 (no double spend row appended)
+        recheck_spend_logs: Final = read_rows(
+            'SELECT spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s AND call_type=\'aretrieve_batch\' AND end_user=%s',
+            (sha256(key.encode()).hexdigest(), user_a),
+        )
+        assert len(recheck_spend_logs) == 1, "Duplicate spend log detected after re-poll"
+
+        # Verify EndUserTable spend has not doubled
+        post_repoll_spend: Final = float(str(read_rows('SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s', (user_a,))[0]["spend"]))
+        assert post_repoll_spend == current_a_spend, f"Double charge detected! {post_repoll_spend} != {current_a_spend}"
 
         # Verify Customer A remains strictly budget-denied
         recheck_denied: Final = gateway.request(
