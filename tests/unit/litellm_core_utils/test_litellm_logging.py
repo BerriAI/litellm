@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 import pytest_asyncio
 from mcp.types import AudioContent, CallToolResult, ImageContent, TextContent
 from openai import AsyncOpenAI
@@ -12470,3 +12471,23 @@ def test_standard_logging_payload_reports_the_deployment_entry_the_request_was_b
         )
     finally:
         litellm.model_cost.pop(deployment_id, None)
+
+
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+def test_ollama_cost_information_does_not_request_live_metadata(
+    local_model_cost_map: None, respx_mock: respx.MockRouter, provider: str
+) -> None:
+    metadata: Final = respx_mock.post("https://cost-information.example/api/show").respond(
+        json={"model_info": {"test.context_length": 32768}}
+    )
+    info: Final = StandardLoggingPayloadSetup.get_model_cost_information(
+        base_model="test-ollama-cost-information",
+        custom_pricing=False,
+        custom_llm_provider=provider,
+        init_response_obj=litellm.ModelResponse(model="test-ollama-cost-information"),
+        api_base="https://cost-information.example",
+    )
+    rates: Final = info["model_map_value"]
+    assert rates is not None
+    assert (rates["input_cost_per_token"], rates["output_cost_per_token"]) == (0.0, 0.0)
+    assert not metadata.called

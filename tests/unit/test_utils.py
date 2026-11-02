@@ -10009,3 +10009,25 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     )
 
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
+
+
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+def test_ollama_pricing_lookup_preserves_live_model_info_discovery(
+    local_model_cost_map: None, respx_mock: respx.MockRouter, provider: str
+) -> None:
+    from litellm.utils import get_model_info_for_pricing
+
+    metadata: Final = respx_mock.post("https://model-info.example/api/show").respond(
+        json={"model_info": {"test.context_length": 32768}}
+    )
+    pricing: Final = get_model_info_for_pricing(
+        model="test-live-discovery", custom_llm_provider=provider, api_base="https://model-info.example"
+    )
+    assert (pricing["input_cost_per_token"], pricing["output_cost_per_token"]) == (0.0, 0.0)
+    assert not metadata.called
+
+    discovered: Final = litellm.get_model_info(
+        model="test-live-discovery", custom_llm_provider=provider, api_base="https://model-info.example"
+    )
+    assert discovered["max_input_tokens"] == 32768
+    assert metadata.call_count == 1

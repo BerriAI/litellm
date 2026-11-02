@@ -6358,6 +6358,8 @@ def get_model_info_helper(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
+    *,
+    catalog_only: bool = False,
 ) -> ModelInfoBase:
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
@@ -6393,7 +6395,7 @@ def get_model_info_helper(
         model_cost_custom_llm_provider: Final = custom_llm_provider
         #########################
         provider_config: BaseLLMModelInfo | None = None
-        if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
+        if not catalog_only and custom_llm_provider and custom_llm_provider in LlmProvidersSet:
             provider_config = ProviderConfigManager.get_provider_model_info(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
@@ -6417,7 +6419,7 @@ def get_model_info_helper(
                         e,
                     )
 
-        if custom_llm_provider == "huggingface":
+        if not catalog_only and custom_llm_provider == "huggingface":
             max_tokens: Final = _get_max_position_embeddings(model_name=model)
             return ModelInfoBase(
                 key=model,
@@ -6892,6 +6894,39 @@ def get_model_info(
 
 get_model_info.cache_clear = _cached_get_model_info.cache_clear
 get_model_info.cache_info = _cached_get_model_info.cache_info
+
+
+def get_model_info_for_pricing(
+    model: str, custom_llm_provider: str | None = None, api_base: str | None = None
+) -> ModelInfo:
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider
+
+    provider: Final = declared_provider(model, custom_llm_provider)
+    if provider not in ("ollama", "ollama_chat"):
+        return get_model_info(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
+    try:
+        catalog: Final = get_model_info_helper(model=model, custom_llm_provider=provider, catalog_only=True)
+    except ModelNotMappedError:
+        return ModelInfo(
+            key=model.removeprefix(f"{provider}/"),
+            litellm_provider="ollama",
+            mode="chat",
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+            max_tokens=None,
+            max_input_tokens=None,
+            max_output_tokens=None,
+            supported_openai_params=None,
+        )
+    return ModelInfo(**catalog, supported_openai_params=None)
+
+
+def get_model_info_helper_for_pricing(model: str, custom_llm_provider: str | None) -> ModelInfoBase:
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider
+
+    if declared_provider(model, custom_llm_provider) in ("ollama", "ollama_chat"):
+        return get_model_info_for_pricing(model=model, custom_llm_provider=custom_llm_provider)
+    return cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
 
 
 def json_schema_type(python_type_name: str):
