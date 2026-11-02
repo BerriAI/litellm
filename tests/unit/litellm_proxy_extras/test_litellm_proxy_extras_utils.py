@@ -1,4 +1,5 @@
 import glob
+import importlib.abc
 import logging
 import os
 import re
@@ -1722,6 +1723,20 @@ class TestStripPrismaQueryParams:
         )
 
 
+class _PsycopgCannotLoad(importlib.abc.MetaPathFinder):
+    """What a node without libpq sees: `import psycopg` raises a plain ImportError."""
+
+    def find_spec(self, fullname: str, path: object, target: object = None) -> None:
+        if fullname == "psycopg":
+            raise ImportError("couldn't import requested psycopg 'python' implementation: libpq library not found")
+        return None
+
+
+def _make_psycopg_unimportable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(sys.modules, "psycopg", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_PsycopgCannotLoad(), *sys.meta_path])
+
+
 class TestBuildRequestLogIndexes:
     """The migration job hands the index build the direct database URL and the schema
     the migrations target, waits for it, and reports its result."""
@@ -1765,6 +1780,21 @@ class TestBuildRequestLogIndexes:
         assert ProxyExtrasDBManager.build_request_log_indexes(build=build) is True
 
         assert builds == []
+
+    def test_a_psycopg_that_cannot_load_is_skipped_with_a_warning_so_the_job_can_finish(
+        self, monkeypatch, builds, build, caplog
+    ):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@primary:5432/db")
+        _make_psycopg_unimportable(monkeypatch)
+
+        with caplog.at_level(logging.WARNING, logger="litellm_proxy_extras"):
+            built: Final = ProxyExtrasDBManager.build_request_log_indexes(build=build)
+
+        assert built is True
+        assert builds == []
+        assert [record.levelname for record in caplog.records if "psycopg could not be imported" in record.message] == [
+            "WARNING"
+        ]
 
 
 class TestStartRequestLogIndexBuild:
