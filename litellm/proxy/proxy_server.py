@@ -10047,7 +10047,7 @@ def _event_with_restamped_nested_model(event: Mapping[str, object], target_model
 _SSE_DATA_FIELD: Final = b"data:"
 _SSE_NESTED_RESPONSE_MARKER: Final = b'"response"'
 _SSE_EVENT_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
-_JSON_OBJECT: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+_JSON_OBJECT: Final = TypeAdapter(dict[object, object])
 _JSON_ARRAY: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
@@ -10088,10 +10088,20 @@ def _unencodable_part(value: object, ancestors: frozenset[int]) -> IncEx | bool:
     lineage: Final = ancestors | {id(value)}
     if isinstance(value, BaseModel):
         return _unencodable_keys(iter(value), lineage) or True
-    if isinstance(value, Mapping):
-        return _unencodable_keys(_JSON_OBJECT.validate_python(value).items(), lineage) or True
+    if isinstance(value, dict):
+        return _unencodable_entries(_JSON_OBJECT.validate_python(value), lineage)
     if isinstance(value, (list, tuple)):
-        return _unencodable_indexes(_JSON_ARRAY.validate_python(value), lineage) or True
+        return _unencodable_indexes(enumerate(_JSON_ARRAY.validate_python(value)), lineage) or True
+    return True
+
+
+def _unencodable_entries(entries: Mapping[object, object], lineage: frozenset[int]) -> IncEx | bool:
+    by_name: Final = {key: item for key, item in entries.items() if isinstance(key, str)}
+    if len(by_name) == len(entries):
+        return _unencodable_keys(by_name.items(), lineage) or True
+    by_index: Final = {key: item for key, item in entries.items() if isinstance(key, int)}
+    if len(by_index) == len(entries):
+        return _unencodable_indexes(by_index.items(), lineage) or True
     return True
 
 
@@ -10099,8 +10109,8 @@ def _unencodable_keys(items: Iterable[tuple[str, object]], lineage: frozenset[in
     return {key: _unencodable_part(item, lineage) for key, item in items if not _json_encodes(item)}
 
 
-def _unencodable_indexes(items: Sequence[object], lineage: frozenset[int]) -> Mapping[int, IncEx | bool]:
-    return {index: _unencodable_part(item, lineage) for index, item in enumerate(items) if not _json_encodes(item)}
+def _unencodable_indexes(items: Iterable[tuple[int, object]], lineage: frozenset[int]) -> Mapping[int, IncEx | bool]:
+    return {index: _unencodable_part(item, lineage) for index, item in items if not _json_encodes(item)}
 
 
 def _serialize_chat_chunk_leniently(chunk: ModelResponseStream) -> bytes:

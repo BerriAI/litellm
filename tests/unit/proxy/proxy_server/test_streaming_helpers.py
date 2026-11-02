@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
+from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -866,6 +867,28 @@ def test_serialize_streaming_chunk_drops_only_the_nested_value_json_cannot_encod
     assert payload["choices"][1]["delta"] == {"content": "b", "provider_specific_fields": {"citations": ["ok"]}}
     assert payload["usage"] == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
     assert payload["trace_chunk"] == {"keep": 1}
+
+
+def test_serialize_streaming_chunk_keeps_streaming_when_unencodable_values_sit_under_non_string_keys() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-keys",
+        choices=[StreamingChoices(index=0, delta=Delta(content="still streaming"))],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+    setattr(chunk, "by_index", {0: "kept", 1: object()})
+    setattr(chunk, "mixed_keys", {"name": "x", 2: object()})
+    setattr(chunk, "bytes_keys", {b"raw": object()})
+    setattr(chunk, "read_only_view", MappingProxyType({"name": object()}))
+
+    payload: Final = json.loads(_serialize_streaming_chunk(chunk))
+
+    assert payload["choices"][0]["delta"] == {"content": "still streaming"}
+    assert payload["by_index"] == {"0": "kept"}
+    assert "mixed_keys" not in payload
+    assert "bytes_keys" not in payload
+    assert "read_only_view" not in payload
 
 
 @pytest.mark.asyncio
