@@ -8,7 +8,7 @@ import os
 import sys
 import uuid
 import zlib
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -64,6 +64,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     _build_passthrough_failure_request_payload,
     _registered_pass_through_routes,
     _guardrail_response_headers,
+    _log_passthrough_upstream_failure_keeping_guardrail_headers,
     _strip_client_guardrail_fields,
     _truncate_upstream_error_body,
     _update_metadata_with_tags_in_header,
@@ -503,36 +504,59 @@ async def test_pass_through_request_preserves_proxy_exception_status():
         assert exc.value.param == "limit"
 
 
-@pytest.mark.asyncio
-async def test_guardrail_proxy_exception_carries_the_guardrails_that_ran():
-    blocked: Final = ProxyException(message="blocked by guardrail", type="None", param="None", code=400)
-
-    async def record_then_block(
-        user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str, endpoint_type: object
+class _RecordsThenRaisesProxyException(CustomGuardrail):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: str,
     ) -> None:
         data["metadata"] = {"applied_guardrails": ["passed-guard"]}  # mutable-ok: a guardrail records on the live body
-        raise blocked
+        raise ProxyException(message="blocked by guardrail", type="None", param="None", code=400)
 
-    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
-        mock_proxy_logging.post_call_failure_hook = AsyncMock()
-        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=record_then_block)
 
-        mock_request = MagicMock(spec=Request)
-        mock_request.method = "POST"
-        mock_request.body = AsyncMock(return_value=b'{"model": "gpt-5.6", "messages": []}')
-        mock_request.headers = Headers({"content-type": "application/json"})
-        mock_request.query_params = QueryParams({})
+@pytest.mark.asyncio
+async def test_guardrail_proxy_exception_carries_the_guardrails_that_ran():
+    guardrail: Final = _RecordsThenRaisesProxyException(
+        guardrail_name="passed-guard", event_hook=GuardrailEventHooks.pre_call, default_on=True
+    )
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.body = AsyncMock(return_value=b'{"model": "gpt-5.6", "messages": []}')
+    mock_request.headers = Headers({"content-type": "application/json"})
+    mock_request.query_params = QueryParams({})
 
-        with pytest.raises(ProxyException) as exc:
-            await pass_through_request(
-                request=mock_request,
-                target="http://test.com/v1/chat/completions",
-                custom_headers={},
-                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
-            )
+    with (
+        pytest.MonkeyPatch.context() as litellm_patch,
+        patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside pass_through_request
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+        ),
+        pytest.raises(ProxyException) as exc,
+    ):
+        litellm_patch.setattr(litellm, "callbacks", [guardrail])
+        await pass_through_request(
+            request=mock_request,
+            target="http://test.com/v1/chat/completions",
+            custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
 
-    assert exc.value is blocked
     assert exc.value.headers["x-litellm-applied-guardrails"] == "passed-guard"
+
+
+@pytest.mark.asyncio
+async def test_successful_response_keeps_no_guardrail_headers_from_before_the_post_call_pass():
+    headers: Final = await _log_passthrough_upstream_failure_keeping_guardrail_headers(
+        response=httpx.Response(status_code=200),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        request_payload={},
+        logging_obj=MagicMock(),
+        parsed_body={"metadata": {"applied_guardrails": ["pre-call-guard"]}},
+        kwargs=None,
+    )
+
+    assert headers == {}
 
 
 def test_is_langfuse_route():
@@ -13312,8 +13336,6 @@ class TestInheritAuthGuardrails:
         inherit: bool,
         user_api_key_dict: UserAPIKeyAuth,
         guardrails: tuple[CustomGuardrail, ...] = (),
-        post_call_side_effect: Callable[..., Awaitable[None]] | None = None,
-        failure_side_effect: Callable[..., Awaitable[None]] | None = None,
     ) -> tuple[Response, list[dict[str, object]], AsyncMock]:
         pre_call_data: Final[list[dict[str, object]]] = []
 
@@ -13323,10 +13345,7 @@ class TestInheritAuthGuardrails:
 
         proxy_logging: Final = MagicMock()
         proxy_logging.pre_call_hook = AsyncMock(side_effect=_record_pre_call)
-        proxy_logging.post_call_success_hook = AsyncMock(
-            return_value={"id": "chatcmpl-1"}, side_effect=post_call_side_effect
-        )
-        proxy_logging.post_call_failure_hook = AsyncMock(side_effect=failure_side_effect)
+        proxy_logging.post_call_success_hook = AsyncMock(return_value={"id": "chatcmpl-1"})
         proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
         upstream: Final = httpx.Response(
             status_code=200,
@@ -13377,30 +13396,6 @@ class TestInheritAuthGuardrails:
     @staticmethod
     def _chat_body(**extra: object) -> dict[str, object]:
         return {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], **extra}
-
-    @pytest.mark.asyncio
-    async def test_modified_response_names_a_guardrail_the_failure_hook_drops(self):
-        async def _modify_response(**kwargs: object) -> None:
-            data: Final = cast(dict[str, dict[str, object]], kwargs["data"])  # cast-ok: the hook data the handler built
-            data["metadata"]["applied_guardrails"] = ["key-guard"]
-            raise ModifyResponseException(
-                message="replaced", model="gpt-4o", request_data=data, guardrail_name="key-guard"
-            )
-
-        async def _drop_guardrail_fields(**kwargs: object) -> None:
-            cast(dict[str, dict[str, object]], kwargs["request_data"])["metadata"].pop("applied_guardrails", None)  # cast-ok: payload
-
-        response, _, _ = await self._run_with_response(
-            self._chat_body(),
-            inherit=True,
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]}),
-            guardrails=(self._guardrail("key-guard", GuardrailEventHooks.post_call),),
-            post_call_side_effect=_modify_response,
-            failure_side_effect=_drop_guardrail_fields,
-        )
-
-        assert response.status_code == 200
-        assert response.headers["x-litellm-applied-guardrails"] == "key-guard"
 
     @pytest.mark.asyncio
     async def test_key_team_and_project_guardrails_reach_pre_and_post_call(self):

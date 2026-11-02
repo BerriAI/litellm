@@ -47,6 +47,7 @@ PHONE_POST_CALL: Final = "passthrough-auth-phone-post-call"
 PIPELINE_BLOCKS: Final = "passthrough-pipeline-blocks-the-response"
 PIPELINE_ALLOWS: Final = "passthrough-pipeline-allows-the-response"
 PIPELINE_BEFORE_THE_CALL: Final = "passthrough-pipeline-before-the-call"
+PIPELINE_MODIFIES: Final = "passthrough-pipeline-modifies-the-response"
 _CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 _JSON: Final = TypeAdapter(dict[str, JsonValue])
 _JSON_LIST: Final = TypeAdapter(list[JsonValue])
@@ -181,10 +182,11 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                         PIPELINE_BLOCKS: _pipeline_policy("post_call", KEY_POST_CALL, "block"),
                         PIPELINE_ALLOWS: _pipeline_policy("post_call", KEY_POST_CALL, "allow"),
                         PIPELINE_BEFORE_THE_CALL: _pipeline_policy("pre_call", GUARDRAIL, "block"),
+                        PIPELINE_MODIFIES: _pipeline_policy("post_call", KEY_POST_CALL, "modify_response"),
                     },
                     "policy_attachments": [
                         {"policy": policy, "tags": [policy]}
-                        for policy in (PIPELINE_BLOCKS, PIPELINE_ALLOWS, PIPELINE_BEFORE_THE_CALL)
+                        for policy in (PIPELINE_BLOCKS, PIPELINE_ALLOWS, PIPELINE_BEFORE_THE_CALL, PIPELINE_MODIFIES)
                     ],
                     "model_list": [
                         *_JSON_LIST.validate_python(config.get("model_list") or []),
@@ -615,6 +617,19 @@ def test_post_call_policy_pipeline_decides_what_a_flagged_step_does(rig: AuthGua
 
         assert response.status_code == 200, response.text
         assert len(rig.key_post_call_vendor.drain()) == 1
+        assert KEY_POST_CALL in response.headers["x-litellm-applied-guardrails"].split(",")
+
+
+def test_response_a_policy_pipeline_modifies_names_the_step_that_ran(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        _drain(rig)
+
+        response: Final = _send(gateway, OPENAI_ROUTE, _tagged_body(OPENAI_ROUTE, PIPELINE_MODIFIES), key)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["error"]["type"] == "content_filter"
         assert KEY_POST_CALL in response.headers["x-litellm-applied-guardrails"].split(",")
 
 
