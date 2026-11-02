@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_WARN_DAYS,
     DeprecationStatus,
@@ -28,6 +29,7 @@ class _ResolvedDeprecation:
     deprecation_date: date
     litellm_model: str | None
     litellm_provider: str | None
+    copied_from_another_row: bool = False
 
 
 def _parse_deprecation_date(raw_value: object) -> date | None:
@@ -62,6 +64,9 @@ def _cost_map_lookup(model_key: str | None) -> _ResolvedDeprecation | None:
         deprecation_date=parsed,
         litellm_model=model_key,
         litellm_provider=provider if isinstance(provider, str) else None,
+        copied_from_another_row=isinstance(entry, AliasedCostEntry)
+        and "deprecation_date" not in entry.registered_fields
+        and not isinstance(provider, str),
     )
 
 
@@ -125,7 +130,7 @@ def _resolve_deployment_deprecation(
         *_schedule_keys(provider, model_name),
     )
     found: Final = tuple(resolved for resolved in (_cost_map_lookup(key) for key in candidates) if resolved is not None)
-    return next((resolved for resolved in found if resolved.litellm_provider is not None), next(iter(found), None))
+    return next((resolved for resolved in found if not resolved.copied_from_another_row), next(iter(found), None))
 
 
 def _classify(days_until: int, warn_within_days: int) -> DeprecationStatus:

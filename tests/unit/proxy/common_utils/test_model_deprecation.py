@@ -15,6 +15,7 @@ import pytest
 import litellm
 from litellm import Router
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 from litellm.proxy.common_utils.model_deprecation import (
     _classify,
     _parse_deprecation_date,
@@ -282,9 +283,13 @@ class TestProviderScopedResolution:
     COST_MAP = {
         "gpt-4o": {"deprecation_date": "2027-01-14", "litellm_provider": "openai"},
         "azure/gpt-4o": {"deprecation_date": "2027-04-14", "litellm_provider": "azure"},
-        "azure_ai/gpt-4o": {"deprecation_date": "2027-01-14"},
+        "azure_ai/gpt-4o": AliasedCostEntry({"deprecation_date": "2027-01-14", "mode": "chat"}, ()),
         "github_copilot/gpt-4o": {"litellm_provider": "github_copilot"},
-        "azure_ai/gpt-4.1": {"deprecation_date": "2027-05-01", "litellm_provider": "azure_ai"},
+        "azure_ai/gpt-4.1": AliasedCostEntry(
+            {"deprecation_date": "2027-05-01", "litellm_provider": "azure_ai", "mode": "chat"}, ()
+        ),
+        "custom-base": {"deprecation_date": "2026-12-01"},
+        "registered-base": AliasedCostEntry({"deprecation_date": "2026-12-15"}, (), frozenset({"deprecation_date"})),
         "gpt-4.1": {"deprecation_date": "2027-01-14", "litellm_provider": "openai"},
         "azure/gpt-4.1": {"deprecation_date": "2027-04-14", "litellm_provider": "azure"},
     }
@@ -317,6 +322,12 @@ class TestProviderScopedResolution:
                 ("azure/gpt-4o", date(2027, 4, 14), "azure"),
             ),
             ({"model": "azure_ai/gpt-4.1"}, {}, ("azure_ai/gpt-4.1", date(2027, 5, 1), "azure_ai")),
+            ({"model": "azure/gpt-4o"}, {"base_model": "custom-base"}, ("custom-base", date(2026, 12, 1), None)),
+            (
+                {"model": "azure/gpt-4o"},
+                {"base_model": "registered-base"},
+                ("registered-base", date(2026, 12, 15), None),
+            ),
         ],
         ids=[
             "bare",
@@ -328,6 +339,8 @@ class TestProviderScopedResolution:
             "azure-ai-reads-azure",
             "azure-ai-base-model-reads-azure",
             "azure-ai-own-row-wins",
+            "custom-base-model-row-wins",
+            "registered-base-model-row-wins",
         ],
     )
     def test_should_prefer_the_deployments_own_provider_date(
@@ -335,7 +348,7 @@ class TestProviderScopedResolution:
         monkeypatch: pytest.MonkeyPatch,
         litellm_params: Mapping[str, str],
         model_info: Mapping[str, str],
-        expected: tuple[str, date, str],
+        expected: tuple[str, date, str | None],
     ) -> None:
         monkeypatch.setattr(litellm, "model_cost", self.COST_MAP)
         router: Final = _make_router(
