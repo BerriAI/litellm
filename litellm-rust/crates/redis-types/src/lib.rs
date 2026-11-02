@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use litellm_circuit_breaker::Config as BreakerConfig;
 use litellm_secret_value::SecretValue;
 use veil::Redact;
 
@@ -17,6 +18,8 @@ pub struct Resolution {
     pub timeout: Option<Duration>,
     pub connect_timeout: Option<Duration>,
     pub health_check: HealthCheck,
+    /// `REDIS_CIRCUIT_BREAKER_*`, or none when the breaker is disabled.
+    pub breaker: Option<BreakerConfig>,
     /// Plain settings the resolver does not model, kept verbatim for the redis-py projection.
     pub passthrough: Passthrough,
     /// Settings whose value is a host object, like redis-py's `retry` or `connection_class`, which

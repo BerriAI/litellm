@@ -8,6 +8,7 @@ use veil::Redact;
 use crate::{Object, Value};
 
 mod auth;
+mod breaker;
 mod endpoint;
 mod error;
 mod keys;
@@ -182,6 +183,7 @@ impl ConfiguredRedis {
             timeout: options::seconds(options.socket_timeout.as_ref())?,
             connect_timeout: options::seconds(options.socket_connect_timeout.as_ref())?,
             health_check: health_check(options.health_check_interval.as_ref())?,
+            breaker: breaker::breaker(environment),
             passthrough: unmodeled.passthrough,
             host_objects: unmodeled.host_objects,
             ignored: unmodeled.ignored.into_iter().chain(url_ignored).collect(),

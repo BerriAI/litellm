@@ -1,29 +1,55 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use litellm_circuit_breaker::Breaker;
+use litellm_core_utils::settings::Lookup;
 use litellm_redis_client::{
-    Credentials, DEFAULT_TIMEOUT, Namespace, RedisClient, RedisConfig, Target, Timeouts,
+    Credentials, CredentialsProvider, DEFAULT_TIMEOUT, Namespace, RedisClient, RedisConfig,
+    RedisEvents, Target, Timeouts,
 };
 use litellm_redis_types::{Auth, HealthCheck, Resolution, StaticAuth};
 
-use crate::Error;
+use crate::{
+    Error, RefreshingCredentials,
+    sources::{AzureAd, ElastiCacheIam, GcpIam},
+};
+
+pub type SharedEnvironment = Arc<dyn Lookup + Send + Sync>;
+
+pub struct HostServices {
+    pub events: Option<Arc<dyn RedisEvents>>,
+    pub http: litellm_http::Client,
+    pub environment: SharedEnvironment,
+}
 
 // litellm/constants.py REDIS_CLUSTER_HEALTH_CHECK_INTERVAL, the default _redis.py sets for cluster clients only
 const CLUSTER_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(25);
 
-pub fn connect(resolved: Resolution, breaker: Option<Breaker>) -> Result<RedisClient, Error> {
+pub fn connect(resolved: Resolution, host: HostServices) -> Result<RedisClient, Error> {
     tracing::info!(target = ?resolved.target, namespace = ?resolved.namespace, "redis client configured");
+    let credentials = credentials(resolved.auth, &host)?;
+    let events = host.events;
+    let breaker = resolved.breaker.map(|config| {
+        let observer = events.clone();
+        Breaker::new(
+            config,
+            Box::new(move |transition| {
+                if let Some(events) = &observer {
+                    events.breaker(transition);
+                }
+            }),
+        )
+    });
     let health_check = health_check(&resolved.target, resolved.health_check);
     Ok(RedisClient::new(RedisConfig {
         target: resolved.target,
-        credentials: credentials(resolved.auth)?,
+        credentials,
         namespace: resolved.namespace.map(Namespace::new).unwrap_or_default(),
         timeouts: Timeouts::new(
             resolved.timeout.unwrap_or(DEFAULT_TIMEOUT),
             resolved.connect_timeout,
         ),
         breaker,
-        events: None,
+        events,
         health_check,
     })?)
 }
@@ -37,20 +63,29 @@ fn health_check(target: &Target, configured: HealthCheck) -> Option<Duration> {
     }
 }
 
-fn credentials(auth: Auth) -> Result<Credentials, Error> {
-    match auth {
-        Auth::Static(StaticAuth { username, password }) => Ok(Credentials { username, password }),
-        Auth::Provider(_) => Err(Error::NoHostCredentialProvider),
-        Auth::GcpIam { .. } => Err(Error::CloudAuth {
-            setting: "gcp_service_account",
-        }),
-        Auth::AzureAd(_) => Err(Error::CloudAuth {
-            setting: "azure_redis_ad_token",
-        }),
-        Auth::AwsIam(_) => Err(Error::CloudAuth {
-            setting: "aws_iam_auth",
-        }),
-    }
+fn credentials(auth: Auth, host: &HostServices) -> Result<Credentials, Error> {
+    let refreshing = |provider: RefreshingCredentials| {
+        Credentials::Provider(CredentialsProvider(Arc::new(provider)))
+    };
+    Ok(match auth {
+        Auth::Static(StaticAuth { username, password }) => {
+            Credentials::Static { username, password }
+        }
+        Auth::Provider(_) => return Err(Error::NoHostCredentialProvider),
+        Auth::AzureAd(auth) => refreshing(RefreshingCredentials::new(AzureAd::new(
+            auth,
+            host.environment.clone(),
+        ))),
+        Auth::AwsIam(auth) => refreshing(RefreshingCredentials::new(ElastiCacheIam::new(
+            auth,
+            &*host.environment,
+        )?)),
+        Auth::GcpIam { service_account } => refreshing(RefreshingCredentials::new(GcpIam::new(
+            host.http.clone(),
+            service_account,
+            host.environment.clone(),
+        ))),
+    })
 }
 
 #[cfg(test)]

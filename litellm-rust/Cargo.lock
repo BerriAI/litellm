@@ -3709,6 +3709,7 @@ dependencies = [
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
+ "litellm-circuit-breaker",
  "litellm-core-utils",
  "litellm-error",
  "litellm-python-compat",
@@ -4445,17 +4446,31 @@ dependencies = [
 name = "litellm-redis-connect"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
+ "litellm-auth-aws",
+ "litellm-auth-azure",
+ "litellm-auth-gcp",
+ "litellm-auth-types",
  "litellm-circuit-breaker",
  "litellm-config",
+ "litellm-core-utils",
+ "litellm-error",
+ "litellm-http",
  "litellm-redis-client",
  "litellm-redis-testing",
  "litellm-redis-types",
+ "litellm-secret-value",
  "rstest",
  "rustls 0.23.42",
+ "serde",
  "serde_json",
+ "strum",
  "thiserror 2.0.19",
+ "time",
  "tokio",
  "tracing",
+ "url",
+ "veil",
 ]
 
 [[package]]
@@ -4474,6 +4489,7 @@ dependencies = [
 name = "litellm-redis-types"
 version = "0.1.0"
 dependencies = [
+ "litellm-circuit-breaker",
  "litellm-secret-value",
  "serde_json",
  "veil",

@@ -821,6 +821,58 @@ fn ssl_min_version_warns_only_when_rustls_cannot_meet_it(
     );
 }
 
+fn breaker_from(environment: &[(&str, &str)]) -> Option<litellm_circuit_breaker::Config> {
+    let environment: HashMap<String, String> = environment
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect();
+    resolve_kwargs(json!({"host": "redis"}), &environment)
+        .unwrap()
+        .breaker
+}
+
+#[rstest]
+fn the_breaker_defaults_match_litellm_constants() {
+    assert_eq!(
+        breaker_from(&[]),
+        Some(litellm_circuit_breaker::Config {
+            failure_threshold: 5,
+            recovery_timeout: std::time::Duration::from_secs(60),
+            timeout_min_duration: std::time::Duration::from_secs(5),
+        })
+    );
+}
+
+#[rstest]
+#[case::disabled(&[("REDIS_CIRCUIT_BREAKER_ENABLED", "False")], None)]
+#[case::configured(
+    &[
+        ("REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD", " 9 "),
+        ("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", "30"),
+        ("REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION", "2.5"),
+    ],
+    Some((9, 30.0, 2.5))
+)]
+#[case::an_unparsable_value_keeps_its_default_like_get_env_int(
+    &[("REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD", "five"), ("REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION", "soon")],
+    Some((5, 60.0, 5.0))
+)]
+#[case::a_fractional_recovery_timeout_is_not_an_int(&[("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", "1.5")], Some((5, 60.0, 5.0)))]
+fn the_breaker_reads_the_environment_like_python(
+    #[case] environment: &[(&str, &str)],
+    #[case] expected: Option<(u32, f64, f64)>,
+) {
+    let breaker = breaker_from(environment).map(|config| {
+        (
+            config.failure_threshold,
+            config.recovery_timeout.as_secs_f64(),
+            config.timeout_min_duration.as_secs_f64(),
+        )
+    });
+
+    assert_eq!(breaker, expected);
+}
+
 fn tls_view(tls: Option<&TlsOptions>) -> serde_json::Value {
     tls.map_or(serde_json::Value::Null, |tls| {
         serde_json::json!({
