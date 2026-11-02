@@ -1378,36 +1378,68 @@ def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(fiel
     assert ([tool["name"] for tool in optional_params.get("tools", [])] == ["json_tool_call"]) is not native
 
 
-_DICT_FIELD_RESPONSE_FORMAT: Final = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "out",
-        "schema": {
-            "type": "object",
-            "properties": {"field": {"type": "object", "additionalProperties": {"type": "integer"}}},
-            "required": ["field"],
-        },
-    },
-}
-
-
 @pytest.mark.parametrize(
     ("model", "thinking_params"),
     [
         ("claude-opus-4-8", {"thinking": {"type": "adaptive"}}),
         ("claude-opus-4-8", {"reasoning_effort": "low"}),
-        ("claude-opus-5", {}),
+        ("claude-opus-4-8", {"reasoning_effort": "none"}),
         ("claude-sonnet-5-5", {}),
+        (
+            "claude-opus-4-8",
+            {"tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]},
+        ),
     ],
-    ids=["adaptive-thinking", "reasoning-effort", "default-thinking-model", "model-without-forced-tools"],
+    ids=[
+        "adaptive-thinking",
+        "reasoning-effort",
+        "reasoning-effort-none",
+        "model-without-forced-tools",
+        "caller-tools",
+    ],
 )
-def test_dict_fields_take_the_unforced_json_tool_when_it_cannot_be_forced(
-    local_model_cost_map, model, thinking_params
-):
+def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(model, thinking_params):
     optional_params: Final = AnthropicConfig().map_openai_params(
-        non_default_params={**thinking_params, "response_format": _DICT_FIELD_RESPONSE_FORMAT},
+        non_default_params={
+            **thinking_params,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "out",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"field": {"type": "object", "additionalProperties": {"type": "integer"}}},
+                        "required": ["field"],
+                    },
+                },
+            },
+        },
         optional_params={},
         model=model,
+        drop_params=False,
+    )
+
+    assert "output_format" in optional_params
+    assert "json_tool_call" not in [tool["name"] for tool in optional_params.get("tools", [])]
+
+
+def test_dict_fields_take_the_unforced_json_tool_on_a_default_thinking_model(local_model_cost_map):
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "out",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"field": {"type": "object", "additionalProperties": {"type": "integer"}}},
+                        "required": ["field"],
+                    },
+                },
+            }
+        },
+        optional_params={},
+        model="claude-opus-5",
         drop_params=False,
     )
 
@@ -1416,41 +1448,6 @@ def test_dict_fields_take_the_unforced_json_tool_when_it_cannot_be_forced(
     assert [
         (tool["name"], tool["input_schema"]["properties"]["field"]) for tool in optional_params["tools"]
     ] == [("json_tool_call", {"type": "object", "additionalProperties": {"type": "integer"}})]
-
-
-def test_dict_fields_keep_native_output_next_to_caller_tools(local_model_cost_map):
-    optional_params: Final = AnthropicConfig().map_openai_params(
-        non_default_params={
-            "tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
-            "response_format": _DICT_FIELD_RESPONSE_FORMAT,
-        },
-        optional_params={},
-        model="claude-opus-4-8",
-        drop_params=False,
-    )
-
-    assert "output_format" in optional_params
-    assert "json_tool_call" not in [tool["name"] for tool in optional_params.get("tools", [])]
-
-
-@pytest.mark.parametrize(
-    ("model", "thinking_params"),
-    [
-        ("claude-opus-4-8", {"reasoning_effort": "none"}),
-        ("claude-opus-5", {"thinking": {"type": "disabled"}}),
-    ],
-    ids=["reasoning-effort-none", "default-thinking-model-thinking-disabled"],
-)
-def test_dict_fields_take_the_forced_json_tool_when_thinking_is_off(local_model_cost_map, model, thinking_params):
-    optional_params: Final = AnthropicConfig().map_openai_params(
-        non_default_params={**thinking_params, "response_format": _DICT_FIELD_RESPONSE_FORMAT},
-        optional_params={},
-        model=model,
-        drop_params=False,
-    )
-
-    assert "output_format" not in optional_params
-    assert optional_params["tool_choice"] == {"name": "json_tool_call", "type": "tool"}
 
 
 def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
@@ -6767,6 +6764,7 @@ def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(loc
         ("claude-opus-5", {}, False),
         ("claude-sonnet-5", {}, False),
         ("claude-haiku-5-5", {}, False),
+        ("claude-fable-5", {"reasoning_effort": "none"}, False),
         ("claude-opus-4-8", {}, True),
         ("claude-opus-5", {"thinking": {"type": "disabled"}}, True),
         ("claude-haiku-5-5", {"reasoning_effort": "none"}, True),
@@ -6776,6 +6774,7 @@ def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(loc
         "opus-5-default-thinking",
         "sonnet-5-default-thinking",
         "haiku-5-5-default-thinking",
+        "fable-5-always-on-reasoning-effort-none",
         "opus-4-8-default-off",
         "opus-5-thinking-disabled",
         "haiku-5-5-reasoning-effort-none",

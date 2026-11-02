@@ -1340,12 +1340,15 @@ class AmazonConverseConfig(BaseConfig):
                 model=model, custom_llm_provider=self.custom_llm_provider
             ) and AnthropicModelInfo.response_format_tool_can_be_forced(model, "bedrock", request_params)
             schema_description: Final = description if isinstance(description, str) else None
+            instructs_unforced_tool: Final = not tool_is_forced and BedrockModelInfo.get_base_model(model).startswith(
+                "anthropic"
+            )
             _tool: Final = self._create_json_tool_call_for_response_format(
                 json_schema=json_schema,
                 description=(
-                    schema_description
-                    if tool_is_forced
-                    else " ".join(filter(None, (RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION, schema_description)))
+                    " ".join(filter(None, (RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION, schema_description)))
+                    if instructs_unforced_tool
+                    else schema_description
                 ),
             )
             optional_params = self._add_tools_to_optional_params(optional_params=optional_params, tools=[_tool])

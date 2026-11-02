@@ -1131,6 +1131,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def will_think(model: str, custom_llm_provider: str, request_params: Mapping[str, object]) -> bool:
+        if AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider):
+            return True
         match request_params:
             case {"thinking": True | {"type": "enabled" | "adaptive"}}:
                 return True

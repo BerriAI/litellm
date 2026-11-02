@@ -5054,6 +5054,7 @@ _JSON_TOOL_CHOICE: Final = {"tool": {"name": "json_tool_call"}}
         ("global.anthropic.claude-sonnet-5", None, None, {}, False),
         ("us.anthropic.claude-haiku-5-5", None, None, {}, False),
         ("us.anthropic.claude-fable-5", None, None, {}, False),
+        ("us.anthropic.claude-fable-5", None, None, {"reasoning_effort": "none"}, False),
         ("us.anthropic.claude-opus-4-8", None, None, {}, True),
         ("us.anthropic.claude-opus-5", None, None, {"thinking": {"type": "disabled"}}, True),
         ("us.anthropic.claude-haiku-5-5", None, None, {"reasoning_effort": "none"}, True),
@@ -5064,6 +5065,7 @@ _JSON_TOOL_CHOICE: Final = {"tool": {"name": "json_tool_call"}}
         "sonnet-5-default-thinking",
         "haiku-5-5-default-thinking",
         "fable-5-always-on",
+        "fable-5-always-on-reasoning-effort-none",
         "opus-4-8-default-off",
         "opus-5-thinking-disabled",
         "haiku-5-5-reasoning-effort-none",
@@ -5103,6 +5105,34 @@ def test_json_tool_is_forced_only_when_the_model_will_not_think(
         if forced
         else f"{RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION} The capital of a country"
     )
+
+
+def test_unforced_json_tool_keeps_the_schema_description_on_a_non_claude_model(set_native_structured_output):
+    model: Final = "us.meta.llama3-3-70b-instruct-v1:0"
+    set_native_structured_output(model, None)
+    config: Final = AmazonConverseConfig()
+
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {**CAPITAL_JSON_SCHEMA, "description": "The capital of a country"},
+            }
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    request: Final = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "toolChoice" not in request["toolConfig"]
+    assert [tool["toolSpec"]["description"] for tool in request["toolConfig"]["tools"]] == ["The capital of a country"]
 
 
 @pytest.mark.parametrize(

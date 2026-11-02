@@ -1776,7 +1776,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         request_params: Mapping[str, object],
     ) -> bool:
         open_object_takes_json_tool: Final = (
-            json_schema is not None and schema_has_open_object(json_schema) and not request_params.get("tools")
+            json_schema is not None
+            and schema_has_open_object(json_schema)
+            and not self.is_thinking_requested(request_params)
+            and not self.is_thinking_enabled(dict(request_params))
+            and not request_params.get("tools")
+            and not AnthropicModelInfo.forced_tool_use_unsupported(model)
         )
         return self.uses_native_structured_output(model) and not open_object_takes_json_tool
 
