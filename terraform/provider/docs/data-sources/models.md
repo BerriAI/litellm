@@ -41,4 +41,5 @@ In addition to all arguments above, the following attributes are exported:
   * `tier` - Model tier (`free` or `paid`).
   * `mode` - Model mode, e.g. `chat` or `embedding`.
   * `team_id` - Team the deployment is scoped to, if any.
+  * `display_name` - Human-readable name returned by `/v1/models`, if configured.
   * `db_model` - Whether the deployment is stored in the database.

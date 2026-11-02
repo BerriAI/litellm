@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { CircleHelp } from "lucide-react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { toast } from "@/lib/toast";
 import { registerClaudeCodePlugin } from "@/components/networking";
 import { FieldGroup } from "@/components/ui/field";

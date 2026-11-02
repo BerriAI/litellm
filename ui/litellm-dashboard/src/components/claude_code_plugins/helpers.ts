@@ -2,7 +2,7 @@
  * Helper utilities for Claude Code Marketplace
  */
 
-import { PluginSource, MarketplacePluginEntry } from "./types";
+import type { Plugin, PluginSource } from "./types";
 
 export interface SkillSourcePreview {
   parsed: PluginSource;
@@ -240,7 +240,9 @@ export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourceP
  * bare `"url"` string, so the url/source pair is nested one level deeper. The key must be
  * "litellm" to match the name the proxy returns in marketplace.json.
  */
-export const buildMarketplaceSettingsSnippet = (proxyOrigin: string): string =>
+export const MARKETPLACE_KEY_PLACEHOLDER = "<your-litellm-key>";
+
+export const buildMarketplaceSettingsSnippet = (proxyOrigin: string, requiresKey: boolean): string =>
   JSON.stringify(
     {
       extraKnownMarketplaces: {
@@ -248,6 +250,7 @@ export const buildMarketplaceSettingsSnippet = (proxyOrigin: string): string =>
           source: {
             source: "url",
             url: `${proxyOrigin}/claude-code/marketplace.json`,
+            ...(requiresKey ? { headers: { Authorization: `Bearer ${MARKETPLACE_KEY_PLACEHOLDER}` } } : {}),
           },
         },
       },
@@ -261,25 +264,6 @@ export const buildMarketplaceSettingsSnippet = (proxyOrigin: string): string =>
  * Installs the named plugin from the "litellm" marketplace registered in settings.json.
  */
 export const formatInstallCommand = (plugin: { name: string }): string => `/plugin install ${plugin.name}@litellm`;
-
-/**
- * Extract unique categories from plugins list
- * Returns array with "All" first, then sorted categories, then "Other"
- */
-export const extractCategories = (plugins: Array<{ category?: string }>): string[] => {
-  const categories = new Set<string>();
-
-  plugins.forEach((p) => {
-    if (p.category && p.category.trim() !== "") {
-      categories.add(p.category);
-    }
-  });
-
-  const sortedCategories = Array.from(categories).sort();
-
-  // Return: All, sorted categories, Other
-  return ["All", ...sortedCategories, "Other"];
-};
 
 /**
  * Validate plugin name format (kebab-case)
@@ -296,7 +280,7 @@ export const validatePluginName = (name: string): boolean => {
 /**
  * Get human-readable source display text
  */
-export const getSourceDisplayText = (source: PluginSource): string => {
+export const getSourceDisplayText = (source: Plugin["source"]): string => {
   if (source.source === "github" && source.repo) {
     return `GitHub: ${source.repo}`;
   }
@@ -312,7 +296,7 @@ export const getSourceDisplayText = (source: PluginSource): string => {
 /**
  * Get clickable link for plugin source. Ssh clone urls are not browsable, so they yield null.
  */
-export const getSourceLink = (source: PluginSource): string | null => {
+export const getSourceLink = (source: Plugin["source"]): string | null => {
   if (source.source === "github" && source.repo) {
     return `https://github.com/${source.repo}`;
   }
@@ -324,7 +308,7 @@ export const getSourceLink = (source: PluginSource): string | null => {
  * Get badge color based on category
  */
 export const getCategoryBadgeColor = (
-  category?: string,
+  category?: string | null,
 ): "blue" | "green" | "purple" | "red" | "orange" | "yellow" | "gray" => {
   if (!category) {
     return "gray";
@@ -347,77 +331,6 @@ export const getCategoryBadgeColor = (
   }
 
   return "gray";
-};
-
-/**
- * Format date to readable string
- */
-export const formatDateString = (dateString?: string): string => {
-  if (!dateString) {
-    return "N/A";
-  }
-
-  try {
-    const date = new Date(dateString);
-    return date.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-  } catch (error) {
-    return "Invalid date";
-  }
-};
-
-/**
- * Truncate text with ellipsis
- */
-export const truncateText = (text: string, maxLength: number): string => {
-  if (!text || text.length <= maxLength) {
-    return text;
-  }
-  return text.substring(0, maxLength) + "...";
-};
-
-/**
- * Filter plugins by search term
- * Searches in: name, description, keywords
- */
-export const filterPluginsBySearch = (
-  plugins: MarketplacePluginEntry[],
-  searchTerm: string,
-): MarketplacePluginEntry[] => {
-  if (!searchTerm || searchTerm.trim() === "") {
-    return plugins;
-  }
-
-  const term = searchTerm.toLowerCase().trim();
-
-  return plugins.filter((plugin) => {
-    const nameMatch = plugin.name.toLowerCase().includes(term);
-    const descriptionMatch = plugin.description?.toLowerCase().includes(term) || false;
-    const keywordsMatch = plugin.keywords?.some((keyword) => keyword.toLowerCase().includes(term)) || false;
-
-    return nameMatch || descriptionMatch || keywordsMatch;
-  });
-};
-
-/**
- * Filter plugins by category
- */
-export const filterPluginsByCategory = (
-  plugins: MarketplacePluginEntry[],
-  category: string,
-): MarketplacePluginEntry[] => {
-  if (category === "All") {
-    return plugins;
-  }
-
-  if (category === "Other") {
-    return plugins.filter((p) => !p.category || p.category.trim() === "");
-  }
-
-  return plugins.filter((p) => p.category === category);
 };
 
 /**
@@ -473,15 +386,4 @@ export const parseKeywords = (keywordsString: string): string[] => {
     .split(",")
     .map((kw) => kw.trim())
     .filter((kw) => kw !== "");
-};
-
-/**
- * Format keywords array to comma-separated string
- */
-export const formatKeywords = (keywords?: string[]): string => {
-  if (!keywords || keywords.length === 0) {
-    return "";
-  }
-
-  return keywords.join(", ");
 };

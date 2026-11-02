@@ -60,6 +60,8 @@ def _config_attachment_to_db_response(index: int, attachment: PolicyAttachment) 
         keys=attachment.keys or [],
         models=attachment.models or [],
         tags=attachment.tags or [],
+        priority=attachment.priority,
+        default=attachment.default,
         definition_location="config",
     )
 
@@ -621,7 +623,7 @@ async def test_pipeline(
     ```
     """
     try:
-        validated_pipeline: Final = GuardrailPipeline(**request.pipeline)
+        validated_pipeline: Final = GuardrailPipeline.model_validate(request.pipeline)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid pipeline: {e}")
 

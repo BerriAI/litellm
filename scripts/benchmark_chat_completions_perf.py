@@ -29,14 +29,13 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Final, Optional
 
 import aiohttp
 from aiohttp import web
 
 
 DEFAULT_MODEL = "perf-test-model"
-DEFAULT_API_KEY = "sk-1234"
 
 
 @dataclass
@@ -228,7 +227,6 @@ general_settings:
 
 litellm_settings:
   drop_params: true
-  telemetry: false
 """,
         encoding="utf-8",
     )
@@ -647,7 +645,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--proxy-port", type=int, default=4000)
     parser.add_argument("--provider-host", default="127.0.0.1")
     parser.add_argument("--provider-port", type=int, default=8099)
-    parser.add_argument("--api-key", default=DEFAULT_API_KEY)
+    parser.add_argument("--api-key", default=os.environ.get("LITELLM_MASTER_KEY"))
     parser.add_argument("--requests", type=int, default=500)
     parser.add_argument("--concurrency", type=int, default=100)
     parser.add_argument("--stream-requests", type=int, default=200)
@@ -696,12 +694,23 @@ def parse_args() -> argparse.Namespace:
 
 async def async_main() -> None:
     args = parse_args()
+    if args.no_start_proxy and not args.api_key:
+        raise ValueError("Set LITELLM_MASTER_KEY or pass --api-key when using --no-start-proxy")
+    api_key: Final = args.api_key or (
+        "sk-"
+        + subprocess.run(
+            ["openssl", "rand", "-hex", "16"],
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout.strip()
+    )
     litellm_dir = Path(args.litellm_dir).resolve()
     revision = get_git_revision(litellm_dir)
     proxy_base_url = f"http://{args.proxy_host}:{args.proxy_port}"
     proxy_url = f"{proxy_base_url}/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {args.api_key}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
     provider_headers = {
@@ -733,7 +742,7 @@ async def async_main() -> None:
             provider_base_url = provider.base_url
 
         config_path = tmp_dir / "config.yaml"
-        write_proxy_config(config_path, provider_base_url, args.api_key)
+        write_proxy_config(config_path, provider_base_url, api_key)
 
         try:
             if not args.no_start_proxy:

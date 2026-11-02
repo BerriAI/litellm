@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -19,6 +20,7 @@ from litellm.secret_managers.main import get_secret_str
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 else:
     LiteLLMLoggingObj = Any
@@ -67,15 +69,15 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         litellm_params_dict: dict,
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
-        extra_headers: dict[str, Any] | None,
-        base_llm_http_handler: Any,
+        extra_headers: dict[str, object] | None,
+        base_llm_http_handler: "BaseLLMHTTPHandler",
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> Union[
         "HttpxBinaryResponseContent",
-        Coroutine[Any, Any, "HttpxBinaryResponseContent"],
+        Coroutine[object, object, "HttpxBinaryResponseContent"],
     ]:
         """
         Dispatch method to handle Azure AVA TTS requests
@@ -328,8 +330,6 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
                 f"https://{{region}}.{self.TTS_SPEECH_DOMAIN}"
             )
 
-        # Remove trailing slash and parse URL
-        api_base = api_base.rstrip("/")
         parsed_url: Final = urlparse(api_base)
         hostname: Final = parsed_url.hostname or ""
 
@@ -338,14 +338,10 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             region: Final = self._extract_region_from_hostname(hostname=hostname, domain=self.COGNITIVE_SERVICES_DOMAIN)
             return self._build_tts_url(region=region)
 
-        # Check if it's already a TTS endpoint
         if self._is_tts_endpoint(hostname=hostname):
-            if not api_base.endswith(self.TTS_ENDPOINT_PATH):
-                return f"{api_base}{self.TTS_ENDPOINT_PATH}"
-            return api_base
+            return ensure_api_route(api_base, self.TTS_ENDPOINT_PATH)
 
-        # Assume it's a custom endpoint, append the path
-        return f"{api_base}{self.TTS_ENDPOINT_PATH}"
+        return join_api_base(api_base, self.TTS_ENDPOINT_PATH)
 
     def _is_cognitive_services_endpoint(self, hostname: str) -> bool:
         """Check if hostname is a Cognitive Services endpoint"""

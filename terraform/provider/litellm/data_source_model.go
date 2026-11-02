@@ -23,14 +23,15 @@ type modelInfoParams struct {
 }
 
 type modelInfoMeta struct {
-	ID        string `json:"id"`
-	DBModel   bool   `json:"db_model"`
-	BaseModel string `json:"base_model"`
-	Tier      string `json:"tier"`
-	Mode      string `json:"mode"`
-	TeamID    string `json:"team_id"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID          string `json:"id"`
+	DBModel     bool   `json:"db_model"`
+	BaseModel   string `json:"base_model"`
+	Tier        string `json:"tier"`
+	Mode        string `json:"mode"`
+	TeamID      string `json:"team_id"`
+	DisplayName string `json:"display_name"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 type modelInfoEntry struct {
@@ -112,6 +113,10 @@ func dataSourceLiteLLMModel() *schema.Resource {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
+			"display_name": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
 			"db_model": {
 				Type:     schema.TypeBool,
 				Computed: true,
@@ -161,6 +166,7 @@ func dataSourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("tier", entry.ModelInfo.Tier)
 	d.Set("mode", entry.ModelInfo.Mode)
 	d.Set("team_id", entry.ModelInfo.TeamID)
+	d.Set("display_name", entry.ModelInfo.DisplayName)
 	d.Set("db_model", entry.ModelInfo.DBModel)
 
 	log.Printf("[INFO] Successfully read model with ID: %s", modelID)
@@ -197,6 +203,7 @@ func dataSourceLiteLLMModels() *schema.Resource {
 						"tier":                {Type: schema.TypeString, Computed: true},
 						"mode":                {Type: schema.TypeString, Computed: true},
 						"team_id":             {Type: schema.TypeString, Computed: true},
+						"display_name":        {Type: schema.TypeString, Computed: true},
 						"db_model":            {Type: schema.TypeBool, Computed: true},
 					},
 				},
@@ -247,6 +254,7 @@ func dataSourceLiteLLMModelsRead(d *schema.ResourceData, m interface{}) error {
 			"tier":                entry.ModelInfo.Tier,
 			"mode":                entry.ModelInfo.Mode,
 			"team_id":             entry.ModelInfo.TeamID,
+			"display_name":        entry.ModelInfo.DisplayName,
 			"db_model":            entry.ModelInfo.DBModel,
 		})
 	}

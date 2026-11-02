@@ -628,3 +628,99 @@ func TestJWTKeyMappingCreateDoesNotLeakKeyInErrors(t *testing.T) {
 		t.Fatalf("the virtual key must be redacted in errors, got %v", err)
 	}
 }
+
+func TestJWTKeyMappingCreateSendsTokenIDAndOmitsKey(t *testing.T) {
+	srv, calls := jwtKeyMappingTestServer(t, jwtKeyMappingFixture())
+	defer srv.Close()
+
+	const tokenHash = "1923314ae0efc8b2523c7d421bac5a7cf88df291273b139948b526d396974a41"
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"token_id":        tokenHash,
+		"is_active":       true,
+	})
+
+	if err := resourceLiteLLMJWTKeyMappingCreate(d, client); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	create := (*calls)[0]
+	if create.Body["token"] != tokenHash {
+		t.Fatalf("token hash not sent: %v", create.Body["token"])
+	}
+	if _, sent := create.Body["key"]; sent {
+		t.Fatalf("key must be omitted when token_id is used, got: %v", create.Body)
+	}
+}
+
+func TestJWTKeyMappingCreateOmitsTokenWhenKeyIsUsed(t *testing.T) {
+	srv, calls := jwtKeyMappingTestServer(t, jwtKeyMappingFixture())
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"key":             "sk-abc123",
+		"is_active":       true,
+	})
+
+	if err := resourceLiteLLMJWTKeyMappingCreate(d, client); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	create := (*calls)[0]
+	if create.Body["key"] != "sk-abc123" {
+		t.Fatalf("virtual key not sent: %v", create.Body["key"])
+	}
+	if _, sent := create.Body["token"]; sent {
+		t.Fatalf("token must be omitted when key is used, got: %v", create.Body)
+	}
+}
+
+func TestJWTKeyMappingUpdateSendsTokenIDAndOmitsKey(t *testing.T) {
+	srv, calls := jwtKeyMappingTestServer(t, jwtKeyMappingFixture())
+	defer srv.Close()
+
+	const oldHash = "1111111111111111111111111111111111111111111111111111111111111111"
+	const newHash = "2222222222222222222222222222222222222222222222222222222222222222"
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := resourceDataWithChange(t,
+		map[string]string{
+			"id":              "map-abc-123",
+			"jwt_claim_name":  "client_id",
+			"jwt_claim_value": "dev-alice",
+			"token_id":        oldHash,
+			"is_active":       "true",
+		},
+		map[string]interface{}{
+			"jwt_claim_name":  "client_id",
+			"jwt_claim_value": "dev-alice",
+			"token_id":        newHash,
+			"is_active":       true,
+		})
+
+	if err := resourceLiteLLMJWTKeyMappingUpdate(d, client); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	var update *jwtKeyMappingCall
+	for i := range *calls {
+		if (*calls)[i].Path == "/jwt/key/mapping/update" {
+			update = &(*calls)[i]
+		}
+	}
+	if update == nil {
+		t.Fatalf("expected an update call, got %v", *calls)
+	}
+	if update.Body["token"] != newHash {
+		t.Fatalf("new token hash not sent: %v", update.Body["token"])
+	}
+	if _, sent := update.Body["key"]; sent {
+		t.Fatalf("key must be omitted when token_id is used, got: %v", update.Body)
+	}
+}

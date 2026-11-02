@@ -1,0 +1,733 @@
+"""
+Unit tests for DashScope image generation support (qwen-image-2.0, qwen-image-2.0-pro,
+qwen-image-3.0, qwen-image-3.0-pro).
+
+Run in docker: pytest tests/unit/test_dashscope_image_generation.py -v
+"""
+
+from typing import Final
+from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
+import respx
+from pydantic import ValidationError
+
+import litellm
+from litellm.cost_calculator import default_image_cost_calculator
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.dashscope.common_utils import (
+    DASHSCOPE_DEFAULT_ORIGIN,
+    DASHSCOPE_IMAGE_PATH,
+)
+from litellm.llms.dashscope.image_generation.transformation import (
+    DEFAULT_API_BASE,
+    DashScopeImageGenerationConfig,
+)
+from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
+from litellm.types.utils import ImageResponse, ModelInfo
+from litellm.utils import get_llm_provider
+
+# ---------------------------------------------------------------------------
+# 1. Provider detection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "model_string",
+    [
+        "dashscope/qwen-image-2.0",
+        "dashscope/qwen-image-2.0-pro",
+        "dashscope/qwen-image-3.0",
+        "dashscope/qwen-image-3.0-pro",
+    ],
+)
+def test_get_llm_provider_returns_dashscope(model_string: str):
+    model, provider, _, _ = get_llm_provider(model_string)
+    assert provider == "dashscope", f"Expected 'dashscope', got '{provider}'"
+    assert "qwen-image" in model
+
+
+# ---------------------------------------------------------------------------
+# 2. Model info: mode == "image_generation"
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# 3. Request transformation
+# ---------------------------------------------------------------------------
+
+
+class TestDashScopeImageGenerationConfig:
+    def setup_method(self):
+        self.cfg = DashScopeImageGenerationConfig()
+
+    def test_get_complete_url_default(self):
+        url = self.cfg.get_complete_url(None, None, "qwen-image-2.0", {}, {})
+        assert url == DEFAULT_API_BASE
+
+    def test_get_complete_url_custom(self):
+        custom = "https://custom.endpoint/generate"
+        url = self.cfg.get_complete_url(custom, None, "qwen-image-2.0", {}, {})
+        assert url == custom
+
+    @pytest.mark.parametrize(
+        "chat_api_base",
+        [
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/",
+        ],
+    )
+    def test_get_complete_url_ignores_chat_compatible_mode_base(
+        self, chat_api_base: str
+    ):
+        url = self.cfg.get_complete_url(chat_api_base, None, "qwen-image-3.0", {}, {})
+        assert url == DEFAULT_API_BASE
+
+    @pytest.mark.parametrize(
+        ("api_base", "expected"),
+        [
+            (
+                "https://dashscope.aliyuncs.com",
+                "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+            ),
+            (
+                "https://llm-abc123.cn-beijing.maas.aliyuncs.com",
+                "https://llm-abc123.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+            ),
+            (
+                "https://llm-abc123.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+                "https://llm-abc123.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+            ),
+            (
+                "https://dashscope-us.aliyuncs.com/api/v1/",
+                "https://dashscope-us.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+            ),
+        ],
+    )
+    def test_get_complete_url_derives_from_the_domain(
+        self, api_base: str, expected: str
+    ):
+        url: Final = self.cfg.get_complete_url(api_base, None, "qwen-image-3.0", {}, {})
+        assert url == expected
+
+    @pytest.mark.parametrize(
+        "endpoint_url",
+        [
+            "https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation",
+            "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis",
+        ],
+    )
+    def test_get_complete_url_keeps_a_full_dashscope_endpoint_url(
+        self, monkeypatch: pytest.MonkeyPatch, endpoint_url: str
+    ):
+        monkeypatch.setenv("DASHSCOPE_API_BASE_IMAGE", "https://images.example.com/generate")
+        url: Final = self.cfg.get_complete_url(endpoint_url, None, "qwen-image-3.0", {}, {})
+        assert url == endpoint_url
+
+    def test_validate_environment_sets_auth_header(self):
+        headers = self.cfg.validate_environment(
+            headers={},
+            model="qwen-image-2.0",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_key="sk-test-key",
+        )
+        assert headers["Authorization"] == "Bearer sk-test-key"
+        assert headers["Content-Type"] == "application/json"
+
+    def test_validate_environment_raises_without_key(self):
+        with patch(
+            "litellm.llms.dashscope.image_generation.transformation.get_secret_str",
+            return_value=None,
+        ):
+            with pytest.raises(ValueError, match="DASHSCOPE_API_KEY"):
+                self.cfg.validate_environment(
+                    headers={},
+                    model="qwen-image-2.0",
+                    messages=[],
+                    optional_params={},
+                    litellm_params={},
+                    api_key=None,
+                )
+
+    def test_transform_request_structure(self):
+        req = self.cfg.transform_image_generation_request(
+            model="qwen-image-2.0",
+            prompt="a puppy on green grass",
+            optional_params={"size": "1024*1024"},
+            litellm_params={},
+            headers={},
+        )
+        assert req["model"] == "qwen-image-2.0"
+        messages = req["input"]["messages"]
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+        assert messages[0]["content"][0]["text"] == "a puppy on green grass"
+        assert req["parameters"]["size"] == "1024*1024"
+
+    @pytest.mark.parametrize("model", ["qwen-image-3.0", "qwen-image-3.0-pro"])
+    def test_transform_request_qwen_image_3(self, model: str):
+        req = self.cfg.transform_image_generation_request(
+            model=model,
+            prompt="a poster with small multilingual text",
+            optional_params=self.cfg.map_openai_params(
+                non_default_params={"size": "2048x2048", "n": 6},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            ),
+            litellm_params={},
+            headers={},
+        )
+        assert req["model"] == model
+        assert req["input"]["messages"][0]["content"][0]["text"] == (
+            "a poster with small multilingual text"
+        )
+        assert req["parameters"]["size"] == "2048*2048"
+        assert req["parameters"]["n"] == 6
+
+    def test_transform_request_empty_params(self):
+        req = self.cfg.transform_image_generation_request(
+            model="qwen-image-2.0-pro",
+            prompt="sunset over the ocean",
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert req["parameters"] == {}
+
+    # ---------------------------------------------------------------------------
+    # 4. Response transformation
+    # ---------------------------------------------------------------------------
+
+    def _make_mock_response(self, image_url: str) -> httpx.Response:
+        body = {
+            "status_code": 200,
+            "request_id": "test-request-id",
+            "output": {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"image": image_url}],
+                        },
+                    }
+                ]
+            },
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "width": 1024,
+                "height": 1024,
+                "image_count": 1,
+            },
+        }
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+        mock_resp.headers = {}
+        mock_resp.json.return_value = body
+        return mock_resp
+
+    def test_transform_response_extracts_url(self):
+        image_url = "https://example.oss.aliyuncs.com/generated/test.png"
+        mock_resp = self._make_mock_response(image_url)
+        model_response = ImageResponse()
+        result = self.cfg.transform_image_generation_response(
+            model="qwen-image-2.0",
+            raw_response=mock_resp,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+        assert result.data is not None
+        assert len(result.data) == 1
+        assert result.data[0].url == image_url
+
+    def test_transform_response_multiple_images(self):
+        body = {
+            "output": {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"image": "https://example.com/img1.png"}],
+                        },
+                    },
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"image": "https://example.com/img2.png"}],
+                        },
+                    },
+                ]
+            },
+            "usage": {},
+        }
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+        mock_resp.headers = {}
+        mock_resp.json.return_value = body
+
+        model_response = ImageResponse()
+        result = self.cfg.transform_image_generation_response(
+            model="qwen-image-2.0",
+            raw_response=mock_resp,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+        assert len(result.data) == 2
+        assert result.data[0].url == "https://example.com/img1.png"
+        assert result.data[1].url == "https://example.com/img2.png"
+
+    def test_transform_response_multiple_images_in_one_choice(self):
+        body = {
+            "output": {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": [
+                                {"image": "https://example.com/img1.png", "type": "image"},
+                                {"image": "https://example.com/img2.png", "type": "image"},
+                            ],
+                        },
+                    }
+                ]
+            },
+            "usage": {
+                "output_width": 1024,
+                "output_height": 1024,
+                "output_image_count": 2,
+            },
+        }
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+        mock_resp.headers = {}
+        mock_resp.json.return_value = body
+
+        result = self.cfg.transform_image_generation_response(
+            model="qwen-image-3.0",
+            raw_response=mock_resp,
+            model_response=ImageResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+        assert [image.url for image in result.data] == [
+            "https://example.com/img1.png",
+            "https://example.com/img2.png",
+        ]
+
+    def test_transform_response_raises_on_non_200_status(self):
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 400
+        mock_resp.headers = {}
+        mock_resp.text = '{"code":"InvalidParameter","message":"Size not supported"}'
+        mock_resp.json.return_value = {
+            "code": "InvalidParameter",
+            "message": "Size not supported",
+        }
+
+        with pytest.raises(BaseLLMException):
+            self.cfg.transform_image_generation_response(
+                model="qwen-image-2.0",
+                raw_response=mock_resp,
+                model_response=ImageResponse(),
+                logging_obj=MagicMock(),
+                request_data={},
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+
+    def test_transform_response_raises_on_api_error_body(self):
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+        mock_resp.headers = {}
+        mock_resp.json.return_value = {
+            "code": "InvalidParameter",
+            "message": "Size not supported",
+        }
+
+        with pytest.raises(BaseLLMException):
+            self.cfg.transform_image_generation_response(
+                model="qwen-image-2.0",
+                raw_response=mock_resp,
+                model_response=ImageResponse(),
+                logging_obj=MagicMock(),
+                request_data={},
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+
+    # ---------------------------------------------------------------------------
+    # 5. OpenAI → DashScope parameter mapping
+    # ---------------------------------------------------------------------------
+
+    def test_map_openai_params_size_conversion(self):
+        mapped = self.cfg.map_openai_params(
+            non_default_params={"size": "1024x1024"},
+            optional_params={},
+            model="qwen-image-2.0",
+            drop_params=False,
+        )
+        assert mapped["size"] == "1024*1024"
+
+    def test_map_openai_params_n_passthrough(self):
+        mapped = self.cfg.map_openai_params(
+            non_default_params={"n": 2},
+            optional_params={},
+            model="qwen-image-2.0",
+            drop_params=False,
+        )
+        assert mapped == {"n": 2}
+
+    def test_map_openai_params_unknown_size_uses_asterisk(self):
+        mapped = self.cfg.map_openai_params(
+            non_default_params={"size": "768x768"},
+            optional_params={},
+            model="qwen-image-2.0",
+            drop_params=False,
+        )
+        assert mapped["size"] == "768*768"
+
+    @pytest.mark.parametrize(
+        "openai_size, expected",
+        [
+            ("256x256", "256*256"),
+            ("512x512", "512*512"),
+            ("1024x1024", "1024*1024"),
+            ("1792x1024", "1792*1024"),
+            ("1024x1792", "1024*1792"),
+            ("2048x2048", "2048*2048"),
+        ],
+    )
+    def test_map_openai_params_size_table(self, openai_size: str, expected: str):
+        mapped = self.cfg.map_openai_params(
+            non_default_params={"size": openai_size},
+            optional_params={},
+            model="qwen-image-2.0",
+            drop_params=False,
+        )
+        assert mapped["size"] == expected
+
+
+# ---------------------------------------------------------------------------
+# 6. End-to-end flow via litellm.image_generation (HTTP mocked)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "dashscope/qwen-image-2.0",
+        "dashscope/qwen-image-3.0",
+        "dashscope/qwen-image-3.0-pro",
+    ],
+)
+def test_litellm_image_generation_dashscope_end_to_end(model: str):
+    mock_response_body = {
+        "output": {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "image": "https://dashscope-result.oss.aliyuncs.com/test.png"
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "width": 1024,
+            "height": 1024,
+            "image_count": 1,
+        },
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
+    ) as mock_post:
+        mock_http_response = MagicMock()
+        mock_http_response.json.return_value = mock_response_body
+        mock_http_response.status_code = 200
+        mock_http_response.headers = {}
+        mock_post.return_value = mock_http_response
+
+        response = litellm.image_generation(
+            model=model,
+            prompt="a puppy playing on green grass",
+            api_key="sk-test-key",
+            size="1024x1024",
+        )
+
+        assert response is not None
+        assert response.data is not None
+        assert len(response.data) == 1
+        assert (
+            response.data[0].url == "https://dashscope-result.oss.aliyuncs.com/test.png"
+        )
+
+        # Verify the HTTP call was made to the DashScope endpoint
+        call_args = mock_post.call_args
+        called_url = (
+            call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
+        )
+        assert called_url == DEFAULT_API_BASE
+
+        # Verify request body contains DashScope format
+        call_kwargs = call_args[1] if call_args[1] else {}
+        if "json" in call_kwargs:
+            body = call_kwargs["json"]
+            assert "input" in body
+            assert "messages" in body["input"]
+            assert body["parameters"]["size"] == "1024*1024"
+
+
+
+@pytest.mark.parametrize(
+    ("api_base", "chat_base_env", "image_base_env", "expected_url"),
+    [
+        (None, "", "", DEFAULT_API_BASE),
+        ("https://dashscope.aliyuncs.com", "", "", f"{DASHSCOPE_DEFAULT_ORIGIN}{DASHSCOPE_IMAGE_PATH}"),
+        (None, "", "https://images.example.com/generate", "https://images.example.com/generate"),
+        (
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "",
+            "https://images.example.com/generate",
+            "https://images.example.com/generate",
+        ),
+        (None, "https://gateway.example.com/dashscope/images", "", "https://gateway.example.com/dashscope/images"),
+        (None, "https://dashscope-us.aliyuncs.com", "https://images.example.com/generate", "https://images.example.com/generate"),
+        (
+            None,
+            f"https://dashscope-us.aliyuncs.com{DASHSCOPE_IMAGE_PATH}",
+            "https://images.example.com/generate",
+            f"https://dashscope-us.aliyuncs.com{DASHSCOPE_IMAGE_PATH}",
+        ),
+        (
+            None,
+            "https://gateway.example.com/dashscope/images",
+            "https://images.example.com/generate",
+            "https://gateway.example.com/dashscope/images",
+        ),
+        (
+            None,
+            "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+            "https://images.example.com/generate",
+            "https://images.example.com/generate",
+        ),
+        (
+            "https://dashscope-us.aliyuncs.com",
+            "",
+            "https://images.example.com/generate",
+            f"https://dashscope-us.aliyuncs.com{DASHSCOPE_IMAGE_PATH}",
+        ),
+        (
+            None,
+            "https://dashscope-us.aliyuncs.com",
+            "",
+            f"https://dashscope-us.aliyuncs.com{DASHSCOPE_IMAGE_PATH}",
+        ),
+        (
+            "https://dashscope-intl.aliyuncs.com",
+            "https://gateway.example.com/dashscope/images",
+            "",
+            f"https://dashscope-intl.aliyuncs.com{DASHSCOPE_IMAGE_PATH}",
+        ),
+    ],
+)
+def test_image_generation_resolves_from_the_configured_base_not_the_chat_default(
+    monkeypatch: pytest.MonkeyPatch,
+    api_base: str | None,
+    chat_base_env: str,
+    image_base_env: str,
+    expected_url: str,
+):
+    monkeypatch.setenv("DASHSCOPE_API_BASE", chat_base_env)
+    monkeypatch.setenv("DASHSCOPE_API_BASE_IMAGE", image_base_env)
+    image_url: Final = "https://dashscope-result.oss.aliyuncs.com/t.png"
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(expected_url).respond(
+            200, json={"output": {"choices": [{"message": {"content": [{"image": image_url}]}}]}}
+        )
+        response: Final = litellm.image_generation(
+            model="dashscope/qwen-image-3.0", prompt="a puppy", api_key="sk-test-key", api_base=api_base
+        )
+
+    assert response.data[0].url == image_url
+
+
+def _transform_response(payload: object) -> ImageResponse:
+    return DashScopeImageGenerationConfig().transform_image_generation_response(
+        model="qwen-image-2.0",
+        raw_response=httpx.Response(200, json=payload),
+        model_response=ImageResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"output": {}},
+        {"output": {"choices": []}},
+        {"output": {"choices": ""}},
+        {"output": {"choices": [{}]}},
+        {"output": {"choices": [{"message": {}}]}},
+        {"output": {"choices": [{"message": {"content": {}}}]}},
+        {"output": {"choices": [{"message": {"content": [{}]}}]}},
+        {"output": {"choices": [{"message": {"content": [{"image": ""}]}}]}},
+        {"output": {"choices": [{"message": {"content": [{"text": "hi"}]}}]}},
+        {"code": "Partial", "output": {"choices": []}},
+    ],
+)
+def test_transform_response_without_image_content_has_no_images(
+    payload: dict[str, object],
+):
+    assert _transform_response(payload).data == []
+
+
+@pytest.mark.parametrize("usage", [None, "n/a", ["input_image_count", 2]])
+def test_transform_response_returns_the_images_whatever_shape_usage_has(usage: object):
+    response = _transform_response(
+        {"output": {"choices": [{"message": {"content": [{"image": "https://a.example/1.png"}]}}]}, "usage": usage}
+    )
+
+    assert [image.url for image in response.data] == ["https://a.example/1.png"]
+    assert "billable_input_image_count" not in response.hidden_params
+
+
+def test_transform_response_skips_content_items_without_an_image():
+    response = _transform_response(
+        {
+            "output": {
+                "choices": [
+                    {"message": {"content": [{"text": "caption"}, {"image": "https://a.example/1.png"}]}},
+                    {"message": {"content": [{"image": None}, {"image": "https://a.example/2.png"}]}},
+                ]
+            }
+        }
+    )
+
+    assert [image.url for image in response.data] == [
+        "https://a.example/1.png",
+        "https://a.example/2.png",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"code": "InvalidParameter", "message": "Size not supported"}, "Size not supported"),
+        ({"code": "Throttled"}, "{'code': 'Throttled'}"),
+        ({"code": 429, "message": {"detail": "slow down"}}, "{'detail': 'slow down'}"),
+    ],
+)
+def test_transform_response_reports_api_error_bodies(
+    payload: dict[str, object], message: str
+):
+    with pytest.raises(BaseLLMException) as exc_info:
+        _transform_response(payload)
+
+    assert exc_info.value.message == message
+    assert exc_info.value.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["code"],
+        "code",
+        7,
+        {"output": None},
+        {"output": ["not", "an", "object"]},
+        {"output": {"choices": 7}},
+        {"output": {"choices": ["not an object"]}},
+        {"output": {"choices": [{"message": "not an object"}]}},
+        {"output": {"choices": [{"message": {"content": None}}]}},
+        {"output": {"choices": [{"message": {"content": ["not an object"]}}]}},
+    ],
+)
+def test_transform_response_rejects_malformed_payloads_without_echoing_them(
+    payload: object,
+):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_response(payload)
+
+    assert "input_value" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("model", "usage"),
+    (
+        ("qwen-image-2.0", {"width": 2048, "height": 1536, "image_count": 1}),
+        (
+            "qwen-image-3.0",
+            {"output_width": 2048, "output_height": 1536, "output_image_count": 1, "input_image_count": 0},
+        ),
+    ),
+)
+def test_a_per_pixel_deployment_bills_the_size_dashscope_rendered_when_the_caller_sent_none(
+    model: str, usage: dict[str, int]
+):
+    response = _transform_response(
+        {
+            "output": {"choices": [{"message": {"content": [{"image": "https://a.example/1.png"}]}}]},
+            "usage": usage,
+        }
+    )
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        completion_response=response,
+        custom_llm_provider="dashscope",
+        call_type="image_generation",
+        model_info=ModelInfo(input_cost_per_pixel=1e-08),
+    )
+
+    assert cost == pytest.approx(2048 * 1536 * 1e-08)
+
+
+@pytest.mark.parametrize("model", ("qwen-image-2.0", "qwen-image-2.0-pro", "qwen-image-3.0"))
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_a_shared_row_bills_a_generated_image_the_same_on_the_default_calculator_released_proxies_use(model: str):
+    dashscope_cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        completion_response=ImageResponse(data=[{"url": "https://a.example/1.png"}]),
+        custom_llm_provider="dashscope",
+        call_type="image_generation",
+    )
+
+    assert dashscope_cost > 0
+    assert default_image_cost_calculator(model=f"dashscope/{model}", custom_llm_provider="dashscope") == pytest.approx(
+        dashscope_cost
+    )

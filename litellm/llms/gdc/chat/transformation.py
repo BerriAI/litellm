@@ -7,12 +7,35 @@ import os
 import re
 import threading
 from collections.abc import Callable
-from typing import Any, Final, Protocol
+from typing import Final, Protocol
 from urllib.parse import urlsplit
 
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict, Unpack
+
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.types.llms.openai import AllMessageValues
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _OpenAIGPTConfigOptions(TypedDict, total=False):
+    """The sampling defaults ``OpenAIGPTConfig.__init__`` accepts and stashes on the class."""
+
+    frequency_penalty: ReadOnly[int | None]
+    function_call: ReadOnly[str | dict[str, object] | None]
+    functions: ReadOnly[list[object] | None]
+    logit_bias: ReadOnly[dict[str, object] | None]
+    max_tokens: ReadOnly[int | None]
+    n: ReadOnly[int | None]
+    presence_penalty: ReadOnly[int | None]
+    stop: ReadOnly[str | list[object] | None]
+    temperature: ReadOnly[int | None]
+    top_p: ReadOnly[int | None]
+    response_format: ReadOnly[dict[str, object] | None]
 
 
 class _GDCHAudienceCredentials(Protocol):
@@ -32,7 +55,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
     _GDCH_CREDENTIAL_TYPE: Final[str] = "gdch_service_account"
     _PATH_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-zA-Z0-9_-]+$")
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: Unpack[_OpenAIGPTConfigOptions]) -> None:
         super().__init__(**kwargs)
         self._creds_lock = threading.Lock()
         self._gdch_creds_cache: dict[tuple[str, str], _GDCHAudienceCredentials] = {}
@@ -122,7 +145,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         project = self._validate_path_id(project, "vertex_project", model)
         location = self._validate_path_id(location, "vertex_location", model)
 
-        return f"{api_base}/v1/projects/{project}/locations/{location}/chat/completions"
+        return join_api_base(api_base, f"v1/projects/{project}/locations/{location}/chat/completions")
 
     def _read_env_bool(self, val: bool | str | None, env_var: str, default: bool = True) -> bool | str:
         def _parse(s: str) -> bool | str:
@@ -184,10 +207,10 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         import google.auth
 
         try:
-            json_obj: Final = json.loads(api_key)
+            json_obj: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(api_key)))
         except json.JSONDecodeError:
             return None, False
-        if not isinstance(json_obj, dict) or json_obj.get("type") != self._GDCH_CREDENTIAL_TYPE:
+        if json_obj is None or json_obj.get("type") != self._GDCH_CREDENTIAL_TYPE:
             raise ValueError(
                 "GDC only accepts a GDCH service account credential as a JSON api_key "
                 '(expected "type": "gdch_service_account"). Other Google credential types are '

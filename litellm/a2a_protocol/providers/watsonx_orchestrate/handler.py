@@ -7,7 +7,7 @@ import hashlib
 import json
 import time
 from collections.abc import AsyncIterator
-from typing import Any, Final, NamedTuple, Protocol
+from typing import Final, NamedTuple, Protocol
 
 import httpx
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -20,6 +20,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 _IBM_CLOUD_IAM_URL: Final = "https://iam.cloud.ibm.com/identity/token"
@@ -74,7 +75,7 @@ class _WXORun(TypedDict, total=False):
 
 
 class _SSELineSource(Protocol):
-    def aiter_lines(self) -> AsyncIterator[str]: ...
+    def aiter_text(self) -> AsyncIterator[str]: ...
 
 
 class _WXOView(TypedDict, total=False):
@@ -228,10 +229,10 @@ class WatsonxOrchestrateHandler:
         return run_data
 
     @staticmethod
-    async def _accumulate_wxo_sse_text(response: Any) -> str:
+    async def _accumulate_wxo_sse_text(response: _SSELineSource) -> str:
         source: Final[_WXOView] = {"sse_source": response}
         accumulated_text = ""
-        async for line in source["sse_source"].aiter_lines():
+        async for line in aiter_sse_lines(source["sse_source"].aiter_text()):
             if not line.startswith("data:"):
                 continue
             data_str = line[5:].strip()

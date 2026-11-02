@@ -1,0 +1,1 @@
+- https://docs.cloud.google.com/secret-manager/docs/reference/rest/v1/projects.secrets.versions/access

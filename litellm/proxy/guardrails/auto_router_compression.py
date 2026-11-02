@@ -14,14 +14,14 @@ from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
-from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
+from litellm.router_strategy.auto_router.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.router import Router
 
-COMPRESSION_GUARDRAIL_PROVIDERS: Final = frozenset({"headroom", "compresr"})
+COMPRESSION_GUARDRAIL_PROVIDERS: Final = frozenset({"headroom", "compresr", "typesafe"})
 _NO_COMPRESSION: Final = "none"
 
 # A ContextVar, not metadata: metadata reaches spend logs the caller can read, and a
@@ -92,7 +92,7 @@ def policy_for_model(
     """
     if llm_router is None:
         return None
-    deployments: Final = llm_router.deployments_for_request(model_alias, request_kwargs)
+    deployments: Final = llm_router.registry().deployments(model_alias, source="for_request", request=request_kwargs)
     markers: Final = tuple(
         litellm_params
         for deployment in deployments
@@ -156,15 +156,13 @@ async def arm_pre_call(
     if not isinstance(model_alias, str) or not model_alias:
         return
 
-    from litellm.router_strategy.tag_based_routing import (
-        _get_tags_from_request_kwargs,  # pyright: ignore[reportPrivateUsage]  # used in router.py and budget_limiter.py too
-    )
+    from litellm.router_strategy.tag_based_routing import get_routing_tags_from_request_kwargs
 
     policy: Final = policy_for_model(
         llm_router=llm_router,
         model_alias=model_alias,
         request_kwargs=data,
-        request_tags=_get_tags_from_request_kwargs(data),
+        request_tags=get_routing_tags_from_request_kwargs(data),
     )
     if policy is None:
         return
@@ -194,14 +192,14 @@ async def arm_pre_call(
         existing: Final = tuple(requested) if isinstance(requested, (list, tuple)) else ()
         if policy.model not in existing:
             # A list: litellm_pre_call_utils isinstance-checks this key and drops a tuple.
-            metadata["guardrails"] = [*existing, policy.model]  # mutable-ok: this key's contract is a list
+            metadata["guardrails"] = [*existing, policy.model]
 
 
 def _as_routing_messages(
     messages: Iterable[Mapping[str, object]],
 ) -> list[dict[str, object]]:  # mutable-ok: shape fixed by the pre-routing hook protocol
     """A fresh, independently mutable copy, the shape the pre-routing hook takes."""
-    return [dict(message) for message in messages]  # mutable-ok: shape fixed by the pre-routing hook protocol
+    return [dict(message) for message in messages]
 
 
 async def messages_for_routing(
@@ -248,7 +246,7 @@ async def messages_for_routing(
     model: Final = request_kwargs.get("model")
     # Throwaway: apply_guardrail writes stats here, so routing never double-counts into
     # extract_compression_saved_tokens.
-    stats_sink: Final = {"messages": messages, "model": model}  # mutable-ok: apply_guardrail writes its stats here
+    stats_sink: Final = {"messages": messages, "model": model}
     result: Final = await guardrail.apply_guardrail(
         inputs=inputs,
         request_data=stats_sink,

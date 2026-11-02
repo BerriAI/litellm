@@ -1,4 +1,6 @@
 {{- if .Values.backend.enabled }}
+{{- $componentHosts := .Values.ingress.componentHosts | default dict -}}
+{{- $hasComponentHosts := or $componentHosts.ui $componentHosts.backend $componentHosts.gateway -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -7,6 +9,9 @@ metadata:
     {{- include "litellm.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: backend
 spec:
+  {{- if and (not .Values.backend.hpa.enabled) (not (kindIs "invalid" .Values.backend.replicaCount)) }}
+  replicas: {{ .Values.backend.replicaCount }}
+  {{- end }}
   {{- with .Values.backend.strategy }}
   strategy:
     {{- toYaml . | nindent 4 }}
@@ -54,7 +59,18 @@ spec:
               containerPort: 4001
               protocol: TCP
           env:
+            {{- include "litellm.lensConnectionEnv" . | nindent 12 }}
+            {{- if .Values.ui.publicUrl }}
+            - name: LITELLM_CORS_ORIGINS
+              value: {{ include "litellm.ui.publicOrigin" . | quote }}
+            - name: LITELLM_CORS_ALLOW_CREDENTIALS
+              value: "true"
+            {{- end }}
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.backend) | nindent 12 }}
+            {{- if .Values.backend.gatewayUrl }}
+            - name: LITELLM_GATEWAY_URL
+              value: {{ if $hasComponentHosts }}{{ include "litellm.backend.gatewayOrigin" . | quote }}{{ else }}{{ .Values.backend.gatewayUrl | quote }}{{ end }}
+            {{- end }}
             {{- if .Values.gateway.config.create }}
             - name: CONFIG_FILE_PATH
               value: /app/config/config.yaml

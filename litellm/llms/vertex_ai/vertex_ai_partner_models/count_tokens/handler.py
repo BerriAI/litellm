@@ -1,47 +1,79 @@
 """
-Token counter for Vertex AI Partner Models (Anthropic Claude, Mistral, etc.)
+Token counter for Vertex AI Partner Models (Anthropic Claude, Meta Llama)
 
 This handler provides token counting for partner models hosted on Vertex AI.
 Unlike Gemini models which use Google's token counting API, partner models use
 their respective publisher-specific count-tokens endpoints.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.common_utils import (
+    OBJECT_LIST_ADAPTER,
+    count_tokens_feature_betas,
+    is_claude_model_target,
+    tools_without_custom_field,
+)
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+_COUNT_TOKENS_PUBLISHERS: Final = (
+    ("claude", "anthropic"),
+    ("llama", "meta"),
+    ("meta/", "meta"),
+)
+
+
+_REQUEST_MESSAGES: Final = TypeAdapter(Sequence[object])
+
+
+def count_tokens_request_body(
+    request_data: Mapping[str, object], model: str, drop_params: object
+) -> Mapping[str, object]:
+    tools: Final = request_data.get("tools")
+    if not isinstance(tools, list):
+        return request_data
+    return {
+        **request_data,
+        "tools": tools_without_custom_field(
+            OBJECT_LIST_ADAPTER.validate_python(tools),
+            hoist_defer_loading=is_claude_model_target("vertex_ai", model),
+            drop_custom=drops_unsupported_params(drop_params),
+        ),
+    }
+
+
+def count_tokens_publisher(model: str) -> str | None:
+    return next((publisher for marker, publisher in _COUNT_TOKENS_PUBLISHERS if marker in model), None)
+
+
+def count_tokens_headers(access_token: str, request_data: Mapping[str, object]) -> Mapping[str, str]:
+    authorization: Final = {"Authorization": f"Bearer {access_token}"}
+    betas: Final = count_tokens_feature_betas(
+        "vertex_ai", request_data, _REQUEST_MESSAGES.validate_python(request_data["messages"])
+    )
+    return {**authorization, "anthropic-beta": ",".join(betas)} if betas else authorization
 
 
 class VertexAIPartnerModelsTokenCounter(VertexBase):
     """
     Token counter for Vertex AI Partner Models.
 
-    Handles token counting for models like Claude (Anthropic), Mistral, etc.
+    Handles token counting for models like Claude (Anthropic) and Llama (Meta)
     that are available through Vertex AI's partner model program.
     """
 
     def _get_publisher_for_model(self, model: str) -> str:
-        """
-        Determine the publisher name for the given model.
-
-        Args:
-            model: The model name (e.g., "claude-3-5-sonnet-20241022")
-
-        Returns:
-            Publisher name to use in the Vertex AI endpoint URL
-
-        Raises:
-            ValueError: If the model is not a recognized partner model
-        """
-        if "claude" in model:
-            return "anthropic"
-        elif "mistral" in model or "codestral" in model:
-            return "mistralai"
-        elif "llama" in model or "meta/" in model:
-            return "meta"
-        else:
+        publisher: Final = count_tokens_publisher(model)
+        if publisher is None:
             raise ValueError(f"Unknown partner model: {model}")
+        return publisher
 
     def _build_count_tokens_endpoint(
         self,
@@ -65,16 +97,14 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         publisher: Final = self._get_publisher_for_model(model)
 
         # Use custom api_base if provided, otherwise construct default
-        if api_base:
-            base_url = api_base
-        else:
-            base_url = get_vertex_base_url(vertex_location)
+        base_url: Final = api_base or get_vertex_base_url(vertex_location)
 
         # Construct the count-tokens endpoint
         # Format: /v1/projects/{project}/locations/{location}/publishers/{publisher}/models/count-tokens:rawPredict
-        endpoint: Final = (
-            f"{base_url}/v1/projects/{project_id}/locations/{vertex_location}/"
-            f"publishers/{publisher}/models/count-tokens:rawPredict"
+        endpoint: Final = join_api_base(
+            base_url,
+            f"v1/projects/{project_id}/locations/{vertex_location}/"
+            f"publishers/{publisher}/models/count-tokens:rawPredict",
         )
 
         return endpoint
@@ -163,8 +193,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
             api_base=litellm_params.get("api_base"),
         )
 
-        # Prepare headers
-        headers: Final = {"Authorization": f"Bearer {access_token}"}
+        headers: Final = dict(count_tokens_headers(access_token, request_data))
 
         # Get async HTTP client
         from litellm import LlmProviders
@@ -176,7 +205,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         response: Final = await async_client.post(
             endpoint_url,
             headers=headers,
-            json=request_data,
+            json=dict(count_tokens_request_body(request_data, model, litellm_params.get("drop_params"))),
             timeout=30.0,
         )
 

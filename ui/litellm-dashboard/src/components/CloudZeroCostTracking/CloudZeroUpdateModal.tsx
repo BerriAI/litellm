@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { useCloudZeroUpdateSettings } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";

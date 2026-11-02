@@ -1,5 +1,6 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
+import { MCP_ALL_TOOLS_WILDCARD } from "../mcp_tools/constants";
 
 // Mirrors the backend resolver's union (direct + access_group + tool_perm + toolset), so the
 // editor shows exactly the servers this permission level entitles.
@@ -47,7 +48,7 @@ interface ResolveInput {
 // Access groups come back as plain names, but older records carry `{ name }` objects.
 const accessGroupRefSchema = z.union([z.string(), z.object({ name: z.string() })]);
 
-const accessGroupNamesOf = (server: MCPServer): readonly string[] =>
+export const accessGroupNamesOf = (server: MCPServer): readonly string[] =>
   (server.mcp_access_groups ?? []).flatMap((group) => {
     const parsed = accessGroupRefSchema.safeParse(group);
     if (!parsed.success) return [];
@@ -120,6 +121,12 @@ export const mcpAllowedToolsFor = (
   if (keys.length === 0) return undefined;
   return [...new Set(keys.flatMap((key) => toolPermissions[key] ?? []))];
 };
+
+// An allowed-tools union carrying the wildcard grants every current and future tool on the
+// server; `undefined` (no entry at all) is unrestricted for a different reason and is not a
+// wildcard grant the editor should expand.
+export const mcpGrantsAllTools = (allowed: readonly string[] | undefined): boolean =>
+  allowed !== undefined && allowed.includes(MCP_ALL_TOOLS_WILDCARD);
 
 // Tool names the given toolsets grant on this server, `undefined` when they grant none.
 const mcpToolsetToolsFor = (

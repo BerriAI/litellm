@@ -4,6 +4,8 @@ import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
 import { masterKey } from "../../helpers/traffic";
 
+const BUDGET_LIST_PATH = "/management/v1/budgets";
+
 interface StoredBudget {
   budget_id: string;
   max_budget: number | null;
@@ -30,7 +32,17 @@ async function createBudgetViaApi(page: PlaywrightPage, budget: Partial<StoredBu
 }
 
 async function searchForBudget(page: PlaywrightPage, budgetId: string): Promise<void> {
+  const searched = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      response.request().method() === "GET" &&
+      url.pathname === BUDGET_LIST_PATH &&
+      url.searchParams.get("q") === budgetId
+    );
+  });
   await page.getByPlaceholder("Search by budget ID").fill(budgetId);
+  const response = await searched;
+  expect(response.ok(), `GET ${BUDGET_LIST_PATH}?q=${budgetId} (${response.status()})`).toBe(true);
 }
 
 test.describe("Budgets", () => {
@@ -48,13 +60,11 @@ test.describe("Budgets", () => {
     await expect(modal).toBeVisible({ timeout: 10_000 });
 
     await modal.getByRole("textbox", { name: "Budget ID" }).fill(budgetId);
-    await modal.getByRole("spinbutton", { name: "Max Tokens per minute" }).fill("5000");
-    await modal.getByRole("spinbutton", { name: "Max Requests per minute" }).fill("60");
-
-    await modal.getByRole("button", { name: "Optional Settings" }).click();
-    await modal.getByRole("spinbutton", { name: "Max Budget (USD)" }).fill("25.5");
-    await modal.getByRole("combobox", { name: "Reset Budget" }).click();
-    await page.getByRole("option", { name: "weekly" }).click();
+    await modal.getByRole("spinbutton", { name: "Tokens per minute" }).fill("5000");
+    await modal.getByRole("spinbutton", { name: "Requests per minute" }).fill("60");
+    await modal.getByRole("spinbutton", { name: "Spend limit" }).fill("25.5");
+    await modal.getByRole("combobox", { name: "Reset period" }).click();
+    await page.getByRole("option", { name: "per week" }).click();
 
     await modal.getByRole("button", { name: "Create Budget" }).click();
     await expect(modal).not.toBeVisible({ timeout: 10_000 });
@@ -88,15 +98,12 @@ test.describe("Budgets", () => {
     const modal = page.getByRole("dialog", { name: "Edit Budget" });
     await expect(modal).toBeVisible({ timeout: 10_000 });
 
-    await modal.getByRole("button", { name: "Optional Settings" }).click();
-    await modal.getByRole("spinbutton", { name: "Max Budget (USD)" }).fill("99");
+    await modal.getByRole("spinbutton", { name: "Spend limit" }).fill("99");
     await modal.getByRole("button", { name: "Save", exact: true }).click();
     await expect(modal).not.toBeVisible({ timeout: 10_000 });
 
     await expect(page.getByRole("row").filter({ hasText: budgetId })).toContainText("$99.00", { timeout: 10_000 });
 
-    // Not hypothetical: the edit form posts the whole budget, so a field it fails to
-    // seed from the existing row goes to the server as null and silently clears.
     const stored = await findBudget(page, budgetId);
     expect(stored?.max_budget, "spend cap raised").toBe(99);
     expect(stored?.tpm_limit, "TPM limit untouched by a spend-cap edit").toBe(1000);

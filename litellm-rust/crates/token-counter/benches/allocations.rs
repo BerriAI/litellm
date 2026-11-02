@@ -87,7 +87,7 @@ fn main() {
         },
     );
 
-    let counter = TokenCounter::from_json(TOKENIZER_JSON).expect("tokenizer loads");
+    let counter = TokenCounter::from_json_fast(TOKENIZER_JSON).expect("tokenizer loads");
     let object = CountableRequest::parse(OBJECT_BODY).expect("object request parses");
     counter
         .count_request(&object)

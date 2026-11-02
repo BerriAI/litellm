@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useQueryState } from "nuqs";
 import { useChatHistory } from "@/components/chat/useChatHistory";
 import type { AssistantMessageUpdate, ChatMessage, Conversation } from "@/components/chat/types";
 
@@ -53,8 +53,7 @@ export function ChatShellProvider({
   premiumUser,
   children,
 }: ChatShellProviderProps) {
-  const searchParams = useSearchParams();
-  const urlConversationId = searchParams.get("id");
+  const [urlConversationId] = useQueryState("id");
   const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>([]);
 
   const {

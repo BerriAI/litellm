@@ -12,14 +12,16 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
-    _get_httpx_client,  # pyright: ignore[reportPrivateUsage]  # house cached-client factory has no public alias
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import LlmProviders
@@ -35,6 +37,17 @@ TOKEN_EXPIRY_BUFFER_MS: Final = 60000
 
 _token_cache: Final = InMemoryCache()
 _NO_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GigaChatTokenResponse(TypedDict):
+    tok: NotRequired[ReadOnly[str | None]]
+    access_token: NotRequired[ReadOnly[str | None]]
+    exp: NotRequired[ReadOnly[int | float | str | None]]
+    expires_at: NotRequired[ReadOnly[int | float | str | None]]
+
+
+_TOKEN_RESPONSE: Final = TypeAdapter(_GigaChatTokenResponse)
 
 
 class GigaChatAuthError(BaseLLMException):
@@ -58,7 +71,7 @@ def _get_scope() -> str:
 
 def _get_http_client() -> HTTPHandler:
     """Get cached httpx client with SSL verification disabled."""
-    return _get_httpx_client(params={"ssl_verify": False})
+    return get_httpx_client(params={"ssl_verify": False})
 
 
 def get_access_token(
@@ -230,7 +243,7 @@ async def _request_token_async(
 
 def _parse_token_response(response: httpx.Response) -> tuple[str, int]:
     """Parse OAuth token response."""
-    data: Final = response.json()
+    data: Final = _TOKEN_RESPONSE.validate_python(response.json())
 
     # GigaChat returns either 'tok'/'exp' or 'access_token'/'expires_at'
     access_token: Final = data.get("tok") or data.get("access_token")
@@ -243,7 +256,7 @@ def _parse_token_response(response: httpx.Response) -> tuple[str, int]:
         )
 
     # expires_at is in milliseconds
-    expires_at: int  # rebind-ok: conditionally assigned from str or int
+    expires_at: int
     if isinstance(expires_at_raw, str):
         expires_at = int(expires_at_raw)  # rebind-ok: conditionally assigned from str or int
     else:

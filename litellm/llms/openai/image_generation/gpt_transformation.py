@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -9,9 +10,12 @@ from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageResponse
 from litellm.utils import convert_to_model_response_object
 
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+
 if TYPE_CHECKING:
-    import tiktoken
     from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
+
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class GPTImageGenerationConfig(BaseImageGenerationConfig):
@@ -61,11 +65,11 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
-        response: Final = raw_response.json()
+        response: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         stringified_response: Final = response
         ## LOGGING
@@ -82,7 +86,14 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
         )
 
         # set optional params
-        image_response.size = image_response.size or optional_params.get("size", "1024x1024")
+        width: Final = optional_params.get("width")
+        height: Final = optional_params.get("height")
+        requested_size: Final = (
+            f"{width}x{height}"
+            if isinstance(width, int) and isinstance(height, int)
+            else optional_params.get("size", "1024x1024")
+        )
+        image_response.size = image_response.size or requested_size
         image_response.quality = image_response.quality or optional_params.get("quality", "high")
         image_response.output_format = image_response.output_format or optional_params.get("output_format", "png")
 

@@ -1,0 +1,64 @@
+{
+  "resourceLogs": [
+    {
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "com.anthropic.claude_code.events",
+            "version": "2.1.289"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1791242448890000000",
+              "body": {
+                "stringValue": "claude_code.api_request_body"
+              },
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-raw-fixture"
+                  }
+                },
+                {
+                  "key": "event.name",
+                  "value": {
+                    "stringValue": "api_request_body"
+                  }
+                },
+                {
+                  "key": "event.sequence",
+                  "value": {
+                    "intValue": "30"
+                  }
+                },
+                {
+                  "key": "body",
+                  "value": {
+                    "stringValue": "{\"messages\": [{\"role\": \"user\", \"content\": [{\"tool_use_id\": \"toolu_01Jkh34bKyUY3NcG7ej8yQfw\", \"type\": \"tool_result\", \"content\": \"1\\tThis is a synthetic fixture for testing coding-session capture.\\n2\\tMarker: LENS-REPLAY-ALPHA\\n3\\tNo external services or user files should be accessed.\\n4\\t\"}, {\"type\": \"tool_result\", \"content\": \"Exit code 3\\nRAW-EXPECTED\", \"is_error\": true, \"tool_use_id\": \"toolu_01NpCr9FJfGh4PyHLkRrKhu4\", \"cache_control\": {\"type\": \"ephemeral\"}}]}]}"
+                  }
+                },
+                {
+                  "key": "query_source",
+                  "value": {
+                    "stringValue": "repl_main_thread"
+                  }
+                },
+                {
+                  "key": "request_body_id",
+                  "value": {
+                    "stringValue": "be021b83-d74f-4ab9-aab1-8ecbb564dd35"
+                  }
+                }
+              ],
+              "flags": 1,
+              "traceId": "9ac8ed7ab2370baed8b34f517e356029",
+              "spanId": "a2d6a9a271bd730a",
+              "observedTimeUnixNano": "1791242448890000000"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,100 @@
+suite: test fixed replica count when HPA is disabled
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - ui/deployment.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: gateway renders replicaCount into spec.replicas when its HPA is disabled
+    template: gateway/deployment.yaml
+    set:
+      gateway.hpa.enabled: false
+      gateway.replicaCount: 3
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 3
+
+  - it: backend renders replicaCount into spec.replicas when its HPA is disabled
+    template: backend/deployment.yaml
+    set:
+      backend.hpa.enabled: false
+      backend.replicaCount: 2
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  - it: ui renders replicaCount into spec.replicas when its HPA is disabled
+    template: ui/deployment.yaml
+    set:
+      ui.hpa.enabled: false
+      ui.replicaCount: 2
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  - it: replicaCount 0 scales the gateway to zero instead of being treated as unset
+    template: gateway/deployment.yaml
+    set:
+      gateway.hpa.enabled: false
+      gateway.replicaCount: 0
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 0
+
+  - it: a component with HPA disabled but no replicaCount set keeps omitting spec.replicas, so upgrades do not reset a hand-scaled Deployment
+    set:
+      gateway.hpa.enabled: false
+      backend.hpa.enabled: false
+      ui.hpa.enabled: false
+    asserts:
+      - notExists:
+          path: spec.replicas
+        template: gateway/deployment.yaml
+      - notExists:
+          path: spec.replicas
+        template: backend/deployment.yaml
+      - notExists:
+          path: spec.replicas
+        template: ui/deployment.yaml
+
+  - it: every component omits spec.replicas when its HPA is enabled, so the autoscaler owns the count
+    set:
+      gateway.hpa.enabled: true
+      gateway.replicaCount: 3
+      backend.hpa.enabled: true
+      backend.replicaCount: 3
+      ui.hpa.enabled: true
+      ui.replicaCount: 3
+    asserts:
+      - notExists:
+          path: spec.replicas
+        template: gateway/deployment.yaml
+      - notExists:
+          path: spec.replicas
+        template: backend/deployment.yaml
+      - notExists:
+          path: spec.replicas
+        template: ui/deployment.yaml
+
+  - it: a component with HPA disabled renders replicas while a sibling with HPA enabled does not
+    set:
+      gateway.hpa.enabled: false
+      gateway.replicaCount: 4
+      backend.hpa.enabled: true
+      backend.replicaCount: 4
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 4
+        template: gateway/deployment.yaml
+      - notExists:
+          path: spec.replicas
+        template: backend/deployment.yaml

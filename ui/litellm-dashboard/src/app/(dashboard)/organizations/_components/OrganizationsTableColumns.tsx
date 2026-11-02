@@ -3,7 +3,7 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 
-import { DataTableSortHeader } from "@/components/shared/DataTable";
+import { DataTableMultiSortHeader, DataTableSortHeader } from "@/components/shared/DataTable";
 import { DateCell, IdentityCell, ModelsCell, MoneyCell } from "@/components/shared/table_cells";
 import { Organization } from "@/components/networking";
 import { buttonVariants } from "@/components/ui/button";
@@ -129,7 +129,7 @@ export const getOrganizationsTableColumns = ({
   {
     id: "spend",
     accessorKey: "spend",
-    meta: { title: "Spend (USD)" },
+    meta: { title: "Spend (USD)", numeric: true },
     header: ({ column }) => <DataTableSortHeader column={column} title="Spend (USD)" />,
     size: 120,
     enableSorting: true,
@@ -137,38 +137,67 @@ export const getOrganizationsTableColumns = ({
   },
   {
     id: "max_budget",
-    meta: { title: "Budget (USD)" },
-    header: "Budget (USD)",
+    accessorFn: (organization) => getOrganizationBudget(organization).max_budget ?? Number.POSITIVE_INFINITY,
+    sortUndefined: "last",
+    sortDescFirst: true,
+    meta: { title: "Budget (USD)", numeric: true },
+    header: ({ column }) => <DataTableSortHeader column={column} title="Budget (USD)" />,
     size: 120,
-    enableSorting: false,
+    enableSorting: true,
     cell: ({ row }) => (
       <MoneyCell value={getOrganizationBudget(row.original).max_budget} decimals={2} emptyText="Unlimited" showZero />
     ),
   },
   {
     id: "models",
+    accessorFn: (organization) =>
+      organization.models?.length && !organization.models.includes("all-proxy-models")
+        ? [...organization.models].sort().join(", ")
+        : undefined,
+    sortUndefined: "last",
+    sortDescFirst: false,
     meta: { title: "Models", skeleton: "chips" },
-    header: "Models",
+    header: ({ column }) => <DataTableSortHeader column={column} title="Models" />,
     size: 260,
-    enableSorting: false,
+    enableSorting: true,
     cell: ({ row }) => <ModelsCell models={row.original.models} />,
   },
   {
     id: "limits",
     meta: { title: "TPM / RPM Limits" },
-    header: "TPM / RPM Limits",
+    header: ({ table }) => (
+      <DataTableMultiSortHeader
+        table={table}
+        fields={[
+          { id: "tpm_limit", label: "TPM" },
+          { id: "rpm_limit", label: "RPM" },
+        ]}
+      />
+    ),
     size: 150,
     enableSorting: false,
     cell: ({ row }) => <OrganizationLimitsCell organization={row.original} />,
   },
   {
     id: "members",
-    meta: { title: "Members" },
-    header: "Members",
+    accessorFn: (organization) => organization.members?.length ?? 0,
+    sortUndefined: "last",
+    sortDescFirst: true,
+    meta: { title: "Members", numeric: true },
+    header: ({ column }) => <DataTableSortHeader column={column} title="Members" />,
     size: 100,
-    enableSorting: false,
+    enableSorting: true,
     cell: ({ row }) => <span className="text-sm">{row.original.members?.length ?? 0} Members</span>,
   },
+  ...(["tpm_limit", "rpm_limit"] as const).map(
+    (field): ColumnDef<Organization> => ({
+      id: field,
+      accessorFn: (organization) => getOrganizationBudget(organization)[field] ?? Number.POSITIVE_INFINITY,
+      sortUndefined: "last",
+      sortDescFirst: true,
+      enableHiding: false,
+    }),
+  ),
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },

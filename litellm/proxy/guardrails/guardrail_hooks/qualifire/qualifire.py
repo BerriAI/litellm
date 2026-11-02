@@ -10,6 +10,7 @@ import os
 from typing import Any, Final, Literal
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -29,6 +30,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 GUARDRAIL_NAME: Final = "qualifire"
 DEFAULT_QUALIFIRE_API_BASE: Final = "https://proxy.qualifire.ai"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class QualifireGuardrail(CustomGuardrail):
@@ -188,7 +190,7 @@ class QualifireGuardrail(CustomGuardrail):
                         args = function_info.get("arguments", {})
                         if isinstance(args, str):
                             try:
-                                args = json.loads(args)
+                                args = _DECODED_JSON.validate_python(json.loads(args))
                             except json.JSONDecodeError:
                                 args = {}
                         api_tool_calls.append(
@@ -378,12 +380,13 @@ class QualifireGuardrail(CustomGuardrail):
                 url=url,
                 headers=headers,
                 json=payload,
+                timeout=self.timeout,
             )
             response.raise_for_status()
             result: Final = response.json()
 
             # Extract response info for logging
-            qualifire_response: Final = {
+            qualifire_response: Final[dict[str, object]] = {
                 "score": result.get("score"),
                 "status": result.get("status"),
             }
@@ -419,6 +422,9 @@ class QualifireGuardrail(CustomGuardrail):
             verbose_proxy_logger.exception("Qualifire Guardrail error: %s", e)
             raise
 
+    def supports_structured_messages(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -452,7 +458,7 @@ class QualifireGuardrail(CustomGuardrail):
         dynamic_params: Final = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
 
         # Extract messages from structured_messages or request_data
-        messages: list[AllMessageValues] | None = inputs.get("structured_messages") if input_type == "request" else None
+        messages: list[AllMessageValues] | None = inputs.get("structured_messages")
         if not messages:
             messages = request_data.get("messages")
 

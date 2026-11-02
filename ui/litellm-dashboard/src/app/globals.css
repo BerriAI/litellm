@@ -1,6 +1,8 @@
 @layer theme, base, components, utilities;
 
 @import "tailwindcss";
+@import "@litellm/lens-ui/styles.css";
+@source "../../node_modules/@litellm/lens-ui/src";
 @import "tw-animate-css";
 
 @plugin '@headlessui/tailwindcss';
@@ -64,12 +66,71 @@
 }
 
 @theme inline {
+  --animate-slot-slide-in: slot-slide-in 150ms cubic-bezier(0, 0, 0.2, 1) both;
+  --animate-trace-drawer-in: trace-drawer-in 200ms cubic-bezier(0.25, 1, 0.5, 1) both;
+  --animate-trace-drawer-out: trace-drawer-out 200ms cubic-bezier(0.4, 0, 1, 1) both;
+  --animate-lens-shimmer: lens-shimmer 1.1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+
+  @keyframes lens-shimmer {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(250%);
+    }
+  }
+
+  @keyframes trace-drawer-in {
+    from {
+      opacity: 0;
+      transform: translateX(2rem) scaleX(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes trace-drawer-out {
+    from {
+      opacity: 1;
+      transform: none;
+    }
+    to {
+      opacity: 0;
+      transform: translateX(2rem) scaleX(0.98);
+    }
+  }
+
+  @keyframes slot-slide-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
   @keyframes scroll-fade-reveal-e {
     from {
       --scroll-fade-e: var(--_scroll-fade-size-e, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
     }
     to {
       --scroll-fade-e: 0px;
+    }
+  }
+}
+
+@layer utilities {
+  .animate-trace-drawer-in,
+  .animate-trace-drawer-out {
+    transform-origin: right center;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-trace-drawer-in,
+    .animate-trace-drawer-out,
+    .animate-slot-slide-in {
+      animation: none !important;
     }
   }
 }
@@ -141,6 +202,45 @@
   --sidebar-ring: oklch(0.707 0.022 261.325);
   --neutral-border: #dcddeb;
   --logo-surface: oklch(1 0 0);
+  --trace-text: oklch(0.21 0.03 256);
+  --trace-text-2: oklch(0.35 0.03 256);
+  --trace-text-secondary: oklch(0.35 0.03 256);
+  --trace-duration: oklch(0.48 0.03 230);
+  --trace-key: oklch(0.55 0.03 240);
+  --trace-placeholder: oklch(0.7 0.02 240);
+  --trace-surface: oklch(1 0 0);
+  --trace-chip: oklch(0.975 0.006 220);
+  --trace-row-hover: oklch(0.975 0.008 215);
+  --trace-row-selected: oklch(0.95 0.035 200);
+  --trace-brand: oklch(0.6 0.13 195);
+  --finding-affected: var(--info);
+  --finding-unaffected: oklch(0.551 0.027 264.364 / 0.45);
+  --finding-quote: color-mix(in oklab, var(--warning) 16%, transparent);
+  --finding-ring: 0 0 0 1px oklch(0 0 0 / 0.06), 0 1px 2px -1px oklch(0 0 0 / 0.06), 0 2px 4px 0 oklch(0 0 0 / 0.04);
+  --trace-border: oklch(0.92 0.01 230);
+  --trace-line: oklch(0.88 0.03 205);
+  --trace-card-border: oklch(0.93 0.01 230);
+  --trace-dot: oklch(0.86 0.05 190);
+  --trace-tab-active: oklch(0.95 0.025 205);
+  --trace-tab-hover: oklch(0.93 0.02 215);
+  --trace-tag: oklch(0.95 0.02 205);
+  --trace-chain: #2a78d6;
+  --trace-llm: #eb6834;
+  --trace-tool: #1baf7a;
+  --trace-chain-soft: color-mix(in oklab, #2a78d6 12%, transparent);
+  --trace-llm-soft: color-mix(in oklab, #eb6834 12%, transparent);
+  --trace-tool-soft: color-mix(in oklab, #1baf7a 14%, transparent);
+  --trace-glyph: oklch(0.99 0 0);
+  --trace-human: oklch(0.5 0.15 260);
+  --trace-human-glyph: oklch(0.95 0.04 210);
+  --trace-turn: oklch(0.96 0.03 200);
+  --trace-turn-border: oklch(0.75 0.1 200);
+  --trace-ok: oklch(0.92 0.08 160);
+  --trace-ok-glyph: oklch(0.55 0.15 155);
+  --trace-called: oklch(0.93 0.06 185);
+  --trace-called-text: oklch(0.38 0.08 195);
+  --trace-shadow-md: 0 4px 6px -1px #0b1b2e1a, 0 2px 4px -1px #0b1b2e0f;
+  --trace-shadow-xs: 0 1px 2px 0 #0b1b2e0d;
 }
 
 .dark {
@@ -183,9 +283,87 @@
   --sidebar-border: oklch(0.187 0 0);
   --sidebar-ring: oklch(0.569 0 0);
   --neutral-border: var(--border);
+  --trace-text: oklch(0.96 0.005 220);
+  --trace-text-2: oklch(0.88 0.01 220);
+  --trace-text-secondary: oklch(0.88 0.01 220);
+  --trace-duration: oklch(0.78 0.03 200);
+  --trace-key: oklch(0.68 0.03 220);
+  --trace-placeholder: oklch(0.5 0.02 230);
+  --trace-surface: oklch(0.19 0.012 240);
+  --trace-chip: oklch(0.23 0.015 235);
+  --trace-row-hover: oklch(0.23 0.018 230);
+  --trace-row-selected: oklch(0.29 0.05 210);
+  --trace-brand: oklch(0.78 0.13 190);
+  --finding-affected: var(--info);
+  --finding-unaffected: oklch(0.707 0.022 261.325 / 0.35);
+  --finding-quote: color-mix(in oklab, var(--warning) 24%, transparent);
+  --finding-ring: 0 0 0 1px oklch(1 0 0 / 0.08);
+  --trace-border: oklch(0.3 0.02 235);
+  --trace-line: oklch(0.36 0.04 210);
+  --trace-card-border: oklch(0.27 0.02 235);
+  --trace-dot: oklch(0.45 0.06 195);
+  --trace-tab-active: oklch(0.28 0.03 215);
+  --trace-tab-hover: oklch(0.32 0.03 220);
+  --trace-tag: oklch(0.28 0.03 215);
+  --trace-chain: #3987e5;
+  --trace-llm: #d95926;
+  --trace-tool: #199e70;
+  --trace-chain-soft: color-mix(in oklab, #3987e5 24%, transparent);
+  --trace-llm-soft: color-mix(in oklab, #d95926 24%, transparent);
+  --trace-tool-soft: color-mix(in oklab, #199e70 24%, transparent);
+  --trace-glyph: oklch(0.99 0 0);
+  --trace-human: oklch(0.56 0.15 260);
+  --trace-human-glyph: oklch(0.95 0.04 210);
+  --trace-turn: oklch(0.29 0.05 210);
+  --trace-turn-border: oklch(0.5 0.09 200);
+  --trace-ok: oklch(0.35 0.07 160);
+  --trace-ok-glyph: oklch(0.82 0.15 155);
+  --trace-called: oklch(0.32 0.06 190);
+  --trace-called-text: oklch(0.88 0.08 185);
+  --trace-shadow-md: 0 4px 6px -1px #00000080, 0 2px 4px -1px #00000066;
+  --trace-shadow-xs: 0 1px 2px 0 #0000004d;
 }
 
 @theme inline {
+  --color-trace-text: var(--trace-text);
+  --color-trace-text-2: var(--trace-text-2);
+  --color-trace-text-secondary: var(--trace-text-secondary);
+  --color-trace-duration: var(--trace-duration);
+  --color-trace-key: var(--trace-key);
+  --color-trace-placeholder: var(--trace-placeholder);
+  --color-trace-surface: var(--trace-surface);
+  --color-trace-chip: var(--trace-chip);
+  --color-trace-row-hover: var(--trace-row-hover);
+  --color-trace-row-selected: var(--trace-row-selected);
+  --color-trace-brand: var(--trace-brand);
+  --color-finding-affected: var(--finding-affected);
+  --color-finding-unaffected: var(--finding-unaffected);
+  --color-finding-quote: var(--finding-quote);
+  --shadow-finding-ring: var(--finding-ring);
+  --color-trace-border: var(--trace-border);
+  --color-trace-line: var(--trace-line);
+  --color-trace-card-border: var(--trace-card-border);
+  --color-trace-dot: var(--trace-dot);
+  --color-trace-tab-active: var(--trace-tab-active);
+  --color-trace-tab-hover: var(--trace-tab-hover);
+  --color-trace-tag: var(--trace-tag);
+  --color-trace-chain: var(--trace-chain);
+  --color-trace-llm: var(--trace-llm);
+  --color-trace-tool: var(--trace-tool);
+  --color-trace-chain-soft: var(--trace-chain-soft);
+  --color-trace-llm-soft: var(--trace-llm-soft);
+  --color-trace-tool-soft: var(--trace-tool-soft);
+  --color-trace-glyph: var(--trace-glyph);
+  --color-trace-human: var(--trace-human);
+  --color-trace-human-glyph: var(--trace-human-glyph);
+  --color-trace-turn: var(--trace-turn);
+  --color-trace-turn-border: var(--trace-turn-border);
+  --color-trace-ok: var(--trace-ok);
+  --color-trace-ok-glyph: var(--trace-ok-glyph);
+  --color-trace-called: var(--trace-called);
+  --color-trace-called-text: var(--trace-called-text);
+  --shadow-trace-md: var(--trace-shadow-md);
+  --shadow-trace-xs: var(--trace-shadow-xs);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -300,9 +478,589 @@
   border: 1px solid var(--neutral-border);
 }
 
+/* Standalone Chat only. Moyai's semantic glass treatment (frontend/theme.css,
+   1118ab0) is adapted to the existing LiteLLM controls and theme switch. */
+.chat-theme {
+  --background: #ffffff;
+  --foreground: #000000;
+  --card: var(--background);
+  --card-foreground: var(--foreground);
+  --popover: var(--background);
+  --popover-foreground: var(--foreground);
+  --primary: #7145b8;
+  --primary-foreground: #ffffff;
+  --secondary: #f0f0f2;
+  --secondary-foreground: var(--foreground);
+  --muted: var(--secondary);
+  --muted-foreground: #4b4b50;
+  --accent: var(--secondary);
+  --accent-foreground: var(--foreground);
+  --border: #e2e2e5;
+  --input: #d2d2d7;
+  --ring: #767680;
+  --sidebar: #f8f8f8;
+  --sidebar-foreground: var(--foreground);
+  --sidebar-accent: #eeeaf4;
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --chat-canvas: #ededf0;
+  --chat-shell: #ffffff;
+  --chat-message: #f5f5f6;
+  --chat-message-border: #e2e2e5;
+  --chat-home-editor-border: #d2d2d7;
+  --chat-focus-border: #767680;
+  --chat-prompt-muted: var(--muted-foreground);
+  --chat-reading: var(--background);
+  --chat-glass-surface: var(--background);
+  --chat-glass-chrome: var(--sidebar);
+  --chat-glass-elevated: var(--background);
+  --chat-glass-line: var(--border);
+  --chat-glass-sheen: none;
+  --chat-glass-blur: none;
+  --chat-glass-inset: inset 0 0 0 transparent;
+  --chat-glass-shadow: 0 8px 24px rgb(36 36 38 / 6%);
+  --chat-backdrop: none;
+}
+
+.dark .chat-theme {
+  --background: #181818;
+  --foreground: #ededed;
+  --primary: #b69af7;
+  --primary-foreground: #17131f;
+  --secondary: #222225;
+  --muted-foreground: #aeb0b5;
+  --border: #2b2b2f;
+  --input: #3c3c42;
+  --ring: #77777e;
+  --sidebar: #151515;
+  --sidebar-accent: #292430;
+  --chat-canvas: #0b0b0b;
+  --chat-shell: #111111;
+  --chat-message: #1c1c1e;
+  --chat-message-border: #303034;
+  --chat-home-editor-border: #3c3c42;
+  --chat-focus-border: #77777e;
+  --chat-prompt-muted: #a3a3a8;
+  --chat-glass-shadow: 0 8px 24px rgb(0 0 0 / 15%);
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .chat-theme {
+    --chat-shell: rgb(255 255 255 / 38%);
+    --chat-reading: rgb(255 255 255 / 80%);
+    --chat-glass-surface: rgb(255 255 255 / 20%);
+    --chat-glass-chrome: rgb(255 255 255 / 40%);
+    --chat-glass-elevated: rgb(255 255 255 / 92%);
+    --chat-glass-line: rgb(73 77 89 / 14%);
+    --chat-glass-sheen: linear-gradient(125deg, rgb(255 255 255 / 24%), transparent 45%, rgb(255 255 255 / 4%));
+    --chat-glass-blur: blur(14px) saturate(110%);
+    --chat-glass-inset: inset 0 1px 0 rgb(255 255 255 / 75%), inset 1px 0 0 rgb(255 255 255 / 40%);
+    --chat-glass-shadow: var(--chat-glass-inset), 0 12px 32px rgb(41 45 58 / 10%);
+    --chat-backdrop: radial-gradient(ellipse at 3% 0%, #b3bac6 0%, transparent 56%),
+      radial-gradient(ellipse at 100% 100%, #c5cad4 0%, transparent 58%);
+  }
+
+  .dark .chat-theme {
+    --chat-shell: rgb(17 17 19 / 46%);
+    --chat-reading: rgb(17 17 19 / 90%);
+    --chat-glass-surface: rgb(28 28 31 / 32%);
+    --chat-glass-chrome: rgb(27 27 30 / 42%);
+    --chat-glass-elevated: rgb(27 27 30 / 92%);
+    --chat-glass-line: rgb(255 255 255 / 16%);
+    --chat-glass-sheen: linear-gradient(125deg, rgb(255 255 255 / 8%), transparent 45%, rgb(255 255 255 / 2%));
+    --chat-glass-inset: inset 0 1px 0 rgb(255 255 255 / 16%), inset 1px 0 0 rgb(255 255 255 / 4%);
+    --chat-glass-shadow: var(--chat-glass-inset), 0 12px 32px rgb(0 0 0 / 24%);
+    --chat-backdrop: radial-gradient(ellipse at 4% 0%, #1b1c1f 0%, transparent 52%),
+      radial-gradient(ellipse at 100% 100%, #151619 0%, transparent 58%);
+  }
+}
+
+.chat-workspace {
+  background: var(--chat-canvas);
+  background-image: linear-gradient(var(--chat-shell), var(--chat-shell)), var(--chat-backdrop);
+  font-family: var(--font-moyai-chat, ui-sans-serif, system-ui, sans-serif);
+  font-size: 13px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.chat-theme .chat-glass-pane:not(:has(.moyai-chat-home)) {
+  background: var(--chat-reading);
+}
+
+.chat-theme .chat-glass-sidebar,
+.chat-theme.chat-mobile-sidebar {
+  background: var(--chat-glass-surface);
+  background-image: var(--chat-glass-sheen);
+  border-color: var(--chat-glass-line);
+  -webkit-backdrop-filter: var(--chat-glass-blur);
+  backdrop-filter: var(--chat-glass-blur);
+  box-shadow: var(--chat-glass-inset);
+}
+
+.chat-theme.chat-mobile-sidebar {
+  width: min(320px, calc(100vw - 32px));
+  background-color: var(--chat-glass-elevated);
+}
+
+.chat-theme .chat-nav-item,
+.chat-theme .chat-new-conversation {
+  font-size: 13px;
+  border-radius: 8px;
+}
+
+/* Moyai main.tsx / brand.css / sidebar-layout.css at 1118ab0.
+   Keep the rail geometry local to standalone Chat. */
+.moyai-chat-shell {
+  position: relative;
+}
+
+.chat-theme .moyai-chat-sidebar,
+.chat-theme.moyai-chat-sidebar {
+  display: flex;
+  flex: 0 0 240px;
+  flex-direction: column;
+  width: 240px;
+  min-height: 0;
+  gap: 2px;
+  padding: 8px 10px;
+  overflow: hidden;
+  border-right: 1px solid var(--chat-glass-line);
+}
+
+.moyai-chat-brand-row {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-height: 40px;
+  gap: 4px;
+}
+
+.chat-theme .moyai-chat-workspace-switcher {
+  min-width: 0;
+  height: 36px;
+  flex: 1;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 0 6px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--sidebar-foreground);
+  box-shadow: none;
+  font-size: 15px;
+  line-height: 1.25;
+  font-weight: 550;
+  letter-spacing: -0.02em;
+}
+
+.chat-theme .moyai-chat-workspace-switcher:hover,
+.chat-theme .moyai-chat-workspace-switcher[data-popup-open] {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+}
+
+.moyai-chat-workspace-switcher [data-slot="workspace-icon"] {
+  width: 28px;
+  height: 28px;
+}
+
+.moyai-chat-workspace-switcher [data-slot="workspace-label"] {
+  flex: 1;
+  text-align: left;
+}
+
+.moyai-chat-mobile-header .moyai-chat-workspace-switcher {
+  flex: none;
+}
+
+.moyai-chat-brand-row > [data-slot="button"]:not(.moyai-chat-workspace-switcher) {
+  width: 28px;
+  height: 28px;
+  color: var(--foreground);
+}
+
+.chat-theme .moyai-chat-rail-button {
+  height: 32px;
+  min-height: 32px;
+  flex-shrink: 0;
+  gap: 9px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.moyai-chat-destinations {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.moyai-chat-destinations svg,
+.moyai-chat-sidebar > .chat-new-conversation svg {
+  width: 15px;
+  height: 15px;
+}
+
+.moyai-chat-sidebar .moyai-chat-rail-button:hover,
+.moyai-chat-history .chat-conversation-row:hover {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+.moyai-chat-history .moyai-chat-history-heading {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.moyai-chat-history .chat-conversation-row {
+  min-height: 48px;
+  border-radius: 6px;
+}
+
+.moyai-chat-history .chat-conversation-row > [data-slot="button"] {
+  height: auto;
+  min-height: 48px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+.moyai-chat-empty-history {
+  padding: 2px 10px 6px 25px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.moyai-chat-conversation-meta {
+  line-height: 18px;
+}
+
+.moyai-chat-account {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px 0;
+  border-top: 1px solid var(--sidebar-border);
+}
+
+.moyai-chat-account > [data-slot="button"] {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  color: var(--foreground);
+}
+
+.chat-theme.moyai-chat-collapsed .moyai-chat-sidebar {
+  flex-basis: 52px;
+  width: 52px;
+  padding: 12px 8px 8px;
+}
+
+.moyai-chat-collapsed .moyai-chat-sidebar > :not(.moyai-chat-brand-row),
+.moyai-chat-collapsed [data-slot="workspace-label"],
+.moyai-chat-collapsed [data-slot="workspace-chevron"],
+.moyai-chat-collapsed .moyai-chat-search {
+  display: none;
+}
+
+.moyai-chat-collapsed .moyai-chat-brand-row {
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+
+.moyai-chat-collapsed .moyai-chat-workspace-switcher {
+  flex: none;
+  width: 36px;
+  padding: 4px;
+}
+
+@media (min-width: 601px) and (max-width: 1250px) {
+  .chat-theme .moyai-chat-sidebar {
+    width: 230px;
+    flex-basis: 230px;
+  }
+}
+
+@media (max-width: 600px) {
+  .moyai-chat-shell {
+    flex-direction: column;
+  }
+
+  .chat-theme.moyai-chat-sidebar {
+    width: calc(100vw - 56px);
+  }
+
+  .chat-theme .moyai-chat-rail-button,
+  .chat-theme .moyai-chat-workspace-switcher,
+  .moyai-chat-brand-row > [data-slot="button"]:not(.moyai-chat-workspace-switcher),
+  .moyai-chat-account [data-slot="button"] {
+    min-height: 44px;
+  }
+
+  .moyai-chat-brand-row > [data-slot="button"]:not(.moyai-chat-workspace-switcher),
+  .moyai-chat-account [data-slot="button"] {
+    width: 44px;
+  }
+}
+
+@media (hover: none) {
+  .chat-theme .chat-conversation-actions {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 600px) {
+  .chat-theme .chat-nav-item,
+  .chat-theme .chat-new-conversation,
+  .chat-theme .chat-conversation-row > [data-slot="button"] {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  .chat-theme,
+  .dark .chat-theme {
+    --chat-shell: var(--background);
+    --chat-reading: var(--background);
+    --chat-glass-surface: var(--background);
+    --chat-glass-chrome: var(--sidebar);
+    --chat-glass-elevated: var(--background);
+    --chat-glass-line: var(--border);
+    --chat-glass-sheen: none;
+    --chat-glass-blur: none;
+    --chat-glass-inset: inset 0 0 0 transparent;
+    --chat-glass-shadow: none;
+    --chat-backdrop: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-theme [data-slot="button"],
+  .chat-theme .chat-conversation-row,
+  .chat-theme .chat-conversation-actions,
+  .chat-theme.chat-mobile-sidebar {
+    transition: none;
+  }
+}
+
 /* A dialog opened from inside another dialog reads as a drill-down, not a stack: base-ui stamps
    this attribute on the parent while a child is open, so the parent steps aside instead of
    showing its own edges around a differently sized child. */
 [data-slot="dialog-content"][data-nested-dialog-open] {
   visibility: hidden;
+}
+
+@keyframes timeline-sweep {
+  from {
+    left: -6rem;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+@property --scroll-fade-b {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@theme inline {
+  @keyframes scroll-fade-reveal-b {
+    from {
+      --scroll-fade-b: var(--_scroll-fade-size-b, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+    }
+    to {
+      --scroll-fade-b: 0px;
+    }
+  }
+}
+
+@utility scroll-fade-b {
+  --_scroll-fade-size-b: var(--scroll-fade-b-size, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+  --scroll-fade-mask: linear-gradient(to bottom, #000 0, #000 calc(100% - var(--scroll-fade-b, 0px)), transparent 100%);
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y);
+    animation-range: calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-b: var(--_scroll-fade-size-b);
+  }
+}
+
+@property --scroll-fade-s {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@theme inline {
+  @keyframes scroll-fade-reveal-s {
+    from {
+      --scroll-fade-s: 0px;
+    }
+    to {
+      --scroll-fade-s: var(--_scroll-fade-size-s, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+    }
+  }
+}
+
+@utility scroll-fade-x {
+  --_scroll-fade-size-s: var(--scroll-fade-s-size, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+  --_scroll-fade-size-e: var(--scroll-fade-e-size, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+  --scroll-fade-inline: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--scroll-fade-s, 0px),
+    #000 calc(100% - var(--scroll-fade-e, 0px)),
+    transparent 100%
+  );
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    --scroll-fade-inline: linear-gradient(
+      to left,
+      transparent 0,
+      #000 var(--scroll-fade-s, 0px),
+      #000 calc(100% - var(--scroll-fade-e, 0px)),
+      transparent 100%
+    );
+  }
+  -webkit-mask-image: var(--scroll-fade-mask, var(--scroll-fade-inline));
+  mask-image: var(--scroll-fade-mask, var(--scroll-fade-inline));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-s 1ms ease-in-out,
+      scroll-fade-reveal-e 1ms ease-in-out;
+    animation-timeline: scroll(self inline), scroll(self inline);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-s: var(--_scroll-fade-size-s);
+    --scroll-fade-e: var(--_scroll-fade-size-e);
+  }
+}
+
+@property --shimmer-angle {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 20deg;
+}
+@property --shimmer-image {
+  syntax: "*";
+  inherits: false;
+}
+@property --shimmer-text-fill {
+  syntax: "*";
+  inherits: false;
+}
+
+@theme inline {
+  @keyframes tw-shimmer {
+    from {
+      background-position: 100% 0;
+    }
+    to {
+      background-position: 0 0;
+    }
+  }
+}
+
+@utility shimmer {
+  --_spread: var(--shimmer-spread, calc(3ch + 40px));
+  --_base: currentColor;
+  --_highlight: var(--shimmer-color, oklch(from currentColor l c h / calc(alpha * 0.2)));
+
+  background-image: var(
+    --shimmer-image,
+    linear-gradient(
+      calc(90deg + var(--shimmer-angle)),
+      var(--_base) calc(50% - var(--_spread)),
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%) calc(50% - var(--_spread) * 0.5),
+      var(--_highlight) 50%,
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%) calc(50% + var(--_spread) * 0.5),
+      var(--_base) calc(50% + var(--_spread))
+    )
+  );
+  background-repeat: no-repeat;
+  background-size: calc(200% + var(--_spread) * 2) 100%;
+  background-position: 0 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: var(--shimmer-text-fill, transparent);
+  animation: tw-shimmer var(--shimmer-duration, 2s) linear infinite;
+
+  @variant dark {
+    --_highlight: var(--shimmer-color, oklch(from currentColor max(0.8, calc(l + 0.4)) c h / calc(alpha + 0.4)));
+  }
+
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    animation-direction: reverse;
+  }
+}
+
+@utility shimmer-once {
+  animation-iteration-count: 1;
+}
+
+@utility shimmer-reverse {
+  animation-direction: reverse;
+}
+
+@utility shimmer-none {
+  --shimmer-image: none;
+  --shimmer-text-fill: currentColor;
+}
+
+@utility shimmer-color-* {
+  --shimmer-color: --value(--color, [color]);
+  --shimmer-color: color-mix(in oklch, --value(--color, [color]) calc(--modifier(integer) * 1%), transparent);
+}
+
+@utility shimmer-duration-* {
+  --shimmer-duration: calc(--value(integer) * 1ms);
+}
+
+@utility shimmer-spread-* {
+  --shimmer-spread: calc(var(--spacing) * --value(integer));
+  --shimmer-spread: --value([length], [percentage]);
+}
+
+@utility shimmer-angle-* {
+  --shimmer-angle: calc(--value(integer) * 1deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer {
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
+  }
 }

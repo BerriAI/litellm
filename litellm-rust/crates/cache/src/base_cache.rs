@@ -1,18 +1,57 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 
 use crate::Error;
 
-pub type CacheFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
+#[derive(Clone, Debug, PartialEq)]
+pub enum BatchEntry<V> {
+    Hit(V),
+    Miss,
+    Invalid,
+}
+
+pub trait CacheContext: Clone + Send + Sync + 'static {
+    fn ttl(&self) -> Option<Duration>;
+
+    fn with_ttl(&self, ttl: Option<Duration>) -> Self;
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExactCacheContext {
+    pub ttl: Option<Duration>,
+}
+
+impl CacheContext for ExactCacheContext {
+    fn ttl(&self) -> Option<Duration> {
+        self.ttl
+    }
+
+    fn with_ttl(&self, ttl: Option<Duration>) -> Self {
+        Self { ttl }
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct CacheKwargs {
+pub struct SemanticCacheContext {
+    pub input: Option<serde_json::Value>,
+    pub messages: Option<serde_json::Value>,
+    pub metadata: Option<serde_json::Value>,
+    pub scope: Option<String>,
     pub ttl: Option<Duration>,
-    pub extras: Map<String, Value>,
+}
+
+impl CacheContext for SemanticCacheContext {
+    fn ttl(&self) -> Option<Duration> {
+        self.ttl
+    }
+
+    fn with_ttl(&self, ttl: Option<Duration>) -> Self {
+        Self {
+            ttl,
+            ..self.clone()
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -32,67 +71,55 @@ pub struct CacheConnectionResult {
 
 pub trait BaseCache: Send + Sync {
     type Value: Clone + Send + Sync + 'static;
+    type Context: CacheContext;
 
-    fn default_ttl(&self) -> Duration {
-        Duration::from_secs(60)
-    }
+    fn get_ttl(&self, context: &Self::Context) -> Option<Duration>;
 
-    fn get_ttl(&self, kwargs: &CacheKwargs) -> Duration {
-        kwargs.ttl.unwrap_or_else(|| self.default_ttl())
-    }
-
-    fn set_cache(&self, key: &str, value: Self::Value, kwargs: CacheKwargs) -> Result<(), Error>;
-
-    fn get_cache(&self, key: &str, kwargs: &CacheKwargs) -> Result<Option<Self::Value>, Error>;
-
-    fn async_set_cache<'a>(
-        &'a self,
-        key: &'a str,
+    fn set_cache(
+        &self,
+        key: &str,
         value: Self::Value,
-        kwargs: CacheKwargs,
-    ) -> CacheFuture<'a, ()> {
-        Box::pin(async move { self.set_cache(key, value, kwargs) })
+        context: &Self::Context,
+    ) -> Result<(), Error>;
+
+    fn get_cache(&self, key: &str, context: &Self::Context) -> Result<Option<Self::Value>, Error>;
+
+    fn async_set_cache(
+        &self,
+        key: &str,
+        value: Self::Value,
+        context: Self::Context,
+    ) -> impl Future<Output = Result<(), Error>> + Send {
+        async move { self.set_cache(key, value, &context) }
     }
 
-    fn async_get_cache<'a>(
-        &'a self,
-        key: &'a str,
-        kwargs: &'a CacheKwargs,
-    ) -> CacheFuture<'a, Option<Self::Value>> {
-        Box::pin(async move { self.get_cache(key, kwargs) })
+    fn async_get_cache(
+        &self,
+        key: &str,
+        context: &Self::Context,
+    ) -> impl Future<Output = Result<Option<Self::Value>, Error>> + Send {
+        async move { self.get_cache(key, context) }
     }
 
-    fn async_set_cache_pipeline<'a>(
-        &'a self,
-        cache_list: Vec<(String, Self::Value)>,
-        kwargs: CacheKwargs,
-    ) -> CacheFuture<'a, ()> {
-        Box::pin(async move {
-            for (key, value) in cache_list {
-                self.set_cache(&key, value, kwargs.clone())?;
+    fn async_set_cache_pipeline(
+        &self,
+        entries: Vec<(String, Self::Value)>,
+        context: Self::Context,
+    ) -> impl Future<Output = Result<(), Error>> + Send {
+        async move {
+            for (key, value) in entries {
+                self.async_set_cache(&key, value, context.clone()).await?;
             }
             Ok(())
-        })
+        }
     }
 
-    fn batch_cache_write<'a>(
-        &'a self,
-        key: &'a str,
+    fn batch_cache_write(
+        &self,
+        key: &str,
         value: Self::Value,
-        kwargs: CacheKwargs,
-    ) -> CacheFuture<'a, ()> {
-        self.async_set_cache(key, value, kwargs)
+        context: Self::Context,
+    ) -> impl Future<Output = Result<(), Error>> + Send {
+        self.async_set_cache(key, value, context)
     }
-
-    fn delete_cache(&self, key: &str) -> Result<(), Error>;
-
-    fn async_delete_cache<'a>(&'a self, key: &'a str) -> CacheFuture<'a, ()> {
-        Box::pin(async move { self.delete_cache(key) })
-    }
-
-    fn flush_cache(&self) -> Result<(), Error>;
-
-    fn disconnect(&self) -> CacheFuture<'_, ()>;
-
-    fn test_connection(&self) -> CacheFuture<'_, CacheConnectionResult>;
 }

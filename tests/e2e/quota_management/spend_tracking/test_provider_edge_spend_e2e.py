@@ -14,6 +14,7 @@ write path are all still under test with zero provider calls.
 import pytest
 
 from e2e_config import CHEAP_OPENAI_MODEL, provider_edge_base
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from spend_e2e_client import SpendClient, unique_marker, unwrap
@@ -22,6 +23,15 @@ pytestmark = [pytest.mark.e2e, pytest.mark.replayable]
 
 
 @pytest.mark.covers("quota_management.spend_tracking.chat_completions.logs_cost")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.OPENAI,),
+        models=(f"openai/{CHEAP_OPENAI_MODEL}",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_edge_wired_chat_writes_nonzero_spend_row(
     client: SpendClient, resources: ResourceManager, scoped_key: str
 ) -> None:

@@ -3,7 +3,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { ChevronRight } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import FuseProfilePresets from "./FuseProfilePresets";
 import { Switch } from "@/components/ui/switch";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { MultiSelect } from "@/components/shared/MultiSelect";
@@ -36,6 +36,7 @@ interface Props {
   onChange: (value: ComplexityRouterConfigValue) => void;
   modelOptions: { value: string; label: string }[];
   effortOptionsByModel: Record<string, string[] | null | undefined>;
+  section?: "all" | "required" | "advanced";
 }
 
 const NumberField = ({
@@ -188,7 +189,7 @@ const CalibrationFields = ({
 
 const emptyCoefficients = () => ({ slope: Number.NaN, intercept: Number.NaN });
 
-const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptionsByModel }: Props) => {
+const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptionsByModel, section = "all" }: Props) => {
   const id = React.useId();
   const isCapability = value.classifier_type === "capability";
   const capability = value.capability_classifier_config ?? newCapabilitySettings();
@@ -212,94 +213,195 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
           ? "Forecasts whether the efficient solver can complete the task using the bundled capability card"
           : "Forecasts success for both solvers and selects efficient when the estimated quality gap is within your allowance"}
       </p>
-      <div className="space-y-1">
-        <Label htmlFor={`${id}-judge`}>Judge model</Label>
-        <SearchSelect
-          inputId={`${id}-judge`}
-          aria-label="Judge model"
-          options={modelOptions}
-          value={llm.model}
-          placeholder="Select the judge model"
-          onValueChange={(model) => {
-            if (model === llm.model) return;
-            onChange({ ...value, classifier_llm_config: { ...llm, model: model ?? "", reasoning_effort: undefined } });
-          }}
-        />
-      </div>
-      {isCapability ? (
+      {section === "all" && (
         <>
-          <NumberField
-            label="Solve probability threshold"
-            value={capability.base_threshold}
-            min={0}
-            max={1}
-            help="Minimum estimated chance of whole-task success required to use the efficient solver"
-            onChange={(base_threshold) => updateCapability({ ...capability, base_threshold })}
-          />
-        </>
-      ) : (
-        <>
-          {(["efficient_profile", "capable_profile", "harness"] as const).map((field) => {
-            const label = {
-              efficient_profile: "Efficient solver profile",
-              capable_profile: "Capable solver profile",
-              harness: "Harness and budget",
-            }[field];
-            return (
-              <div key={field} className="space-y-1">
-                <Label htmlFor={`${id}-${field}`}>{label}</Label>
-                <Textarea
-                  id={`${id}-${field}`}
-                  value={fuse[field]}
-                  maxLength={4000}
-                  placeholder={
-                    field === "harness"
-                      ? "Tools, execution environment, verification, and budget available to each solver"
-                      : "Describe this solver's strengths, limitations, and settings"
-                  }
-                  onChange={(event) => updateFuse({ ...fuse, [field]: event.target.value })}
-                />
-              </div>
-            );
-          })}
-          <NumberField
-            label="Maximum quality gap"
-            value={fuse.max_quality_gap}
-            min={0}
-            max={1}
-            help="Allowed difference between capable and efficient success probabilities, from 0 to 1. This is an estimate, not a measured quality guarantee"
-            onChange={(max_quality_gap) => updateFuse({ ...fuse, max_quality_gap })}
-          />
+          <div className="space-y-1">
+            <Label htmlFor={`${id}-judge`}>Judge model</Label>
+            <SearchSelect
+              inputId={`${id}-judge`}
+              aria-label="Judge model"
+              options={modelOptions}
+              value={llm.model}
+              placeholder="Select the judge model"
+              onValueChange={(model) => {
+                if (model === llm.model) return;
+                onChange({
+                  ...value,
+                  classifier_llm_config: { ...llm, model: model ?? "", reasoning_effort: undefined },
+                });
+              }}
+            />
+          </div>
         </>
       )}
-      <Collapsible className="rounded-lg border">
-        <CollapsibleTrigger className="group flex w-full items-center gap-2 px-4 py-3 text-left font-medium">
-          <ChevronRight className="size-4 transition-transform group-data-panel-open:rotate-90" />
-          Classifier options
-        </CollapsibleTrigger>
-        <CollapsibleContent className="space-y-4 px-4 pb-4">
-          <ClassifierReasoningEffortSelect
-            model={llm.model}
-            value={llm.reasoning_effort}
-            explicitlySupported={effortOptionsByModel[llm.model]}
-            onChange={(reasoning_effort) => onChange({ ...value, classifier_llm_config: { ...llm, reasoning_effort } })}
-          />
-          <NumberField
-            label="Timeout (ms)"
-            min={1}
-            step={1}
-            value={llm.timeout_ms}
-            help="Allow enough time for the judge to produce its forecast"
-            onChange={(timeout_ms) => onChange({ ...value, classifier_llm_config: { ...llm, timeout_ms } })}
-          />
-          <ClassifierCircuitBreakerConfig
-            value={llm}
-            onChange={(classifier_llm_config) => onChange({ ...value, classifier_llm_config })}
-          />
-          <ClassifierVisionConfig
-            value={llm}
-            onChange={(classifier_llm_config) => onChange({ ...value, classifier_llm_config })}
-          />
+      {section !== "advanced" && (
+        <>
+          {isCapability ? (
+            <>
+              <NumberField
+                label="Solve probability threshold"
+                value={capability.base_threshold}
+                min={0}
+                max={1}
+                help="Minimum estimated chance of whole-task success required to use the efficient solver"
+                onChange={(base_threshold) => updateCapability({ ...capability, base_threshold })}
+              />
+            </>
+          ) : (
+            <>
+              <FuseProfilePresets value={fuse} onChange={updateFuse} />
+              <NumberField
+                label="Maximum quality gap"
+                value={fuse.max_quality_gap}
+                min={0}
+                max={1}
+                help="Allowed difference between capable and efficient success probabilities, from 0 to 1. Tune on held-out tasks from your workload; this estimate is not a measured quality guarantee. A gap of 0 still selects efficient on tied or higher forecasts. Route directly to one model to avoid judging when you do not want model selection"
+                onChange={(max_quality_gap) => updateFuse({ ...fuse, max_quality_gap })}
+              />
+            </>
+          )}
+        </>
+      )}
+      {section !== "required" && (
+        <Collapsible
+          open={section === "advanced" ? true : undefined}
+          className={section === "advanced" ? undefined : "rounded-lg border"}
+        >
+          {section === "all" && (
+            <CollapsibleTrigger className="group flex w-full items-center gap-2 px-4 py-3 text-left font-medium">
+              <ChevronRight className="size-4 transition-transform group-data-panel-open:rotate-90" />
+              Classifier options
+            </CollapsibleTrigger>
+          )}
+          <CollapsibleContent className="space-y-4 px-4 pb-4">
+            <ClassifierReasoningEffortSelect
+              model={llm.model}
+              value={llm.reasoning_effort}
+              explicitlySupported={effortOptionsByModel[llm.model]}
+              onChange={(reasoning_effort) =>
+                onChange({ ...value, classifier_llm_config: { ...llm, reasoning_effort } })
+              }
+            />
+            <NumberField
+              label="Timeout (ms)"
+              min={1}
+              step={1}
+              value={llm.timeout_ms}
+              help="Allow enough time for the judge to produce its forecast"
+              onChange={(timeout_ms) => onChange({ ...value, classifier_llm_config: { ...llm, timeout_ms } })}
+            />
+            <ClassifierCircuitBreakerConfig
+              value={llm}
+              onChange={(classifier_llm_config) => onChange({ ...value, classifier_llm_config })}
+            />
+            <ClassifierVisionConfig
+              value={llm}
+              onChange={(classifier_llm_config) => onChange({ ...value, classifier_llm_config })}
+            />
+            {isCapability && (
+              <NumberField
+                label="Capability boundary step"
+                value={capability.threshold_step ?? 0}
+                min={0}
+                max={0.5}
+                help="Added once for uncertain or unmatched tasks and twice for unsupported tasks; the final threshold cannot exceed 1"
+                onChange={(threshold_step) => updateCapability({ ...capability, threshold_step })}
+              />
+            )}
+            <NumberField
+              label="Classifier output token limit"
+              min={1}
+              step={1}
+              value={config.max_output_tokens ?? (isCapability ? 4096 : 1024)}
+              onChange={(max_output_tokens) => updateTransport({ max_output_tokens })}
+            />
+            <div className="space-y-1">
+              <Label htmlFor={`${id}-format`}>Forecast response format</Label>
+              <SearchSelect
+                inputId={`${id}-format`}
+                aria-label="Forecast response format"
+                value={config.response_format ?? "json_schema"}
+                allowClear={false}
+                options={[
+                  { value: "json_schema", label: "Strict JSON schema" },
+                  { value: "json_object", label: "JSON object (for judges without strict schema support)" },
+                ]}
+                onValueChange={(response_format) => {
+                  if (response_format === "json_schema" || response_format === "json_object")
+                    updateTransport({ response_format });
+                }}
+              />
+            </div>
+            <div className="space-y-3 rounded-md border p-3">
+              <Label>
+                <Switch
+                  checked={Boolean(config.calibration)}
+                  onCheckedChange={(enabled) =>
+                    isCapability
+                      ? updateCapability({
+                          ...capability,
+                          calibration: enabled ? { version: "", ...emptyCoefficients() } : undefined,
+                        })
+                      : updateFuse({
+                          ...fuse,
+                          calibration: enabled
+                            ? {
+                                version: "",
+                                prompt_version: "llm-v2-1",
+                                efficient: emptyCoefficients(),
+                                capable: emptyCoefficients(),
+                              }
+                            : undefined,
+                        })
+                  }
+                />
+                Use fitted calibration
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Optional coefficients fitted for your judge, solvers, and harness. Leave off to use raw forecasts
+              </p>
+              {config.calibration && (
+                <div className="space-y-1">
+                  <Label htmlFor={`${id}-version`}>Calibration version</Label>
+                  <Input
+                    id={`${id}-version`}
+                    value={config.calibration.version}
+                    maxLength={isCapability ? 128 : 512}
+                    onChange={(event) => setCalibrationVersion(event.target.value)}
+                  />
+                </div>
+              )}
+              {isCapability && capability.calibration && (
+                <CalibrationFields
+                  label="Efficient"
+                  bounded
+                  value={capability.calibration}
+                  onChange={(next) =>
+                    updateCapability({
+                      ...capability,
+                      calibration: { version: capability.calibration?.version ?? "", ...next },
+                    })
+                  }
+                />
+              )}
+              {!isCapability &&
+                fuse.calibration &&
+                (["efficient", "capable"] as const).map((role) => (
+                  <CalibrationFields
+                    key={role}
+                    label={role === "efficient" ? "Efficient" : "Capable"}
+                    value={fuse.calibration![role]}
+                    onChange={(next) => {
+                      if (fuse.calibration) updateFuse({ ...fuse, calibration: { ...fuse.calibration, [role]: next } });
+                    }}
+                  />
+                ))}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
+      {section === "all" && (
+        <>
           <div className="space-y-1">
             <Label htmlFor={`${id}-frequency`}>How often to classify</Label>
             <SearchSelect
@@ -317,111 +419,12 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
               }}
             />
           </div>
-          {isCapability && (
-            <NumberField
-              label="Capability boundary step"
-              value={capability.threshold_step ?? 0}
-              min={0}
-              max={0.5}
-              help="Added once for uncertain or unmatched tasks and twice for unsupported tasks; the final threshold cannot exceed 1"
-              onChange={(threshold_step) => updateCapability({ ...capability, threshold_step })}
-            />
-          )}
-          <NumberField
-            label="Classifier output token limit"
-            min={1}
-            step={1}
-            value={config.max_output_tokens ?? (isCapability ? 4096 : 1024)}
-            onChange={(max_output_tokens) => updateTransport({ max_output_tokens })}
-          />
-          <div className="space-y-1">
-            <Label htmlFor={`${id}-format`}>Forecast response format</Label>
-            <SearchSelect
-              inputId={`${id}-format`}
-              aria-label="Forecast response format"
-              value={config.response_format ?? "json_schema"}
-              allowClear={false}
-              options={[
-                { value: "json_schema", label: "Strict JSON schema" },
-                { value: "json_object", label: "JSON object (for judges without strict schema support)" },
-              ]}
-              onValueChange={(response_format) => {
-                if (response_format === "json_schema" || response_format === "json_object")
-                  updateTransport({ response_format });
-              }}
-            />
-          </div>
-          <div className="space-y-3 rounded-md border p-3">
-            <Label>
-              <Switch
-                checked={Boolean(config.calibration)}
-                onCheckedChange={(enabled) =>
-                  isCapability
-                    ? updateCapability({
-                        ...capability,
-                        calibration: enabled ? { version: "", ...emptyCoefficients() } : undefined,
-                      })
-                    : updateFuse({
-                        ...fuse,
-                        calibration: enabled
-                          ? {
-                              version: "",
-                              prompt_version: "llm-v2-1",
-                              efficient: emptyCoefficients(),
-                              capable: emptyCoefficients(),
-                            }
-                          : undefined,
-                      })
-                }
-              />
-              Use fitted calibration
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              Optional coefficients fitted for your judge, solvers, and harness. Leave off to use raw forecasts
-            </p>
-            {config.calibration && (
-              <div className="space-y-1">
-                <Label htmlFor={`${id}-version`}>Calibration version</Label>
-                <Input
-                  id={`${id}-version`}
-                  value={config.calibration.version}
-                  maxLength={isCapability ? 128 : 512}
-                  onChange={(event) => setCalibrationVersion(event.target.value)}
-                />
-              </div>
-            )}
-            {isCapability && capability.calibration && (
-              <CalibrationFields
-                label="Efficient"
-                bounded
-                value={capability.calibration}
-                onChange={(next) =>
-                  updateCapability({
-                    ...capability,
-                    calibration: { version: capability.calibration?.version ?? "", ...next },
-                  })
-                }
-              />
-            )}
-            {!isCapability &&
-              fuse.calibration &&
-              (["efficient", "capable"] as const).map((role) => (
-                <CalibrationFields
-                  key={role}
-                  label={role === "efficient" ? "Efficient" : "Capable"}
-                  value={fuse.calibration![role]}
-                  onChange={(next) => {
-                    if (fuse.calibration) updateFuse({ ...fuse, calibration: { ...fuse.calibration, [role]: next } });
-                  }}
-                />
-              ))}
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
+        </>
+      )}
       <p className="text-xs text-muted-foreground">
         The classifier uses its bundled prompt and always falls back to the capable solver
       </p>
-      {error && (
+      {section !== "advanced" && error && (
         <p role="alert" className="text-sm text-destructive">
           {error}
         </p>

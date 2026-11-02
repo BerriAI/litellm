@@ -1,7 +1,8 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
-import { Copy, Info, KeyRound, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { ChartColumn, Copy, Info, KeyRound, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import Link from "next/link";
 
 import { UserInfo } from "@/components/networking";
 import { createSelectionColumn, DataTableSortHeader } from "@/components/shared/DataTable";
@@ -16,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
+import { usageHrefForUser } from "@/app/(dashboard)/usage/_components/usageUrlState";
 import { copyToClipboard } from "@/utils/dataUtils";
 
 const SSO_ID_HINT =
@@ -29,12 +31,13 @@ function isScimInactive(user: UserInfo): boolean {
 
 interface UserRowActionsProps {
   user: UserInfo;
+  canViewUserUsage: boolean;
   onUserClick: (userId: string, openInEditMode?: boolean) => void;
   onDeleteUser: (user: UserInfo) => void;
   onResetPassword: (userId: string) => void;
 }
 
-function UserRowActions({ user, onUserClick, onDeleteUser, onResetPassword }: UserRowActionsProps) {
+function UserRowActions({ user, canViewUserUsage, onUserClick, onDeleteUser, onResetPassword }: UserRowActionsProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -60,6 +63,15 @@ function UserRowActions({ user, onUserClick, onDeleteUser, onResetPassword }: Us
           <Copy />
           Copy user ID
         </DropdownMenuItem>
+        {canViewUserUsage && (
+          <DropdownMenuItem
+            render={<Link href={usageHrefForUser(user.user_id)} />}
+            data-testid="user-action-view-usage"
+          >
+            <ChartColumn />
+            View usage
+          </DropdownMenuItem>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem variant="destructive" onClick={() => onDeleteUser(user)} data-testid="user-action-delete">
           <Trash2 />
@@ -73,6 +85,7 @@ function UserRowActions({ user, onUserClick, onDeleteUser, onResetPassword }: Us
 export interface UsersTableColumnsDeps {
   possibleUIRoles: Record<string, Record<string, string>> | null;
   includeSelection: boolean;
+  canViewUserUsage: boolean;
   onUserClick: (userId: string, openInEditMode?: boolean) => void;
   onDeleteUser: (user: UserInfo) => void;
   onResetPassword: (userId: string) => void;
@@ -81,6 +94,7 @@ export interface UsersTableColumnsDeps {
 export const getUsersTableColumns = ({
   possibleUIRoles,
   includeSelection,
+  canViewUserUsage,
   onUserClick,
   onDeleteUser,
   onResetPassword,
@@ -116,10 +130,12 @@ export const getUsersTableColumns = ({
     },
     {
       id: "status",
+      accessorFn: (user) => (isScimInactive(user) ? "Inactive" : "Active"),
       meta: { title: "Status", skeleton: "badge" },
-      header: "Status",
+      header: ({ column }) => <DataTableSortHeader column={column} title="Status" />,
+      sortDescFirst: false,
       size: 110,
-      enableSorting: false,
+      enableSorting: true,
       cell: ({ row }) => {
         if (isScimInactive(row.original)) {
           return (
@@ -141,15 +157,20 @@ export const getUsersTableColumns = ({
       header: ({ column }) => <DataTableSortHeader column={column} title="Global Proxy Role" variant="header-cycle" />,
       size: 160,
       enableSorting: true,
-      cell: ({ row }) => <span className="text-sm">{possibleUIRoles?.[row.original.user_role]?.ui_label || "-"}</span>,
+      cell: ({ row }) => (
+        <span className="text-sm">
+          {(row.original.user_role && possibleUIRoles?.[row.original.user_role]?.ui_label) || "-"}
+        </span>
+      ),
     },
     {
       id: "user_alias",
       accessorKey: "user_alias",
       meta: { title: "User Alias" },
-      header: "User Alias",
+      header: ({ column }) => <DataTableSortHeader column={column} title="User Alias" />,
+      sortDescFirst: false,
       size: 150,
-      enableSorting: false,
+      enableSorting: true,
       cell: ({ row }) => (
         <span className="block max-w-40 truncate text-sm" title={row.original.user_alias ?? undefined}>
           {row.original.user_alias || "-"}
@@ -169,26 +190,28 @@ export const getUsersTableColumns = ({
       id: "max_budget",
       accessorKey: "max_budget",
       meta: { title: "Budget (USD)", numeric: true },
-      header: "Budget (USD)",
+      header: ({ column }) => <DataTableSortHeader column={column} title="Budget (USD)" />,
+      sortDescFirst: true,
       size: 130,
-      enableSorting: false,
+      enableSorting: true,
       cell: ({ row }) => <MoneyCell value={row.original.max_budget} decimals={2} emptyText="Unlimited" showZero />,
     },
     {
       id: "sso_user_id",
       accessorKey: "sso_user_id",
       meta: { title: "SSO ID" },
-      header: () => (
+      header: ({ column }) => (
         <span className="flex items-center gap-1.5">
-          SSO ID
+          <DataTableSortHeader column={column} title="SSO ID" />
           <CellTooltip
             content={SSO_ID_HINT}
             trigger={<Info className="size-3.5 shrink-0 text-muted-foreground" aria-label="About SSO ID" />}
           />
         </span>
       ),
+      sortDescFirst: false,
       size: 160,
-      enableSorting: false,
+      enableSorting: true,
       cell: ({ row }) => (
         <span className="block max-w-40 truncate font-mono text-xs" title={row.original.sso_user_id ?? undefined}>
           {row.original.sso_user_id ?? "-"}
@@ -199,9 +222,10 @@ export const getUsersTableColumns = ({
       id: "key_count",
       accessorKey: "key_count",
       meta: { title: "Virtual Keys", skeleton: "badge" },
-      header: "Virtual Keys",
+      header: ({ column }) => <DataTableSortHeader column={column} title="Virtual Keys" />,
+      sortDescFirst: true,
       size: 120,
-      enableSorting: false,
+      enableSorting: true,
       cell: ({ row }) => {
         const keyCount = row.original.key_count;
         if (keyCount > 0) {
@@ -237,9 +261,10 @@ export const getUsersTableColumns = ({
       id: "updated_at",
       accessorKey: "updated_at",
       meta: { title: "Updated At" },
-      header: "Updated At",
+      header: ({ column }) => <DataTableSortHeader column={column} title="Updated At" />,
+      sortDescFirst: false,
       size: 130,
-      enableSorting: false,
+      enableSorting: true,
       cell: ({ row }) => <DateCell value={row.original.updated_at} precision="date" />,
     },
     {
@@ -253,6 +278,7 @@ export const getUsersTableColumns = ({
         <div className="flex justify-end">
           <UserRowActions
             user={row.original}
+            canViewUserUsage={canViewUserUsage}
             onUserClick={onUserClick}
             onDeleteUser={onDeleteUser}
             onResetPassword={onResetPassword}
