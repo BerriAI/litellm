@@ -59875,6 +59875,7 @@
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
+        "search_context_cost_per_query": {"search_context_size_high":0.012,"search_context_size_low":0.012,"search_context_size_medium":0.012},
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html",
         "use_openai_responses_path": true,
         "supported_endpoints": [
@@ -59896,7 +59897,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_web_search": true
     },
     "bedrock_mantle/openai.gpt-daybreak-blue-5.6-sol": {
         "input_cost_per_token": 4.4e-06,
@@ -59911,6 +59913,7 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "mode": "responses",
+        "search_context_cost_per_query": {"search_context_size_high":0.012,"search_context_size_low":0.012,"search_context_size_medium":0.012},
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/responses"
@@ -59930,7 +59933,8 @@
         "supports_tool_choice": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-daybreak-blue-56-sol.html"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-daybreak-blue-56-sol.html",
+        "supports_web_search": true
     },
     "bedrock_mantle/openai.gpt-5.6-luna": {
         "input_cost_per_token": 2.2e-07,
