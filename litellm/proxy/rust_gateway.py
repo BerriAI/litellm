@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter
 from typing_extensions import assert_never
@@ -42,7 +42,7 @@ class Supervised:
     trusted_proxies: tuple[str, ...]
 
 
-RustGatewayMode = Disabled | Supervisor | Supervised
+RustGatewayMode: TypeAlias = Disabled | Supervisor | Supervised
 
 
 def trusted_proxies(operator_value: str | None) -> tuple[str, ...]:
@@ -122,8 +122,8 @@ class Signal:
     signum: signal.Signals
 
 
-Event = Stop | Exited
-State = Running | Draining | Finished
+Event: TypeAlias = Stop | Exited
+State: TypeAlias = Running | Draining | Finished
 
 
 def _signal_next(signum: signal.Signals, order: tuple[Child, ...]) -> tuple[State, Signal | None]:
