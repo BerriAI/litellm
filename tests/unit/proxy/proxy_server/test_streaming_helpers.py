@@ -335,6 +335,12 @@ def test_responses_sse_chunk_that_json_cannot_show_as_printed_keeps_the_base_fra
     assert _format_responses_sse_chunk(chunk=chunk) == _format_streaming_sse_chunk(chunk=chunk)
 
 
+def test_responses_sse_chunk_without_a_type_keeps_the_base_frame() -> None:
+    chunk: Final = {"note": "hook output without a type"}
+
+    assert _format_responses_sse_chunk(chunk=chunk) == _format_streaming_sse_chunk(chunk=chunk)
+
+
 def test_responses_error_event_encodes_its_detail_the_way_the_chat_error_frame_does() -> None:
     error: Final = {
         "message": "blocked",

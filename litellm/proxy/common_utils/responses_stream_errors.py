@@ -141,10 +141,13 @@ def _is_plain_json(chunk: object) -> bool:
     return next((not level.values for level in levels if _settles(level)), False)
 
 
+def _carries_a_type(chunk: object) -> bool:
+    return _is_dict(chunk) and type(chunk) is dict and "type" in chunk
+
+
 def responses_chunk_data(chunk: object) -> str | None:
-    kind: Final = type(chunk)
     try:
-        return json.dumps(chunk, allow_nan=False) if kind is dict and _is_plain_json(chunk) else None
+        return json.dumps(chunk, allow_nan=False) if _carries_a_type(chunk) and _is_plain_json(chunk) else None
     except (ValueError, RecursionError):
         return None
 
