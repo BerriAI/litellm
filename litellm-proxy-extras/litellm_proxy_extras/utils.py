@@ -974,7 +974,7 @@ class ProxyExtrasDBManager:
         from litellm_proxy_extras.migration_recovery import (
             baseline_current_schema,
             recover_completed_migration,
-            roll_back_failed_inert_migration,
+            roll_back_replayable_failed_migration,
         )
 
         database_url: Final = os.environ.get("DATABASE_URL")
@@ -990,9 +990,9 @@ class ProxyExtrasDBManager:
             if not migration.is_file():
                 return False
             with migration_lock(lock_url) as coordinator:
-                return recover_completed_migration(coordinator, schema, migration) or roll_back_failed_inert_migration(
+                return recover_completed_migration(
                     coordinator, schema, migration
-                )
+                ) or roll_back_replayable_failed_migration(coordinator, schema, migration)
 
         def baseline_existing(migrations_dir: str) -> None:
             with migration_lock(lock_url) as coordinator:
