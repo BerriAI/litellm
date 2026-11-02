@@ -1572,6 +1572,40 @@ def test_key_granted_openrouter_wildcard_without_an_openrouter_deployment_lists_
     assert (listed, catalog.call_count) == ([], 0)
 
 
+@respx.mock
+def test_key_granted_hosted_vllm_wildcard_without_a_hosted_vllm_deployment_lists_no_environment_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.setenv("HOSTED_VLLM_API_BASE", "http://hosted-vllm-environment-only.test:8000/v1")
+    environment_server: Final = respx.get("http://hosted-vllm-environment-only.test:8000/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "vllm-team/*",
+                "litellm_params": {"model": "hosted_vllm/*", "api_base": "http://vllm-team.test:8000/v1"},
+            }
+        ]
+    )
+
+    listed: Final = get_complete_model_list(
+        key_models=["hosted_vllm/*"],
+        team_models=[],
+        proxy_model_list=router.model_names,
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert (listed, environment_server.call_count) == ([], 0)
+
+
 @contextmanager
 def _openai_catalog_behind_a_catch_all(
     monkeypatch: pytest.MonkeyPatch, concrete_name: str, concrete_model_info: Mapping[str, str]

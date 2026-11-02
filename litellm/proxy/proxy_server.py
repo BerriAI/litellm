@@ -17990,14 +17990,21 @@ async def model_info_v1(
     alias_models: Final = copy.deepcopy(registry.deployments(source="alias"))
     all_models.extend(alias_models)
 
-    all_models = await run_model_listing(partial(expand_wildcard_deployments_for_model_info, all_models, llm_router))
-
     allowed_model_names: Final = await _get_v1_model_info_allowed_model_names_with_access_groups(
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+    )
+
+    all_models = await run_model_listing(
+        partial(
+            expand_wildcard_deployments_for_model_info,
+            all_models,
+            llm_router,
+            allowed_model_names=allowed_model_names,
+        )
     )
 
     all_models = _filter_v1_model_info_deployments(

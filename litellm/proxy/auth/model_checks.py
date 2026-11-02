@@ -6,7 +6,7 @@ import copy
 import functools
 import itertools
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from types import MappingProxyType
 from typing import Final, TypeVar
@@ -35,7 +35,9 @@ _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
 _MODEL_LISTING_POOL: Final = ThreadPoolExecutor(thread_name_prefix="litellm-model-listing")
 
-_PROVIDERS_LISTED_ONLY_THROUGH_A_DEPLOYMENT: Final = frozenset({LlmProviders.OPENROUTER.value})
+_PROVIDERS_LISTED_ONLY_THROUGH_A_DEPLOYMENT: Final = frozenset(
+    {LlmProviders.OPENROUTER.value, LlmProviders.HOSTED_VLLM.value}
+)
 
 _Listed: Final = TypeVar("_Listed")
 
@@ -562,9 +564,23 @@ def _names_no_deployment_serves_by_name(
     return tuple(name for name in names if not deployed_by_name(name, team_id))
 
 
+def _matches_a_pattern(name: str, patterns: Sequence[str]) -> bool:
+    return any(_wildcard_name_regex(pattern).match(name) for pattern in patterns)
+
+
+def _can_expand_to_an_allowed_name(
+    model_name: str, litellm_model: str, allowed_model_names: Collection[str] | None
+) -> bool:
+    if allowed_model_names is None or not _check_wildcard_routing(model_name):
+        return True
+    patterns: Final = tuple(pattern for pattern in (model_name, litellm_model) if _check_wildcard_routing(pattern))
+    return any(_matches_a_pattern(name, patterns) for name in allowed_model_names)
+
+
 def expand_wildcard_deployments_for_model_info(
     deployments: list[dict[str, object]],
     llm_router: Router | None = None,
+    allowed_model_names: Collection[str] | None = None,
 ) -> list[dict[str, object]]:
     """Expand wildcard deployments into one row per known provider model.
 
@@ -581,6 +597,8 @@ def expand_wildcard_deployments_for_model_info(
         raw_params = deployment.get("litellm_params")
         litellm_params_dict: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
         litellm_model = str(litellm_params_dict.get("model") or "")
+        if not _can_expand_to_an_allowed_name(model_name, litellm_model, allowed_model_names):
+            continue
 
         # Determine the wildcard pattern to expand.
         # Branch order matters: only fall to litellm_model when model_name is
