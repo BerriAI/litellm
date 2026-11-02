@@ -342,25 +342,18 @@ def _configured_window(row: CodexCatalogRow, stock_model: CodexStockModel) -> Ma
     """The `context_window` the operator's `model_info.max_input_tokens` gives a known model's entry,
     or nothing, which keeps `stock_model`'s own.
 
-    A request to the row can route to any of its deployments, so the window is the smallest value they
-    set, and only when every one sets a value: a deployment that sets none leaves Codex's own window in
-    place, which is logged. The window never goes past `stock_model`'s `max_context_window`, the most
-    Codex lets its own `model_context_window` setting raise that model to."""
+    A request to the row can route to any of its deployments, so the window is the smallest one of them
+    takes: its `max_input_tokens` where the operator set one, Codex's own window where not. A limit set
+    on only some deployments can therefore lower the window but never raise it. The window never goes
+    past `stock_model`'s `max_context_window`, the most Codex lets its own `model_context_window`
+    setting raise that model to."""
     per_deployment: Final = row.configured_max_input_tokens
     declared: Final = tuple(limit for limit in per_deployment if limit is not None)
-    if not declared:
+    unset_window: Final = () if len(declared) == len(per_deployment) else (stock_model.context_window,)
+    if not declared or None in unset_window:
         return MappingProxyType({})
-    if len(declared) < len(per_deployment):
-        verbose_proxy_logger.warning(
-            "model_info.max_input_tokens for %s is set on %d of its %d deployments, so Codex keeps its own "
-            "context window: the window follows max_input_tokens only when every deployment sets it",
-            row.id,
-            len(declared),
-            len(per_deployment),
-        )
-        return MappingProxyType({})
+    smallest: Final = min(limit for limit in (*declared, *unset_window) if limit is not None)
     ceiling: Final = stock_model.max_context_window
-    smallest: Final = min(declared)
     return MappingProxyType({"context_window": smallest if ceiling is None else min(smallest, ceiling)})
 
 
@@ -505,9 +498,9 @@ def codex_models_response_json(
     byte limit silently and keeps its bundled one, so the body holds only the entries that fit,
     the ones offering a service tier taken first and the rest in listing order, an entry too large
     for the bytes left passed over, every kept entry at its listing position; `byte_limit=None`
-    keeps every entry. A row whose deployments all set `model_info.max_input_tokens` gets the smallest
-    as its known model's `context_window`, capped at that model's `max_context_window`. A row listed
-    under another name than the Codex model its `upstream_model` names (an alias) takes that model's
+    keeps every entry. A row whose deployments set `model_info.max_input_tokens` gets the smallest
+    window any of them takes as its known model's `context_window`, capped at that model's
+    `max_context_window`. A row listed under another name than the Codex model its `upstream_model` names (an alias) takes that model's
     entry; `alias_defaults="deployment"` drops the defaults Codex picks for that model in favor of
     what the alias's deployments pin, while `"codex"` keeps them, as Codex would use them for the
     model's own name. `client_version` is the requesting Codex's version, which decides the reasoning

@@ -249,12 +249,13 @@ _WIDE_STOCK = MappingProxyType(
         ((1050000,), 872000),
         ((600000, 400000), 400000),
         ((600000, None), 272000),
+        ((100000, None), 100000),
         ((None,), 272000),
         ((), 272000),
     ],
 )
 @pytest.mark.parametrize("alias_defaults", ["codex", "deployment"])
-def test_a_known_model_and_its_alias_take_the_max_input_tokens_every_deployment_sets(
+def test_a_known_model_and_its_alias_take_the_smallest_window_any_deployment_takes(
     configured, expected, alias_defaults
 ):
     rows = (
@@ -283,6 +284,18 @@ def test_a_configured_window_goes_past_codexs_own_when_the_stock_entry_sets_no_c
     )["models"]
 
     assert entry["context_window"] == 1050000
+
+
+def test_a_deployment_without_a_limit_keeps_a_windowless_stock_entry_as_codex_ships_it():
+    windowless = MappingProxyType({"gpt-5.5": _stock("gpt-5.5").model_copy(update={"context_window": None})})
+
+    (entry,) = json.loads(
+        codex_models_response_json(
+            (_row("gpt-5.5", configured_max_input_tokens=(1050000, None)),), stock=windowless, instructions=_PROMPT
+        ).json
+    )["models"]
+
+    assert entry["context_window"] is None
 
 
 def test_model_list_body_sizes_a_known_models_window_off_the_deployments_the_key_team_routes_to():
