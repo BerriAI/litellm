@@ -3981,6 +3981,45 @@ async def test_invoke_body_without_anthropic_version_is_scanned_whole():
     assert "structured_messages" not in guardrail.received[-1]
 
 
+_PLAIN_TEXT_DOCUMENT: Final = {
+    "type": "document",
+    "source": {"type": "text", "media_type": "text/plain", "data": "Card 4111 1111 1111 1111"},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param([{"type": "text", "text": "Summarize this"}, _PLAIN_TEXT_DOCUMENT], id="document"),
+        pytest.param(
+            [
+                {
+                    "type": "search_result",
+                    "source": "https://example.com/cards",
+                    "title": "Cards",
+                    "content": [{"type": "text", "text": "Card 4111 1111 1111 1111"}],
+                }
+            ],
+            id="search_result",
+        ),
+        pytest.param(
+            [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [_PLAIN_TEXT_DOCUMENT]}],
+            id="document_in_tool_result",
+        ),
+    ],
+)
+async def test_anthropic_invoke_body_with_blocks_the_messages_handler_does_not_scan_is_scanned_whole(content: list):
+    invoke = _anthropic_invoke_data()
+    data = {**invoke, "data": {**invoke["data"], "messages": [{"role": "user", "content": content}]}}
+    guardrail = _replying({})
+
+    await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
+
+    assert json.loads(guardrail.received[-1]["texts"][0])["data"] == data["data"]
+    assert "structured_messages" not in guardrail.received[-1]
+
+
 @pytest.mark.asyncio
 async def test_anthropic_invoke_response_masks_are_written_back():
     response = {
