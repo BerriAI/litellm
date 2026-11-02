@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import AbstractContextManager, nullcontext
 from copy import deepcopy
@@ -294,12 +293,14 @@ def test_process_guardrail_metadata_records_in_the_litellm_metadata_bucket(proxy
     assert data == {"litellm_metadata": {"guardrails": ["g1", "g2"], "applied_guardrails": ["g2", "g1"]}}
 
 
-def test_process_guardrail_metadata_handles_many_guardrail_names_quickly(proxy_logging):
-    names = [f"guard-{i}" for i in range(50_000)]
-    data = {"metadata": {"guardrails": names, "applied_guardrails": []}}
-    started = time.perf_counter()
+def test_process_guardrail_metadata_does_not_search_the_applied_list_per_name(proxy_logging):
+    class _NoMembershipChecks(list):
+        def __contains__(self, item):
+            raise AssertionError("searched the applied list")
+
+    names = [f"guard-{i}" for i in range(100)]
+    data = {"metadata": {"guardrails": names, "applied_guardrails": _NoMembershipChecks()}}
     proxy_logging._process_guardrail_metadata(data)
-    assert time.perf_counter() - started < 2
     assert data["metadata"]["applied_guardrails"] == names
 
 

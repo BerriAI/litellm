@@ -7,6 +7,7 @@ to extract specific fields for guardrail processing.
 """
 
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, Protocol, runtime_checkable
 
 from pydantic import TypeAdapter
@@ -29,44 +30,60 @@ if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
-# Strings in a provider's JSON response that name or encode something rather than carry the reply's text.
-_NON_TEXT_RESPONSE_FIELDS: Final = frozenset(
+# The fields of a provider's JSON reply that name or encode something rather than carry its text, by the field they sit
+# under. Anything outside these positions, such as a tool call's arguments, is the model's own output and is read whole.
+_REPLY_TOP_LEVEL_FIELDS: Final = frozenset(
     (
-        "b64_json",
-        "bytesBase64Encoded",
-        "embedding",
-        "finishReason",
-        "finish_reason",
         "id",
         "model",
         "modelVersion",
         "object",
         "responseId",
-        "role",
         "service_tier",
         "status",
         "system_fingerprint",
-        "thoughtSignature",
-        "type",
     )
 )
+_REPLY_NESTED_FIELDS: Final = MappingProxyType(
+    {
+        "candidates": frozenset(("finishReason",)),
+        "choices": frozenset(("finish_reason",)),
+        "content": frozenset(("role", "type")),
+        "data": frozenset(("b64_json", "embedding", "object")),
+        "message": frozenset(("role",)),
+        "output": frozenset(("id", "role", "status", "type")),
+        "parts": frozenset(("thoughtSignature",)),
+        "predictions": frozenset(("bytesBase64Encoded",)),
+        "tool_calls": frozenset(("id", "type")),
+    }
+)
+_REPLY_BODY_FIELDS: Final = frozenset(("candidates", "choices", "content", "data", "output", "predictions"))
 
 
 def _response_text(response: Mapping[str, object]) -> str:
-    """The text a JSON response carries, without its timestamps, usage counts, ids and vectors, which a guardrail
-    would otherwise read as phone or card numbers."""
-    pending: Final[list[object]] = [response]  # mutable-ok: local to this walk
+    """The strings a JSON response carries, without the numbers around them or a provider reply's ids and encoded data,
+    which a guardrail would otherwise read as phone or card numbers."""
+    top_level: Final = _REPLY_TOP_LEVEL_FIELDS if _REPLY_BODY_FIELDS & response.keys() else None
+    pending: Final[list[tuple[object, frozenset[str] | None]]] = [(response, top_level)]  # mutable-ok: stack
     texts: Final[list[str]] = []  # mutable-ok: local to this walk
     while pending:
-        value = pending.pop()
+        value, skipped = pending.pop()
         fields = as_str_mapping(value)
         items = as_object_list(value)
         if isinstance(value, str):
             texts.append(value)
         elif fields is not None:
-            pending.extend(reversed([item for name, item in fields.items() if name not in _NON_TEXT_RESPONSE_FIELDS]))
+            pending.extend(
+                reversed(
+                    [
+                        (item, None if skipped is None else _REPLY_NESTED_FIELDS.get(name))
+                        for name, item in fields.items()
+                        if skipped is None or name not in skipped
+                    ]
+                )
+            )
         elif items is not None:
-            pending.extend(reversed(items))
+            pending.extend((item, skipped) for item in reversed(items))
     return "\n".join(text for text in texts if text)
 
 
