@@ -7,17 +7,19 @@ from dataclasses import dataclass
 from itertools import accumulate
 from os.path import commonprefix
 from types import MappingProxyType
-from typing import Final, TypeVar
+from typing import TYPE_CHECKING, Final, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
-import litellm
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.routing_common_utils import MID_STREAM_CONTINUATION_KWARG
 from litellm.litellm_core_utils.rules import Rules
 from litellm.types.llms.openai import AllMessageValues, OutputTextDeltaEvent
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 from litellm.utils import supports_assistant_prefill
+
+if TYPE_CHECKING:
+    from litellm.router_python_host import PythonHost
 
 
 class _ContinuationMarker:
@@ -219,7 +221,7 @@ class ContinuationOutput:
     """Splices a fallback's continuation onto the stream the client already received. Drops a leading echo of the
     prefill, since some providers (Mistral) return the prefix inside the completion, and the prefill's trailing
     whitespace sent again by a provider that strips it (Anthropic), keeps the primary's chunk id, created time and single role delta, and
-    runs litellm.post_call_rules over the joined text, since each stream wrapper only sees its own fragment. A
+    runs the process post_call_rules (read through the router core's host) over the joined text, since each stream wrapper only sees its own fragment. A
     continuation nested in another leaves the rules to the outermost one, the only one holding the whole text."""
 
     def __init__(
@@ -229,7 +231,11 @@ class ContinuationOutput:
         model: str,
         primary_response: object,
         checks_post_call_rules: bool = True,
+        host: "PythonHost | None" = None,
     ) -> None:
+        from litellm.router_python_host import python_host
+
+        self._host: Final = python_host if host is None else host
         self._text = emitted_text
         self._checks_post_call_rules: Final = checks_post_call_rules
         self._prefill_text: Final = _prefill_text(prefill_message)
@@ -283,7 +289,7 @@ class ContinuationOutput:
         return _without_leading_text(chunk, matched)
 
     def _observed(self, chunks: tuple[ModelResponseStream, ...]) -> tuple[ModelResponseStream, ...]:
-        if not self._checks_post_call_rules or not litellm.post_call_rules:
+        if not self._checks_post_call_rules or not self._host.dynamic().post_call_rules:
             return chunks
         for chunk in chunks:
             self._text += _delta_text(chunk)

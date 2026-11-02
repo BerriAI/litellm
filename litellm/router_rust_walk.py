@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Final
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 if TYPE_CHECKING:
+    from litellm.router_python_host import PythonHost
     from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
 
 # `RETRY_BREADCRUMB_LIMIT`: how many failures `previous_models` keeps.
@@ -225,9 +226,10 @@ class FallbackOutcomes:
     custom loggers and, under ``include_fallback_errors``, lists the level's errors (its own
     first, then each hop that failed) in the response's ``x-litellm-fallback-errors``."""
 
-    __slots__ = ("_failed", "_header_errors", "_include", "_pending")
+    __slots__ = ("_failed", "_header_errors", "_host", "_include", "_pending")
 
-    def __init__(self, request: Mapping[str, object]) -> None:
+    def __init__(self, request: Mapping[str, object], host: "PythonHost") -> None:
+        self._host: Final = host
         self._include: Final = request.get("include_fallback_errors", False) is True
         self._failed: Final[dict[object, list[object]]] = {}  # mutable-ok: each level's failed hops, in order
         self._header_errors: Final[list[list[object]]] = []  # mutable-ok: each successful hop's errors, innermost first
@@ -253,7 +255,7 @@ class FallbackOutcomes:
                 self._header_errors.append([get_fallback_error_info(level_error), *failed])
             self._pending.append(
                 handlers.log_success_fallback_event(  # pyright: ignore[reportUnknownMemberType]  # takes the kwargs as an untyped dict
-                    original_model_group=original, kwargs=dict(kwargs), original_exception=level_error
+                    original_model_group=original, kwargs=dict(kwargs), original_exception=level_error, host=self._host
                 )
             )
             return
@@ -261,7 +263,7 @@ class FallbackOutcomes:
             failed.append(get_fallback_error_info(hop_error))
         self._pending.append(
             handlers.log_failure_fallback_event(  # pyright: ignore[reportUnknownMemberType]  # see above
-                original_model_group=original, kwargs=dict(kwargs), original_exception=level_error
+                original_model_group=original, kwargs=dict(kwargs), original_exception=level_error, host=self._host
             )
         )
 

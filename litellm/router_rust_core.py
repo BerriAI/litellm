@@ -721,7 +721,10 @@ class Resolved:
         # An explicit `routing_strategy=None` reaches the Rust core as "None": no strategy picks.
         return kept if self.routing_strategy is not None else {**kept, "routing_strategy": "None"}
 
-    def dynamic_document(self, version: int, model_names: Sequence[str]) -> Mapping[str, object]:
+    def dynamic_document(
+        self, version: int, model_names: Sequence[str], process_allowed_fails: object
+    ) -> Mapping[str, object]:
+        """``process_allowed_fails`` is the process default, read through the host."""
         values: Final = {
             "version": version,
             "model_group_alias": _plain(dict(self.model_group_alias)),
@@ -730,21 +733,19 @@ class Resolved:
             "content_policy_fallbacks": _plain(self.content_policy_fallbacks),
             "num_retries": _crate_int(self.num_retries),
             "max_fallbacks": _crate_int(self.max_fallbacks),
-            "allowed_fails": _crate_int(self._router_allowed_fails()),
+            "allowed_fails": _crate_int(self._router_allowed_fails(process_allowed_fails)),
             "fallback_keys": self._fallback_keys(model_names),
             "default_deployment": _plain(served_default_deployment(self.default_deployment)[0]),
             "default_deployment_raises": True if served_default_deployment(self.default_deployment)[1] else None,
         }
         return {name: value for name, value in values.items() if value is not None}
 
-    def _router_allowed_fails(self) -> object:
+    def _router_allowed_fails(self, process_allowed_fails: object) -> object:
         """``allowed_fails`` when it counts as set on the router (``_is_allowed_fails_set_on_router``):
-        passed explicitly, or different from the process default."""
-        import litellm
-
+        passed explicitly, or different from the process default ``process_allowed_fails``."""
         if self.explicit_allowed_fails is not None:
             return self.explicit_allowed_fails
-        if self.allowed_fails != litellm.allowed_fails:
+        if self.allowed_fails != process_allowed_fails:
             return self.allowed_fails
         return None
 
@@ -1218,7 +1219,9 @@ class RustCore(
             **{name: value for name, value in failover_document(self._plain).items() if value is not None},
             **({"provider_default_deployment_ids": list(default_ids)} if default_ids else {}),
         }
-        return RouterCoreHandle(static, self._resolved.dynamic_document(self._version, names))
+        return RouterCoreHandle(
+            static, self._resolved.dynamic_document(self._version, names, self._host.dynamic().allowed_fails)
+        )
 
     def _provider_default_ids(self) -> tuple[str, ...]:
         """``provider_default_deployment_ids`` as the cooldown check reads it (``deployment in
@@ -1609,7 +1612,9 @@ class RustCore(
                 self._rebuild()
             else:
                 names: Final = [str(d.get("model_name")) for d in self._handle.deployments()]
-                self._handle.apply({"settings": resolved.dynamic_document(self._version, names)})
+                self._handle.apply(
+                    {"settings": resolved.dynamic_document(self._version, names, self._host.dynamic().allowed_fails)}
+                )
 
     def _changes_strategy(self, updated: Mapping[str, object]) -> bool:
         """``update_settings`` names a ``routing_strategy`` other than the router's."""
@@ -3016,7 +3021,7 @@ class _Driver:
         self._served: tuple[str | None, Mapping[str, object]] = (None, MappingProxyType({}))
         self._attempts: int = 0
         self._walk: Final = WalkMetadata(request, plan.metadata_field, self._params_base_model)
-        self.outcomes: Final = FallbackOutcomes(request)
+        self.outcomes: Final = FallbackOutcomes(request, core._host)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
         # The fallback level the walk is at, from its fallback events.
         self._level: int = 0
 
@@ -3581,7 +3586,7 @@ class _Driver:
         source: Final = own if own is not None else fallbacks
         entries: Final = [dict(m) for entry in _as_list(source) if (m := as_str_mapping(entry))]
         found, generic = (
-            get_fallback_model_group_for_lookup_groups(entries, lookup)  # pyright: ignore[reportArgumentType]  # the fallbacks config shape
+            get_fallback_model_group_for_lookup_groups(entries, lookup, self._core._host.dynamic().provider_list)  # pyright: ignore[reportArgumentType, reportPrivateUsage]  # the fallbacks config shape; the driver's own core's host
             if entries
             else (None, None)
         )

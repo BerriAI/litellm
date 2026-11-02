@@ -45,6 +45,7 @@ from litellm.types.router import (
 
 if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
+    from litellm.router_python_host import PythonHost
 
 # Status codes a generic API call's caller-supplied resource id can trigger on its own
 # (e.g. a nonexistent file/batch/thread id), independent of the selected deployment's health.
@@ -266,7 +267,7 @@ def is_bad_request_without_fallback(exception: Exception, fallback_on_unsupporte
     return exception.status_code == 400 and bool(getattr(exception, "llm_provider", ""))
 
 
-def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
+def _check_stripped_model_group(model_group: str, fallback_key: str, provider_list: Sequence[object]) -> bool:
     """
     Handles wildcard routing scenario
 
@@ -279,11 +280,8 @@ def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     Returns:
     - True if the stripped model group == fallback_key
     """
-    for provider in litellm.provider_list:
-        if isinstance(provider, Enum):
-            _provider = provider.value
-        else:
-            _provider = provider
+    for provider in provider_list:
+        _provider: str = str(provider.value) if isinstance(provider, Enum) else str(provider)  # pyright: ignore[reportAny]  # an Enum member's value
         if model_group.startswith(f"{_provider}/"):
             stripped_model_group = model_group.replace(f"{_provider}/", "")
             if stripped_model_group == fallback_key:
@@ -588,12 +586,16 @@ def _resolved_a_specific_chain(
 def get_fallback_model_group_for_lookup_groups(
     fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
     lookup_groups: tuple[str, ...],
+    provider_list: Sequence[object] | None = None,
 ) -> tuple[list[str] | None, int | None]:  # mutable-ok: mirrors get_fallback_model_group's contract
     """
     First lookup group with a specifically-keyed chain wins; the generic "*" chain applies
     only after every group missed, so a catch-all cannot shadow a later group's own chain.
     """
-    results: Final = tuple(get_fallback_model_group(fallbacks=fallbacks, model_group=group) for group in lookup_groups)
+    results: Final = tuple(
+        get_fallback_model_group(fallbacks=fallbacks, model_group=group, provider_list=provider_list)
+        for group in lookup_groups
+    )
     specific: Final = next((result for result in results if _resolved_a_specific_chain(fallbacks, result)), None)
     if specific is not None:
         return specific
@@ -603,8 +605,12 @@ def get_fallback_model_group_for_lookup_groups(
 def get_fallback_model_group(
     fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
     model_group: str,
+    provider_list: Sequence[object] | None = None,
 ) -> tuple[list[str] | None, int | None]:  # mutable-ok: mirrors get_fallback_model_group's contract
     """
+    ``provider_list`` is the process provider list, read through the router core's host (the
+    process host's when none is given).
+
     Returns:
     - fallback_model_group: List[str] of fallback model groups. example: ["gpt-4", "gpt-3.5-turbo"]
     - generic_fallback_idx: int of the index of the generic fallback in the fallbacks list.
@@ -615,6 +621,9 @@ def get_fallback_model_group(
     - provider-prefixed model group match
     - generic fallback
     """
+    from litellm.router_python_host import python_host
+
+    providers: Final = python_host.dynamic().provider_list if provider_list is None else provider_list
     generic_fallback_idx: int | None = None
     stripped_model_fallback: list[str] | None = None
     fallback_model_group: list[str] | None = None
@@ -628,7 +637,7 @@ def get_fallback_model_group(
                 fallback_model_group = item[model_group]
                 break
             elif fallback_key == prefixed_model_group or _check_stripped_model_group(
-                model_group=model_group, fallback_key=fallback_key
+                model_group=model_group, fallback_key=fallback_key, provider_list=providers
             ):  # check generic fallback
                 stripped_model_fallback = item[fallback_key]
             elif fallback_key == "*":  # check generic fallback
@@ -645,20 +654,26 @@ def get_fallback_model_group(
     return fallback_model_group, generic_fallback_idx
 
 
-def _resolved_fallback_chain(entries: Sequence[object], lookup_groups: tuple[str, ...]) -> Sequence[object]:
+def _resolved_fallback_chain(
+    entries: Sequence[object], lookup_groups: tuple[str, ...], provider_list: Sequence[object] | None
+) -> Sequence[object]:
     group_entries: Final[Sequence[Mapping[str, list[str]]]] = tuple(  # mutable-ok: mirrors the fallbacks config shape
         entry for entry in entries if isinstance(entry, Mapping) and entry
     )
-    chain, _ = get_fallback_model_group_for_lookup_groups(fallbacks=group_entries, lookup_groups=lookup_groups)
+    chain, _ = get_fallback_model_group_for_lookup_groups(
+        fallbacks=group_entries, lookup_groups=lookup_groups, provider_list=provider_list
+    )
     return chain if isinstance(chain, list) else ()
 
 
-def continuation_fallback_targets(fallbacks: object, lookup_groups: tuple[str, ...]) -> Sequence[object]:
+def continuation_fallback_targets(
+    fallbacks: object, lookup_groups: tuple[str, ...], provider_list: Sequence[object] | None = None
+) -> Sequence[object]:
     entries: Final[Sequence[object]] = fallbacks if isinstance(fallbacks, list) else ()
     return (
         entries
         if check_non_standard_fallback_format(fallbacks=entries)
-        else _resolved_fallback_chain(entries, lookup_groups)
+        else _resolved_fallback_chain(entries, lookup_groups, provider_list)
     )
 
 
@@ -901,6 +916,7 @@ async def run_async_fallback(
                 original_model_group=original_model_group,
                 kwargs=kwargs,
                 original_exception=original_exception,
+                host=litellm_routing_ctx.host(),
             )
             return response
         except Exception as e:
@@ -910,6 +926,7 @@ async def run_async_fallback(
                 original_model_group=original_model_group,
                 kwargs=kwargs,
                 original_exception=original_exception,
+                host=litellm_routing_ctx.host(),
             )
             if (
                 failure_callbacks_blocked_logging_obj := _failure_callbacks_blocked_logging_object(
@@ -925,7 +942,9 @@ async def run_async_fallback(
     raise error_from_fallbacks
 
 
-async def log_success_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
+async def log_success_fallback_event(
+    original_model_group: str, kwargs: dict, original_exception: Exception, host: "PythonHost | None" = None
+):
     """
     Log a successful fallback event to all registered callbacks.
 
@@ -940,7 +959,9 @@ async def log_success_fallback_event(original_model_group: str, kwargs: dict, or
         Errors during logging are caught and reported but do not interrupt the process.
     """
     # Get deduplicated CustomLogger instances from all callback lists
-    custom_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
+    from litellm.router_python_host import python_host
+
+    custom_loggers: Final = (python_host if host is None else host).callbacks.get_custom_loggers_for_type(CustomLogger)
 
     for _callback_custom_logger in custom_loggers:
         try:
@@ -953,7 +974,9 @@ async def log_success_fallback_event(original_model_group: str, kwargs: dict, or
             verbose_router_logger.error("Error in log_success_fallback_event: %s", e)
 
 
-async def log_failure_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
+async def log_failure_fallback_event(
+    original_model_group: str, kwargs: dict, original_exception: Exception, host: "PythonHost | None" = None
+):
     """
     Log a failed fallback event to all registered callbacks.
 
@@ -968,7 +991,9 @@ async def log_failure_fallback_event(original_model_group: str, kwargs: dict, or
         Errors during logging are caught and reported but do not interrupt the process.
     """
     # Get deduplicated CustomLogger instances from all callback lists
-    custom_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
+    from litellm.router_python_host import python_host
+
+    custom_loggers: Final = (python_host if host is None else host).callbacks.get_custom_loggers_for_type(CustomLogger)
 
     for _callback_custom_logger in custom_loggers:
         try:

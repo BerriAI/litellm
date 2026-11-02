@@ -75,7 +75,7 @@ async def test_get_llm_provider_for_deployment_dict_view_supports_mapping_and_at
         return model, "openai", None, None
 
     monkeypatch.setattr(
-        "litellm.router_strategy.budget_limiter.litellm.get_llm_provider",
+        "litellm.get_llm_provider",
         _future_style_get_llm_provider,
     )
 

@@ -44,6 +44,8 @@ from litellm.utils import get_utc_datetime
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.router_python_host import PythonHost
+
     Span = _Span
 else:
     Span = Any
@@ -179,11 +181,11 @@ def _estimate_input_tokens(request_kwargs: dict[str, Any] | None, model: str = "
     return 0
 
 
-def _model_max_output_tokens(model_name: str) -> int | None:
-    # litellm.get_model_info raises a bare Exception for an unrecognized model;
-    # this lookup is a fallback default and must never fail the request.
+def _model_max_output_tokens(model_name: str, host: PythonHost) -> int | None:
+    # get_model_info (through the router core's host) raises a bare Exception for an
+    # unrecognized model; this lookup is a fallback default and must never fail the request.
     with contextlib.suppress(Exception):
-        info: Final = litellm.get_model_info(model=model_name)
+        info: Final = host.invoke("get_model_info")(model=model_name)  # pyright: ignore[reportUnknownMemberType]  # the host op table
         model_max: Final = info.get("max_output_tokens")
         if model_max is not None:
             return max(0, int(model_max))
@@ -227,8 +229,8 @@ def _deployment_output_cap(request_kwargs: Mapping[str, object] | None, deployme
     )
 
 
-def _default_otpm_reservation(model_name: str, otpm_limit: int) -> int:
-    model_max: Final = _model_max_output_tokens(model_name) if model_name else None
+def _default_otpm_reservation(model_name: str, otpm_limit: int, host: PythonHost) -> int:
+    model_max: Final = _model_max_output_tokens(model_name, host) if model_name else None
     share_of_limit: Final = max(1, int(otpm_limit * NO_MAX_TOKENS_TPM_RESERVATION_FRACTION))
     return min(4096 if model_max is None else model_max, share_of_limit)
 
@@ -238,11 +240,12 @@ def _otpm_reservation(
     deployment: Mapping[str, object],
     model_name: str,
     otpm_limit: int,
+    host: PythonHost,
 ) -> int:
     from_request: Final = _explicit_max_tokens(request_kwargs)
     if from_request is not None:
         return from_request
-    default: Final = _default_otpm_reservation(model_name, otpm_limit)
+    default: Final = _default_otpm_reservation(model_name, otpm_limit, host)
     from_deployment: Final = _deployment_output_cap(request_kwargs, deployment)
     return default if from_deployment is None else min(from_deployment, default)
 
@@ -515,7 +518,11 @@ async def _increment_with_rollback(
 def io_token_pre_call_check(
     dual_cache: DualCache,
     deployment: dict,
+    host: PythonHost | None = None,
 ) -> dict | None:
+    """``host`` is the router core's host (the process host when none is given)."""
+    from litellm.router_python_host import python_host
+
     itpm_limit, otpm_limit = get_deployment_io_token_limits(deployment)
     if itpm_limit is None and otpm_limit is None:
         return deployment
@@ -525,7 +532,9 @@ def io_token_pre_call_check(
     _model, served_model = _tokenizer_and_served_models(deployment)
     estimated_input: Final = _estimate_input_tokens(request_kwargs, model=_model)
     otpm_to_reserve: Final = (
-        _otpm_reservation(request_kwargs, deployment, served_model, otpm_limit) if otpm_limit is not None else 0
+        _otpm_reservation(request_kwargs, deployment, served_model, otpm_limit, python_host if host is None else host)
+        if otpm_limit is not None
+        else 0
     )
 
     dt: Final = get_utc_datetime()
@@ -584,7 +593,11 @@ async def async_io_token_pre_call_check(
     dual_cache: DualCache,
     deployment: dict,
     parent_otel_span: Span | None = None,
+    host: PythonHost | None = None,
 ) -> dict | None:
+    """``host`` is the router core's host (the process host when none is given)."""
+    from litellm.router_python_host import python_host
+
     itpm_limit, otpm_limit = get_deployment_io_token_limits(deployment)
     if itpm_limit is None and otpm_limit is None:
         return deployment
@@ -600,7 +613,9 @@ async def async_io_token_pre_call_check(
     _model, served_model = _tokenizer_and_served_models(deployment)
     estimated_input: Final = await offload_token_count(_estimate_input_tokens)(request_kwargs, model=_model)
     otpm_to_reserve: Final = (
-        _otpm_reservation(request_kwargs, deployment, served_model, otpm_limit) if otpm_limit is not None else 0
+        _otpm_reservation(request_kwargs, deployment, served_model, otpm_limit, python_host if host is None else host)
+        if otpm_limit is not None
+        else 0
     )
 
     dt: Final = get_utc_datetime()

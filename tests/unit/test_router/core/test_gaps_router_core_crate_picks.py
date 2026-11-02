@@ -267,10 +267,10 @@ def _stale(make_core: MakeCore, **arguments: object) -> RouterCore:  # kwargs-ok
 
 @pytest.mark.asyncio
 async def test_a_stale_routing_group_at_a_fallback_level_is_that_levels_error(
-    make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
+    make_core: MakeCore, host: ScriptedHost
 ) -> None:
     events: Final = FallbackEvents()
-    monkeypatch.setattr(litellm, "callbacks", [events])
+    host.callbacks.add_litellm_callback(events)
     core: Final = _stale(make_core)
     host.answer("*", rate_limit())
 

@@ -5,13 +5,13 @@ Callbacks triggered on cooling down deployments
 import copy
 from typing import TYPE_CHECKING, Any, Final
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.router_deprecated import renamed_router_param
 
 if TYPE_CHECKING:
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.router_api import RoutingContext
+    from litellm.router_python_host import PythonHost
 else:
     PrometheusLogger = Any
 
@@ -54,14 +54,17 @@ def emit_router_cooldown_event(
     temp_litellm_params = copy.deepcopy(_litellm_params)
     temp_litellm_params = dict(temp_litellm_params)
     _model_name: Final = _deployment.get("model_name", None) or ""
-    _api_base: Final = litellm.get_api_base(model=_model_name, optional_params=temp_litellm_params) or ""
+    host: Final = ctx.host()
+    _api_base: Final = str(
+        host.invoke("get_api_base")(model=_model_name, optional_params=temp_litellm_params) or ""  # pyright: ignore[reportUnknownMemberType]  # the host op table
+    )
     model_info: Final = _deployment["model_info"]
     model_id: Final = model_info.id
 
     litellm_model_name: Final = temp_litellm_params.get("model") or ""
     llm_provider = ""
     try:
-        _, llm_provider, _, _ = litellm.get_llm_provider(
+        _, llm_provider, _, _ = host.invoke("get_llm_provider")(  # pyright: ignore[reportUnknownMemberType]  # the host op table
             model=litellm_model_name,
             custom_llm_provider=temp_litellm_params.get("custom_llm_provider"),
         )
@@ -69,7 +72,7 @@ def emit_router_cooldown_event(
         pass
 
     # get the prometheus logger from in memory loggers
-    prometheusLogger: Final[PrometheusLogger | None] = get_prometheus_logger_from_callbacks()
+    prometheusLogger: Final[PrometheusLogger | None] = get_prometheus_logger_from_callbacks(host)
 
     if prometheusLogger is not None:
         prometheusLogger.set_deployment_complete_outage(
@@ -88,19 +91,22 @@ def emit_router_cooldown_event(
         )
 
 
-def get_prometheus_logger_from_callbacks() -> PrometheusLogger | None:
+def get_prometheus_logger_from_callbacks(host: "PythonHost | None" = None) -> PrometheusLogger | None:
     """
-    Checks if prometheus is a initalized callback, if yes returns it
+    Checks if prometheus is a initalized callback, if yes returns it. The callback lists are read
+    through ``host`` (the router core's host; the process host when none is given).
     """
     from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.router_python_host import python_host
 
     if PrometheusLogger is None:
         return None
 
-    for _callback in litellm._async_success_callback:
+    source: Final = python_host if host is None else host
+    for _callback in source.callback_list("_async_success_callback"):
         if isinstance(_callback, PrometheusLogger):
             return _callback
-    for global_callback in litellm.callbacks:
+    for global_callback in source.dynamic().callbacks:
         if isinstance(global_callback, PrometheusLogger):
             return global_callback
 

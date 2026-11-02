@@ -1306,6 +1306,7 @@ class RustEndpoints:
             kwargs,
             self._core._resolved.default_litellm_params,  # pyright: ignore[reportPrivateUsage]  # see above
             deployment_params(),
+            self._core._host,  # pyright: ignore[reportPrivateUsage]  # see above
         )
 
     def _split_priority(

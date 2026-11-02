@@ -18,6 +18,7 @@ import litellm
 if TYPE_CHECKING:
     from litellm.caching.caching import Cache
     from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
+    from litellm.types.utils import BudgetConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +60,9 @@ class RouterDynamicConfig:
     callback_manager: "LoggingCallbackManager"
     cache: "Cache | None"
     request_timeout_explicitly_set: bool = False
+    tag_budget_config: "Mapping[str, BudgetConfig] | None" = None
+    disable_token_counter: bool = False
+    post_call_rules: Sequence[object] = ()
 
 
 _versions: Final = itertools.count(1)
@@ -112,6 +116,9 @@ def current_dynamic_config() -> RouterDynamicConfig:
         callback_manager=litellm.logging_callback_manager,
         cache=litellm.cache,
         request_timeout_explicitly_set=litellm.request_timeout_explicitly_set,
+        tag_budget_config=litellm.tag_budget_config,
+        disable_token_counter=litellm.disable_token_counter,
+        post_call_rules=litellm.post_call_rules,
     )
 
 
@@ -141,6 +148,9 @@ _LIVE_SOURCES: Final = MappingProxyType(
         "input_callback": "input_callback",
         "callback_manager": "logging_callback_manager",
         "cache": "cache",
+        "tag_budget_config": "tag_budget_config",
+        "disable_token_counter": "disable_token_counter",
+        "post_call_rules": "post_call_rules",
     }
 )
 

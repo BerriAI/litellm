@@ -8,7 +8,6 @@ from uuid import uuid4
 import httpx
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
-import litellm
 from litellm._logging import verbose_router_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.litellm_core_utils.classifier_logging import masked_originating_request
@@ -115,12 +114,14 @@ def _jev_input_target(params: Mapping[str, object], explicit_limit: object) -> J
         return JevInputTarget(qualified_model, None)
 
 
-def _jev_request_count(request: JevSystemOneRequest, models: Sequence[str], budget: int) -> tuple[int, str]:
+def _jev_request_count(
+    request: JevSystemOneRequest, models: Sequence[str], budget: int, disable_token_counter: bool
+) -> tuple[int, str]:
     from litellm._lazy_imports import get_token_counter_new
 
     payload: Final = request.model_dump_json(exclude={"model"})
     byte_count: Final = len(payload.encode("utf-8"))
-    if byte_count <= budget or litellm.disable_token_counter:
+    if byte_count <= budget or disable_token_counter:
         return byte_count, "utf8_bytes"
     try:
         counts: Final = tuple(get_token_counter_new()(model=model, text=payload) for model in models)
@@ -137,7 +138,9 @@ def fit_jev_request(
     system_prompt: str | None,
     targets: Sequence[JevInputTarget],
     truncate: Callable[[str, int], str],
+    disable_token_counter: bool,
 ) -> JevBudgetedRequest:
+    """``disable_token_counter`` is the process setting, read through the router core's host."""
     known: Final = tuple(target for target in targets if target.max_tokens is not None)
     if not known:
         return JevBudgetedRequest(
@@ -158,6 +161,7 @@ def fit_jev_request(
         truncate,
         len(known) != len(targets),
         bounded_prompt != prompt or bounded_system != system_prompt,
+        disable_token_counter,
     )
 
 
@@ -170,6 +174,7 @@ def _fit_jev_components(
     truncate: Callable[[str, int], str],
     unknown_limits: bool,
     truncated: bool,
+    disable_token_counter: bool,
 ) -> JevBudgetedRequest:
     attempts: Final = len(prompt).bit_length() + len(system_prompt or "").bit_length() + 1
     components: tuple[str, str | None, bool, int] = (  # rebind-ok: bounded iterative fitting state
@@ -181,7 +186,7 @@ def _fit_jev_components(
     while True:
         current_prompt, current_system, was_truncated, remaining = components
         request = build_request(current_prompt, current_system)
-        count, method = _jev_request_count(request, models, budget)
+        count, method = _jev_request_count(request, models, budget, disable_token_counter)
         telemetry: StandardLoggingRoutingDecision = {
             "classifier_input_budget_tokens": budget,
             "classifier_input_tokens": count,
@@ -452,19 +457,22 @@ def build_jev_request(
 
 
 def jev_classifier_cost(
-    response: JevSystemOneResponse, configured_model: str, provider: ClassifierProvider = "typesafe"
+    response: JevSystemOneResponse,
+    configured_model: str,
+    provider: ClassifierProvider = "typesafe",
+    *,
+    cost_map: Mapping[str, object],
 ) -> float | None:
+    """The call's cost from ``cost_map`` (the process cost map, read through the router core's host)."""
     usage: Final = response.usage
     if usage is None:
         return None
     model: Final = response.model or configured_model
     model_key: Final = f"{provider}/{model}"
-    if model_key not in litellm.model_cost:  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
+    if model_key not in cost_map:
         return None
     try:
-        pricing: Final = _REGISTRY_PRICING_ADAPTER.validate_python(
-            litellm.model_cost[model_key]  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
-        )
+        pricing: Final = _REGISTRY_PRICING_ADAPTER.validate_python(cost_map[model_key])
     except ValidationError:
         return None
     return usage.input_tokens * pricing.input_cost_per_token + usage.output_tokens * pricing.output_cost_per_token

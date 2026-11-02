@@ -143,6 +143,7 @@ class OptionalChecks:
         if RouterBudgetLimiting.should_init_router_budget_limiter(  # pyright: ignore[reportUnknownMemberType]  # untyped model_list
             model_list=model_list if isinstance(model_list, list) else None,  # pyright: ignore[reportUnknownArgumentType]  # the argument as passed
             provider_budget_config=self.provider_budget_config,  # pyright: ignore[reportArgumentType]  # the argument as passed
+            host=self._host,
         ):
             if listed is not None:
                 listed.append("router_budget_limiting")
@@ -255,10 +256,11 @@ class OptionalChecks:
                     dual_cache=self._cache,
                     provider_budget_config=self.provider_budget_config,  # pyright: ignore[reportArgumentType]  # the argument as passed
                     model_list=self._hosted._core_model_list,  # pyright: ignore[reportPrivateUsage, reportArgumentType]  # the live model_list
+                    host=self._host,
                 )
                 self.router_budget_logger = callback
             elif name == "enforce_model_rate_limits":
-                callback = ModelRateLimitingCheck(dual_cache=self._cache)
+                callback = ModelRateLimitingCheck(dual_cache=self._cache, host=self._host)
             if callback is None:
                 continue
             if self.optional_callbacks is not None and any(

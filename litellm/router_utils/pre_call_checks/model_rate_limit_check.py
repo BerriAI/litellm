@@ -44,6 +44,8 @@ from litellm.utils import get_utc_datetime
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.router_python_host import PythonHost
+
     Span = _Span
 else:
     Span = Any
@@ -134,7 +136,14 @@ class ModelRateLimitingCheck(CustomLogger):
     this check actively enforces those limits across ALL routing strategies.
     """
 
-    def __init__(self, dual_cache: DualCache, clock: Callable[[], datetime] = get_utc_datetime):
+    def __init__(
+        self,
+        dual_cache: DualCache,
+        clock: Callable[[], datetime] = get_utc_datetime,
+        host: "PythonHost | None" = None,
+    ):
+        # The router core's host: the io-token checks read model info through it.
+        self._host: PythonHost | None = host
         self.dual_cache = dual_cache
         self.clock = clock
         # model_ids already warned about itpm/otpm + tpm/rpm on the same deployment,
@@ -312,6 +321,7 @@ class ModelRateLimitingCheck(CustomLogger):
                 io_token_pre_call_check(
                     self.dual_cache,
                     deployment,
+                    host=self._host,
                 )
                 io_reservation_made = True
 
@@ -397,6 +407,7 @@ class ModelRateLimitingCheck(CustomLogger):
                     self.dual_cache,
                     deployment,
                     parent_otel_span=parent_otel_span,
+                    host=self._host,
                 )
                 io_reservation_made = True
 
