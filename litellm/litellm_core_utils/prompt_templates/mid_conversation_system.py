@@ -85,6 +85,11 @@ def message_field(message: object, key: str) -> object:
     return mapping.get(key) if mapping is not None else getattr(message, key, None)
 
 
+def string_field(message: object, key: str) -> str | None:
+    value: Final = message_field(message, key)
+    return value if isinstance(value, str) else None
+
+
 def is_system_message(message: object) -> bool:
     return message_field(message, "role") == "system"
 

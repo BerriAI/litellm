@@ -1598,6 +1598,53 @@ async def test_previous_response_id_keeps_the_tools_an_earlier_codex_tool_search
     assert prisma_client.db.queries == 1
 
 
+@pytest.mark.asyncio
+async def test_a_codex_additional_tools_item_sends_claude_its_tools_but_not_its_text() -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+
+    await litellm.aresponses(
+        model=_MODEL,
+        input=[
+            {"type": "additional_tools", "role": "developer", "content": "Reply PINEAPPLE.", "tools": [_SHELL_TOOL]},
+            {"role": "user", "content": "Hi"},
+        ],
+        api_key="sk-ant-fake",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+    )
+
+    sent: Final = json.loads(anthropic.body)
+    assert [tool["name"] for tool in sent["tools"]] == ["shell"]
+    assert "PINEAPPLE" not in json.dumps(sent)
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_names_a_malformed_item_after_a_codex_additional_tools_item_by_its_index() -> None:
+    weather_tool: Final = {
+        "type": "function",
+        "name": "get_weather",
+        "parameters": {"type": "object", "properties": {}},
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_SEARCH_TURN, _CALENDAR_TURN])),
+        pytest.raises(litellm.BadRequestError) as raised,
+    ):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-calendar-turn",
+            input=[
+                {"type": "additional_tools", "role": "developer", "tools": [weather_tool]},
+                {"type": "function_call_output", "call_id": "toolu_standup", "output": "Created Standup."},
+                {"role": ["user"], "content": "Now create another event titled Retro."},
+            ],
+            tools=[_CODEX_TOOL_SEARCH, _SHELL_TOOL],
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(_RecordingRawAnthropicMessages())),
+        )
+
+    assert "'input[2].role'" in raised.value.message
+
+
 _REFUSAL_EXPLANATION: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]["explanation"]
 _ANSWER_BEFORE_REFUSAL: Final = {"type": "text", "text": "Here is the start."}
 
@@ -1808,7 +1855,11 @@ _RAN_SEARCH_RESULT: Final = {
         {"type": "web_search_result", "url": "https://tokyo.example", "title": "Tokyo", "encrypted_content": "e"}
     ],
 }
-_THINKING_BEFORE_SEARCHES: Final = {"type": "thinking", "thinking": "Find each sister city in turn.", "signature": "sig"}
+_THINKING_BEFORE_SEARCHES: Final = {
+    "type": "thinking",
+    "thinking": "Find each sister city in turn.",
+    "signature": "sig",
+}
 _TEXT_BEFORE_PENDING_SEARCH: Final = {"type": "text", "text": "Tokyo pairs with Paris. Checking Paris next."}
 _PENDING_SEARCH: Final = {
     "type": "server_tool_use",
