@@ -326,3 +326,7 @@ other.<area>.<case>.<assertion>
 - do not use xfail markers, tests should be written in a form that the end user expects it to pass
 
 - a cell addresses the stack through its front door (`PROXY_BASE_URL`) the way a customer does, never a gateway pod by address, and proves a cross-replica property with N independent calls through that door, naming the miss odds (2^-N at two pods) in its docstring. `PROXY_REPLICA_URLS` is for read-backs that are per pod by nature (polling until a management write has converged on every replica, `/metrics`, RSS), never for steering the scenario a cell asserts on at a chosen pod
+
+## Provider response cache
+
+The provider response cache can share the stage Valkey instance through a `rediss://` URL. Set `E2E_PROVIDER_CACHE_REDIS_CLUSTER=1` for a cluster-aware client, including ElastiCache Serverless. Keep the dedicated HMAC key and namespace, and restrict test cleanup to keys in the test's own namespace
