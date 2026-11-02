@@ -721,6 +721,22 @@ async def test_a_routed_bedrock_deployment_sends_cache_points_when_register_mode
     assert b"cachePoint" in converse.calls.last.request.content
 
 
+@pytest.mark.parametrize(
+    ("catalog_caching", "deployment_caching", "expected"),
+    [(None, True, True), (True, False, False), (True, None, True), (None, None, False)],
+)
+def test_a_routed_deployments_own_prompt_caching_flag_decides_cache_points_for_a_catalogued_model(
+    catalog_caching: bool | None, deployment_caching: bool | None, expected: bool, local_model_cost_map: None
+) -> None:
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    model: Final = f"qa-catalogued-model-{catalog_caching}-{deployment_caching}"
+    catalog_flag: Final = {} if catalog_caching is None else {"supports_prompt_caching": catalog_caching}
+    deployment_flag: Final = {} if deployment_caching is None else {"supports_prompt_caching": deployment_caching}
+    litellm.register_model({model: {"litellm_provider": "bedrock", "mode": "chat", **catalog_flag}})
+
+    assert bedrock_model_accepts_cache_points(model, model_info={"id": "qa-deployment", **deployment_flag}) is expected
+
 def test_merge_bedrock_aws_request_params_strips_caller_identity_when_deployment_has_static_credentials():
     from litellm.llms.bedrock.common_utils import merge_bedrock_aws_request_params
 

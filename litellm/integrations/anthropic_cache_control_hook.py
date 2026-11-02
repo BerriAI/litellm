@@ -489,14 +489,16 @@ _PROVIDERS_READING_THE_FLAG_AS_CACHE_POINT: Final = frozenset(("bedrock", "bedro
 _PROVIDERS_HOSTING_OPENAIS_API: Final = frozenset(("azure", "azure_ai", "bedrock_mantle"))
 
 
-def _declared_hosted_flag(declared: bool, model: str, provider: str | None, model_cost: CostMap) -> bool | None:
+def _declared_hosted_flag(
+    declared: bool, model: str, provider: str | None, model_cost: CostMap, deployment_provider: object
+) -> bool | None:
     """
     A deployment's own ``supports_prompt_cache_breakpoint`` picks OpenAI's breakpoint only where the
     request goes out OpenAI-shaped. Bedrock reads the same flag on every route as whether Converse takes
     a ``cachePoint``, and a provider building Anthropic messages takes ``cache_control``, so both keep
     the Anthropic mark. A gateway or self-hosted server (OpenRouter, a LiteLLM proxy, vLLM) may pass
     the request on to Anthropic, so there the flag only picks OpenAI's breakpoint for a model the cost
-    map lists under that provider.
+    map, or the deployment's own ``litellm_provider``, lists under that provider.
     """
     if provider is None or provider == "openai":
         return None
@@ -505,6 +507,7 @@ def _declared_hosted_flag(declared: bool, model: str, provider: str | None, mode
         and provider not in _PROVIDERS_READING_THE_FLAG_AS_CACHE_POINT
         and (
             provider in _PROVIDERS_HOSTING_OPENAIS_API
+            or deployment_provider == provider
             or _cost_map_lists_model_for_provider(model, provider, model_cost)
         )
         and _sends_openai_shaped_chat(model, provider)
@@ -869,6 +872,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 model,
                 custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model, api_base),
                 routed_cost_map(),
+                None if model_info is None else model_info.get("litellm_provider"),
             )
         )
         if hosted_flag is not None:

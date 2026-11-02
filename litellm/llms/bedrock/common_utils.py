@@ -1475,9 +1475,10 @@ def bedrock_model_accepts_cache_points(
     never silently degrade. ``litellm.utils.supports_prompt_caching`` is not reusable here:
     it returns False for unmapped models, the opposite polarity. ``deployment_model`` is the
     model as configured when ``model`` is its ``base_model``: its own declaration wins.
-    A routed call passes its deployment's ``model_info``, whose flag wins outright. Without
-    one it reads the catalog as loaded, since the registered keys are shared by every
-    deployment of the same model string and carry whichever sibling registered last.
+    A routed call passes its deployment's ``model_info``, whose breakpoint flag wins outright and
+    whose ``supports_prompt_caching`` wins over the catalog's for a known model. Other flags come
+    from the catalog as loaded, since the registered keys are shared by every deployment of the
+    same model string and carry whichever sibling registered last.
     """
     if model is None:
         return True
@@ -1513,6 +1514,9 @@ def bedrock_declared_cache_point_support(model: str, model_info: Mapping[str, ob
         return explicit_marker_support
     if not any(catalog_entry(key) is not None for key in map_keys):
         return None
+    deployment_caching: Final = None if model_info is None else model_info.get("supports_prompt_caching")
+    if isinstance(deployment_caching, bool):
+        return deployment_caching
     return any(
         entry.get("supports_prompt_caching") is True for key in map_keys if (entry := catalog_entry(key)) is not None
     )

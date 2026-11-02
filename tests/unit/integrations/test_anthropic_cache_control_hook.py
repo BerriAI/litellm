@@ -5398,6 +5398,16 @@ def test_a_gateway_deployment_declaring_the_flag_picks_openais_dialect_for_a_mod
     ] == [True, False]
 
 
+def test_a_gateway_deployment_declaring_the_flag_picks_openais_dialect_when_its_model_info_lists_that_provider() -> None:
+    assert [
+        AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+            "qa-self-hosted-gpt",
+            "hosted_vllm",
+            model_info={"supports_prompt_cache_breakpoint": True, "litellm_provider": listed_provider},
+        )
+        for listed_provider in ("hosted_vllm", "openrouter")
+    ] == [True, False]
+
 def test_a_custom_handler_provider_declaring_the_flag_keeps_the_anthropic_mark() -> None:
     litellm.register_model(
         {"qa-custom-handler/qa-model": {"litellm_provider": "qa-custom-handler", "mode": "chat"}}
