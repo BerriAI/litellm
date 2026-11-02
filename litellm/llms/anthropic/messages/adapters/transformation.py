@@ -400,6 +400,10 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return None
 
+    def _streamed_tool_call_signature(self, tool_call_id: str, tool_call: object) -> str | None:
+        id_parts: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
+        return id_parts[1] if len(id_parts) > 1 else self._extract_signature_from_tool_call(tool_call)
+
     def _extract_signature_from_tool_use_content(self, content: Mapping[str, object]) -> str | None:
         """
         Extract signature from a tool_use content block's provider_specific_fields.
@@ -1728,10 +1732,7 @@ class LiteLLMAnthropicMessagesAdapter:
             ):
                 raw_id = choice.delta.tool_calls[0].id or str(uuid.uuid4())
                 tool_name = choice.delta.tool_calls[0].function.name or ""
-                thought_sig: str | None = None
-                if THOUGHT_SIGNATURE_SEPARATOR in raw_id:
-                    parts = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
-                    thought_sig = parts[1] if len(parts) > 1 else None
+                thought_sig = self._streamed_tool_call_signature(raw_id, choice.delta.tool_calls[0])
                 tool_block: dict[str, object] = {
                     "type": "tool_use",
                     "id": normalize_anthropic_tool_use_id(raw_id),
