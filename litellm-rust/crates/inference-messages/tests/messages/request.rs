@@ -440,7 +440,12 @@ async fn an_oauth_key_sends_the_browser_access_header_and_the_oauth_beta(call: M
 #[case::deepseek("deepseek")]
 #[case::minimax("minimax")]
 #[tokio::test]
-async fn caller_protocol_headers_win_over_the_defaults(call: MessagesCall, #[case] provider: &str) {
+/// Python adds a default unless that exact lowercase name is present, then folds the casings
+/// into one header, so a capitalised caller header is sent beside the default.
+async fn capitalised_caller_protocol_headers_are_joined_with_the_defaults(
+    call: MessagesCall,
+    #[case] provider: &str,
+) {
     let upstream = upstream([message_response()]).await;
 
     run_message(MessagesCall {
@@ -457,10 +462,13 @@ async fn caller_protocol_headers_win_over_the_defaults(call: MessagesCall, #[cas
     .await;
 
     let request = only_request(&upstream).await;
-    assert_eq!(request.header_values("anthropic-version"), ["2024-01-01"]);
+    assert_eq!(
+        request.header_values("anthropic-version"),
+        ["2024-01-01, 2023-06-01"]
+    );
     assert_eq!(
         request.header_values("content-type"),
-        ["application/json; charset=utf-8"]
+        ["application/json; charset=utf-8, application/json"]
     );
 }
 

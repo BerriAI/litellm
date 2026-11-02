@@ -225,14 +225,25 @@ async fn an_upstream_error_keeps_its_status_and_body(call: MessagesCall, #[case]
 }
 
 #[rstest]
-#[case::not_json(ResponseTemplate::new(200).set_body_string("not json"))]
-#[case::not_a_message(json_response(json!({"unexpected": true})))]
 #[tokio::test]
-async fn an_unreadable_success_body_is_an_invalid_response(
-    call: MessagesCall,
-    #[case] response: ResponseTemplate,
-) {
-    let upstream = upstream([response]).await;
+async fn an_unparseable_success_body_is_reported_as_the_upstream_answer(call: MessagesCall) {
+    let upstream = upstream([ResponseTemplate::new(200).set_body_string("not json")]).await;
+
+    let error = run(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        ..call
+    })
+    .await
+    .expect_err("an unparseable body fails");
+
+    assert_eq!(error.upstream_response(), Some((200, "not json")));
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_unreadable_success_body_is_an_invalid_response(call: MessagesCall) {
+    let upstream = upstream([json_response(json!({"unexpected": true}))]).await;
 
     let error = run(MessagesCall {
         api_key: Some("sk".into()),

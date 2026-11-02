@@ -110,6 +110,11 @@ impl ThinkingBudgets {
 pub struct ThinkingContext {
     pub capabilities: MessagesModelCapabilities,
     pub budgets: ThinkingBudgets,
+    /// `drop_params` as Python's thinking translation reads it.
+    pub drop_params: bool,
+    /// The provider accepts `display: "updates"` on thinking translated from the legacy shape
+    /// (Python's `LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS`).
+    pub keeps_display_updates: bool,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MessagesTransformContext {
@@ -130,8 +135,22 @@ impl MessagesTransformContext {
             thinking: ThinkingContext {
                 capabilities,
                 budgets: ThinkingBudgets::from_lookup(env),
+                drop_params,
+                keeps_display_updates: false,
             },
             drop_params,
+        }
+    }
+
+    /// The same context for a provider in Python's `LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS`.
+    #[must_use]
+    pub fn keeping_display_updates(&self) -> Self {
+        Self {
+            thinking: ThinkingContext {
+                keeps_display_updates: true,
+                ..self.thinking
+            },
+            ..*self
         }
     }
 }

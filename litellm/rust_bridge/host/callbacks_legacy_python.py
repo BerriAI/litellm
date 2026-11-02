@@ -22,6 +22,7 @@ from typing import (
     cast,  # noqa: TID251  # bounded compatibility calls into legacy Python integrations
 )
 
+import httpx
 from pydantic import TypeAdapter
 
 if TYPE_CHECKING:
@@ -243,6 +244,26 @@ def post_call(
     logger.post_call(original_response=original_response, api_key=api_key, additional_args=additional_args)
 
 
+def record_response(logger: Logging, status: int, headers: list[tuple[str, str]], body: str) -> None:
+    """Stores the provider response the way Python's Messages handler does, for logging to replay."""
+    response: Final = httpx.Response(status_code=status, headers=headers, content=body.encode())
+    logger.model_call_details["httpx_response"] = response
+    logger.model_call_details["response_headers"] = dict(response.headers)
+
+
+def record_api_window(logger: Logging, start: float, end: float) -> None:
+    """Records the provider exchange's window the way Python's timed `AsyncHTTPHandler.post` does."""
+    from litellm.litellm_core_utils.logging_utils import (
+        _set_duration_in_model_call_details,  # pyright: ignore[reportPrivateUsage]  # the timed post's own recorder
+    )
+
+    _set_duration_in_model_call_details(
+        logging_obj=logger,
+        start_time=datetime.datetime.fromtimestamp(start),
+        end_time=datetime.datetime.fromtimestamp(end),
+    )
+
+
 def defers_async_logging(logger: LoggingSurface) -> bool:
     return bool(getattr(logger, "defer_async_logging", False))
 
@@ -357,6 +378,27 @@ def after_deployment_failure(kwargs: dict[str, object], error: Exception, call_t
 
 
 _STREAM_HEADERS: Final = TypeAdapter(Mapping[str, str])
+
+
+class _HiddenParamsCarrier:
+    """Stands in for the stream `@client` stamps, so the head becomes its `_hidden_params`."""
+
+    def __init__(self, hidden_params: dict[str, object]) -> None:
+        self._hidden_params: object = hidden_params
+
+
+def stamp_stream_head(
+    head: dict[str, object],
+    logger: Logging,
+    kwargs: dict[str, object],
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+) -> None:
+    carrier: Final = _HiddenParamsCarrier(head)
+    finalize(carrier, logger, kwargs, start_time, end_time)
+    stamped: Final = carrier._hidden_params  # pyright: ignore[reportPrivateUsage]  # the carrier's own field
+    if stamped is not head and isinstance(stamped, dict):
+        head.update(cast("dict[str, object]", stamped))  # cast-ok: update_response_metadata writes a str-keyed dict
 
 
 def stream_opened(logger: Logging, head: Mapping[str, object]) -> None:
