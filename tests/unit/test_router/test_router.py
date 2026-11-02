@@ -26481,7 +26481,8 @@ class TestRouterEmbeddingIntegration:
             assert wrapped(model="vector-alias", vector_store_id="store", query="query") == "routed"
 
         assert fallback.call_args.kwargs["model"] == "vector-alias"
-        assert fallback.call_args.kwargs["original_function"] is original
+        handler = fallback.call_args.kwargs["original_function"]
+        assert (handler.resolve(), handler.call_type) == (original, "vector_store_search")
         assert isinstance(
             fallback.call_args.kwargs["_direct_vector_store_embedding_executor"],
             RouterVectorStoreEmbeddingExecutor,

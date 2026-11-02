@@ -26,6 +26,14 @@ from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
 from litellm.litellm_core_utils.routing_common_utils import without_router_only_kwargs
 from litellm.responses.retrieve_stream_query import without_retrieve_stream_defaults
+from litellm.router_endpoint_table import (
+    ENDPOINTS,
+    EndpointSpec,
+    interaction_request,
+    managed_agent_request,
+    search_tool_call,
+    with_provider,
+)
 from litellm.router_rust_shaping import (
     ROUTER_CLIENTS_TARGET,
     STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
@@ -110,6 +118,8 @@ class Plan:
     # The named parameter the endpoint takes beside **kwargs, sent between the deployment params and
     # the request (`{**data, name: value, **kwargs}`).
     named: tuple[str, ...] = ()
+    # The endpoint's call type, which the routing decisions key on (never the host function's name).
+    call_type: str | None = None
 
     @property
     def sets_headers(self) -> bool:
@@ -122,42 +132,34 @@ class Plan:
         return get_router_metadata_variable_name(function_name=self.function_name)
 
 
-def _generic(endpoint: str, host_op: str | None = None, *, sync: bool = False) -> Plan:
+def _generic(endpoint: str, host_op: str | None = None, *, sync: bool = False, call_type: str | None = None) -> Plan:
+    op: Final = host_op or endpoint
+    routed_as: Final = call_type or op.rsplit(".", 1)[-1]
     if sync:
         return Plan(
             endpoint=endpoint,
-            host_op=host_op or endpoint,
+            host_op=op,
             kind="generic_sync",
             sync=True,
             prepare_field="litellm_metadata",
             function_name="generic_api_call",
-            splits_stream_timeout=_handler_name(host_op or endpoint) in STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
+            splits_stream_timeout=routed_as in STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
             stamp="none",
             fail_key="group",
             single_attempt=True,
+            call_type=routed_as,
         )
     return Plan(
         endpoint=endpoint,
-        host_op=host_op or endpoint,
+        host_op=op,
         kind="generic",
         prepare_field="litellm_metadata",
         function_name="_ageneric_api_call_with_fallbacks",
-        splits_stream_timeout=_handler_name(host_op or endpoint) in STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
+        splits_stream_timeout=routed_as in STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
         stamp="deployment",
         fail_key="group",
+        call_type=routed_as,
     )
-
-
-def _handler_name(host_op: str) -> str:
-    return host_op.rsplit(".", 1)[-1]
-
-
-def invoked_handler_name(core: "RustCore", plan: Plan) -> str | None:
-    """The generic handler's ``__name__`` (`original_generic_function.__name__`): the function the
-    host serves for the op, which decides the stream-timeout split and the responses socket."""
-    function: Final[object] = core._host.invoke(plan.host_op)  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # the core's host
-    name: Final[object] = getattr(function, "__name__", None)
-    return name if isinstance(name, str) else None
 
 
 PLANS: Final[Mapping[str, Plan]] = MappingProxyType(
@@ -294,166 +296,21 @@ PLANS: Final[Mapping[str, Plan]] = MappingProxyType(
 
 # --- the generic endpoints ------------------------------------------------------------------
 
-# endpoint -> host op, for the async generic endpoints routed through
-# `_ageneric_api_call_with_fallbacks` when they carry a model.
-_HOST_GENERIC: Final[Mapping[str, str]] = MappingProxyType(
+# The table's dispatches the Rust core routes with a generic plan (`_ageneric_api_call_with_fallbacks`,
+# or the sync `_generic_api_call_with_fallbacks`) when the request carries a model.
+_GENERIC_DISPATCHES: Final = frozenset(
     {
-        "afile_delete": "afile_delete",
-        "afile_content": "afile_content",
-        "afile_list": "afile_list",
-        "aget_responses": "aget_responses",
-        "acancel_responses": "acancel_responses",
-        "acompact_responses": "acompact_responses",
-        "adelete_responses": "adelete_responses",
-        "alist_input_items": "alist_input_items",
-        "_arealtime": "_arealtime",
-        "acreate_realtime_client_secret": "acreate_realtime_client_secret",
-        "arealtime_calls": "arealtime_calls",
-        "acreate_realtime_transcription_session": "acreate_realtime_transcription_session",
-        "_aresponses_websocket": "_aresponses_websocket",
-        "acreate_fine_tuning_job": "acreate_fine_tuning_job",
-        "acancel_fine_tuning_job": "acancel_fine_tuning_job",
-        "alist_fine_tuning_jobs": "alist_fine_tuning_jobs",
-        "aretrieve_fine_tuning_job": "aretrieve_fine_tuning_job",
-        "aimage_edit": "aimage_edit",
-        "allm_passthrough_route": "allm_passthrough_route",
-        "acreate_skill": "acreate_skill",
-        "alist_skills": "alist_skills",
-        "aget_skill": "aget_skill",
-        "adelete_skill": "adelete_skill",
-        "agenerate_content": "google_genai.agenerate_content",
-        "agenerate_content_stream": "google_genai.agenerate_content_stream",
-        "aocr": "ocr.aocr",
-        "adecisions": "decisions.adecisions",
-        "asystemone": "systemone.asystemone",
-        "aextraction": "extraction.aextraction",
-        **{f"avideo_{name}": f"videos.avideo_{name}" for name in ("generation", "list", "status", "content", "remix")},
-        **{
-            name: f"containers.{name}"
-            for name in ("acreate_container", "alist_containers", "aretrieve_container", "adelete_container")
-        },
-        **{
-            name: f"containers.endpoint_factory._generated_endpoints.{name}"
-            for name in (
-                "aupload_container_file",
-                "alist_container_files",
-                "aretrieve_container_file",
-                "adelete_container_file",
-                "aretrieve_container_file_content",
-            )
-        },
-        **{
-            f"avector_store_{name}": f"vector_stores.main.a{name}"
-            for name in ("search", "retrieve", "list", "update", "delete")
-        },
-        **{
-            f"avector_store_file_{name}": f"vector_store_files.main.a{target}"
-            for name, target in (
-                ("create", "create"),
-                ("list", "list"),
-                ("retrieve", "retrieve"),
-                ("content", "retrieve_content"),
-                ("update", "update"),
-                ("delete", "delete"),
-            )
-        },
-        "acreate_interaction": "interactions.acreate",
-        "aget_interaction": "interactions.aget",
-        "adelete_interaction": "interactions.adelete",
-        "acancel_interaction": "interactions.acancel",
-    }
-)
-
-_SYNC_GENERIC: Final[Mapping[str, str]] = MappingProxyType(
-    {
-        "generate_content": "google_genai.generate_content",
-        "generate_content_stream": "google_genai.generate_content_stream",
-        "ocr": "ocr.ocr",
-        # The sync wrapper routes a search tool name as a model group, unlike `asearch`.
-        "search": "search.search",
-        "decisions": "decisions.decisions",
-        "systemone": "systemone.systemone",
-        "extraction": "extraction.extraction",
-        **{f"video_{name}": f"videos.video_{name}" for name in ("generation", "list", "status", "content", "remix")},
-        **{
-            name: f"containers.{name}"
-            for name in ("create_container", "list_containers", "retrieve_container", "delete_container")
-        },
-        **{
-            f"vector_store_{name}": f"vector_stores.main.{name}"
-            for name in ("search", "create", "retrieve", "list", "update", "delete")
-        },
-    }
-)
-
-_CONTAINER_FILE_ROUTED: Final = frozenset(
-    {
-        "aupload_container_file",
-        "alist_container_files",
-        "aretrieve_container_file",
-        "adelete_container_file",
-        "aretrieve_container_file_content",
-    }
-)
-_VIDEO_DIRECT: Final = frozenset({"avideo_create_character", "avideo_get_character", "avideo_edit", "avideo_extension"})
-_SYNC_VIDEO_UNBRANCHED: Final = frozenset(
-    {"video_create_character", "video_get_character", "video_edit", "video_extension"}
-)
-_SYNC_CONTAINER_FILES_UNBRANCHED: Final = frozenset(
-    {
-        "upload_container_file",
-        "list_container_files",
-        "retrieve_container_file",
-        "delete_container_file",
-        "retrieve_container_file_content",
-    }
-)
-_UNBRANCHED: Final = frozenset(
-    {
-        "aadapter_generate_content",
-        *_SYNC_VIDEO_UNBRANCHED,
-        *_SYNC_CONTAINER_FILES_UNBRANCHED,
-        "get_interaction",
-        "delete_interaction",
-        "cancel_interaction",
-    }
-)
-_ASSISTANTS: Final = frozenset(
-    {
-        "acreate_assistants",
-        "adelete_assistant",
-        "aget_assistants",
-        "acreate_thread",
-        "aget_thread",
-        "a_add_message",
-        "aget_messages",
-        "arun_thread",
-    }
-)
-_MANAGED_AGENTS: Final[Mapping[str, str]] = MappingProxyType(
-    {  # comprehension-ok: a flat walk of nested rows
-        f"{prefix}{name}": f"interactions.agents.{prefix}{target}"
-        for prefix in ("a", "")
-        for name, target in (
-            ("create_agent", "create"),
-            ("list_agents", "list"),
-            ("get_agent", "get"),
-            ("delete_agent", "delete"),
-            ("list_agent_versions", "list_versions"),
-        )
-    }
-)
-_SYNC_VECTOR_STORE_FILES: Final[Mapping[str, str]] = MappingProxyType(
-    {
-        f"vector_store_file_{name}": f"vector_store_files.main.{target}"
-        for name, target in (
-            ("create", "create"),
-            ("list", "list"),
-            ("retrieve", "retrieve"),
-            ("content", "retrieve_content"),
-            ("update", "update"),
-            ("delete", "delete"),
-        )
+        "generic",
+        "generic_client",
+        "generic_provider_client",
+        "passthrough",
+        "response_id",
+        "container",
+        "vector_store",
+        "interaction",
+        "generic_sync",
+        "vector_store_sync",
+        "interaction_sync",
     }
 )
 
@@ -468,13 +325,10 @@ def plan_for(endpoint: str) -> Plan:
 def generic_plan(endpoint: str) -> Plan | None:
     if endpoint in PLANS:
         return PLANS[endpoint]
-    if endpoint in _HOST_GENERIC:
-        return _generic(endpoint, _HOST_GENERIC[endpoint])
-    if endpoint in _VIDEO_DIRECT:
-        return _generic(endpoint, f"videos.{endpoint}")
-    if endpoint in _SYNC_GENERIC:
-        return _generic(endpoint, _SYNC_GENERIC[endpoint], sync=True)
-    return None
+    spec: Final = ENDPOINTS.get(endpoint)
+    if spec is None or spec.dispatch not in _GENERIC_DISPATCHES:
+        return None
+    return _generic(endpoint, spec.host_op, sync=spec.sync, call_type=spec.call_type)
 
 
 # --- preparing the request -------------------------------------------------------------------
@@ -636,7 +490,7 @@ def attempt_call(
                 kwargs,
                 cache=cache,
                 function_name="generic_api_call",
-                splits_stream_timeout=invoked_handler_name(core, plan) in STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
+                splits_stream_timeout=plan.splits_stream_timeout,
             )
             endpoint = kwargs.get("endpoint")  # rebind-ok: rebound as the Python router rebinds it
             if endpoint and isinstance(endpoint, str):
@@ -675,15 +529,14 @@ def _generic_attempt(
     from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
     from litellm.router_rust_websocket import turn_admission
 
-    handler: Final = invoked_handler_name(core, plan)
-    socket: Final = handler == "_aresponses_websocket"
+    socket: Final = plan.call_type == "_aresponses_websocket"
     update_kwargs_with_deployment(
         core._shaping,  # pyright: ignore[reportPrivateUsage]  # the core's own settings
         deployment,
         kwargs,
         cache=core._cache,  # pyright: ignore[reportPrivateUsage]  # the core's routing cache
         function_name="_ageneric_api_call_with_fallbacks",
-        splits_stream_timeout=handler in STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
+        splits_stream_timeout=plan.splits_stream_timeout,
         opens_responses_socket=socket,
     )
     model_name: Final = str(data.get("model"))
@@ -715,9 +568,6 @@ def _generic_attempt(
     return AttemptCall(plan.host_op, final, kwargs, model_name, group)
 
 
-_SEARCH_PROTECTED_PARAMS: Final = frozenset({"search_provider", "api_key", "api_base"})
-
-
 def _search_attempt(
     core: "RustCore",
     plan: Plan,
@@ -726,33 +576,8 @@ def _search_attempt(
 ) -> AttemptCall:
     """`SearchAPIRouter.async_search_with_fallbacks_helper`: one of the search tools named
     ``group`` at random, called with its provider, credentials and params under the request's."""
-    import random
-
-    tools: Final = [
-        tool
-        for tool in core._endpoints.search_tools  # pyright: ignore[reportPrivateUsage]  # the core's live search tools
-        if as_dict(tool).get("search_tool_name") == group
-    ]
-    if not tools:
-        raise ValueError(f"Search tool '{group}' not found in router.search_tools")
-    selected: Final = random.choice(tools)  # load balancing, as the Python router picks
-    params: Final = as_dict(as_dict(selected).get("litellm_params"))
-    search_provider: Final = params.get("search_provider")
-    if not search_provider:
-        raise ValueError(f"search_provider not found in litellm_params for search tool '{group}'")
-    search_params: Final = {
-        key: value
-        for source in (params, kwargs)
-        for key, value in source.items()
-        if key not in _SEARCH_PROTECTED_PARAMS and value is not None
-    }  # comprehension-ok: the tool's params, then the request's
-    final: Final = {
-        "search_provider": search_provider,
-        "api_key": params.get("api_key"),
-        "api_base": params.get("api_base"),
-        **search_params,
-    }
-    return AttemptCall(plan.host_op, final, kwargs, group, group)
+    tools: Final = [as_dict(tool) for tool in core._endpoints.search_tools]  # pyright: ignore[reportPrivateUsage]  # the core's live search tools
+    return AttemptCall(plan.host_op, dict(search_tool_call(tools, group, kwargs)), kwargs, group, group)
 
 
 def unrouted_fields(plan: Plan) -> Mapping[str, object]:
@@ -980,25 +805,6 @@ def start_silent_experiments(
 
 # --- the endpoints ----------------------------------------------------------------------------
 
-_KEEPS_CLIENT: Final = frozenset(
-    {"acreate_realtime_client_secret", "arealtime_calls", "acreate_realtime_transcription_session"}
-)
-_KEEPS_PROVIDER_AND_CLIENT: Final = frozenset({"afile_delete", "afile_content"})
-_RESPONSE_ID_ENDPOINTS: Final = frozenset(
-    {"aget_responses", "acancel_responses", "acompact_responses", "adelete_responses", "alist_input_items"}
-)
-_CONTAINER_ENDPOINTS: Final = frozenset(
-    {"acreate_container", "alist_containers", "aretrieve_container", "adelete_container", *_CONTAINER_FILE_ROUTED}
-)
-_VECTOR_STORE_ENDPOINTS: Final = frozenset(
-    {
-        *(f"avector_store_{name}" for name in ("search", "create", "retrieve", "list", "update", "delete")),
-        *(f"avector_store_file_{name}" for name in ("create", "list", "retrieve", "content", "update", "delete")),
-    }
-)
-_INTERACTION_ENDPOINTS: Final = frozenset(
-    {"acreate_interaction", "aget_interaction", "adelete_interaction", "acancel_interaction"}
-)
 _MISSING: Final = object()
 
 
@@ -1165,16 +971,6 @@ class RustEndpoints:
 
     def member(self, name: str) -> Callable[..., object] | None:
         """The public endpoint ``name``, bound to this core, or None when the core has none."""
-        if name in _UNBRANCHED:
-            return _answers_none
-        if name in _ASSISTANTS:
-            return self._assistants(name)
-        if name in _MANAGED_AGENTS:
-            return self._managed_agents(name)
-        if name in _SYNC_VECTOR_STORE_FILES:
-            return self._sync_vector_store_files(name)
-        if name == "create_interaction":
-            return self._factory("create_interaction", "interactions.create")
         direct: Final = {
             "avector_store_create": self.avector_store_create,
             "acreate_file": self.acreate_file,
@@ -1189,66 +985,125 @@ class RustEndpoints:
             "schedule_acompletion": self.schedule_acompletion,
             "priority_header_update": self.priority_header_update,
             "aguardrail": self.aguardrail,
-            "asearch": self.asearch,
         }.get(name)
         if direct is not None:
             return direct
-        if name == "responses":
-            return self._sync_factory(name, PLANS["responses"])
-        plan: Final = generic_plan(name)
-        if plan is None or name in PLANS:
-            return None
-        if plan.sync:
-            return self._sync_factory(name, plan)
-        return self._factory(name, plan.host_op)
+        spec: Final = ENDPOINTS.get(name)
+        return None if spec is None else self._bind(spec)
 
     # -- the factory wrappers ------------------------------------------------------------------
 
-    def _factory(self, name: str, host_op: str) -> Callable[..., Awaitable[object]]:
+    def _bind(self, spec: EndpointSpec) -> Callable[..., object]:
+        """The wrapper serving ``spec``, dispatched as ``router_endpoint_table`` says."""
+        if spec.sync:
+
+            def sync_wrapper(
+                custom_llm_provider: str | None = None,
+                client: object = None,
+                **kwargs: object,  # kwargs-ok: the endpoint's request
+            ) -> object:
+                return self._dispatch_sync(spec, custom_llm_provider, client, dict(kwargs))
+
+            sync_wrapper.__name__ = spec.name
+            return sync_wrapper
+
         async def async_wrapper(
             custom_llm_provider: str | None = None,
             client: object = None,
             **kwargs: object,  # kwargs-ok: the endpoint's request
         ) -> object:
-            return await self._wrapped(name, host_op, custom_llm_provider, client, dict(kwargs))
+            return await self._dispatch_async(spec, custom_llm_provider, client, dict(kwargs))
 
-        async_wrapper.__name__ = name
+        async_wrapper.__name__ = spec.name
         return async_wrapper
 
-    async def _wrapped(
+    async def _dispatch_async(
         self,
-        name: str,
-        host_op: str,
+        spec: EndpointSpec,
         custom_llm_provider: str | None,
         client: object,
         kwargs: dict[str, object],  # mutable-ok: the wrapper's own kwargs
     ) -> object:
-        plan: Final = generic_plan(name) or _generic(name, host_op)
-        if name in _CONTAINER_ENDPOINTS:
-            return await self._containers(plan, custom_llm_provider, kwargs)
-        if name in _RESPONSE_ID_ENDPOINTS:
-            from litellm.responses.utils import ResponsesAPIRequestUtils
+        match spec.dispatch:
+            case "assistants":
+                return await self._assistants(spec.host_op, custom_llm_provider, client, kwargs)
+            case "moderation":
+                return await self.amoderation(kwargs)
+            case "search":
+                return await self.asearch(**kwargs)
+            case "responses" | "anthropic_messages":
+                return await self.generic(plan_for(spec.name), kwargs)
+            case "managed_agent":
+                return await self._direct(spec.host_op, managed_agent_request(custom_llm_provider, kwargs))
+            case _:
+                pass
+        plan: Final = plan_for(spec.name)
+        match spec.dispatch:
+            case "generic_client":
+                return await self._ageneric(plan, {**kwargs, "client": client})
+            case "generic_provider_client":
+                return await self._ageneric(
+                    plan, {**kwargs, "custom_llm_provider": custom_llm_provider, "client": client}
+                )
+            case "passthrough":
+                return await self._ageneric(plan, {**kwargs, "client": client} if client else kwargs, passthrough=True)
+            case "response_id":
+                return await self._response_id(plan, custom_llm_provider, kwargs)
+            case "container":
+                return await self._containers(plan, custom_llm_provider, kwargs)
+            case "vector_store":
+                return await self._vector_stores(spec.name, plan, custom_llm_provider, kwargs)
+            case "interaction":
+                return await self._interactions(plan, custom_llm_provider, kwargs)
+            case _:
+                return await self._ageneric(plan, kwargs)
 
-            model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(kwargs.get("response_id"))  # pyright: ignore[reportArgumentType]  # any id the caller sends
-            if model_id is not None:
-                kwargs[  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
-                    "model"
-                ] = model_id
-            return await self._ageneric(plan, kwargs)
-        if name in _VECTOR_STORE_ENDPOINTS:
-            return await self._vector_stores(name, plan, custom_llm_provider, kwargs)
-        if name in _INTERACTION_ENDPOINTS or name == "create_interaction":
-            return await self._interactions(plan, custom_llm_provider, kwargs)
-        if name in _KEEPS_CLIENT:
-            return await self._ageneric(plan, {**kwargs, "client": client})
-        if name in _KEEPS_PROVIDER_AND_CLIENT:
-            return await self._ageneric(plan, {**kwargs, "custom_llm_provider": custom_llm_provider, "client": client})
-        if name == "allm_passthrough_route":
-            if client:
-                kwargs[  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
-                    "client"
-                ] = client
-            return await self._ageneric(plan, kwargs, passthrough=True)
+    def _dispatch_sync(
+        self,
+        spec: EndpointSpec,
+        custom_llm_provider: str | None,
+        client: object,
+        kwargs: dict[str, object],  # mutable-ok: the wrapper's own kwargs
+    ) -> object:
+        match spec.dispatch:
+            case "search_sync":
+                return self.search(**kwargs)
+            case "vector_store_file_sync":
+                return self._invoke(spec.host_op)(custom_llm_provider=custom_llm_provider, client=client, **kwargs)
+            case "managed_agent_sync":
+                return self._invoke(spec.host_op)(**managed_agent_request(custom_llm_provider, kwargs))
+            case "vector_store_sync":
+                return self._sync_vector_stores(spec, custom_llm_provider, kwargs)
+            case "interaction_sync":
+                request: Final = interaction_request(custom_llm_provider, kwargs)
+                if request.get("model"):
+                    return self._core._call_sync(plan_for(spec.name), request, _SINGLE_ATTEMPT)  # pyright: ignore[reportPrivateUsage]  # the endpoints drive their own core
+                return self._invoke(spec.host_op)(**request)
+            case _:
+                if "model" not in kwargs:
+                    raise TypeError(
+                        "_generic_api_call_with_fallbacks() missing 1 required positional argument: 'model'"
+                    )
+                return self._core._call_sync(plan_for(spec.name), kwargs, _SINGLE_ATTEMPT)  # pyright: ignore[reportPrivateUsage]  # see above
+
+    async def _response_id(
+        self,
+        plan: Plan,
+        custom_llm_provider: str | None,
+        kwargs: dict[str, object],  # mutable-ok: the request kwargs the Python router mutates in place
+    ) -> object:
+        """`_init_responses_api_endpoints`: a LiteLLM response id pins the deployment it encodes; a
+        plain id with no model calls the handler directly, as litellm does without a router."""
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(kwargs.get("response_id"))  # pyright: ignore[reportArgumentType]  # any id the caller sends
+        if model_id is not None:
+            kwargs[  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
+                "model"
+            ] = model_id
+        if not kwargs.get("model"):
+            direct: Final = {key: value for key, value in kwargs.items() if key != "model"}
+            return await self._direct(plan.host_op, with_provider(custom_llm_provider, direct))
         return await self._ageneric(plan, kwargs)
 
     async def generic(self, plan: Plan, request: Mapping[str, object]) -> object:
@@ -1275,40 +1130,26 @@ class RustEndpoints:
 
         return await self._core._drive(plan, kwargs, passthrough=passthrough_call if passthrough else None)  # pyright: ignore[reportPrivateUsage]  # see above
 
-    def _sync_factory(self, name: str, plan: Plan) -> Callable[..., object]:
-        is_vector_store: Final = name.startswith("vector_store_")
-
-        def sync_wrapper(
-            custom_llm_provider: str | None = None,
-            client: object = None,
-            **kwargs: object,  # kwargs-ok: the endpoint's request
-        ) -> object:
-            if not is_vector_store:
-                if "model" not in kwargs:
-                    raise TypeError(
-                        "_generic_api_call_with_fallbacks() missing 1 required positional argument: 'model'"
-                    )
-                return self._core._call_sync(plan, kwargs, _SINGLE_ATTEMPT)  # pyright: ignore[reportPrivateUsage]  # see above
-            provider_kwargs: dict[  # mutable-ok: the request kwargs the Python router mutates in place  # rebind-ok: rebound as the Python router rebinds it
-                str, object
-            ] = (
-                {**kwargs, "custom_llm_provider": custom_llm_provider}
-                if custom_llm_provider and "custom_llm_provider" not in kwargs
-                else dict(kwargs)
-            )
-            if name == "vector_store_search":
-                provider_kwargs = {  # rebind-ok: rebound as the Python router rebinds it
-                    **provider_kwargs,
-                    "_direct_vector_store_embedding_executor": self._embedding_executor(kwargs),
-                }
-            if provider_kwargs.get("model"):
-                return self._core._call_sync(plan, provider_kwargs, _SINGLE_ATTEMPT)  # pyright: ignore[reportPrivateUsage]  # see above
-            if name == "vector_store_search":
-                return self._invoke(plan.host_op)(**{**provider_kwargs, "router": self._core})
-            return self._invoke(plan.host_op)(**provider_kwargs)
-
-        sync_wrapper.__name__ = name
-        return sync_wrapper
+    def _sync_vector_stores(
+        self,
+        spec: EndpointSpec,
+        custom_llm_provider: str | None,
+        kwargs: Mapping[str, object],
+    ) -> object:
+        """The sync vector store wrapper: routed with a model, else the handler directly."""
+        provider_kwargs: dict[  # mutable-ok: the request kwargs the Python router mutates in place  # rebind-ok: rebound as the Python router rebinds it
+            str, object
+        ] = with_provider(custom_llm_provider, kwargs)
+        if spec.name == "vector_store_search":
+            provider_kwargs = {  # rebind-ok: rebound as the Python router rebinds it
+                **provider_kwargs,
+                "_direct_vector_store_embedding_executor": self._embedding_executor(kwargs),
+            }
+        if provider_kwargs.get("model"):
+            return self._core._call_sync(plan_for(spec.name), provider_kwargs, _SINGLE_ATTEMPT)  # pyright: ignore[reportPrivateUsage]  # the endpoints drive their own core
+        if spec.name == "vector_store_search":
+            return self._invoke(spec.host_op)(**{**provider_kwargs, "router": self._core})
+        return self._invoke(spec.host_op)(**provider_kwargs)
 
     def _embedding_executor(self, kwargs: Mapping[str, object]) -> object:
         from litellm.llms.base_llm.vector_store.transformation import (
@@ -1388,92 +1229,31 @@ class RustEndpoints:
         kwargs: dict[str, object],  # mutable-ok: the request kwargs the Python router mutates in place
     ) -> object:
         """`_init_interactions_api_endpoints`."""
-        if custom_llm_provider and "custom_llm_provider" not in kwargs:
-            kwargs[  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
+        request: Final = interaction_request(custom_llm_provider, kwargs)
+        if request.get("model"):
+            return await self._ageneric(plan, request)
+        return await self._direct(plan.host_op, request)
+
+    async def _assistants(
+        self,
+        op: str,
+        custom_llm_provider: str | None,
+        client: object,
+        kwargs: Mapping[str, object],
+    ) -> object:
+        """`_pass_through_assistants_endpoint_factory`."""
+        provider: object = custom_llm_provider  # rebind-ok: the assistants config's when none is given
+        sent: Final = dict(kwargs)
+        if provider is None:
+            if self._assistants_config is None:
+                raise Exception(  # noqa: TRY002  # the Python router raises a bare Exception
+                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
+                )
+            provider = self._assistants_config[  # rebind-ok: rebound as the Python router rebinds it
                 "custom_llm_provider"
-            ] = custom_llm_provider
-        if "custom_llm_provider" not in kwargs:
-            kwargs[  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
-                "custom_llm_provider"
-            ] = "gemini"
-        if kwargs.get("agent") and kwargs.get("model") == kwargs.get("agent"):
-            kwargs["model"] = (  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
-                None
-            )
-        if kwargs.get("model"):
-            return await self._ageneric(plan, kwargs)
-        return await self._direct(plan.host_op, kwargs)
-
-    def _managed_agents(self, name: str) -> Callable[..., object]:
-        op: Final = _MANAGED_AGENTS[name]
-
-        def prepared(
-            custom_llm_provider: str | None,
-            kwargs: dict[str, object],  # mutable-ok: the request kwargs the Python router mutates in place
-        ) -> dict[str, object]:  # mutable-ok: the call's kwargs
-            if custom_llm_provider and "custom_llm_provider" not in kwargs:
-                kwargs[  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
-                    "custom_llm_provider"
-                ] = custom_llm_provider
-            if "custom_llm_provider" not in kwargs:
-                kwargs[  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
-                    "custom_llm_provider"
-                ] = "gemini"
-            return kwargs
-
-        if name.startswith("a"):
-
-            async def managed_agents_wrapper(
-                custom_llm_provider: str | None = None,
-                client: object = None,
-                **kwargs: object,  # kwargs-ok: the request
-            ) -> object:
-                return await self._direct(op, prepared(custom_llm_provider, dict(kwargs)))
-
-            return managed_agents_wrapper
-
-        def managed_agents_sync_wrapper(
-            custom_llm_provider: str | None = None,
-            client: object = None,
-            **kwargs: object,  # kwargs-ok: the request
-        ) -> object:
-            return self._invoke(op)(**prepared(custom_llm_provider, dict(kwargs)))
-
-        return managed_agents_sync_wrapper
-
-    def _sync_vector_store_files(self, name: str) -> Callable[..., object]:
-        op: Final = _SYNC_VECTOR_STORE_FILES[name]
-
-        def vector_store_file_sync_wrapper(
-            custom_llm_provider: str | None = None,
-            client: object = None,
-            **kwargs: object,  # kwargs-ok: the request
-        ) -> object:
-            return self._invoke(op)(custom_llm_provider=custom_llm_provider, client=client, **kwargs)
-
-        return vector_store_file_sync_wrapper
-
-    def _assistants(self, name: str) -> Callable[..., Awaitable[object]]:
-        async def assistants_wrapper(
-            custom_llm_provider: str | None = None,
-            client: object = None,
-            **kwargs: object,  # kwargs-ok: the request
-        ) -> object:
-            """`_pass_through_assistants_endpoint_factory`."""
-            provider: object = custom_llm_provider  # rebind-ok: the assistants config's when none is given
-            sent: Final = dict(kwargs)
-            if provider is None:
-                if self._assistants_config is None:
-                    raise Exception(  # noqa: TRY002  # the Python router raises a bare Exception
-                        "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
-                    )
-                provider = self._assistants_config[  # rebind-ok: rebound as the Python router rebinds it
-                    "custom_llm_provider"
-                ]
-                sent.update(as_dict(self._assistants_config.get("litellm_params")))
-            return await self._direct(name, {"custom_llm_provider": provider, "client": client, **sent})
-
-        return assistants_wrapper
+            ]
+            sent.update(as_dict(self._assistants_config.get("litellm_params")))
+        return await self._direct(op, {"custom_llm_provider": provider, "client": client, **sent})
 
     # -- completions, priority and prompt management ----------------------------------------
 
@@ -1786,7 +1566,11 @@ class RustEndpoints:
 
     async def avector_store_create(self, model: str | None, **kwargs: object) -> object:  # kwargs-ok: the request
         if model is None:
-            return await self._factory("avector_store_create", "vector_stores.main.acreate")(**kwargs)
+            provider: Final = kwargs.pop("custom_llm_provider", None)
+            plan: Final = _generic("avector_store_create", "vector_stores.main.acreate")
+            return await self._vector_stores(
+                "avector_store_create", plan, provider if isinstance(provider, str) else None, dict(kwargs)
+            )
         return await self._core._drive(PLANS["avector_store_create"], {**kwargs, "model": model}, _SINGLE_ATTEMPT)  # pyright: ignore[reportPrivateUsage]  # see above
 
     async def aretrieve_batch(self, model: str | None = None, **kwargs: object) -> object:  # kwargs-ok: the request
@@ -1963,7 +1747,7 @@ class RustEndpoints:
 
     async def asearch(
         self,
-        custom_llm_provider: str | None = None,
+        custom_llm_provider: object = None,
         client: object = None,
         **kwargs: object,  # kwargs-ok: the request
     ) -> object:
@@ -1975,6 +1759,27 @@ class RustEndpoints:
             raise ValueError("search_tool_name or model parameter is required for search")
         request["model"] = search_tool_name
         return await self._core._drive(PLANS["asearch"], request)  # pyright: ignore[reportPrivateUsage]  # the endpoints drive their own core
+
+    def search(
+        self,
+        custom_llm_provider: object = None,
+        client: object = None,
+        **kwargs: object,  # kwargs-ok: the request
+    ) -> object:
+        """The sync ``search``: one attempt on one of the router's search tools named
+        ``search_tool_name`` (else ``model``), as ``asearch`` picks among them."""
+        search_tool_name: Final = kwargs.get("search_tool_name", kwargs.get("model"))
+        if not search_tool_name:
+            raise ValueError("search_tool_name or model parameter is required for search")
+        request: Final = {key: value for key, value in kwargs.items() if key != "model"}
+        prepared: Final = prepare_request(
+            PLANS["asearch"],
+            request,
+            str(search_tool_name),
+            self._core._resolved.model_group_alias,  # pyright: ignore[reportPrivateUsage]  # the endpoints serve their own core
+        )
+        tools: Final = [as_dict(tool) for tool in self.search_tools]
+        return self._invoke(ENDPOINTS["search"].host_op)(**search_tool_call(tools, str(search_tool_name), prepared))
 
     # -- guardrails ---------------------------------------------------------------------------
 
@@ -2065,11 +1870,6 @@ class RustEndpoints:
 
 
 _SINGLE_ATTEMPT: Final[Mapping[str, object]] = MappingProxyType({"num_retries": 0, "disable_fallbacks": True})
-
-
-async def _answers_none(*_args: object, **_kwargs: object) -> None:  # kwargs-ok: any request
-    """An endpoint the Python router's async wrapper has no branch for."""
-    return
 
 
 def _as_items(value: object) -> list[object]:  # mutable-ok: a fresh list
