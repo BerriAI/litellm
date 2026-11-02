@@ -76873,6 +76873,7 @@
             "text"
         ],
         "supports_audio_input": true,
+        "supports_continuation": true,
         "supports_function_calling": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
