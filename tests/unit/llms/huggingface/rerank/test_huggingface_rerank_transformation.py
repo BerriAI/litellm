@@ -229,7 +229,15 @@ def test_huggingface_rerank_config() -> None:
     config: Final = HuggingFaceRerankConfig()
 
     # Test complete URL generation
-    assert config.get_complete_url(None, "test") == "https://api-inference.huggingface.co/rerank"
+    assert config.get_complete_url(None, "test") == "https://router.huggingface.co/hf-inference/models/test"
+    assert (
+        config.get_complete_url(None, "huggingface/BAAI/bge-reranker-base")
+        == "https://router.huggingface.co/hf-inference/models/BAAI/bge-reranker-base"
+    )
+    assert (
+        config.get_complete_url("https://router.huggingface.co", "BAAI/bge-reranker-base")
+        == "https://router.huggingface.co/hf-inference/models/BAAI/bge-reranker-base"
+    )
 
     # Test custom API base
     custom_url = config.get_complete_url("https://custom.huggingface.co", "test")
@@ -257,7 +265,6 @@ def test_huggingface_rerank_config() -> None:
         query="hello",
         documents=["hello", "world"],
     )
-    print(f"params: {params}")
     assert params["query"] == "hello"
     assert params["texts"] == ["hello", "world"]
     assert params["top_n"] == 2
@@ -278,6 +285,10 @@ def test_request_transformation() -> None:
     )
 
     expected_request: Final = {
+        "inputs": {
+            "query": "hello",
+            "texts": ["hello", "world"],
+        },
         "query": "hello",
         "texts": ["hello", "world"],
         "top_n": 2,
@@ -380,7 +391,7 @@ def test_huggingface_rerank_request_payload(mock_post: MagicMock) -> None:
 
     # Verify URL
     call_url: Final = mock_post.call_args.kwargs["url"]
-    assert call_url == "https://api-inference.huggingface.co/rerank"
+    assert call_url == "https://router.huggingface.co/hf-inference/models/BAAI/bge-reranker-base"
 
     # Verify headers
     headers: Final = mock_post.call_args.kwargs["headers"]
@@ -390,6 +401,10 @@ def test_huggingface_rerank_request_payload(mock_post: MagicMock) -> None:
     # Verify request body
     request_data: Final = json.loads(mock_post.call_args.kwargs["data"])
     expected_request: Final = {
+        "inputs": {
+            "query": "hello",
+            "texts": ["hello", "world"],
+        },
         "query": "hello",
         "texts": ["hello", "world"],
         "raw_scores": False,
@@ -406,6 +421,10 @@ def test_huggingface_rerank_request_payload(mock_post: MagicMock) -> None:
 
 def test_huggingface_rerank_forwards_truncate_options() -> None:
     expected_request: Final = {
+        "inputs": {
+            "query": "hello",
+            "texts": ["hello", "world"],
+        },
         "query": "hello",
         "texts": ["hello", "world"],
         "raw_scores": False,
@@ -415,7 +434,7 @@ def test_huggingface_rerank_forwards_truncate_options() -> None:
     }
 
     def respond(request: httpx.Request) -> httpx.Response:
-        assert request.url == "https://api-inference.huggingface.co/rerank"
+        assert str(request.url) == "https://router.huggingface.co/hf-inference/models/BAAI/bge-reranker-base"
         assert request.headers["Authorization"] == "Bearer test_api_key"
         assert json.loads(request.content) == expected_request
         return httpx.Response(200, json=[{"index": 0, "score": 0.9}])
@@ -434,3 +453,24 @@ def test_huggingface_rerank_forwards_truncate_options() -> None:
 
     assert response.results is not None
     assert response.results[0]["relevance_score"] == 0.9
+
+
+def test_huggingface_rerank_error_response_raises_huggingface_error() -> None:
+    from litellm.llms.huggingface.common_utils import HuggingFaceError
+    from litellm.llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
+    from litellm.types.rerank import RerankResponse
+
+    config: Final = HuggingFaceRerankConfig()
+    mock_response = MagicMock()
+    mock_response.json = lambda: {"error": "Model BAAI/bge-reranker-base is currently loading"}
+    mock_response.status_code = 503
+
+    with pytest.raises(HuggingFaceError) as exc_info:
+        config.transform_rerank_response(
+            model="huggingface/BAAI/bge-reranker-base",
+            raw_response=mock_response,
+            model_response=RerankResponse(),
+            logging_obj=None,
+        )
+
+    assert "Model BAAI/bge-reranker-base is currently loading" in str(exc_info.value)
