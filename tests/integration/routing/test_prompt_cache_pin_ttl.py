@@ -174,7 +174,7 @@ def _model_list(rig_wires: Mapping[str, str]) -> list[JsonValue]:
         deployment(
             "pin-zero-one-hour-price",
             "pin-zero-one-hour-price",
-            model="sarvam/sarvam-m",
+            model="sarvam/sarvam-105b",
             api_base=f"{rig_wires['openai']}/v1",
             api_key=PROVIDER_KEY,
         ),
