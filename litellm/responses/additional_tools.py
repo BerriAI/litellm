@@ -6,6 +6,7 @@ from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # validating the openai tool union strips vendor keys from raw tools
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypeIs  # noqa: TID251  # narrows a client input item before its type is read
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -14,10 +15,6 @@ from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInp
 ADDITIONAL_TOOLS_INPUT_ITEM_TYPE: Final = "additional_tools"
 _NAMESPACE_TOOL_TYPE: Final = "namespace"
 _ITEMS: Final = TypeAdapter(tuple[object, ...])
-
-
-class _InputItemType(LiteLLMBaseModel):
-    type: str = ""
 
 
 class _ToolList(LiteLLMBaseModel):
@@ -31,11 +28,14 @@ class HoistedAdditionalTools:
     hoisted: tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]
 
 
+def _is_an_input_item(
+    item: object,
+) -> TypeIs[Mapping[str, object]]:  # guard-ok: auth scans every list input, and a pydantic error per item is slow
+    return isinstance(item, Mapping)
+
+
 def _is_additional_tools_item(item: object) -> bool:
-    try:
-        return _InputItemType.model_validate(item).type == ADDITIONAL_TOOLS_INPUT_ITEM_TYPE
-    except ValidationError:
-        return False
+    return _is_an_input_item(item) and item.get("type") == ADDITIONAL_TOOLS_INPUT_ITEM_TYPE
 
 
 def _tool_list_of(value: object) -> tuple[Mapping[str, object], ...]:

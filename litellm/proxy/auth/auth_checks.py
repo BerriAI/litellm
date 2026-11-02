@@ -166,6 +166,7 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.router import Router
 from litellm.router_api import RegistryReader
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
@@ -7954,6 +7955,10 @@ def _tools(tools: object) -> tuple[object, ...]:
         return ()
 
 
+def _request_tools(request_body: Mapping[str, object]) -> tuple[object, ...]:
+    return (*_tools(request_body.get("tools")), *additional_tools_in_input(request_body.get("input")))
+
+
 def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
     try:
         tool_fields: Final = _TOOL_ADAPTER.validate_python(tool, strict=True)
@@ -7964,14 +7969,14 @@ def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
 
 def _strict_requested_vector_store_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
     """
-    Same fields VectorStoreRegistry.get_vector_store_ids_to_run reads, but a vector_store_ids that is
-    not a list of strings is a 400 instead of being skipped or iterated, and tools that are not
-    objects name no store.
+    Same fields VectorStoreRegistry.get_vector_store_ids_to_run reads, plus the tools of `additional_tools`
+    input items, but a vector_store_ids that is not a list of strings is a 400 instead of being skipped or
+    iterated, and tools that are not objects name no store.
     """
     return tuple(
         chain(
             _validated_vector_store_ids(request_body.get("vector_store_ids")),
-            chain.from_iterable(_tool_vector_store_ids(tool) for tool in _tools(request_body.get("tools"))),
+            chain.from_iterable(_tool_vector_store_ids(tool) for tool in _request_tools(request_body)),
         )
     )
 
@@ -8010,7 +8015,7 @@ def _legacy_requested_vector_store_ids(
     return tuple(
         chain(
             top_level,
-            chain.from_iterable(vector_store_ids_in_tool(tool) for tool in _tools(request_body.get("tools"))),
+            chain.from_iterable(vector_store_ids_in_tool(tool) for tool in _request_tools(request_body)),
         )
     )
 
@@ -8079,8 +8084,8 @@ async def vector_store_access_check(
     """
     Checks whether the caller may use every vector store the request names.
 
-    Requested stores come from `vector_store_ids`, `tools[].vector_store_ids` and the RAG
-    `retrieval_config.vector_store_id`. Grants come from each identity's
+    Requested stores come from `vector_store_ids`, `tools[].vector_store_ids`, the tools of
+    `additional_tools` input items and the RAG `retrieval_config.vector_store_id`. Grants come from each identity's
     `object_permission.vector_stores`.
 
     Both modes read the same request fields, with or without a vector store registry, and answer 400

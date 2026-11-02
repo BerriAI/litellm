@@ -2398,6 +2398,37 @@ async def test_deny_by_default_ignores_tools_that_name_no_vector_store(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("deny_by_default", [False, True], ids=["legacy", "deny-by-default"])
+@pytest.mark.parametrize(
+    ("key_vector_stores", "denied_by"),
+    [(["KBSTOREA"], _KEY_DENIED), (["KBSTOREB"], None)],
+    ids=["ungranted", "granted"],
+)
+async def test_file_search_inside_additional_tools_input_item_needs_a_vector_store_grant(
+    deny_by_default: bool, key_vector_stores: list[str], denied_by: ProxyErrorTypes | None
+):
+    await _assert_rag_query_outcome(
+        _common_checks_for_rag_query(
+            {"vector_store_deny_by_default": deny_by_default},
+            _virtual_key(object_permission_id="key-permission"),
+            SimpleNamespace(vector_stores=key_vector_stores),
+            request_body={
+                "model": "gpt-4o-mini",
+                "input": [
+                    {
+                        "type": "additional_tools",
+                        "role": "developer",
+                        "tools": [{"type": "file_search", "vector_store_ids": ["KBSTOREB"]}],
+                    },
+                    {"type": "message", "role": "user", "content": "what is in this KB?"},
+                ],
+            },
+        ),
+        denied_by,
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_body",
     [
