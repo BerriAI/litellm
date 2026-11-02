@@ -12,6 +12,7 @@ from typing import Final, Literal
 from pydantic import JsonValue
 
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.common_utils import tools_without_custom_field
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
@@ -194,7 +195,15 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         # For InvokeModel, we need to provide the raw body that would be sent to the model
         # Remove the 'model' field from the body as it's not part of the model input
-        body_data: Final = {k: v for k, v in request_data.items() if k != "model"}
+        tools: Final = request_data.get("tools")
+        body_data: Final = {
+            **{k: v for k, v in request_data.items() if k != "model"},
+            **(
+                {"tools": tools_without_custom_field(tools, hoist_defer_loading=True, drop_custom=True)}
+                if isinstance(tools, list)
+                else {}
+            ),
+        }
 
         if "messages" in body_data:
             # Bedrock validates the body against the model's InvokeModel schema;

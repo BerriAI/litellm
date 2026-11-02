@@ -1127,16 +1127,16 @@ class PrismaManager:
         return ProxyExtrasDBManager.build_request_log_indexes()
 
     @staticmethod
-    def migration_data_check_report(use_migrate: bool = True) -> str | None:
-        """The read-only pre-migration row check on its own, for `--check_migrations_against_existing_data`: the
-        refusal the migration step would print, or None when the pending schema changes
-        can be applied to the rows the database has."""
+    def migration_dry_run_summary(use_migrate: bool = True) -> tuple[bool, str]:
+        """`--check_migrations_against_existing_data` on its own: the pending migrations applied inside a
+        transaction that is rolled back, as (whether they all applied, what the operator reads)."""
         from litellm_proxy_extras.utils import (
             ProxyExtrasDBManager,  # pyright: ignore[reportUnknownVariableType]  # litellm-proxy-extras is an optional install
         )
+        from pydantic import TypeAdapter
 
-        refusal: Final[object] = ProxyExtrasDBManager.migration_data_check_report(use_migrate=use_migrate)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm-proxy-extras is an optional install
-        return refusal if isinstance(refusal, str) else None
+        summary: Final[object] = ProxyExtrasDBManager.migration_dry_run_summary(use_migrate=use_migrate)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm-proxy-extras is an optional install
+        return TypeAdapter(tuple[bool, str]).validate_python(summary)
 
     @staticmethod
     def start_request_log_index_build() -> None:

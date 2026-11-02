@@ -1988,3 +1988,41 @@ def test_the_partial_response_billed_on_disconnect_carries_the_logging_objects_b
         partial.response.usage.input_tokens,
         partial.response.usage.output_tokens,
     ), "the bill is priced on the partial's own usage"
+
+
+def _refusal_chunk(refusal: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="gpt-5.5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content=None, refusal=refusal),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streamed_refusal_deltas_become_one_refusal_part_of_the_message(sync_mode: bool):
+    iterator: Final = _build_iterator(
+        [_refusal_chunk("I'm sorry, "), _refusal_chunk("I can't help with that."), _chunk("", finish_reason="stop")]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    parts_added: Final = [
+        event.model_dump()["part"] for event in events if event.type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED
+    ]
+    refusal_done: Final = [event for event in events if event.type == ResponsesAPIStreamEvents.REFUSAL_DONE]
+    message_done: Final = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+    finished: Final = events[-1]
+    expected_content: Final = [{"type": "refusal", "refusal": "I'm sorry, I can't help with that."}]
+    assert parts_added == [{"type": "refusal", "refusal": ""}]
+    assert [event.refusal for event in refusal_done] == [expected_content[0]["refusal"]]
+    assert [item.model_dump()["content"] for item in message_done] == [expected_content]
+    assert [item.model_dump()["content"] for item in finished.response.output] == [expected_content]

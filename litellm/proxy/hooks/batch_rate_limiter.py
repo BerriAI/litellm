@@ -1118,7 +1118,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     },
                 ) from e
 
-        llm_model_list: Final = llm_router.model_list if llm_router is not None else None
+        llm_model_list: Final = llm_router.registry().all() if llm_router is not None else None
         for model in models:
             model_to_check = model
             try:

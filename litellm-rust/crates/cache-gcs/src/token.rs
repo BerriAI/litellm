@@ -1,7 +1,9 @@
 use std::{future::Future, pin::Pin};
 
 use litellm_auth_gcp::{VertexAuth, VertexConfig};
-use litellm_auth_types::{InputSource, SecretValue, Sourced};
+use litellm_auth_types::{InputSource, Sourced};
+use litellm_secret_value::SecretValue;
+
 use litellm_cache::Error;
 
 pub trait TokenSource: Send + Sync + 'static {

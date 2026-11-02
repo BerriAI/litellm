@@ -81,7 +81,7 @@ impl From<ManagerError> for PythonMutationError {
 pub(super) async fn write_python_provider(
     manager: &SecretManager,
     name: &str,
-    value: &litellm_secrets::SecretValue,
+    value: &litellm_secret_value::SecretValue,
 ) -> Result<serde_json::Value, PythonMutationError> {
     match manager {
         SecretManager::Cyberark(client) => {
@@ -128,7 +128,7 @@ pub(super) async fn rotate_python_provider(
     manager: &SecretManager,
     current_name: &str,
     new_name: &str,
-    value: &litellm_secrets::SecretValue,
+    value: &litellm_secret_value::SecretValue,
 ) -> Result<serde_json::Value, PythonMutationError> {
     match manager {
         SecretManager::Cyberark(client) => {
@@ -186,7 +186,7 @@ pub(super) enum PythonMutationResponse {
 pub(super) async fn write_python_provider_with_context(
     manager: &SecretManager,
     name: &str,
-    value: &litellm_secrets::SecretValue,
+    value: &litellm_secret_value::SecretValue,
     context: &litellm_secrets_types::SecretWriteContext,
 ) -> Result<PythonMutationResponse, PythonMutationError> {
     if let (SecretManager::HashicorpVault(client), SecretOperationContext::Hashicorp(operation)) =
@@ -235,7 +235,7 @@ pub(super) async fn rotate_python_provider_with_context(
     manager: &SecretManager,
     current_name: &str,
     new_name: &str,
-    value: &litellm_secrets::SecretValue,
+    value: &litellm_secret_value::SecretValue,
     context: &SecretOperationContext,
 ) -> Result<PythonMutationResponse, PythonMutationError> {
     if let (SecretManager::HashicorpVault(client), SecretOperationContext::Hashicorp(context)) =

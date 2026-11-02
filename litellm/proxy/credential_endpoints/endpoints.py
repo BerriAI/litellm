@@ -298,9 +298,10 @@ def _resolve_deployment_credentials(llm_router: litellm.Router | None, model_id:
             status_code=500,
             detail="LLM router not found. Please ensure you have a valid router instance.",
         )
-    if llm_router.get_deployment(model_id) is None:
+    registry: Final = llm_router.registry()
+    if registry.deployment(model_id) is None:
         raise HTTPException(status_code=404, detail="Model not found")
-    credential_values: Final = llm_router.get_deployment_credentials(model_id)
+    credential_values: Final = registry.credentials(model_id)
     if credential_values is None:
         raise HTTPException(status_code=404, detail="Model not found")
     return _CREDENTIAL_DICT_ADAPTER.validate_python(credential_values)
@@ -530,10 +531,11 @@ async def get_credential_by_model(
     try:
         if llm_router is None:
             raise HTTPException(status_code=500, detail="LLM router not found")
-        model: Final = llm_router.get_deployment(model_id)
+        registry: Final = llm_router.registry()
+        model: Final = registry.deployment(model_id)
         if model is None:
             raise HTTPException(status_code=404, detail="Model not found")
-        credential_values: Final = llm_router.get_deployment_credentials(model_id)
+        credential_values: Final = registry.credentials(model_id)
         if credential_values is None:
             raise HTTPException(status_code=404, detail="Model not found")
         masked_credential_values: Final = get_masked_values(

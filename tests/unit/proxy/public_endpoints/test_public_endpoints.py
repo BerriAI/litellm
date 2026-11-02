@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from importlib.resources import files
 from itertools import chain
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -18,11 +20,34 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
 from litellm.proxy.public_endpoints import router
 from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
+from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
 from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreateInfo, ProviderCredentialField
 from litellm.types.utils import LlmProviders
+
+
+def test_meta_model_api_fields_are_separate_from_meta_llama() -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+    response: Final = TestClient(app).get("/public/providers/fields")
+    assert response.status_code == 200
+    providers: Final = response.json()
+    meta: Final = next((p for p in providers if p["litellm_provider"] == "meta"), None)
+    llama: Final = next(p for p in providers if p["litellm_provider"] == "meta_llama")
+    assert meta is not None
+    assert meta["provider"] == "META"
+    assert meta["provider_display_name"] == "Meta Model API"
+    assert meta["default_model_placeholder"] == "meta/muse-spark-1.1"
+    fields: Final = {field["key"]: field for field in meta["credential_fields"]}
+    assert set(fields) == {"api_base", "api_key"}
+    assert fields["api_base"]["field_type"] == "text"
+    assert fields["api_key"]["field_type"] == "password"
+    assert fields["api_base"]["required"] is False
+    assert fields["api_key"]["required"] is False
+    assert llama["provider"] == "LLAMA"
+    assert llama["provider_display_name"] == "Meta Llama"
 
 
 def test_bigmodel_fields_require_private_key_and_share_default_base_with_adapter() -> None:
@@ -383,6 +408,34 @@ def test_cognition_provider_fields():
     assert fields_by_key["api_base"]["required"] is False
 
 
+def test_zai_provider_fields():
+    from litellm.llms.zai.chat.transformation import ZAI_API_BASE
+
+    app_instance: Final = FastAPI()
+    app_instance.include_router(router)
+    test_client: Final = TestClient(app_instance)
+
+    response: Final = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers: Final = response.json()
+
+    zai: Final = next((p for p in providers if p["provider"] == "ZAI"), None)
+    assert zai is not None, "Z.AI provider entry not found"
+
+    assert zai["provider_display_name"] == "Z.AI (Zhipu AI)"
+    assert zai["litellm_provider"] == "zai"
+    assert zai["default_model_placeholder"].startswith("zai/")
+
+    fields_by_key: Final = {f["key"]: f for f in zai["credential_fields"]}
+
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+    assert fields_by_key["api_base"]["required"] is False
+    assert fields_by_key["api_base"]["field_type"] == "text"
+    assert fields_by_key["api_base"]["placeholder"] == ZAI_API_BASE
+
+
 def test_zerogpu_add_model_form_defaults_resolve_to_a_priced_zerogpu_model():
     import litellm
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -478,9 +531,16 @@ def _decisions_provider_entry(provider: str) -> ProviderCreateInfo:
     return entry
 
 
-@pytest.mark.parametrize("display_name,provider", (("TypeSafe", LlmProviders.TYPESAFE), ("Nace", LlmProviders.NACE)))
-def test_decisions_provider_fields(display_name: str, provider: LlmProviders) -> None:
-    entry: Final = _decisions_provider_entry(display_name)
+@pytest.mark.parametrize(
+    ("provider_key", "display_name", "provider"),
+    (
+        ("TypeSafe", "TypeSafe", LlmProviders.TYPESAFE),
+        ("Nace", "Nace", LlmProviders.NACE),
+        ("EU_JEV", "eu/jev", LlmProviders.EU_JEV),
+    ),
+)
+def test_decisions_provider_fields(provider_key: str, display_name: str, provider: LlmProviders) -> None:
+    entry: Final = _decisions_provider_entry(provider_key)
 
     assert entry.provider_display_name == display_name
     assert entry.litellm_provider == provider.value
@@ -558,11 +618,11 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "libertai",
         "litellm_agent",
         "manus",
-        "meta",
         "modelscope",
         "mongodb",
         "nano-gpt",
         "neosantara",
+        "opensearch",
         "parasail",
         "pinstripes",
         "poe",
@@ -579,7 +639,6 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "transcribe",
         "valkey",
         "xiaomi_mimo",
-        "zai",
     }
 )
 
@@ -1782,3 +1841,72 @@ def test_public_skill_hub_echoes_registered_installation_preference(preference):
     assert [(p["name"], p["installation_preference"]) for p in response.json()["plugins"]] == [
         ("security-review", preference)
     ]
+
+
+_INTERNAL_PLUGIN: Final = SimpleNamespace(
+    id="plugin-id",
+    name="deploy-helper",
+    enabled=True,
+    created_at=None,
+    updated_at=None,
+    manifest_json=json.dumps(
+        {
+            "source": {
+                "source": "git-subdir",
+                "url": "https://gitlab.internal.example.com/platform/claude-skills.git",
+                "path": "plugins/deploy-helper",
+            }
+        }
+    ),
+)
+
+
+def _skill_hub_response(find_many: AsyncMock, general_settings: Mapping[str, object]) -> httpx.Response:
+    table: Final = MagicMock()
+    table.find_many = find_many
+    prisma: Final = MagicMock()
+    prisma.db.litellm_claudecodeplugintable = table
+    app: Final = FastAPI()
+    app.include_router(router)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.general_settings", dict(general_settings)),
+    ):
+        return TestClient(app).get("/public/skill_hub")
+
+
+def test_public_skill_hub_is_empty_when_marketplace_auth_is_required() -> None:
+    find_many: Final = AsyncMock(return_value=[_INTERNAL_PLUGIN])
+
+    public: Final = _skill_hub_response(find_many, {})
+    gated: Final = _skill_hub_response(find_many, {"claude_code_marketplace_auth_required": True})
+
+    assert [plugin["name"] for plugin in public.json()["plugins"]] == ["deploy-helper"]
+    assert gated.status_code == 200
+    assert gated.json()["plugins"] == []
+    assert "gitlab.internal.example.com" not in gated.text
+
+
+def test_public_skill_hub_500_body_carries_no_exception_text() -> None:
+    response: Final = _skill_hub_response(
+        AsyncMock(side_effect=RuntimeError("could not reach postgres://admin:hunter2@db.internal")), {}
+    )
+
+    assert response.status_code == 500
+    assert "hunter2" not in response.text
+    assert "db.internal" not in response.text
+
+
+def test_public_skill_hub_without_a_database_answers_db_not_connected() -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        response: Final = TestClient(app).get("/public/skill_hub")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": CommonProxyErrors.db_not_connected_error.value}

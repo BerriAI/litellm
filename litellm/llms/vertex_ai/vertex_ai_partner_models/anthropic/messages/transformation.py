@@ -1,9 +1,15 @@
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
+    context_management_betas,
+    requires_native_compaction_beta,
+)
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
     messages_carry_output_config,
@@ -11,6 +17,7 @@ from litellm.llms.anthropic.messages.native.transformation import (
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
 )
 from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
@@ -18,6 +25,8 @@ from litellm.types.router import GenericLiteLLMParams
 
 from ....vertex_llm_base import VertexBase
 from ..output_params_utils import sanitize_vertex_anthropic_output_params
+
+_OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 _VERSION_HEADER_VERTEX_READS_FROM_BODY: Final = "anthropic-version"
 _VERTEX_DEFAULT_VERSION: Final = "vertex-2023-10-16"
@@ -171,28 +180,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         if existing_beta:
             beta_values.update(b.strip() for b in existing_beta.split(","))
 
-        # Check for context management
-        context_management_param: Final = optional_params.get("context_management")
-        if context_management_param is not None:
-            # Check edits array for compact_20260112 type
-            edits: Final = context_management_param.get("edits", [])
-            has_compact = False
-            has_other = False
-
-            for edit in edits:
-                edit_type = edit.get("type", "")
-                if edit_type == "compact_20260112":
-                    has_compact = True
-                else:
-                    has_other = True
-
-            # Add compact header if any compact edits exist
-            if has_compact:
-                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
-
-            # Add context management header if any other edits exist
-            if has_other:
-                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
+        beta_values.update(context_management_betas(optional_params.get("context_management")))
 
         # Check for web search tool
         for tool in tools:
@@ -211,8 +199,23 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         if messages_carry_output_config(messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
 
-        if beta_values:
-            request_headers["anthropic-beta"] = ",".join(beta_values)
+        typed_params: Final = _OPTIONAL_PARAMS.validate_python(optional_params)
+        if requires_native_compaction_beta("vertex_ai", typed_params, messages):
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
+
+        tool_change_betas: Final = (
+            (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,)
+            if anthropic_model_info.is_mid_conversation_tool_change_used(messages)
+            else ()
+        )
+        all_beta_values: Final = beta_values.union(
+            anthropic_model_info.thinking_betas(
+                optional_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # optional_params is the base config's bare dict
+            ),
+            tool_change_betas,
+        )
+        if all_beta_values:
+            request_headers["anthropic-beta"] = ",".join(sorted(all_beta_values))
 
         return request_headers, api_base
 
@@ -245,7 +248,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             headers=headers,
         )
 
-        self._normalize_system_role_messages(anthropic_messages_request, model=model)
+        self._normalize_system_role_messages(
+            anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
+        )
 
         self._remove_scope_from_cache_control(anthropic_messages_request)
 

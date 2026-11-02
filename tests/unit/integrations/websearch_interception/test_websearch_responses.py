@@ -6,10 +6,14 @@ tool calls returned by /v1/responses, executes the search server-side, and
 builds a Responses-format follow-up request.
 """
 
+import datetime
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+import litellm
 
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
@@ -17,6 +21,7 @@ from litellm.integrations.websearch_interception.handler import (
 from litellm.types.integrations.custom_logger import (
     RESPONSES_AGENTIC_SURFACE,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.utils import CallTypes, LlmProviders
 
 
@@ -250,6 +255,112 @@ async def test_build_responses_plan_produces_responses_input():
     assert "tool_choice" not in patch_obj.optional_params
     assert "_agentic_loop_api_surface" not in patch_obj.kwargs
     assert patch_obj.model == "openai/gpt-4o"
+
+
+_WEB_SEARCH_FUNCTION_CALL: Final = {
+    "tool_calls": [
+        {
+            "id": "fc_1",
+            "call_id": "fc_1",
+            "type": "function_call",
+            "name": "litellm_web_search",
+            "arguments": '{"query": "latest ai news"}',
+            "input": {"query": "latest ai news"},
+        }
+    ],
+    "tool_type": "websearch",
+    "response_format": "responses",
+}
+
+
+async def _responses_followup_model(model: str, custom_llm_provider: str, logging_obj: Logging | None) -> str | None:
+    logger: Final = WebSearchInterceptionLogger()
+    plan: Final = await logger.async_build_responses_agentic_loop_plan(
+        tools={**_WEB_SEARCH_FUNCTION_CALL, "provider": custom_llm_provider},
+        model=model,
+        messages=[{"role": "user", "content": "What's the latest AI news?"}],
+        response=_responses_output_with_web_search(),
+        optional_params={"tools": [{"type": "function", "name": "litellm_web_search"}]},
+        logging_obj=logging_obj,
+        stream=False,
+        kwargs={
+            "custom_llm_provider": custom_llm_provider,
+            "_agentic_loop_api_surface": RESPONSES_AGENTIC_SURFACE,
+        },
+    )
+    assert plan.request_patch is not None
+    return plan.request_patch.model
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("perplexity_search")
+async def test_build_responses_plan_keeps_the_provider_on_a_sub_path_model() -> None:
+    """#38829 on the Responses surface: a provider-stripped model whose remainder still holds a
+    slash was left unqualified, so the follow-up could not resolve a provider."""
+    followup_model: Final = await _responses_followup_model("mantle/anthropic.claude-sonnet-5", "bedrock", None)
+
+    assert followup_model == "bedrock/mantle/anthropic.claude-sonnet-5"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("perplexity_search")
+async def test_responses_followup_reuses_the_model_the_caller_requested() -> None:
+    """An OpenRouter model whose own id starts with "openrouter/" reaches the handler as
+    "openrouter/free", which re-qualifying alone cannot tell apart from a request for model "free"."""
+    requested_model: Final = "openrouter/openrouter/free"
+    logging_obj: Final = Logging(
+        model=requested_model,
+        messages=[],
+        stream=False,
+        call_type=CallTypes.responses.value,
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="call-responses-followup",
+        function_id="fn-responses-followup",
+    )
+    litellm.responses(
+        model=requested_model,
+        input="What's the latest AI news?",
+        mock_response="searching",
+        litellm_logging_obj=logging_obj,
+    )
+
+    followup_model: Final = await _responses_followup_model("openrouter/free", "openrouter", logging_obj)
+
+    assert followup_model == requested_model
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("perplexity_search")
+async def test_responses_followup_keeps_the_caller_model_across_the_chat_completions_bridge() -> None:
+    """A Responses request bridged to chat completions re-enters completion() with the stripped model."""
+    requested_model: Final = "openrouter/openrouter/free"
+    logging_obj: Final = Logging(
+        model=requested_model,
+        messages=[],
+        stream=False,
+        call_type=CallTypes.responses.value,
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="call-bridged-followup",
+        function_id="fn-bridged-followup",
+    )
+    litellm.responses(
+        model=requested_model,
+        input="What's the latest AI news?",
+        mock_response="searching",
+        litellm_logging_obj=logging_obj,
+    )
+    litellm.completion(
+        model="openrouter/free",
+        custom_llm_provider="openrouter",
+        messages=[{"role": "user", "content": "What's the latest AI news?"}],
+        mock_response="searching",
+        litellm_logging_obj=logging_obj,
+        _skip_responses_api_bridge=True,
+    )
+
+    followup_model: Final = await _responses_followup_model("openrouter/free", "openrouter", logging_obj)
+
+    assert followup_model == requested_model
 
 
 @pytest.mark.asyncio

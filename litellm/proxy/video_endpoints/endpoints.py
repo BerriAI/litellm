@@ -701,7 +701,9 @@ async def video_get_character(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded, provider_from_id)
+        resolved_model: Final = llm_router.registry().resolve(
+            model_id_from_decoded, kind="from_id", custom_llm_provider=provider_from_id
+        )
         if resolved_model:
             data["model"] = resolved_model
 

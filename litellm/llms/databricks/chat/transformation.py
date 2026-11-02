@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
+from litellm.anthropic_beta_gated_fields import log_beta_gated_strips, strip_beta_gated_thinking
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     handle_invalid_parallel_tool_calls,
@@ -514,6 +515,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         self.update_optional_params_with_thinking_tokens(
             non_default_params=non_default_params, optional_params=mapped_params
         )
+        gated_thinking: Final = strip_beta_gated_thinking(
+            mapped_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # mapped_params is the base config's bare dict
+            frozenset(),
+            drop_params=drop_params,
+        )
+        if gated_thinking.stripped:
+            log_beta_gated_strips(gated_thinking.stripped, model=model, provider="databricks")
+            mapped_params["thinking"] = gated_thinking.thinking
 
         return mapped_params
 

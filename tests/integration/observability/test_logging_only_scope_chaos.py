@@ -56,7 +56,7 @@ pytestmark: Final = pytest.mark.shares_worker_state
 _EDGE_DELAY_SECONDS: Final = 5
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(4 * graceful_stop_seconds() + 120)
 def test_K1_policy_edge_restart_mid_burst_keeps_output_observation_fail_open(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = f"logging-scope-k1-{uuid.uuid4().hex}"
     marker: Final = uuid.uuid4().hex
@@ -215,7 +215,7 @@ def test_K1_policy_edge_restart_mid_burst_keeps_output_observation_fail_open(gat
                 ) == tuple((identity, "logging_only", expected_status) for _ in expected_directions), (index, entries)
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(4 * graceful_stop_seconds() + 120)
 def test_K2_policy_edge_delay_does_not_delay_concurrent_callers(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = f"logging-scope-k2-{uuid.uuid4().hex}"
     marker: Final = uuid.uuid4().hex

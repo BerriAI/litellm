@@ -11,6 +11,7 @@ import { transformKeyInfo } from "../../../key_team_helpers/transform_key_info";
 import { keyInfoV1Call } from "../../../networking";
 import KeyInfoView from "../../../templates/key_info_view";
 import { TagUsage } from "../../types";
+import { storedKeyId } from "../../keyActivityData";
 
 const TOP_KEYS_LIMITS = [5, 10, 25, 50] as const;
 const LIMIT_OPTIONS = TOP_KEYS_LIMITS.map((limit) => ({ value: String(limit), label: String(limit) }));
@@ -70,11 +71,12 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     if (!accessToken || !canOpenKeyInfo(item)) return;
 
     try {
-      const keyInfo = await keyInfoV1Call(accessToken, item.api_key);
+      const keyId = storedKeyId(item.api_key);
+      const keyInfo = await keyInfoV1Call(accessToken, keyId);
       const transformedKeyData = transformKeyInfo(keyInfo);
 
       setKeyData(transformedKeyData);
-      setSelectedKey(item.api_key);
+      setSelectedKey(keyId);
       setIsModalOpen(true); // Open modal when key is clicked
     } catch (error) {
       console.error("Error fetching key info:", error);

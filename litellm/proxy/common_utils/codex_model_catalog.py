@@ -7,7 +7,8 @@ never the OpenAI list shape. This module builds that body from the rows ``/v1/mo
 lists: a model Codex knows keeps Codex's own entry for it, any other model gets the fallback entry
 Codex itself uses for an unknown slug, and ``model_info.service_tiers`` becomes the entry's
 ``service_tiers``, which Codex turns into slash commands (``/ultrafast``) that send ``service_tier``
-upstream.
+upstream. A fallback entry offers the model group's ``supported_reasoning_efforts`` as its reasoning
+levels, trimmed to the ones the requesting Codex release can parse.
 
 The stock entries are Codex 0.159.3's bundled catalog, vendored unchanged from
 https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/models-manager/models.json (Apache-2.0)
@@ -26,13 +27,16 @@ from pathlib import Path
 from types import MappingProxyType, NoneType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
 
-from pydantic import ConfigDict, StringConstraints, TypeAdapter, ValidationError
+from packaging.version import Version
+from pydantic import ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.router import Router
+    from litellm.router_api import RouterRegistry
     from litellm.types.proxy.model_listing import ModelInfoResponse
 
 CODEX_BASE_INSTRUCTIONS_PATH: Final = Path(__file__).with_name("codex_base_instructions.md")
@@ -43,6 +47,10 @@ CODEX_CHAT_MODES: Final = frozenset({"chat", "responses"})
 _TierId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 _BODY_PREFIX: Final = '{"models":['
 _BODY_SUFFIX: Final = "]}"
+_FIRST_CODEX_WITH_CUSTOM_EFFORTS: Final = Version("0.138.0")
+_EFFORTS_EVERY_CODEX_PARSES: Final = frozenset({"none", "minimal", "low", "medium", "high", "xhigh"})
+_PREFERRED_DEFAULT_EFFORT: Final = "medium"
+_CODEX_UNSET_EFFORT: Final = "none"
 
 
 class CodexServiceTier(LiteLLMBaseModel):
@@ -67,6 +75,15 @@ class _ConfiguredTier(LiteLLMBaseModel):
 _CONFIGURED_TIERS: Final = TypeAdapter(tuple[_TierId | _ConfiguredTier, ...])
 
 
+class CodexFallbackReasoningLevel(LiteLLMBaseModel):
+    """A `ReasoningEffortPreset` as Codex reads it: picking it sends `effort` as the request's reasoning effort."""
+
+    model_config = ConfigDict(frozen=True)
+
+    effort: str
+    description: str
+
+
 class CodexTruncationPolicy(LiteLLMBaseModel):
     mode: Literal["bytes"] = "bytes"
     limit: int = 10_000
@@ -82,10 +99,13 @@ class CodexFallbackModel(LiteLLMBaseModel):
     same as `codex -m` did.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     slug: str
     display_name: str
     description: NoneType = None
-    supported_reasoning_levels: tuple[()] = ()
+    default_reasoning_level: str | None = Field(default=None, exclude_if=lambda level: level is None)
+    supported_reasoning_levels: tuple[CodexFallbackReasoningLevel, ...] = ()
     shell_type: Literal["unified_exec"] = "unified_exec"
     visibility: Literal["list"] = "list"
     supported_in_api: Literal[True] = True
@@ -153,7 +173,8 @@ class CodexCatalogRow:
     """What the catalog needs to know about one listed model: its public id, the listing's mode and
     input limit, the upstream model behind it, the reasoning effort its deployments pin, and the
     `model_info` values the operator set; `service_tiers` holds one raw `model_info.service_tiers`
-    value per deployment behind the id, None where a deployment sets none."""
+    value per deployment behind the id, None where a deployment sets none. `supported_reasoning_efforts`
+    is the model group's, None when unknown."""
 
     id: str
     mode: str | None = None
@@ -162,6 +183,7 @@ class CodexCatalogRow:
     reasoning_effort: str | None = None
     display_name: str | None = None
     service_tiers: tuple[object, ...] = ()
+    supported_reasoning_efforts: tuple[str, ...] | None = None
     search_tool_support: tuple[bool | None, ...] = ()
 
 
@@ -261,8 +283,40 @@ def offered_search_tool(per_deployment: Sequence[bool | None]) -> bool | None:
     return True if per_deployment and None not in per_deployment else None
 
 
-def _codex_can_drive(row: CodexCatalogRow) -> bool:
-    return "*" not in row.id and (row.mode is None or row.mode in CODEX_CHAT_MODES)
+def _codex_can_drive(model_id: str, mode: str | None) -> bool:
+    return "*" not in model_id and (mode is None or mode in CODEX_CHAT_MODES)
+
+
+def _parses_custom_efforts(client_version: str | None) -> bool:
+    try:
+        return client_version is not None and Version(client_version) >= _FIRST_CODEX_WITH_CUSTOM_EFFORTS
+    except ValueError:
+        return False
+
+
+def codex_reasoning_levels(
+    efforts: Sequence[str], client_version: str | None
+) -> tuple[tuple[CodexFallbackReasoningLevel, ...], str | None]:
+    """The reasoning levels a fallback entry offers for a model group's efforts, and its default level.
+
+    Codex before 0.138.0 fails the whole catalog on an effort it has no name for, so for it, and for
+    a version that does not parse, only the efforts every release knows are offered. The default is
+    set whenever a level is offered, because Codex reads a missing one as `none`: `none` itself when the
+    group accepts it, so a user who picks no level sends what Codex sent before, else medium, else the
+    nearest weaker declared level, so picking no level never costs more reasoning than Codex's usual medium,
+    else the weakest declared level, else the first one."""
+    parses_any: Final = _parses_custom_efforts(client_version)
+    offered: Final = tuple(effort for effort in efforts if parses_any or effort in _EFFORTS_EVERY_CODEX_PARSES)
+    if not offered:
+        return (), None
+    nearest: Final = nearest_declared_reasoning_effort(_PREFERRED_DEFAULT_EFFORT, offered, "down")
+    levels: Final = tuple(
+        CodexFallbackReasoningLevel(effort=effort, description=f"Sends reasoning_effort={effort} upstream")
+        for effort in offered
+    )
+    if _CODEX_UNSET_EFFORT in offered:
+        return levels, _CODEX_UNSET_EFFORT
+    return levels, nearest if nearest in offered else offered[0]
 
 
 def _stock_for(row: CodexCatalogRow, stock: Mapping[str, CodexStockModel]) -> CodexStockModel | None:
@@ -309,6 +363,7 @@ def _entry(
     served: frozenset[str],
     instructions: str,
     alias_defaults: CodexAliasDefaults,
+    client_version: str | None,
 ) -> CodexCatalogEntry:
     stock_model: Final = _stock_for(row, stock)
     stock_tiers: Final = MappingProxyType(
@@ -317,9 +372,12 @@ def _entry(
     configured: Final = configured_service_tiers(row.service_tiers, row.id, stock_tiers)
     search_tool: Final = offered_search_tool(row.search_tool_support)
     if stock_model is None:
+        levels, default_level = codex_reasoning_levels(row.supported_reasoning_efforts or (), client_version)
         return CodexFallbackModel(
             slug=row.id,
             display_name=row.display_name if row.display_name is not None else row.id,
+            default_reasoning_level=default_level,
+            supported_reasoning_levels=levels,
             priority=index,
             service_tiers=configured if configured is not None else (),
             context_window=row.max_input_tokens,
@@ -406,6 +464,7 @@ def codex_models_response_json(
     instructions: str | None = None,
     byte_limit: int | None = CODEX_CATALOG_BYTE_LIMIT,
     alias_defaults: CodexAliasDefaults = "codex",
+    client_version: str | None = None,
 ) -> CodexCatalogBody:
     """Codex's `ModelsResponse` body for `rows`, in listing order, cut to Codex's byte limit.
 
@@ -417,14 +476,15 @@ def codex_models_response_json(
     keeps every entry. A row listed under another name than the Codex model its `upstream_model`
     names (an alias) takes that model's entry; `alias_defaults="deployment"` drops the defaults
     Codex picks for that model in favor of what the alias's deployments pin, while `"codex"` keeps
-    them, as Codex would use them for the model's own name.
+    them, as Codex would use them for the model's own name. `client_version` is the requesting Codex's version, which decides the reasoning
+    levels a fallback entry may offer; None counts as a version too old for custom levels.
     """
     known: Final = bundled_codex_models() if stock is None else stock
     prompt: Final = codex_base_instructions() if instructions is None else instructions
-    drivable: Final = tuple(row for row in rows if _codex_can_drive(row))
+    drivable: Final = tuple(row for row in rows if _codex_can_drive(row.id, row.mode))
     served: Final = frozenset(row.id for row in drivable)
     entries: Final = tuple(
-        _entry(index, row, known, served, prompt, alias_defaults) for index, row in enumerate(drivable)
+        _entry(index, row, known, served, prompt, alias_defaults, client_version) for index, row in enumerate(drivable)
     )
     serialized: Final = tuple(_serialized(entry) for entry in entries)
     kept: Final = _kept_positions(entries, serialized, byte_limit)
@@ -435,17 +495,30 @@ def codex_models_response_json(
     )
 
 
+def _group_reasoning_efforts(
+    row: ModelInfoResponse, lookup_id: str, registry: RouterRegistry | None, team_id: str | None
+) -> tuple[str, ...] | None:
+    if registry is None or not _codex_can_drive(row["id"], row.get("mode")):
+        return None
+    group: Final = registry.group(lookup_id, include_hidden=True, team_id=team_id)
+    return group.supported_reasoning_efforts if group is not None else None
+
+
 def _catalog_row(
     row: ModelInfoResponse, lookup_id: str, label_id: str, llm_router: Router | None, team_id: str | None
 ) -> CodexCatalogRow:
+    registry: Final = llm_router.registry() if llm_router is not None else None
     return CodexCatalogRow(
         id=row["id"],
         mode=row.get("mode"),
         max_input_tokens=row.get("max_input_tokens"),
-        upstream_model=llm_router.get_routable_upstream_model(lookup_id, team_id) if llm_router is not None else None,
-        display_name=llm_router.get_configured_display_name(label_id) if llm_router is not None else None,
-        service_tiers=llm_router.get_configured_service_tiers(lookup_id, team_id) if llm_router is not None else (),
-        search_tool_support=llm_router.get_search_tool_support(lookup_id, team_id) if llm_router is not None else (),
+        upstream_model=registry.resolve(lookup_id, kind="upstream", team_id=team_id) if registry is not None else None,
+        display_name=registry.group(label_id, field="display_name") if registry is not None else None,
+        service_tiers=registry.group(lookup_id, field="service_tiers", team_id=team_id) if registry is not None else (),
+        supported_reasoning_efforts=_group_reasoning_efforts(row, lookup_id, registry, team_id),
+        search_tool_support=(
+            registry.resolve(lookup_id, kind="search_tool_support", team_id=team_id) if registry is not None else ()
+        ),
     )
 
 
@@ -460,7 +533,8 @@ def codex_catalog_rows(
     team-scoped rows resolve the way the Anthropic listing's display names do, a `model_group_alias`
     reading its target's deployments under its own name; `team_id` is the requesting key's team, so the
     upstream model that picks Codex's stock entry and the tiers are read only off the deployments its
-    requests can route to. Display names are read under `label_entries`' ids when given."""
+    requests can route to, and the reasoning efforts are the ones `/model_group/info` reports for the
+    entry. Display names are read under `label_entries`' ids when given."""
     lookup_ids: Final = MappingProxyType(dict(entries))
     label_ids: Final = lookup_ids if label_entries is None else MappingProxyType(dict(label_entries))
     return tuple(
@@ -477,9 +551,13 @@ def codex_model_list_body(
     llm_router: Router | None,
     team_id: str | None = None,
     label_entries: Sequence[tuple[str, str]] | None = None,
+    *,
+    client_version: str | None = None,
 ) -> str:
     """The `/v1/models?client_version=...` body, logging the models Codex's byte limit left out."""
-    body: Final = codex_models_response_json(codex_catalog_rows(rows, entries, llm_router, team_id, label_entries))
+    body: Final = codex_models_response_json(
+        codex_catalog_rows(rows, entries, llm_router, team_id, label_entries), client_version=client_version
+    )
     if body.left_out:
         verbose_proxy_logger.warning(
             "Codex model catalog cut at %d bytes, left out: %s. Models offering a service tier are kept first, "

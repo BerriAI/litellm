@@ -59,6 +59,9 @@ class _FakeResponse:
         self.status_code = status_code
         self.content = json.dumps(body).encode() if body is not None else b""
 
+    def json(self):
+        return json.loads(self.content)
+
 
 class _Recorder:
     def __init__(self, returns=None):
@@ -160,22 +163,49 @@ _STOCK_CATALOG = json.dumps({"models": list(_STOCK_MODELS.values())})
 
 
 class _FakeRun:
-    """A `codex` that prints `stock` from a bare `debug models` and answers a catalog override with `returncode`.
+    """A `codex` that prints `stock` from a bare `debug models`, `version` from `--version`, and answers a
+    catalog override with `returncode`.
 
     `stock=None` is a Codex with no `debug models` at all: every call answers with `returncode` and `stderr`.
+    `version=None` is a `--version` that fails, an exception one that cannot run.
     """
 
-    def __init__(self, returncode=0, stderr="", stock=_STOCK_CATALOG):
+    def __init__(self, returncode=0, stderr="", stock=_STOCK_CATALOG, version="codex-cli 0.165.0"):
         self.returncode = returncode
         self.stderr = stderr
         self.stock = stock
+        self.version = version
         self.calls = []
 
     def __call__(self, args, **kwargs):
         self.calls.append((args, kwargs))
+        if self.stock is not None and "--version" in str(args):
+            if isinstance(self.version, Exception):
+                raise self.version
+            if self.version is None:
+                return subprocess.CompletedProcess(args, 2, "", "error: unexpected argument '--version'")
+            return subprocess.CompletedProcess(args, 0, f"{self.version}\n", "")
         if self.stock is not None and "model_catalog_json=" not in str(args):
             return subprocess.CompletedProcess(args, 0, self.stock, "")
         return subprocess.CompletedProcess(args, self.returncode, "", self.stderr)
+
+
+def _routed_get(captured, listing, groups, model_info=None):
+    """A proxy answering /model_group/info with `groups` (or `groups` as the status it fails with),
+    /v1/model/info with `model_info` (raised when it is an exception) and any other URL with `listing`."""
+
+    def fake_get(url, headers, timeout):
+        captured.setdefault("urls", []).append(url)
+        captured["headers"] = headers
+        if url.endswith("/v1/model/info"):
+            if isinstance(model_info, Exception):
+                raise model_info
+            return model_info if model_info is not None else _FakeResponse(200, {"data": []})
+        if not url.endswith("/model_group/info"):
+            return _FakeResponse(200, listing)
+        return _FakeResponse(groups) if isinstance(groups, int) else _FakeResponse(200, {"data": list(groups)})
+
+    return fake_get
 
 
 class _FakeJsonResponse:
@@ -534,15 +564,9 @@ class TestOpencodeModelSync:
     def _listing(*models):
         return {"object": "list", "data": list(models)}
 
-    def _sync(self, listing, base_env=None, base_url="http://localhost:4000/"):
+    def _sync(self, listing, base_env=None, base_url="http://localhost:4000/", groups=()):
         captured = {}
-
-        def fake_get(url, headers, timeout):
-            captured["url"] = url
-            captured["headers"] = headers
-            return _FakeResponse(200, listing)
-
-        env = opencode_model_sync_env(base_env or {}, base_url, "sk-key", get=fake_get)
+        env = opencode_model_sync_env(base_env or {}, base_url, "sk-key", get=_routed_get(captured, listing, groups))
         return captured, env
 
     def test_declares_proxy_as_litellm_provider_with_listed_models(self):
@@ -550,9 +574,9 @@ class TestOpencodeModelSync:
             {"id": "gpt-5.5", "object": "model", "created": 1, "owned_by": "openai", "mode": "chat"},
             {"id": "claude-opus-4-7", "object": "model", "created": 1, "owned_by": "openai"},
         )
-        captured, env = self._sync(listing)
+        captured, env = self._sync(listing, groups=({"model_group": "gpt-5.5", "supported_reasoning_efforts": None},))
 
-        assert captured["url"] == "http://localhost:4000/v1/models"
+        assert captured["urls"] == ["http://localhost:4000/v1/models", "http://localhost:4000/model_group/info"]
         assert captured["headers"] == {"Authorization": "Bearer sk-key"}
         config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
         provider = config["provider"]["litellm"]
@@ -584,6 +608,56 @@ class TestOpencodeModelSync:
         models = json.loads(env["OPENCODE_CONFIG_CONTENT"])["provider"]["litellm"]["models"]
         assert models["gpt-5.5"]["limit"] == {"context": 400000, "output": 128000}
         assert "limit" not in models["half"]
+
+    @pytest.mark.parametrize(
+        ("efforts", "reasoning"),
+        [
+            (
+                ["low", "high", "max"],
+                {
+                    "reasoning": True,
+                    "reasoning_options": [{"type": "effort", "values": ["low", "high", "max"]}],
+                    "variants": {
+                        "low": {"reasoningEffort": "low"},
+                        "high": {"reasoningEffort": "high"},
+                        "max": {"reasoningEffort": "max"},
+                    },
+                },
+            ),
+            (
+                ["none", "turbo"],
+                {
+                    "reasoning": True,
+                    "reasoning_options": [{"type": "effort", "values": ["none", "turbo"]}],
+                    "variants": {"none": {"reasoningEffort": "none"}, "turbo": {"reasoningEffort": "turbo"}},
+                },
+            ),
+            ([], {"variants": {}}),
+            (None, {}),
+        ],
+        ids=["declared", "unknown-names", "non-reasoning", "unknown"],
+    )
+    def test_model_group_reasoning_efforts_become_exactly_the_opencode_variants(self, efforts, reasoning):
+        listing = self._listing(
+            {
+                "id": "m",
+                "object": "model",
+                "created": 1,
+                "owned_by": "openai",
+                "max_input_tokens": 9,
+                "max_output_tokens": 3,
+            }
+        )
+        _, env = self._sync(listing, groups=({"model_group": "m", "supported_reasoning_efforts": efforts},))
+        models = json.loads(env["OPENCODE_CONFIG_CONTENT"])["provider"]["litellm"]["models"]
+        assert models == {"m": {"name": "m", "limit": {"context": 9, "output": 3}, **reasoning}}
+
+    def test_an_unavailable_model_group_info_keeps_the_listing_only_config(self):
+        listing = self._listing({"id": "m", "object": "model", "created": 1, "owned_by": "openai"})
+        _, failed = self._sync(listing, groups=500)
+        _, unknown = self._sync(listing, groups=({"model_group": "m", "supported_reasoning_efforts": None},))
+        assert failed == unknown
+        assert json.loads(failed["OPENCODE_CONFIG_CONTENT"])["provider"]["litellm"]["models"] == {"m": {"name": "m"}}
 
     def test_non_chat_models_are_left_out(self):
         listing = self._listing(
@@ -671,25 +745,13 @@ class TestCodexModelSync:
     def _row(model_id, **extra):
         return {"id": model_id, "object": "model", "created": 1, "owned_by": "openai", **extra}
 
-    def _sync(self, listing, codex_home, base_url="http://localhost:4000/", run=None, model_info=None):
+    def _sync(self, listing, codex_home, base_url="http://localhost:4000/", run=None, groups=(), model_info=None):
         captured = {}
-
-        def fake_get(url, headers, timeout):
-            if headers.get("Authorization") != "Bearer sk-key":
-                return _FakeResponse(401)
-            if url.endswith("/v1/model/info"):
-                if isinstance(model_info, Exception):
-                    raise model_info
-                return model_info if model_info is not None else _FakeResponse(200, {"data": []})
-            captured["url"] = url
-            captured["headers"] = headers
-            return _FakeResponse(200, listing)
-
         result = codex_model_sync_args(
             {"CODEX_HOME": str(codex_home)},
             base_url,
             "sk-key",
-            get=fake_get,
+            get=_routed_get(captured, listing, groups, model_info),
             run=_FakeRun() if run is None else run,
         )
         return captured, result
@@ -707,7 +769,11 @@ class TestCodexModelSync:
         listing = self._listing(self._row("gpt-5.5", mode="chat"), self._row("claude-opus-4-7"))
         captured, result = self._sync(listing, tmp_path / "codex")
 
-        assert captured["url"] == "http://localhost:4000/v1/models"
+        assert captured["urls"] == [
+            "http://localhost:4000/v1/models",
+            "http://localhost:4000/v1/model/info",
+            "http://localhost:4000/model_group/info",
+        ]
         assert captured["headers"] == {"Authorization": "Bearer sk-key"}
         path = self._catalog_path(result)
         assert path == str(tmp_path / "codex" / "litellm-models.json")
@@ -980,6 +1046,53 @@ class TestCodexModelSync:
             assert nullable in entry and entry[nullable] is None
         assert entry["base_instructions"].startswith("You are a coding agent running in the Codex CLI")
 
+    @pytest.mark.parametrize(
+        ("version", "levels"),
+        [
+            ("codex-cli 0.165.0", ["low", "high", "max"]),
+            ("codex-cli 0.138.0", ["low", "high", "max"]),
+            ("codex-cli 0.137.0", ["low", "high"]),
+            ("codex-cli 0.138.0-alpha.3", ["low", "high"]),
+            ("codex-cli", ["low", "high"]),
+            (None, ["low", "high"]),
+            (OSError("codex vanished"), ["low", "high"]),
+            (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"), ["low", "high"]),
+        ],
+        ids=["current", "first-custom", "pre-custom", "pre-release", "no-number", "failed", "unrunnable", "undecodable"],
+    )
+    def test_unknown_model_offers_the_group_efforts_the_installed_codex_parses(self, tmp_path, version, levels):
+        _, result = self._sync(
+            self._listing(self._row("m")),
+            tmp_path,
+            run=_FakeRun(version=version),
+            groups=({"model_group": "m", "supported_reasoning_efforts": ["low", "high", "max"]},),
+        )
+
+        assert isinstance(result, ModelSyncArgs)
+        entry = self._entries(tmp_path)["m"]
+        assert [level["effort"] for level in entry["supported_reasoning_levels"]] == levels
+        assert entry["supported_reasoning_levels"][0] == {
+            "effort": "low",
+            "description": "Sends reasoning_effort=low upstream",
+        }
+        assert entry["default_reasoning_level"] == "low"
+
+    def test_known_models_and_unknown_or_empty_groups_keep_their_entries(self, tmp_path):
+        listing = self._listing(self._row("gpt-5.5"), self._row("unknown"), self._row("empty"))
+        groups = (
+            {"model_group": "gpt-5.5", "supported_reasoning_efforts": ["max"]},
+            {"model_group": "unknown", "supported_reasoning_efforts": None},
+            {"model_group": "empty", "supported_reasoning_efforts": []},
+        )
+        self._sync(listing, tmp_path, groups=groups)
+        with_groups = self._entries(tmp_path)
+        self._sync(listing, tmp_path, groups=500)
+
+        assert with_groups == self._entries(tmp_path)
+        assert with_groups["gpt-5.5"] == {**_STOCK_MODELS["gpt-5.5"], "priority": 0}
+        assert [with_groups[slug]["supported_reasoning_levels"] for slug in ("unknown", "empty")] == [[], []]
+        assert all("default_reasoning_level" not in with_groups[slug] for slug in ("unknown", "empty"))
+
     def test_context_window_comes_from_max_input_tokens_for_unknown_models_only(self, tmp_path):
         listing = self._listing(
             self._row("big", max_input_tokens=400000),
@@ -1094,7 +1207,7 @@ class TestCodexModelSync:
             run=run,
         )
         assert self._catalog_path(result) == str(tmp_path / "litellm-models.json")
-        assert len(run.calls) == 2
+        assert len(run.calls) == 3
         assert all(binary in command for command, _ in run.calls)
 
     def test_opencode_dispatch_never_runs_codex(self):
@@ -1119,6 +1232,7 @@ class TestCodexModelSync:
 
         assert [command for command, _ in run.calls] == [
             ("codex", "debug", "models"),
+            ("codex", "--version"),
             ("codex", "-c", f"model_catalog_json={json.dumps(path)}", "debug", "models"),
         ]
         for _, options in run.calls:
@@ -1157,7 +1271,13 @@ class TestCodexModelSync:
         assert result.reason == "`codex debug models` exited 1: no output"
 
     @pytest.mark.parametrize(
-        "error", [OSError("codex vanished"), subprocess.TimeoutExpired("codex", 10)], ids=["oserror", "timeout"]
+        "error",
+        [
+            OSError("codex vanished"),
+            subprocess.TimeoutExpired("codex", 10),
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+        ],
+        ids=["oserror", "timeout", "undecodable"],
     )
     def test_unrunnable_preflight_is_reported_not_raised(self, tmp_path, error):
         def failing_run(*a, **k):
@@ -1183,6 +1303,7 @@ class TestCodexModelSync:
         doubled = override.replace('"', '""')
         assert [command for command, _ in run.calls] == [
             f'{_CMD_PREFIX}""{shim}" "debug" "models""',
+            f'{_CMD_PREFIX}""{shim}" "--version""',
             f'{_CMD_PREFIX}""{shim}" "-c" "{doubled}" "debug" "models""',
         ]
 

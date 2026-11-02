@@ -618,7 +618,11 @@ async def test_bearer_health_check_sends_the_secret_behind_an_oidc_credential(
     monkeypatch.setattr(
         litellm,
         "credential_list",
-        [CredentialItem(credential_name="voice-sa", credential_values={"api_key": f"oidc/file/{token}"}, credential_info={})],
+        [
+            CredentialItem(
+                credential_name="voice-sa", credential_values={"api_key": f"oidc/file/{token}"}, credential_info={}
+            )
+        ],
     )
     connect: Final = _CapturingConnect()
     with patch("websockets.connect", connect):
@@ -1447,3 +1451,98 @@ async def test_openai_realtime_health_check_sends_the_federated_bearer_for_a_key
             model_params={"model": "openai/gpt-realtime", **federated_deployment},
         )
     assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer federated-bearer"}
+
+
+@pytest.mark.asyncio
+async def test_arealtime_routes_soniox_with_the_deployment_options(monkeypatch):
+    from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
+
+    captured: dict[str, object] = {}
+
+    async def mock_async_realtime(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(realtime_main.base_llm_http_handler, "async_realtime", mock_async_realtime)
+    await realtime_main._arealtime.__wrapped__(
+        model="soniox/stt-rt-v5",
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        query_params={"model": "soniox/stt-rt-v5", "intent": "transcription"},
+        api_key="deployment-key",
+        language_hints=["de"],
+    )
+
+    provider_config = captured["provider_config"]
+    assert isinstance(provider_config, SonioxRealtimeConfig)
+    assert captured["model"] == "stt-rt-v5"
+    assert captured["api_key"] == "deployment-key"
+    start_request = provider_config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.commit"}), "stt-rt-v5"
+    )[0]
+    assert json.loads(start_request)["language_hints"] == ["de"]
+
+
+async def _serve_soniox(reply: str | None) -> tuple[object, list[object]]:
+    import websockets
+
+    received: list[object] = []
+
+    async def handler(connection) -> None:
+        received.append(connection.request.headers["Authorization"])
+        received.append(json.loads(await connection.recv()))
+        received.append(await connection.recv())
+        received.append(await connection.recv())
+        if reply is not None:
+            await connection.send(reply)
+
+    return await websockets.serve(handler, "127.0.0.1", 0), received
+
+
+@pytest.mark.asyncio
+async def test_soniox_realtime_health_check_starts_and_ends_a_stream_on_the_deployment_websocket():
+    server, received = await _serve_soniox(json.dumps({"tokens": [], "finished": True}))
+    port = next(iter(server.sockets)).getsockname()[1]
+    async with server:
+        healthy = await realtime_main.realtime_health_check(
+            model="stt-rt-v5",
+            custom_llm_provider="soniox",
+            api_key="soniox-key",
+            api_base=f"http://127.0.0.1:{port}",
+            model_params={"model": "soniox/stt-rt-v5", "language_hints": ["fa", "en"]},
+        )
+
+    assert healthy is True
+    assert received[0] == "Bearer soniox-key"
+    assert received[1]["model"] == "stt-rt-v5"
+    assert received[1]["language_hints"] == ["fa", "en"]
+    assert received[2] == bytes(len(received[2]))
+    assert len(received[2]) > 0
+    assert received[3] == ""
+
+
+@pytest.mark.asyncio
+async def test_soniox_realtime_health_check_fails_when_soniox_refuses_the_stream():
+    from litellm.llms.soniox.common_utils import SonioxException
+
+    server, _ = await _serve_soniox(json.dumps({"error_code": 401, "error_message": "Invalid API key."}))
+    port = next(iter(server.sockets)).getsockname()[1]
+    async with server:
+        with pytest.raises(SonioxException) as refused:
+            await realtime_main.realtime_health_check(
+                model="stt-rt-v5", custom_llm_provider="soniox", api_key="bad-key", api_base=f"ws://127.0.0.1:{port}"
+            )
+
+    assert refused.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_soniox_realtime_health_check_fails_when_soniox_closes_without_finishing_the_stream():
+    from litellm.llms.soniox.common_utils import SonioxException
+
+    server, _ = await _serve_soniox(None)
+    port = next(iter(server.sockets)).getsockname()[1]
+    async with server:
+        with pytest.raises(SonioxException):
+            await realtime_main.realtime_health_check(
+                model="stt-rt-v5", custom_llm_provider="soniox", api_key="soniox-key", api_base=f"ws://127.0.0.1:{port}"
+            )

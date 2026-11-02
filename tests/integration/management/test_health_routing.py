@@ -151,7 +151,7 @@ def test_public_readiness_reports_stalled_database_lookups(gateway: Gateway, tmp
                                     "Please retry shortly."
                                 ),
                                 "type": "no_db_connection",
-                                "param": "None",
+                                "param": None,
                                 "code": "503",
                             }
                         }

@@ -109,6 +109,12 @@ pub(crate) enum Repr {
         #[source]
         cause: Option<DateCause>,
     },
+    #[error("not a field litellm reads")]
+    #[strum_discriminants(strum(serialize = "unread_field"))]
+    UnreadField,
+    #[error("has no rules")]
+    #[strum_discriminants(strum(serialize = "no_fallback_rules"))]
+    NoFallbackRules,
 }
 
 /// What a problem takes out of the served map
@@ -148,7 +154,7 @@ impl Error {
             | Repr::NoOffPeakHours
             | Repr::EmptyList
             | Repr::InvalidDate { .. } => Rejects::Row,
-            Repr::MissingProvider => Rejects::Nothing,
+            Repr::MissingProvider | Repr::UnreadField | Repr::NoFallbackRules => Rejects::Nothing,
         }
     }
 }
@@ -334,6 +340,8 @@ mod tests {
     #[case::no_off_peak_hours(Repr::NoOffPeakHours, Rejects::Row)]
     #[case::empty_list(Repr::EmptyList, Rejects::Row)]
     #[case::invalid_date(Repr::InvalidDate { cause: None }, Rejects::Row)]
+    #[case::unread_field(Repr::UnreadField, Rejects::Nothing)]
+    #[case::no_fallback_rules(Repr::NoFallbackRules, Rejects::Nothing)]
     fn policy_classifies_each_error(#[case] error: Repr, #[case] expected: Rejects) {
         assert_eq!(Error::from(error).rejects(), expected);
     }
