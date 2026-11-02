@@ -55,6 +55,7 @@ Documentation = "https://docs.litellm.ai"
 # supply-chain-pinned to a vetted, aged release.
 [project.optional-dependencies]
 proxy = [
+    "litellm-gateway==1.109.0",
     "gunicorn>=23.0.0,<24.0",
     "uvicorn>=0.33.0,<1.0",
     "granian>=2.7.4,<3.0; python_version < '3.15'",
@@ -351,6 +352,7 @@ exclude = [
 ]
 
 [tool.uv]
+concurrent-builds = 1
 cache-keys = [
     { file = "pyproject.toml" },
     { file = "rust-toolchain.toml" },
@@ -387,11 +389,12 @@ brotli = "2026-10-22T14:01:00Z"
 pypdf = "2026-10-28T17:01:00Z"
 
 [tool.uv.sources]
+litellm-gateway = { workspace = true }
 litellm-proxy-extras = { workspace = true }
 litellm-enterprise = { workspace = true }
 
 [tool.uv.workspace]
-members = ["enterprise", "litellm-proxy-extras"]
+members = ["enterprise", "litellm-proxy-extras", "packaging/litellm-gateway"]
 
 [tool.commitizen]
 version = "1.109.0"

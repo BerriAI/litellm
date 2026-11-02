@@ -53,7 +53,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
