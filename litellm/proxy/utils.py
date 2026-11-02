@@ -6351,6 +6351,8 @@ class PrismaClient:
         self,
         data: Mapping[str, object],
         table_name: Literal["user", "key", "config", "spend", "team", "user_notification"],
+        *,
+        allow_existing_user: bool = True,
     ):
         """
         Add a key to the database. If it already exists, do nothing.
@@ -6386,14 +6388,23 @@ class PrismaClient:
                 verbose_proxy_logger.info("Data Inserted into Keys Table")
                 return new_verification_token
             elif table_name == "user":
+                from prisma.errors import UniqueViolationError
+
                 db_data = self.jsonify_object(data=data)
                 try:
-                    new_user_row: Final = await UserRepository(self).upsert_user(db_data)
+                    new_user_row: Final = await UserRepository(self).upsert_user(
+                        db_data, allow_existing=allow_existing_user
+                    )
                     if new_user_row is None:
                         raise HTTPException(
                             status_code=403,
                             detail="SSO for more than 5 users requires a LiteLLM Enterprise license. Existing users can still sign in.",
                         )
+                except UniqueViolationError as e:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"error": f"User with id {db_data['user_id']} already exists"},
+                    ) from e
                 except Exception as e:
                     if (
                         "Foreign key constraint failed on the field: `LiteLLM_UserTable_organization_id_fkey (index)`"

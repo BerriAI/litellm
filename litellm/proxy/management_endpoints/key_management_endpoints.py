@@ -5268,7 +5268,7 @@ async def generate_key_helper_fn(
     tpm_limit: int | None = None,
     rpm_limit: int | None = None,
     tpd_limit: int | None = None,
-    query_type: Literal["insert_data", "update_data", "create_data"] = "insert_data",
+    query_type: Literal["insert_data", "update_data"] = "insert_data",
     update_key_values: dict | None = None,
     key_alias: str | None = None,
     allowed_cache_controls: list | None = [],
@@ -5479,28 +5479,12 @@ async def generate_key_helper_fn(
         if prisma_client is not None:
             if table_name is None or table_name == "user":  # do not auto-create users for `/key/generate`
                 ## CREATE USER (If necessary)
-                if query_type == "create_data":
-                    from prisma.errors import ForeignKeyViolationError, UniqueViolationError
-
-                    create_data: Final = cast(  # cast-ok: locally built user fields have string keys
-                        Mapping[str, object], user_data
-                    )
-                    try:
-                        await UserRepository(prisma_client).create(prisma_client.jsonify_object(data=create_data))
-                    except UniqueViolationError as exc:
-                        raise HTTPException(
-                            status_code=status.HTTP_409_CONFLICT,
-                            detail={"error": f"User with id {user_id} already exists"},
-                        ) from exc
-                    except ForeignKeyViolationError as exc:
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail={"error": "A referenced user resource does not exist."},
-                        ) from exc
-                elif query_type == "insert_data":
+                if query_type == "insert_data":
                     user_row = cast(  # cast-ok: table_name="user" is the insert_data branch returning the user row
                         "prisma_models.LiteLLM_UserTable | None",
-                        await prisma_client.insert_data(data=user_data, table_name="user"),
+                        await prisma_client.insert_data(
+                            data=user_data, table_name="user", allow_existing_user=request_type != "user"
+                        ),
                     )
 
                     if user_row is None:

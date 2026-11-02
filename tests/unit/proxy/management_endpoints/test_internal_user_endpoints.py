@@ -4783,7 +4783,9 @@ async def test_user_new_persists_model_max_budget(monkeypatch, model_max_budget,
         models = []
 
     class _FakePrisma:
-        async def insert_data(self, data, table_name):
+        async def insert_data(
+            self, data: Mapping[str, object], table_name: str, *, allow_existing_user: bool = True
+        ) -> _FakeUserRow | SimpleNamespace:
             if table_name == "user":
                 captured["user_data"] = dict(data)
                 return _FakeUserRow()
