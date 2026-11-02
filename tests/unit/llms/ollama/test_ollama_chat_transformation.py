@@ -1043,6 +1043,72 @@ class TestOllamaToolCallTransformation:
         assert tool_msg["tool_call_id"] == "call_abc123"
 
 
+class TestOllamaStreamingParallelToolCallIndex:
+    """Regression for https://github.com/BerriAI/litellm/issues/33678.
+
+    Ollama streams each parallel tool call in its own chunk without an OpenAI-style top-level
+    index. Every delta used to carry index 0, so index-accumulating clients appended the
+    arguments of every later call onto the first one.
+    """
+
+    @staticmethod
+    def _chunk(*tool_calls: dict) -> dict:
+        return {
+            "model": "qwen3:8b",
+            "message": {"role": "assistant", "content": "", "tool_calls": list(tool_calls)},
+            "done": False,
+        }
+
+    @staticmethod
+    def _parsed_tool_calls(iterator: OllamaChatCompletionResponseIterator, *chunks: dict) -> list:
+        return [
+            tool_call
+            for chunk in chunks
+            for tool_call in (iterator.chunk_parser(chunk).choices[0].delta.tool_calls or [])
+        ]
+
+    def test_tool_calls_in_separate_chunks_get_distinct_sequential_indices(self):
+        iterator = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        chunks = [
+            self._chunk({"function": {"name": "bash", "arguments": {"command": command}}})
+            for command in ("date", "uname -a", "whoami")
+        ]
+
+        tool_calls = self._parsed_tool_calls(iterator, *chunks)
+
+        assert [tool_call.index for tool_call in tool_calls] == [0, 1, 2]
+        assert [json.loads(tool_call.function.arguments) for tool_call in tool_calls] == [
+            {"command": "date"},
+            {"command": "uname -a"},
+            {"command": "whoami"},
+        ]
+
+    def test_tool_calls_in_one_chunk_get_distinct_indices(self):
+        iterator = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        chunk = self._chunk(
+            {"function": {"name": "bash", "arguments": {"command": "date"}}},
+            {"function": {"name": "bash", "arguments": {"command": "whoami"}}},
+        )
+
+        tool_calls = self._parsed_tool_calls(iterator, chunk)
+
+        assert [tool_call.index for tool_call in tool_calls] == [0, 1]
+
+    def test_index_counter_continues_across_chunks(self):
+        iterator = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        chunks = [
+            self._chunk(
+                {"function": {"name": "bash", "arguments": {"command": "date"}}},
+                {"function": {"name": "bash", "arguments": {"command": "uname -a"}}},
+            ),
+            self._chunk({"function": {"name": "bash", "arguments": {"command": "whoami"}}}),
+        ]
+
+        tool_calls = self._parsed_tool_calls(iterator, *chunks)
+
+        assert [tool_call.index for tool_call in tool_calls] == [0, 1, 2]
+
+
 class TestOllamaStreamingUsage:
     @staticmethod
     def _parse(chunk: dict) -> ModelResponseStream:

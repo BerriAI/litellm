@@ -431,6 +431,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
     started_reasoning_content: bool = False
     finished_reasoning_content: bool = False
     seen_tool_calls: bool = False
+    _next_tool_call_index: int = 0
 
     def _is_function_call_complete(self, function_args: str | dict) -> bool:
         if isinstance(function_args, dict):
@@ -478,6 +479,8 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             if tool_calls is not None:
                 self.seen_tool_calls = True
                 for tool_call in tool_calls:
+                    tool_call["index"] = self._next_tool_call_index
+                    self._next_tool_call_index += 1
                     function_args = tool_call.get("function").get("arguments")
                     if function_args is not None and len(function_args) > 0:
                         is_function_call_complete = self._is_function_call_complete(function_args)
