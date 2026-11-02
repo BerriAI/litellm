@@ -4359,10 +4359,12 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "litellm-circuit-breaker",
+ "litellm-python-compat",
  "litellm-redis-testing",
  "litellm-secret-value",
  "redis",
  "rstest",
+ "socket2 0.6.5",
  "thiserror 2.0.19",
  "tokio",
 ]
