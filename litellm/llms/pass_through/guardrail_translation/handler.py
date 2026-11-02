@@ -13,7 +13,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
-from litellm.litellm_core_utils.core_helpers import has_attributes
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, has_attributes
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -27,6 +27,47 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.utils import ProxyLogging
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+
+# Strings in a provider's JSON response that name or encode something rather than carry the reply's text.
+_NON_TEXT_RESPONSE_FIELDS: Final = frozenset(
+    (
+        "b64_json",
+        "bytesBase64Encoded",
+        "embedding",
+        "finishReason",
+        "finish_reason",
+        "id",
+        "model",
+        "modelVersion",
+        "object",
+        "responseId",
+        "role",
+        "service_tier",
+        "status",
+        "system_fingerprint",
+        "thoughtSignature",
+        "type",
+    )
+)
+
+
+def _response_text(response: Mapping[str, object]) -> str:
+    """The text a JSON response carries, without its timestamps, usage counts, ids and vectors, which a guardrail
+    would otherwise read as phone or card numbers."""
+    pending: Final[list[object]] = [response]  # mutable-ok: local to this walk
+    texts: Final[list[str]] = []  # mutable-ok: local to this walk
+    while pending:
+        value = pending.pop()
+        fields = as_str_mapping(value)
+        items = as_object_list(value)
+        if isinstance(value, str):
+            texts.append(value)
+        elif fields is not None:
+            pending.extend(reversed([item for name, item in fields.items() if name not in _NON_TEXT_RESPONSE_FIELDS]))
+        elif items is not None:
+            pending.extend(reversed(items))
+    return "\n".join(text for text in texts if text)
 
 
 class PassThroughEndpointHandler(BaseTranslation):
@@ -153,6 +194,7 @@ class PassThroughEndpointHandler(BaseTranslation):
             litellm_logging_obj: Optional logging object
             user_api_key_dict: User API key metadata to pass to guardrails
         """
+        response_fields: Final = as_str_mapping(response)
         if not isinstance(response, dict):
             verbose_proxy_logger.debug("PassThroughEndpointHandler: Response is not a dict, skipping")
             return response
@@ -168,7 +210,11 @@ class PassThroughEndpointHandler(BaseTranslation):
         field_expressions: Final = settings.response_fields if settings else None
 
         # Extract text to check
-        text_to_check: Final = self._extract_text_for_guardrail(response, field_expressions)
+        text_to_check: Final = (
+            self._extract_text_for_guardrail(response, field_expressions)
+            if field_expressions
+            else _response_text(response_fields or {})
+        )
 
         if not text_to_check:
             return response
