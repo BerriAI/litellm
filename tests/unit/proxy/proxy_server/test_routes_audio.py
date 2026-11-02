@@ -209,6 +209,7 @@ def test_audio_speech_error(client, auth_as, patched_speech_error, path):
         response = client.post(path, json=payload)
     assert response.status_code == 500
     assert len(response.content) > 0
+    assert proxy_server.proxy_logging_obj.post_call_failure_hook.await_args.kwargs["dispatched_call_type"] == "aspeech"
 
 
 def test_audio_speech_bad_request_maps_to_400(client, auth_as, patched_speech_provider_rejection):
@@ -254,3 +255,7 @@ def test_audio_transcription_error(client, auth_as, patched_transcription_error,
         response = client.post(path, files=files, data=data)
     assert response.status_code == 500
     assert len(response.content) > 0
+    assert (
+        proxy_server.proxy_logging_obj.post_call_failure_hook.await_args.kwargs["dispatched_call_type"]
+        == "atranscription"
+    )

@@ -109,3 +109,4 @@ def test_moderation_error(client, auth_as, moderation_pipeline_raises, path):
         response = client.post(path, json=payload)
     assert response.status_code == 500
     assert len(response.content) > 0
+    assert proxy_server.proxy_logging_obj.post_call_failure_hook.await_args.kwargs["dispatched_call_type"] == "amoderation"
