@@ -2,6 +2,7 @@ import copy
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from itertools import chain
 from string import Formatter
 from types import MappingProxyType
 from typing import Final, Literal
@@ -16,6 +17,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
@@ -245,6 +247,15 @@ def _gemini_text(content: object) -> str:
     return "\n".join(text for text in texts if isinstance(text, str) and text)
 
 
+def _gemini_tool_results(content: object) -> str:
+    """The results one Gemini ``Content`` hands back to the model in its function response parts, as JSON."""
+    parts: Final = _gemini_items((as_str_mapping(content) or {}).get("parts"))
+    part_fields: Final = (as_str_mapping(part) or {} for part in parts)
+    responses: Final = (fields.get("functionResponse") or fields.get("function_response") for fields in part_fields)
+    results: Final = ((as_str_mapping(response) or {}).get("response") for response in responses)
+    return "\n".join(safe_dumps(result) for result in results if result)
+
+
 def _has_gemini_contents(data: object, call_type: str | None) -> bool:
     """True if ``data`` is a Gemini ``generateContent`` body on a pass-through or Google ``generateContent`` call,
     which carries its prompt in ``contents`` and ``systemInstruction``. A pass-through body with chat ``messages`` or
@@ -263,12 +274,16 @@ def _has_gemini_contents(data: object, call_type: str | None) -> bool:
 def _gemini_inspection_messages(data: Mapping[str, object], call_type: str | None) -> Sequence[Mapping[str, str]]:
     """Chat-style messages for a Gemini ``generateContent`` body on a pass-through or Google ``generateContent``
     call: ``systemInstruction`` first as a system message, then each ``contents`` turn with its text parts joined and
-    ``model`` read as ``assistant``. Turns with no text are dropped."""
+    ``model`` read as ``assistant``, followed by a tool message with the function results it carries. Turns with no
+    text are dropped."""
     if not _has_gemini_contents(data, call_type):
         return []
     system_text: Final = _gemini_text(data.get("systemInstruction") or data.get("system_instruction"))
-    turns: Final = (
-        {"role": _GEMINI_ROLES.get(str(content.get("role") or "user"), "user"), "content": _gemini_text(content)}
+    turns: Final = chain.from_iterable(
+        (
+            {"role": _GEMINI_ROLES.get(str(content.get("role") or "user"), "user"), "content": _gemini_text(content)},
+            {"role": "tool", "content": _gemini_tool_results(content)},
+        )
         for content in map(as_str_mapping, _gemini_items(data.get("contents")))
         if content is not None
     )
