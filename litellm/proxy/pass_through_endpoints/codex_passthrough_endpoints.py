@@ -14,6 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 from starlette.types import Message
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
@@ -22,7 +23,7 @@ from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has untyped params
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import check_model_access_helper
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -75,6 +76,7 @@ _SHARED_CACHE_TTL_SECONDS: Final = 3600
 _ACCOUNT_SLUGS_UNAVAILABLE: Final = "unavailable"
 _ACCOUNT_SLUGS_UNAVAILABLE_TTL_SECONDS: Final = 60
 _ACCOUNT_SLUGS_CACHE_PREFIX: Final = "codex_account_slugs:"
+_ACCOUNT_SLUGS_TARGET: Final = "codex_account_slugs"
 _MODELS_ETAG_CACHE_PREFIX: Final = "codex_models_etag:"
 _MODELS_ETAG_TTL_SECONDS: Final = 300
 _OPENAI_API_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value, LlmProviders.AZURE.value})
@@ -171,6 +173,8 @@ def codex_shared_cache() -> _SharedCache:
 def _may_call_litellm_responses(user_api_key_dict: UserAPIKeyAuth) -> bool:
     try:
         _ = RouteChecks.should_call_route(route=_LITELLM_RESPONSES_PATH, valid_token=user_api_key_dict)
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            RouteChecks.custom_admin_only_route_check(route=_LITELLM_RESPONSES_PATH)
     except HTTPException:
         return False
     return True
@@ -223,6 +227,7 @@ async def _fetched_account_slugs(headers: Mapping[str, str], client_version: str
     return upstream_codex_slugs(response.content) if response.status_code == 200 else None
 
 
+@with_service_target(_ACCOUNT_SLUGS_TARGET)
 async def _account_slugs(headers: Mapping[str, str], cache: _SharedCache) -> frozenset[str] | None:
     cache_key: Final = _account_slugs_cache_key(headers)
     if cache_key is None:

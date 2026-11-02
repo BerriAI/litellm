@@ -597,11 +597,15 @@ def test_chatgpt_model_keeps_passthrough_without_other_providers_reasoning(
 def restricted_key(monkeypatch: pytest.MonkeyPatch) -> Callable[..., str]:
     monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
 
-    def mint(models: list[str], allowed_routes: tuple[str, ...] = ()) -> str:
-        key: Final = f"sk-test-{'-'.join((*models, *allowed_routes))}"
+    def mint(
+        models: list[str], allowed_routes: tuple[str, ...] = (), user_role: LitellmUserRoles | None = None
+    ) -> str:
+        key: Final = f"sk-test-{'-'.join((*models, *allowed_routes, str(user_role)))}"
         proxy_server.user_api_key_cache.set_cache(
             key=hash_token(key),
-            value=UserAPIKeyAuth(token=hash_token(key), models=models, allowed_routes=list(allowed_routes)),
+            value=UserAPIKeyAuth(
+                token=hash_token(key), models=models, allowed_routes=list(allowed_routes), user_role=user_role
+            ),
         )
         return key
 
@@ -743,6 +747,42 @@ def test_native_responses_reach_litellm_models_only_for_a_key_that_may_call_v1_r
     assert provider.called is through_litellm
     assert chatgpt.called is not through_litellm
 
+
+
+@pytest.mark.parametrize(
+    ("user_role", "through_litellm"),
+    [
+        pytest.param(LitellmUserRoles.INTERNAL_USER, False, id="non-admin key"),
+        pytest.param(LitellmUserRoles.PROXY_ADMIN, True, id="proxy admin key"),
+    ],
+)
+def test_admin_only_v1_responses_keeps_litellm_models_to_proxy_admins_on_native_routes(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    mixed_router: Router,
+    restricted_key: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+    user_role: LitellmUserRoles,
+    through_litellm: bool,
+) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {"admin_only_routes": ["/v1/responses"]})
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    _account_catalog(respx_mock)
+    provider: Final = _open_weights_provider(respx_mock)
+    chatgpt: Final = _chatgpt_responses(respx_mock)
+    key: Final = restricted_key(["chatgpt-native", "open-weights"], user_role=user_role)
+    catalog: Final = client.get(
+        "/backend-api/codex/models?client_version=1.0.0", headers={**_ACCOUNT_HEADERS, "x-litellm-api-key": key}
+    )
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={"model": "open-weights", "input": "Hello", "stream": True},
+        headers={**_ACCOUNT_HEADERS, "x-litellm-api-key": key},
+    )
+    assert (catalog.status_code, response.status_code) == (200, 200), response.text
+    assert ("open-weights" in [model["slug"] for model in catalog.json()["models"]]) is through_litellm
+    assert provider.called is through_litellm
+    assert chatgpt.called is not through_litellm
 
 _USER_TURN: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]}
 _ASSISTANT_TURN: Final = {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Hi"}]}

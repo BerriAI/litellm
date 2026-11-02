@@ -393,6 +393,7 @@ def _entry(
         stock_model.upgrade if stock_model.upgrade is not None and stock_model.upgrade.model in served else None
     )
     is_alias: Final = row.id != stock_model.slug
+    deployment_decides: Final = is_alias and alias_defaults == "deployment"
     stock_name: Final = row.id if is_alias else stock_model.display_name
     listing: Final = {
         "slug": row.id,
@@ -402,7 +403,7 @@ def _entry(
         "supported_in_api": True,
         "upgrade": upgrade,
         **({} if search_tool is None else {"supports_search_tool": search_tool}),
-        **(_deployment_defaults(row, stock_model) if is_alias and alias_defaults == "deployment" else {}),
+        **(_deployment_defaults(row, stock_model) if deployment_decides else {}),
     }
     if configured is None:
         return stock_model.model_copy(update=listing)
@@ -412,7 +413,9 @@ def _entry(
             **listing,
             "service_tiers": configured,
             "default_service_tier": (
-                stock_model.default_service_tier if stock_model.default_service_tier in configured_ids else None
+                stock_model.default_service_tier
+                if not deployment_decides and stock_model.default_service_tier in configured_ids
+                else None
             ),
         }
     )
