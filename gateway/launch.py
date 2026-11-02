@@ -41,7 +41,9 @@ def uvicorn_argv(argv: Sequence[str], environ: Mapping[str, str]) -> tuple[str, 
     """Honor ``KEEPALIVE_TIMEOUT`` like ``proxy_cli.py`` does, unless the flag was passed explicitly."""
     keepalive: Final = environ.get("KEEPALIVE_TIMEOUT")
     fd: Final = environ.get("_LITELLM_GATEWAY_FD")
-    inherited_socket: Final = ("--fd", fd) if fd is not None else ()
+    inherited_socket: Final = (
+        ("--fd", fd, "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1") if fd is not None else ()
+    )
     if keepalive is None or any(arg == KEEPALIVE_FLAG or arg.startswith(f"{KEEPALIVE_FLAG}=") for arg in argv):
         return (GATEWAY_APP, "--factory", *argv, *inherited_socket)
     return (GATEWAY_APP, "--factory", *argv, KEEPALIVE_FLAG, keepalive, *inherited_socket)
@@ -85,7 +87,7 @@ def forward_listener(argv: Sequence[str]) -> tuple[str, str, int] | None:
         return None
     from pydantic import TypeAdapter
 
-    from litellm.proxy.rust_gateway import gateway_binary, startup_error
+    from litellm.proxy.rust_gateway import gateway_binary, startup_error, unsupported_proxy_trust
 
     forwarded: Final = tuple(arg for arg in argv if arg != "--rust_gateway")
     params: Final[Mapping[str, object]] = uvicorn_main.make_context(
@@ -100,6 +102,9 @@ def forward_listener(argv: Sequence[str]) -> tuple[str, str, int] | None:
             "--ssl-ciphers": any(arg.split("=")[0] == "--ssl-ciphers" for arg in forwarded),
             "--uds": params["uds"] is not None,
             "--fd": params["fd"] is not None,
+            "--forwarded-allow-ips": unsupported_proxy_trust(
+                TypeAdapter(str | None).validate_python(params["forwarded_allow_ips"])
+            ),
         },
     )
     if error is not None:

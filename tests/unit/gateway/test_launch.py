@@ -114,6 +114,11 @@ def _uvicorn_params(argv: tuple[str, ...]) -> dict[str, object]:
 
 
 class TestUvicornArgv:
+    @pytest.mark.parametrize("trusted", ["192.0.2.1", "*", "127.0.0.1,192.0.2.1"])
+    def test_forwarding_rejects_non_loopback_proxy_trust(self, trusted: str):
+        with pytest.raises(SystemExit, match="does not support --forwarded-allow-ips"):
+            forward_listener(("--rust_gateway", "--forwarded-allow-ips", trusted))
+
     @pytest.mark.parametrize("arguments", [("--uds", "/tmp/gateway.sock"), ("--fd", "0"), ("--fd=17",)])
     @pytest.mark.parametrize("opt_in", ["flag", "environment"])
     def test_forwarding_rejects_external_sockets_before_starting_processes(
@@ -142,6 +147,20 @@ class TestUvicornArgv:
         params: Final = _uvicorn_params(uvicorn_argv(("--workers", "2"), {"_LITELLM_GATEWAY_FD": "17"}))
         assert params["fd"] == 17
         assert params["workers"] == 2
+
+    @pytest.mark.parametrize(
+        "argv",
+        [(), ("--no-proxy-headers",), ("--forwarded-allow-ips", "192.0.2.1"), ("--forwarded-allow-ips=*",)],
+    )
+    def test_private_hop_always_processes_headers_from_only_rust(self, argv: tuple[str, ...]):
+        params: Final = _uvicorn_params(uvicorn_argv(argv, {"_LITELLM_GATEWAY_FD": "17"}))
+        assert params["proxy_headers"] is True
+        assert params["forwarded_allow_ips"] == "127.0.0.1"
+
+    def test_direct_listener_keeps_explicit_proxy_header_options(self):
+        params: Final = _uvicorn_params(uvicorn_argv(("--no-proxy-headers", "--forwarded-allow-ips=*"), {}))
+        assert params["proxy_headers"] is False
+        assert params["forwarded_allow_ips"] == "*"
 
     def test_keepalive_env_reaches_uvicorn(self):
         params: Final = _uvicorn_params(uvicorn_argv(("--workers", "4"), {"KEEPALIVE_TIMEOUT": "75"}))
