@@ -6,6 +6,7 @@ import pytest
 
 from litellm.proxy.common_utils.periodic_reload_schedule import (
     ReloadSchedule,
+    apply_configured_reload_interval,
     clear_reload_interval,
     next_run_at,
     parse_reload_schedule,
@@ -357,3 +358,52 @@ async def test_record_manual_reload_bumps_the_revision_atomically():
         "reload_revision": 1,
     }
     assert published == 5
+
+
+@pytest.mark.asyncio
+async def test_configured_interval_replaces_a_ui_schedule_without_losing_reload_state():
+    """The config file is the source of truth at boot, but the revision and last run belong to
+    the reload job, so pods must not replay a manual reload or forget when the map last ran"""
+    prisma_client = _fake_prisma(_FakeConfigTable())
+    param_name = "model_cost_map_reload_config"
+    await write_reload_interval(prisma_client, param_name, 6)
+    await record_manual_reload(prisma_client, param_name, LAST_RUN)
+
+    await apply_configured_reload_interval(prisma_client, param_name, 24)
+
+    schedule = await read_reload_schedule(prisma_client, param_name)
+    assert schedule == ReloadSchedule(interval_hours=24, reload_revision=1, last_run_at=LAST_RUN)
+
+
+@pytest.mark.asyncio
+async def test_configured_interval_schedules_a_fresh_proxy():
+    prisma_client = _fake_prisma(_FakeConfigTable())
+
+    await apply_configured_reload_interval(prisma_client, "model_cost_map_reload_config", 24)
+
+    status = reload_schedule_status(await read_reload_schedule(prisma_client, "model_cost_map_reload_config"))
+    assert (status["scheduled"], status["interval_hours"]) == (True, 24)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured_hours", [None, 0, -1, True, "24", 1.5])
+async def test_unset_or_invalid_configured_interval_keeps_the_ui_schedule(configured_hours):
+    prisma_client = _fake_prisma(_FakeConfigTable())
+    param_name = "model_cost_map_reload_config"
+    await write_reload_interval(prisma_client, param_name, 6)
+
+    await apply_configured_reload_interval(prisma_client, param_name, configured_hours)
+
+    schedule = await read_reload_schedule(prisma_client, param_name)
+    assert schedule is not None
+    assert schedule.interval_hours == 6
+
+
+@pytest.mark.asyncio
+async def test_configured_interval_write_failure_does_not_block_startup():
+    prisma_client = _mock_prisma()
+    prisma_client.db.litellm_config.upsert = AsyncMock(side_effect=RuntimeError("db unavailable"))
+
+    await apply_configured_reload_interval(prisma_client, "model_cost_map_reload_config", 24)
+
+    prisma_client.db.litellm_config.upsert.assert_awaited_once()

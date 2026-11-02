@@ -20,12 +20,14 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
+    Annotated,
+    Final,
     Protocol,
     TypedDict,
     cast,  # noqa: TID251  # prisma table access is untyped (PrismaWrapper.__getattr__)
 )
 
-from pydantic import ConfigDict, ValidationError
+from pydantic import ConfigDict, Field, StrictInt, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -37,6 +39,8 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_Config
 
 MODEL_COST_MAP_RELOAD_PARAM_NAME = "model_cost_map_reload_config"
+
+_CONFIGURED_INTERVAL_HOURS: Final = TypeAdapter(Annotated[StrictInt, Field(gt=0)])
 
 
 class _RevisionIncrement(TypedDict):
@@ -230,3 +234,28 @@ async def record_manual_reload(prisma_client: PrismaClient, param_name: str, ran
     )
     await evict_config_param(param_name)
     return int(row.reload_revision)
+
+
+async def apply_configured_reload_interval(
+    prisma_client: PrismaClient, param_name: str, configured_hours: object
+) -> None:
+    """Boot-time write of an interval set in the config file. It goes through the same row the
+    schedule endpoints write, so the config value replaces one set from the Admin UI on every
+    restart, and leaving it unset keeps whatever the UI configured"""
+    if configured_hours is None:
+        return
+    try:
+        interval_hours: Final = _CONFIGURED_INTERVAL_HOURS.validate_python(configured_hours)
+    except ValidationError:
+        verbose_proxy_logger.error(
+            "Ignoring configured %s interval %r, it must be a whole number of hours greater than 0",
+            param_name,
+            configured_hours,
+        )
+        return
+    try:
+        await write_reload_interval(prisma_client, param_name, interval_hours)
+    except Exception:  # noqa: BLE001  # a failed write must not block proxy startup
+        verbose_proxy_logger.exception("Failed to apply configured %s interval of %s hours", param_name, interval_hours)
+        return
+    verbose_proxy_logger.info("Applied configured %s interval of %s hours", param_name, interval_hours)

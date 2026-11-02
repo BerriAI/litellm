@@ -2700,6 +2700,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         gt=0,
         description="how often (in seconds) each pod reloads config-in-DB objects (models, credentials, guardrails, etc.) when store_model_in_db is enabled; lower values speed up multi-pod convergence at the cost of more DB load. Applied on proxy startup",
     )
+    model_cost_map_reload_interval_hours: int | None = Field(
+        None,
+        gt=0,
+        description="reload the model cost map every N hours, the same schedule the Admin UI and /schedule/model_cost_map_reload set. Applied on proxy startup and replaces a schedule set from the UI. Requires a database",
+    )
     cancel_on_disconnect: bool | None = Field(
         None,
         description="cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure",

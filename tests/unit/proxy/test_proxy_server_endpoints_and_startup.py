@@ -953,6 +953,48 @@ async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_startup_schedules_model_cost_map_reload_from_general_settings(monkeypatch):
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_config.upsert = AsyncMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+    scheduler = AsyncIOScheduler()
+    configured_settings: Final = {"model_cost_map_reload_interval_hours": 24}
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", _mock_scheduled_proxy_config()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", False),
+            patch("litellm.proxy.proxy_server.get_secret_bool", return_value=False),
+            patch("litellm.proxy.proxy_server.general_settings", configured_settings),
+            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
+        ):
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings=configured_settings,
+                prisma_client=mock_prisma_client,
+                proxy_budget_rescheduler_min_time=1,
+                proxy_budget_rescheduler_max_time=2,
+                proxy_batch_write_at=5,
+                proxy_logging_obj=mock_proxy_logging,
+            )
+    finally:
+        scheduler.shutdown(wait=False)
+
+    upsert_kwargs: Final = mock_prisma_client.db.litellm_config.upsert.await_args.kwargs
+    assert upsert_kwargs["where"] == {"param_name": "model_cost_map_reload_config"}
+    assert json.loads(upsert_kwargs["data"]["update"]["param_value"]) == {"interval_hours": 24}
+
+
+@pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_registers_cleanup_when_retention_lives_only_in_the_db(monkeypatch):
     """With no config file, the startup DB sync rebinds general_settings to a store holding the
     retention period; the cleanup job must be registered from that live value, not the stale

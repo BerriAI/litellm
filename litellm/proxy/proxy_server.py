@@ -543,6 +543,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 )
 from litellm.proxy.common_utils.periodic_reload_schedule import (
     MODEL_COST_MAP_RELOAD_PARAM_NAME,
+    apply_configured_reload_interval,
     clear_reload_interval,
     pod_reload_is_due,
     read_reload_schedule,
@@ -11591,6 +11592,12 @@ class ProxyStartupEvent:
                     replace_existing=True,
                     misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                 )
+
+        await apply_configured_reload_interval(
+            prisma_client,
+            MODEL_COST_MAP_RELOAD_PARAM_NAME,
+            _current_general_settings().get("model_cost_map_reload_interval_hours"),
+        )
 
         heuristic_v1_tuning_baselines = await cls.enforce_heuristic_v1_tuning_baseline(
             prisma_client=prisma_client,
