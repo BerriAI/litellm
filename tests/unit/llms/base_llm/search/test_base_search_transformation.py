@@ -27,6 +27,7 @@ from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
 from litellm.llms.fastcrw.search.transformation import FastCRWSearchConfig
 from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
 from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
+from litellm.llms.keenable.search.transformation import KeenableSearchConfig
 from litellm.llms.linkup.search.transformation import LinkupSearchConfig
 from litellm.llms.nimble.search.transformation import NimbleSearchConfig
 from litellm.llms.parallel_ai.search.transformation import ParallelAISearchConfig
@@ -79,6 +80,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
     (PerplexitySearchConfig, {"PERPLEXITYAI_API_KEY": "srv"}, "caller-key", {}),
     (APISerpentSearchConfig, {"APISERPENT_API_KEY": "srv"}, "caller-key", {}),
     (ExaAISearchConfig, {"EXA_API_KEY": "srv"}, "caller-key", {}),
+    (KeenableSearchConfig, {"KEENABLE_API_KEY": "srv"}, "caller-key", {}),
     (BraveSearchConfig, {"BRAVE_API_KEY": "srv"}, "caller-key", {}),
     (FirecrawlSearchConfig, {"FIRECRAWL_API_KEY": "srv"}, "caller-key", {}),
     (LinkupSearchConfig, {"LINKUP_API_KEY": "srv"}, "caller-key", {}),

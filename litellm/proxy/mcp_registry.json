@@ -270,6 +270,19 @@
       ]
     },
     {
+      "name": "keenable",
+      "title": "Keenable",
+      "description": "Web search and page fetch for AI agents",
+      "icon_url": "/ui/assets/logos/keenable.png",
+      "category": "Search",
+      "registry_url": null,
+      "transport": "http",
+      "url": "https://api.keenable.ai/mcp",
+      "env_vars": [
+        {"name": "KEENABLE_API_KEY", "description": "Keenable API Key", "secret": true}
+      ]
+    },
+    {
       "name": "tavily",
       "title": "Tavily",
       "description": "AI-optimized search engine for research and retrieval",
