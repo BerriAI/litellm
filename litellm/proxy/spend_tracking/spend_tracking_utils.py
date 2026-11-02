@@ -19,7 +19,6 @@ from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     CLI_SESSION_KEY_PREFIX,
     EMPTY_MAPPING,
-    INTERNAL_CALL_ORIGIN_METADATA_KEY,
     KUBERNETES_POD_ROUTING_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -29,7 +28,6 @@ from litellm.constants import (
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
     MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB,
     MCP_SPEND_LOG_MODEL_PREFIX,
-    NON_INFERENCE_CALL_TYPES,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
@@ -45,7 +43,6 @@ from litellm.litellm_core_utils.classifier_logging import (
     without_classifier_audit,
 )
 from litellm.litellm_core_utils.core_helpers import (
-    as_str_mapping,
     get_litellm_metadata_from_kwargs,
     proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
@@ -53,7 +50,11 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.hidden_params import served_from_cache
-from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
+from litellm.litellm_core_utils.internal_call_metadata import (
+    BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX,
+    is_unbilled_non_inference_call,
+    settles_background_response,
+)
 from litellm.litellm_core_utils.litellm_logging import (
     coerce_model_access_groups,
     is_valid_sha256_hash,
@@ -77,13 +78,8 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
     summary_only_compaction_content,
     with_compaction_summary,
 )
-from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    SETTLES_BACKGROUND_RESPONSE_KWARG,
-    BackgroundResponseSettlement,
-)
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
 from litellm.types.utils import (
-    BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
     AzureSpillover,
     CallTypes,
@@ -329,20 +325,12 @@ def _get_spend_logs_metadata(
 
 
 BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
-BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX: Final = "_background_cost"
-
-
-def _settles_background_response(call_type: str, metadata: Mapping[str, object], kwargs: Mapping[str, object]) -> bool:
-    return kwargs.get(SETTLES_BACKGROUND_RESPONSE_KWARG) is BackgroundResponseSettlement.SETTLES or (
-        call_type in NON_INFERENCE_CALL_TYPES
-        and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
-    )
 
 
 def _cost_row_request_id_suffix(call_type: str, metadata: Mapping[str, object], kwargs: Mapping[str, object]) -> str:
     if call_type == CallTypes.aretrieve_batch.value:
         return BATCH_COST_REQUEST_ID_SUFFIX
-    if _settles_background_response(call_type, metadata, kwargs):
+    if settles_background_response(call_type, metadata, kwargs):
         return BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
     return ""
 
@@ -365,19 +353,6 @@ def get_spend_logs_id(
     if resolved_id is None:
         return None
     return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, kwargs)}"
-
-
-def logged_event_key(kwargs: Mapping[str, object], event_id: str) -> str:
-    call_type: Final = kwargs.get("call_type")
-    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
-    metadata: Final = (
-        as_str_mapping(litellm_params.get("litellm_metadata")) or as_str_mapping(litellm_params.get("metadata")) or {}
-    )
-    if not event_id or not _settles_background_response(
-        call_type if isinstance(call_type, str) else "", metadata, kwargs
-    ):
-        return event_id
-    return f"{event_id}{BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX}"
 
 
 _MISSING_ATTRIBUTE: Final = object()

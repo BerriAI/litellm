@@ -16,6 +16,7 @@ from litellm.constants import (
     AZURE_STORAGE_MSFT_VERSION,
 )
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.azure.common_utils import get_azure_ad_token_from_entra_id
 from litellm.llms.custom_httpx.http_handler import (
@@ -55,8 +56,6 @@ class AzureStorageLogQueueItem:
 
 
 def _queued_log(kwargs: Mapping[str, object], payload: StandardLoggingPayload) -> AzureStorageLogQueueItem:
-    from litellm.proxy.spend_tracking.spend_tracking_utils import logged_event_key
-
     payload_id: Final = payload.get("id")
     return AzureStorageLogQueueItem(
         payload=payload,

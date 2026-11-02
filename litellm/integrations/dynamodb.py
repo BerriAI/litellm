@@ -10,6 +10,7 @@ from typing import Final, Protocol
 import litellm
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 
 
 class _DynamoTable(Protocol):
@@ -49,8 +50,6 @@ class DyanmoDBLogger:
     _async_log_event = async_log_event
 
     def log_event(self, kwargs: Mapping[str, object], response_obj, start_time, end_time, print_verbose):
-        from litellm.proxy.spend_tracking.spend_tracking_utils import logged_event_key
-
         try:
             print_verbose(f"DynamoDB Logging - Enters logging function for model {kwargs}")
 

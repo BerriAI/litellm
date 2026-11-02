@@ -8,7 +8,7 @@ import pytest
 import litellm
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.dynamodb import DyanmoDBLogger
-from litellm.proxy.spend_tracking.spend_tracking_utils import BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
+from litellm.litellm_core_utils.internal_call_metadata import BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
     BackgroundResponseSettlement,
@@ -33,6 +33,7 @@ PASSTHROUGH_SETTLEMENT_KWARGS: Final[Mapping[str, object]] = {
         pytest.param(PASSTHROUGH_SETTLEMENT_KWARGS, id="passthrough-settlement"),
     ),
 )
+@pytest.mark.usefixtures("sdk_only_install")
 def test_background_cost_event_keeps_its_own_item_beside_its_create(
     monkeypatch: pytest.MonkeyPatch, cost_kwargs: Mapping[str, object]
 ) -> None:

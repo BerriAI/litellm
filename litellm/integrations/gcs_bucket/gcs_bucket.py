@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     sanitize_cloud_object_component,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.gcs_bucket import *
 from litellm.types.utils import StandardBatchLineItemsPayload, StandardLoggingPayload
@@ -302,8 +303,6 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         """
         Get the object name to use for the current payload
         """
-        from litellm.proxy.spend_tracking.spend_tracking_utils import logged_event_key
-
         current_date: Final = self._get_object_date_from_datetime(datetime.now(timezone.utc))
         metadata: Final = as_str_mapping((as_str_mapping(kwargs.get("litellm_params")) or {}).get("metadata")) or {}
         gcs_log_id: Final = metadata.get("gcs_log_id")

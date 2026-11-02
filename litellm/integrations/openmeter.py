@@ -11,6 +11,7 @@ import httpx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
@@ -51,8 +52,6 @@ class OpenMeterLogger(CustomLogger):
             raise Exception(f"Missing keys={missing_keys} in environment.")
 
     def _common_logic(self, kwargs: Mapping[str, object], response_obj):
-        from litellm.proxy.spend_tracking.spend_tracking_utils import logged_event_key
-
         call_id: Final = response_obj.get("id", kwargs.get("litellm_call_id"))
         dt: Final = get_utc_datetime().isoformat()
         cost: Final = kwargs.get("response_cost", None)
