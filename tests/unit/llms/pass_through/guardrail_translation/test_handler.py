@@ -320,6 +320,25 @@ async def test_post_call_scan_leaves_out_the_numbers_of_a_provider_reply(respons
 
 
 @pytest.mark.asyncio
+async def test_post_call_scan_reads_only_the_text_of_an_anthropic_message():
+    response: Final = {
+        "id": "msg_5551234567",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [
+            {"type": "text", "text": "Paris."},
+            {"type": "tool_use", "id": "toolu_5551234567", "name": "lookup", "input": {"card": 4111111111111111}},
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 5551234567, "output_tokens": 1},
+    }
+
+    assert await _scanned_response_texts(response) == ("Paris.\nlookup\ncard\n4111111111111111",)
+
+
+@pytest.mark.asyncio
 async def test_post_call_scan_skips_a_reply_with_no_text():
     response: Final = {"object": "list", "data": [{"object": "embedding", "embedding": [0.4111111111111111]}]}
 
