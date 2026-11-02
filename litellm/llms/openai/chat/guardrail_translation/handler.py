@@ -139,8 +139,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 scan_only_tool_results=scan_only_tool_results,
             )
 
-        # Step 2: Apply guardrail to all texts and tool calls in batch
-        if texts_to_check or tool_calls_to_check:
+        # Step 2: Apply guardrail to all texts, images and tool calls in batch
+        if texts_to_check or tool_calls_to_check or images_to_check:
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
