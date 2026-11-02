@@ -1125,6 +1125,7 @@ class BudgetExceededError(Exception):
         llm_provider: str | None = None,
         entity_type: str | None = None,
         entity_id: str | None = None,
+        budget_reset_at: datetime.datetime | None = None,
     ):
         self.current_cost = current_cost
         self.max_budget = max_budget
@@ -1132,6 +1133,7 @@ class BudgetExceededError(Exception):
         self.llm_provider = llm_provider or ""
         self.entity_type = entity_type
         self.entity_id = entity_id
+        self.budget_reset_at = budget_reset_at
         # Surface unified rate-limit fields without joining the RateLimitError
         # hierarchy so existing `except BudgetExceededError:` handlers keep
         # working; custom callbacks reading StandardLoggingPayload pick these

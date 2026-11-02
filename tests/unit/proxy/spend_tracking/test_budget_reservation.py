@@ -24,7 +24,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
+    _BudgetCounter,
     _get_team_member_budget_counter,
+    _raise_counter_budget_exceeded,
+    get_budget_window_reset_at,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
@@ -588,3 +591,38 @@ async def test_group_reserves_on_its_current_deployments_after_another_vendors_d
     by_own_name: Final = litellm.token_counter(model="prod", messages=_MULTILINGUAL_MESSAGES)
     assert openai_only != by_own_name
     assert (await _input_tokens(router, "prod"))["prod"] == by_own_name
+
+
+def test_counter_budget_exceeded_carries_the_counter_reset_at():
+    reset_at: Final = datetime(2026, 11, 3, tzinfo=timezone.utc)
+    counter = _BudgetCounter(
+        counter_key="spend:key:k",
+        max_budget=1.0,
+        fallback_spend=1.0,
+        entity_type="Key",
+        entity_id="k",
+        budget_reset_at=reset_at,
+    )
+
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        _raise_counter_budget_exceeded(counter=counter, current_cost=1.5)
+
+    assert exc_info.value.budget_reset_at == reset_at
+
+
+@pytest.mark.parametrize(
+    "window, expected",
+    [
+        (
+            {"budget_duration": "1d", "max_budget": 1.0, "reset_at": "2026-11-03T00:00:00Z"},
+            datetime(2026, 11, 3, tzinfo=timezone.utc),
+        ),
+        (
+            {"budget_duration": "1d", "max_budget": 1.0, "reset_at": datetime(2026, 11, 3)},
+            datetime(2026, 11, 3, tzinfo=timezone.utc),
+        ),
+        ({"budget_duration": "1d", "max_budget": 1.0}, None),
+    ],
+)
+def test_get_budget_window_reset_at(window: dict[str, object], expected: datetime | None):
+    assert get_budget_window_reset_at(window) == expected

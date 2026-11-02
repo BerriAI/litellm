@@ -41,6 +41,7 @@ from litellm.integrations.otel.runtime import phase_event, phase_span, seed_requ
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias, resolve_served_model
+from litellm.models.budget import budget_table_reset_at
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
@@ -3085,6 +3086,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                                 ),
                                 entity_type=Litellm_EntityType.TEAM_MEMBER.value,
                                 entity_id=_entity_id,
+                                budget_reset_at=budget_table_reset_at(team_member_info.litellm_budget_table),
                             )
 
         # Check 3. If token is expired
