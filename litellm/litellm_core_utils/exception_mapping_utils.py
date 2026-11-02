@@ -277,6 +277,65 @@ class _ProviderHTTPException(Protocol):
 _ERROR_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
+def _validated_error_body(error_obj: _ProviderHTTPException) -> Mapping[str, object] | None:
+    """The exception's parsed error body as a dict, or None when it is not one."""
+    raw_body: Final = attribute_or_none(error_obj, "body")
+    if raw_body is None:
+        return None
+    try:
+        validated: Final = _ERROR_BODY_ADAPTER.validate_python(raw_body)
+    except ValidationError:
+        return None
+    return validated
+
+
+def _get_error_request_id(error_obj: _ProviderHTTPException) -> str | None:
+    """
+    Return the provider request id carried in an error object's body, if any.
+
+    Checks `body["request_id"]` (a top-level sibling of `error`, e.g.
+    `{"error": {...}, "request_id": "..."}` from DashScope/Bailian) and
+    `body["error"]["request_id"]`.
+    """
+    body: Final = _validated_error_body(error_obj)
+    if body is None:
+        return None
+
+    body_request_id: Final = body.get("request_id")
+    if isinstance(body_request_id, str) and body_request_id:
+        return body_request_id
+
+    nested_error: Final = body.get("error")
+    if isinstance(nested_error, dict):
+        nested_request_id: Final = nested_error.get("request_id")
+        if isinstance(nested_request_id, str) and nested_request_id:
+            return nested_request_id
+
+    return None
+
+
+def _get_error_message_with_request_id(error_obj: _ProviderHTTPException) -> str | None:
+    """
+    Extract the error message, preserving the provider request id when present.
+
+    Some providers (e.g. DashScope/Bailian) return the request id as a
+    top-level sibling of `error` in the response body, not inside
+    `error.message`. Extracting only the message drops it, leaving users
+    without the provider request id needed to investigate the failure
+    (https://github.com/BerriAI/litellm/issues/47839). Append it to the
+    extracted message when it is available and not already present.
+    """
+    extracted_message: Final = get_error_message(error_obj=error_obj)
+    if extracted_message is None:
+        return None
+
+    request_id: Final = _get_error_request_id(error_obj)
+    if request_id is not None and request_id not in extracted_message:
+        return f"{extracted_message} (request_id: {request_id})"
+
+    return extracted_message
+
+
 def _openai_cyber_policy_body(original_exception: _ProviderHTTPException) -> Mapping[str, object] | None:
     raw_body: Final[object] = getattr(original_exception, "body", None)
     try:
@@ -339,7 +398,7 @@ def _map_openai_exception(
             body=dict(cyber_policy_body),
         )
     # custom_llm_provider is openai, make it OpenAI
-    message = get_error_message(error_obj=original_exception)
+    message = _get_error_message_with_request_id(error_obj=original_exception)
     if message is None:
         if hasattr(original_exception, "message"):
             message = original_exception.message

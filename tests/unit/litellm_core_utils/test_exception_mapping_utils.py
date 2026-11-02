@@ -16,6 +16,7 @@ from litellm.exceptions import GuardrailRaisedException
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     _get_body_error_code,
+    _get_error_message_with_request_id,
     _get_response_headers,
     exception_type,
     extract_and_raise_litellm_exception,
@@ -574,6 +575,98 @@ def test_openai_compatible_429_still_maps_to_rate_limit():
         )
 
     assert excinfo.value.status_code == 429
+
+
+class _FakeErrorObj:
+    """Minimal stand-in for an SDK exception carrying a parsed error body."""
+
+    def __init__(self, body=None, request_id=None):
+        self.body = body
+        if request_id is not None:
+            self.request_id = request_id
+
+
+def test_error_message_with_request_id_appends_top_level_request_id():
+    """DashScope/Bailian returns `request_id` as a top-level sibling of
+    `error` in the response body. Extracting only `error.message` dropped it
+    from the final error text (issue #47839)."""
+    error_obj = _FakeErrorObj(
+        body={
+            "error": {
+                "message": "Incorrect API key provided.",
+                "type": "invalid_request_error",
+                "param": None,
+                "code": "invalid_api_key",
+            },
+            "request_id": "343604ce-3795-9363-8be6-f4aa3f4613ee",
+        }
+    )
+
+    assert _get_error_message_with_request_id(error_obj=error_obj) == (
+        "Incorrect API key provided. (request_id: 343604ce-3795-9363-8be6-f4aa3f4613ee)"
+    )
+
+
+def test_error_message_with_request_id_appends_request_id_for_flat_body():
+    error_obj = _FakeErrorObj(body={"message": "Something went wrong", "request_id": "req_flat_123"})
+
+    assert _get_error_message_with_request_id(error_obj=error_obj) == "Something went wrong (request_id: req_flat_123)"
+
+
+def test_error_message_with_request_id_appends_nested_error_request_id():
+    error_obj = _FakeErrorObj(body={"error": {"message": "Bad request", "request_id": "req_nested_456"}})
+
+    assert _get_error_message_with_request_id(error_obj=error_obj) == "Bad request (request_id: req_nested_456)"
+
+
+def test_error_message_with_request_id_with_non_dict_body_returns_none():
+    error_obj = _FakeErrorObj(body="not-a-dict")
+
+    assert _get_error_message_with_request_id(error_obj=error_obj) is None
+
+
+def test_error_message_with_request_id_without_request_id_is_unchanged():
+    error_obj = _FakeErrorObj(body={"error": {"message": "Plain error", "code": "some_code"}})
+
+    assert _get_error_message_with_request_id(error_obj=error_obj) == "Plain error"
+
+
+def test_error_message_with_request_id_does_not_duplicate_request_id():
+    error_obj = _FakeErrorObj(body={"message": "Failed (request_id: req_dup_1)", "request_id": "req_dup_1"})
+
+    assert _get_error_message_with_request_id(error_obj=error_obj) == "Failed (request_id: req_dup_1)"
+
+
+def test_dashscope_auth_error_message_includes_provider_request_id():
+    """End-to-end (issue #47839): a DashScope 401 through the
+    OpenAI-compatible exception mapping must keep the provider request id
+    in the final AuthenticationError message."""
+    dashscope_body = {
+        "error": {
+            "message": "Incorrect API key provided. For details, see: "
+            "https://help.aliyun.com/zh/model-studio/error-code#apikey-error",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "invalid_api_key",
+        },
+        "request_id": "343604ce-3795-9363-8be6-f4aa3f4613ee",
+    }
+    original_exception = OpenAIError(
+        status_code=401,
+        message=f"Error code: 401 - {dashscope_body}",
+        headers={},
+        body=dashscope_body,
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        exception_type(
+            model="dashscope/deepseek-v4-flash",
+            original_exception=original_exception,
+            custom_llm_provider="dashscope",
+        )
+
+    assert "343604ce-3795-9363-8be6-f4aa3f4613ee" in str(excinfo.value)
+    assert "Incorrect API key provided" in str(excinfo.value)
 
 
 @pytest.mark.parametrize(
