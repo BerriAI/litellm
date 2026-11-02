@@ -10,4 +10,10 @@ pub enum Error {
     Container(#[from] testcontainers_modules::testcontainers::TestcontainersError),
     #[error("{command} exited with {code}")]
     Command { command: String, code: i64 },
+    #[error("generating test TLS certificates")]
+    Certificate(#[from] rcgen::Error),
+    #[error("writing test TLS files")]
+    Files(#[source] io::Error),
+    #[error("Sentinel did not promote the replica")]
+    Failover,
 }

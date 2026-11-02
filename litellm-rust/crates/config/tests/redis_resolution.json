@@ -1,0 +1,1441 @@
+{
+  "cases": [
+    {
+      "environment": {},
+      "kwargs": {
+        "host": "redis"
+      },
+      "name": "host_defaults",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {
+        "REDIS_CLUSTER_NODES": "[{\"host\": \"node-a\", \"port\": 7000}]"
+      },
+      "kwargs": {
+        "startup_nodes": []
+      },
+      "name": "empty_cluster_nodes_use_the_environment",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "mode": "cluster",
+        "nodes": [
+          "node-a:7000"
+        ],
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {
+        "REDIS_SENTINEL_NODES": "[[\"sentinel-a\", 26379]]"
+      },
+      "kwargs": {
+        "sentinel_nodes": [],
+        "service_name": "primary"
+      },
+      "name": "empty_sentinel_nodes_use_the_environment",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "mode": "sentinel",
+        "nodes": [
+          "sentinel-a:26379"
+        ],
+        "sentinel_password": null,
+        "service_name": "primary",
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {
+        "REDIS_SERVICE_NAME": "primary"
+      },
+      "kwargs": {
+        "sentinel_nodes": [
+          [
+            "sentinel-a",
+            26379
+          ]
+        ],
+        "service_name": ""
+      },
+      "name": "empty_service_name_uses_the_environment",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "mode": "sentinel",
+        "nodes": [
+          "sentinel-a:26379"
+        ],
+        "sentinel_password": null,
+        "service_name": "primary",
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "host": "redis",
+        "ssl_cert_reqs": "strict"
+      },
+      "name": "plaintext_ignores_tls_requirements",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "host": "redis",
+        "ssl": true,
+        "ssl_ca_path": "/ca"
+      },
+      "name": "ssl_ca_path_is_unsupported",
+      "python": {
+        "rejected": {
+          "message": "Redis.__init__() got an unexpected keyword argument 'ssl_ca_path'",
+          "type": "TypeError"
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "db": 2,
+        "host": "redis",
+        "password": "pass",
+        "port": 6380,
+        "socket_timeout": 1.5,
+        "ssl": true,
+        "username": "user"
+      },
+      "name": "host_with_every_basic_setting",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": "pass",
+          "username": "user"
+        },
+        "db": 2,
+        "host": "redis",
+        "mode": "host",
+        "port": 6380,
+        "socket_connect_timeout": 1.5,
+        "socket_timeout": 1.5,
+        "tls": {
+          "ca_certs": null,
+          "certfile": null,
+          "check_hostname": false,
+          "keyfile": null,
+          "verify_certificate": true
+        }
+      }
+    },
+    {
+      "environment": {
+        "REDIS_HOST": "environment",
+        "REDIS_PASSWORD": "environment-secret",
+        "REDIS_PORT": "6390",
+        "REDIS_SSL": "True"
+      },
+      "kwargs": {},
+      "name": "environment_host_port_and_password",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": "environment-secret",
+          "username": null
+        },
+        "db": 0,
+        "host": "environment",
+        "mode": "host",
+        "port": 6390,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": {
+          "ca_certs": null,
+          "certfile": null,
+          "check_hostname": false,
+          "keyfile": null,
+          "verify_certificate": true
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "db": "3",
+        "host": "redis",
+        "port": "6380",
+        "socket_timeout": "2.5"
+      },
+      "name": "string_numbers_are_coerced",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 3,
+        "host": "redis",
+        "mode": "host",
+        "port": 6380,
+        "socket_connect_timeout": 2.5,
+        "socket_timeout": 2.5,
+        "tls": null
+      }
+    },
+    {
+      "environment": {
+        "REDIS_SOCKET_TIMEOUT": "0.75"
+      },
+      "kwargs": {
+        "host": "redis"
+      },
+      "name": "socket_timeout_from_the_environment",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 0.75,
+        "socket_timeout": 0.75,
+        "tls": null
+      }
+    },
+    {
+      "environment": {
+        "REDIS_URL": "redis://environment:6379/1"
+      },
+      "kwargs": {},
+      "name": "environment_url",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "mode": "url",
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null,
+        "url": "redis://environment:6379/1"
+      }
+    },
+    {
+      "environment": {
+        "REDIS_HOST": "ignored",
+        "REDIS_URL": "redis://from-url:6379"
+      },
+      "kwargs": {},
+      "name": "environment_url_beats_the_environment_host",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "mode": "url",
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null,
+        "url": "redis://from-url:6379"
+      }
+    },
+    {
+      "environment": {
+        "REDIS_URL": "redis://environment:6379"
+      },
+      "kwargs": {
+        "host": "configured"
+      },
+      "name": "an_explicit_host_drops_the_environment_url",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "configured",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "db": 4,
+        "host": "dropped",
+        "password": "dropped",
+        "url": "rediss://cache:6380",
+        "username": "user"
+      },
+      "name": "a_url_drops_host_db_and_password_and_keeps_the_username",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": "user"
+        },
+        "mode": "url",
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": {
+          "ca_certs": null,
+          "certfile": null,
+          "check_hostname": false,
+          "keyfile": null,
+          "verify_certificate": true
+        },
+        "url": "rediss://cache:6380"
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "ssl_ca_certs": "/ca.pem",
+        "ssl_cert_reqs": "none",
+        "ssl_check_hostname": true,
+        "url": "rediss://cache:6380"
+      },
+      "name": "a_url_ignores_tls_settings_outside_the_url",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "mode": "url",
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": {
+          "ca_certs": null,
+          "certfile": null,
+          "check_hostname": false,
+          "keyfile": null,
+          "verify_certificate": true
+        },
+        "url": "rediss://cache:6380"
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "password": "cluster-secret",
+        "startup_nodes": [
+          {
+            "host": "node-a",
+            "port": 7000
+          }
+        ],
+        "url": "redis://single:6379"
+      },
+      "name": "startup_nodes_beat_a_url",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": "cluster-secret",
+          "username": null
+        },
+        "mode": "cluster",
+        "nodes": [
+          "node-a:7000"
+        ],
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {
+        "REDIS_CLUSTER_NODES": "[{\"host\": \"node-a\", \"port\": \"7000\"}, {\"host\": \"node-b\", \"port\": 7001}]"
+      },
+      "kwargs": {},
+      "name": "environment_cluster_nodes",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "mode": "cluster",
+        "nodes": [
+          "node-a:7000",
+          "node-b:7001"
+        ],
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "ssl": "true",
+        "ssl_ca_certs": "/ca.pem",
+        "ssl_check_hostname": true,
+        "startup_nodes": [
+          {
+            "host": "node-a",
+            "port": 7000
+          }
+        ]
+      },
+      "name": "cluster_tls_options",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "mode": "cluster",
+        "nodes": [
+          "node-a:7000"
+        ],
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": {
+          "ca_certs": "/ca.pem",
+          "certfile": null,
+          "check_hostname": true,
+          "keyfile": null,
+          "verify_certificate": true
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "password": "data-secret",
+        "sentinel_nodes": [
+          [
+            "sentinel-a",
+            26379
+          ],
+          [
+            "sentinel-b",
+            26380
+          ]
+        ],
+        "sentinel_password": "sentinel-secret",
+        "service_name": "primary"
+      },
+      "name": "sentinel_from_settings",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": "data-secret",
+          "username": null
+        },
+        "db": 0,
+        "mode": "sentinel",
+        "nodes": [
+          "sentinel-a:26379",
+          "sentinel-b:26380"
+        ],
+        "sentinel_password": "sentinel-secret",
+        "service_name": "primary",
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {
+        "REDIS_SENTINEL_NODES": "[[\"sentinel-a\", 26379]]",
+        "REDIS_SENTINEL_PASSWORD": "sentinel-secret",
+        "REDIS_SERVICE_NAME": "primary"
+      },
+      "kwargs": {},
+      "name": "sentinel_from_the_environment",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "mode": "sentinel",
+        "nodes": [
+          "sentinel-a:26379"
+        ],
+        "sentinel_password": "sentinel-secret",
+        "service_name": "primary",
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "host": "ignored",
+        "sentinel_nodes": [
+          [
+            "sentinel-a",
+            26379
+          ]
+        ],
+        "service_name": "primary"
+      },
+      "name": "a_host_breaks_sentinel",
+      "python": {
+        "rejected": {
+          "message": "redis.asyncio.client.Redis() got multiple values for keyword argument 'host'",
+          "type": "TypeError"
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "sentinel_nodes": [
+          [
+            "sentinel-a",
+            26379
+          ]
+        ],
+        "service_name": "primary",
+        "url": "redis://single:6379"
+      },
+      "name": "a_url_beats_sentinels",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "mode": "url",
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null,
+        "url": "redis://single:6379"
+      }
+    },
+    {
+      "environment": {
+        "REDIS_AZURE_AD_TOKEN": "true"
+      },
+      "kwargs": {
+        "aws_iam_auth": true,
+        "credential_provider": true,
+        "gcp_service_account": "account",
+        "host": "redis",
+        "password": "dropped"
+      },
+      "name": "an_explicit_credential_provider_beats_cloud_auth",
+      "python": {
+        "auth": {
+          "kind": "host"
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {
+        "REDIS_GCP_SERVICE_ACCOUNT": "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com"
+      },
+      "kwargs": {
+        "aws_iam_auth": true,
+        "azure_redis_ad_token": "True",
+        "host": "redis",
+        "password": "dropped"
+      },
+      "name": "gcp_beats_azure_and_aws",
+      "python": {
+        "auth": {
+          "kind": "gcp_iam",
+          "service_account": "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com"
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "gcp_service_account": "account",
+        "gcp_ssl_ca_certs": "/gcp-ca.pem",
+        "host": "redis",
+        "ssl": true,
+        "ssl_ca_certs": "/configured-ca.pem"
+      },
+      "name": "gcp_ca_certs_replace_the_configured_ones_under_ssl",
+      "python": {
+        "auth": {
+          "kind": "gcp_iam",
+          "service_account": "account"
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": {
+          "ca_certs": "/gcp-ca.pem",
+          "certfile": null,
+          "check_hostname": false,
+          "keyfile": null,
+          "verify_certificate": true
+        }
+      }
+    },
+    {
+      "environment": {
+        "REDIS_USERNAME": "environment-user"
+      },
+      "kwargs": {
+        "aws_iam_auth": true,
+        "azure_client_id": "client",
+        "azure_client_secret": "secret",
+        "azure_redis_ad_token": true,
+        "azure_tenant_id": "tenant",
+        "host": "redis",
+        "username": "dropped"
+      },
+      "name": "azure_beats_aws_and_takes_the_environment_username",
+      "python": {
+        "auth": {
+          "kind": "azure_ad",
+          "username": "environment-user"
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "azure_client_id": "client",
+        "azure_client_secret": "secret",
+        "azure_redis_ad_token": true,
+        "azure_tenant_id": "tenant",
+        "host": "redis"
+      },
+      "name": "azure_without_a_username_sends_only_the_token",
+      "python": {
+        "auth": {
+          "kind": "azure_ad",
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "azure_client_id": "client",
+        "azure_client_secret": "secret",
+        "azure_redis_ad_token": "1",
+        "azure_tenant_id": "tenant",
+        "host": "redis"
+      },
+      "name": "azure_needs_the_literal_true",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {
+        "AWS_DEFAULT_REGION": "us-east-1"
+      },
+      "kwargs": {
+        "aws_iam_auth": "yes",
+        "aws_iam_cache_name": "cache-1",
+        "aws_iam_user_name": "iam-user",
+        "host": "cache-1",
+        "password": "dropped",
+        "ssl": true
+      },
+      "name": "aws_iam_over_tls_with_the_default_region",
+      "python": {
+        "auth": {
+          "cache_name": "cache-1",
+          "kind": "aws_iam",
+          "region": "us-east-1",
+          "serverless": false,
+          "user_name": "iam-user"
+        },
+        "db": 0,
+        "host": "cache-1",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": {
+          "ca_certs": null,
+          "certfile": null,
+          "check_hostname": false,
+          "keyfile": null,
+          "verify_certificate": true
+        }
+      }
+    },
+    {
+      "environment": {
+        "AWS_DEFAULT_REGION": "us-east-1",
+        "AWS_REGION": "eu-central-1"
+      },
+      "kwargs": {
+        "aws_iam_auth": true,
+        "aws_iam_cache_name": "cache-1",
+        "aws_iam_user_name": "iam-user",
+        "host": "cache-1",
+        "ssl": true
+      },
+      "name": "aws_region_beats_the_default_region",
+      "python": {
+        "auth": {
+          "cache_name": "cache-1",
+          "kind": "aws_iam",
+          "region": "eu-central-1",
+          "serverless": false,
+          "user_name": "iam-user"
+        },
+        "db": 0,
+        "host": "cache-1",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": {
+          "ca_certs": null,
+          "certfile": null,
+          "check_hostname": false,
+          "keyfile": null,
+          "verify_certificate": true
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "aws_iam_auth": true,
+        "aws_iam_cache_name": "cache-1",
+        "aws_iam_region": "eu-west-1",
+        "aws_iam_serverless": true,
+        "aws_iam_user_name": "iam-user",
+        "url": "rediss://user:pass@cache-1:6379"
+      },
+      "name": "aws_iam_serverless_over_a_rediss_url_drops_its_userinfo",
+      "python": {
+        "auth": {
+          "cache_name": "cache-1",
+          "kind": "aws_iam",
+          "region": "eu-west-1",
+          "serverless": true,
+          "user_name": "iam-user"
+        },
+        "mode": "url",
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": {
+          "ca_certs": null,
+          "certfile": null,
+          "check_hostname": false,
+          "keyfile": null,
+          "verify_certificate": true
+        },
+        "url": "rediss://cache-1:6379"
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "aws_iam_auth": true,
+        "aws_iam_cache_name": "cache-1",
+        "aws_iam_region": "us-east-1",
+        "aws_iam_user_name": "iam-user",
+        "host": "cache-1"
+      },
+      "name": "aws_iam_without_tls_fails",
+      "python": {
+        "rejected": {
+          "message": "AWS ElastiCache IAM Redis authentication requires TLS",
+          "type": "ValueError"
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "aws_iam_auth": true,
+        "aws_iam_cache_name": "cache-1",
+        "aws_iam_user_name": "iam-user",
+        "host": "cache-1",
+        "ssl": true
+      },
+      "name": "aws_iam_without_a_region_fails",
+      "python": {
+        "rejected": {
+          "message": "AWS ElastiCache IAM Redis authentication requires: aws_iam_region",
+          "type": "ValueError"
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "host": "redis",
+        "ssl": true,
+        "ssl_ca_certs": "/ca.pem",
+        "ssl_cert_reqs": "none",
+        "ssl_check_hostname": true
+      },
+      "name": "tls_options_from_settings",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": {
+          "ca_certs": "/ca.pem",
+          "certfile": null,
+          "check_hostname": true,
+          "keyfile": null,
+          "verify_certificate": false
+        }
+      }
+    },
+    {
+      "environment": {
+        "REDIS_SSL": "true",
+        "REDIS_SSL_CA_CERTS": "/env-ca.pem",
+        "REDIS_SSL_CERT_REQS": "optional"
+      },
+      "kwargs": {
+        "host": "redis"
+      },
+      "name": "tls_options_from_the_environment",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": {
+          "ca_certs": "/env-ca.pem",
+          "certfile": null,
+          "check_hostname": false,
+          "keyfile": null,
+          "verify_certificate": true
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "host": "redis",
+        "socket_connect_timeout": 0.25,
+        "socket_timeout": 2.5
+      },
+      "name": "connect_timeout_is_separate_from_the_socket_timeout",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 0.25,
+        "socket_timeout": 2.5,
+        "tls": null
+      }
+    },
+    {
+      "environment": {
+        "COORD_HOST": "referenced",
+        "COORD_PASSWORD": "referenced-secret"
+      },
+      "kwargs": {
+        "host": "os.environ/COORD_HOST",
+        "password": "os.environ/COORD_PASSWORD"
+      },
+      "name": "environment_references_resolve",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": "referenced-secret",
+          "username": null
+        },
+        "db": 0,
+        "host": "referenced",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "port": 6379
+      },
+      "name": "no_target_fails",
+      "python": {
+        "rejected": {
+          "message": "Either 'host' or 'url' must be specified for redis.",
+          "type": "ValueError"
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "host": "redis",
+        "ssl": true,
+        "ssl_certfile": "/client.pem",
+        "ssl_keyfile": "/client.key"
+      },
+      "name": "client_certificates",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": {
+          "ca_certs": null,
+          "certfile": "/client.pem",
+          "check_hostname": false,
+          "keyfile": "/client.key",
+          "verify_certificate": true
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "url": "rediss://cache:6380/0?ssl_cert_reqs=none&ssl_ca_certs=/ca.pem&ssl_check_hostname=yes"
+      },
+      "name": "a_rediss_url_takes_tls_options_from_its_query",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "mode": "url",
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": {
+          "ca_certs": "/ca.pem",
+          "certfile": null,
+          "check_hostname": true,
+          "keyfile": null,
+          "verify_certificate": false
+        },
+        "url": "rediss://cache:6380/0?ssl_cert_reqs=none&ssl_ca_certs=/ca.pem&ssl_check_hostname=yes"
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "url": "redis://cache:6379/0?socket_timeout=2"
+      },
+      "name": "a_url_query_setting_without_a_redis_rs_equivalent",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "mode": "url",
+        "socket_connect_timeout": 2.0,
+        "socket_timeout": 2.0,
+        "tls": null,
+        "url": "redis://cache:6379/0?socket_timeout=2"
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "db": "99999999999999999999",
+        "ssl_cert_reqs": "strict",
+        "url": "rediss://cache:6380"
+      },
+      "name": "tls_settings_outside_a_url_never_fail_it",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "mode": "url",
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": {
+          "ca_certs": null,
+          "certfile": null,
+          "check_hostname": false,
+          "keyfile": null,
+          "verify_certificate": true
+        },
+        "url": "rediss://cache:6380"
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "db": 99999999999,
+        "startup_nodes": [
+          {
+            "host": "node-a",
+            "port": 7000
+          }
+        ]
+      },
+      "name": "db_is_not_read_for_a_cluster",
+      "python": {
+        "rejected": {
+          "message": "Argument 'db' must be 0 or None in cluster mode",
+          "type": "RedisClusterException"
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "db": true,
+        "startup_nodes": [
+          {
+            "host": "node-a",
+            "port": 7000
+          }
+        ]
+      },
+      "name": "cluster_db_true",
+      "python": {
+        "rejected": {
+          "message": "Argument 'db' must be 0 or None in cluster mode",
+          "type": "RedisClusterException"
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "db": false,
+        "startup_nodes": [
+          {
+            "host": "node-a",
+            "port": 7000
+          }
+        ]
+      },
+      "name": "cluster_db_false",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "mode": "cluster",
+        "nodes": [
+          "node-a:7000"
+        ],
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "db": 0.5,
+        "startup_nodes": [
+          {
+            "host": "node-a",
+            "port": 7000
+          }
+        ]
+      },
+      "name": "cluster_db_fraction",
+      "python": {
+        "rejected": {
+          "message": "Argument 'db' must be 0 or None in cluster mode",
+          "type": "RedisClusterException"
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "db": 0.0,
+        "startup_nodes": [
+          {
+            "host": "node-a",
+            "port": 7000
+          }
+        ]
+      },
+      "name": "cluster_db_float_zero",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "mode": "cluster",
+        "nodes": [
+          "node-a:7000"
+        ],
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "db": [
+          1
+        ],
+        "startup_nodes": [
+          {
+            "host": "node-a",
+            "port": 7000
+          }
+        ]
+      },
+      "name": "cluster_db_nonempty_list",
+      "python": {
+        "rejected": {
+          "message": "Argument 'db' must be 0 or None in cluster mode",
+          "type": "RedisClusterException"
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "db": [],
+        "startup_nodes": [
+          {
+            "host": "node-a",
+            "port": 7000
+          }
+        ]
+      },
+      "name": "cluster_db_empty_list",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "mode": "cluster",
+        "nodes": [
+          "node-a:7000"
+        ],
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "host": "redis",
+        "ssl": true,
+        "ssl_ciphers": "HIGH"
+      },
+      "name": "ssl_ciphers",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": {
+          "ca_certs": null,
+          "certfile": null,
+          "check_hostname": false,
+          "keyfile": null,
+          "verify_certificate": true
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "host": "redis",
+        "retry_on_timeout": true
+      },
+      "name": "retry_on_timeout",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "host": "redis",
+        "port": "abc"
+      },
+      "name": "malformed_port",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "db": "first",
+        "host": "redis"
+      },
+      "name": "malformed_db",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "host": "redis",
+        "socket_timeout": "slow"
+      },
+      "name": "socket_timeout_not_a_number",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {
+        "REDIS_HOST": "redis",
+        "REDIS_PORT": "abc"
+      },
+      "kwargs": {},
+      "name": "malformed_port_from_the_environment",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "host": "redis",
+        "protocol": 3
+      },
+      "name": "protocol_3",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "db": 0,
+        "host": "redis",
+        "mode": "host",
+        "port": 6379,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    },
+    {
+      "environment": {
+        "REDIS_RETRY_ON_ERROR": "true"
+      },
+      "kwargs": {
+        "host": "redis"
+      },
+      "name": "retry_on_error_from_the_environment",
+      "python": {
+        "rejected": {
+          "message": "'bool' object is not iterable",
+          "type": "TypeError"
+        }
+      }
+    },
+    {
+      "environment": {},
+      "kwargs": {
+        "host": "redis",
+        "unix_socket_path": "/tmp/redis.sock"
+      },
+      "name": "unix_socket_path",
+      "python": {
+        "auth": {
+          "kind": "static",
+          "password": null,
+          "username": null
+        },
+        "mode": "unix",
+        "path": "/tmp/redis.sock",
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 5.0,
+        "tls": null
+      }
+    }
+  ]
+}

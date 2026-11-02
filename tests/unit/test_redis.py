@@ -1,5 +1,7 @@
+import importlib.util
 import inspect
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1960,3 +1962,23 @@ def test_async_sentinel_keeps_the_credential_provider_off_the_monitors(markers, 
     master_kwargs = mock_sentinel_cls.return_value.master_for.call_args[1]
     assert isinstance(master_kwargs["credential_provider"], provider_cls)
     assert "password" not in master_kwargs
+
+
+@pytest.mark.skipif(
+    redis.VERSION != (5, 3, 1),
+    reason="Rust resolution fixtures target redis-py 5.3.1, per litellm-rust/crates/config/AGENTS.md",
+)
+def test_rust_redis_resolution_contract_matches_python():
+    generator_path: Final = (
+        Path(__file__).parents[2] / "litellm-rust" / "crates" / "config" / "tests" / "generate_redis_resolution.py"
+    )
+    spec: Final = importlib.util.spec_from_file_location("generate_redis_resolution", generator_path)
+    assert spec is not None and spec.loader is not None
+    generator: Final = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(generator)
+
+    assert generator.render() == generator.FIXTURE.read_text(), (
+        "litellm/_redis.py resolves Redis settings differently from redis_resolution.json, which the Rust resolver "
+        "replays. Regenerate it with `PYTHONPATH=. python litellm-rust/crates/config/tests/generate_redis_resolution.py` "
+        "and make crates/config/tests/redis.rs pass"
+    )

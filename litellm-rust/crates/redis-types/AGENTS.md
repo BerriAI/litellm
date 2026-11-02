@@ -1,0 +1,2 @@
+- The Redis endpoint, node and TLS types that `config` resolves to and `redis-client` connects with, so neither converts the other's copy
+- Data only. It depends on `secret-value` and nothing else, so `config` never pulls in redis-rs or tokio. Anything that needs redis-rs, like building a `ConnectionInfo` or reading TLS files, lives in `redis-client`

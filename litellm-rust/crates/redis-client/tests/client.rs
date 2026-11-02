@@ -11,8 +11,9 @@ use rstest::rstest;
 use litellm_circuit_breaker::{Breaker, Config, State};
 
 use litellm_redis_client::{
-    CallEvent, DEFAULT_TIMEOUT, Endpoint, Error, Expiry, FailureKind, HostEndpoint, Namespace,
-    Operation, Outcome, RedisClient, RedisConfig, RedisEvents, Script, Timeouts, Ttl,
+    CallEvent, Credentials, DEFAULT_TIMEOUT, Endpoint, Error, Expiry, FailureKind, HostEndpoint,
+    Namespace, Operation, Outcome, RedisClient, RedisConfig, RedisEvents, Script, Timeouts,
+    TlsOptions, Ttl,
 };
 use litellm_secret_value::SecretValue;
 use support::{KEEP, connect, connect_guarded, connections, endpoint};
@@ -252,6 +253,7 @@ async fn outage_events_report_the_failure_kind(
         timeouts: Timeouts::new(Duration::from_millis(300), None),
         breaker: None,
         events: Some(recorded.clone()),
+        credentials: Credentials::NONE,
     })
     .unwrap();
     client.ping().await.unwrap();
@@ -301,6 +303,7 @@ async fn every_call_reports_its_operation_and_outcome(
     let recorded = Arc::new(Recorded::default());
     let client = RedisClient::new(RedisConfig {
         endpoint: endpoint(&server),
+        credentials: Credentials::NONE,
         namespace: Namespace::default(),
         timeouts: Timeouts::default(),
         breaker: None,
@@ -729,19 +732,21 @@ async fn a_host_endpoint_connects_to_its_database() {
     let connect = |endpoint| {
         RedisClient::new(RedisConfig {
             endpoint,
+            credentials: Credentials::NONE,
             namespace: Namespace::default(),
             timeouts: Timeouts::default(),
             breaker: None,
             events: None,
         })
     };
-    let url = |url: String| Endpoint::Url(SecretValue::new(url));
+    let url = |url: String| Endpoint::Url {
+        url: SecretValue::new(url),
+        tls: TlsOptions::verified(),
+    };
     let in_db_3 = connect(Endpoint::Host(HostEndpoint {
         host: "127.0.0.1".to_owned(),
         port,
-        username: None,
-        password: None,
-        tls: false,
+        tls: None,
         db: 3,
     }))
     .unwrap();
