@@ -61,6 +61,8 @@ import websockets
 import websockets.exceptions
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import FieldInfo, PydanticUndefined
+from pydantic.main import IncEx
+from pydantic_core import PydanticSerializationError, to_jsonable_python
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
@@ -393,6 +395,7 @@ from litellm.llms.anthropic.messages.convertible_blocks import (
     drop_non_string_tool_result_texts,
     malformed_tool_result_count_error,
 )
+from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
@@ -847,6 +850,8 @@ from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
 from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
 from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
+from litellm.router import router_arguments
+from litellm.router_config import build_router_config
 
 try:
     from litellm.proxy.enterprise_billing.billing_metrics import (
@@ -1208,7 +1213,7 @@ ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai
 ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/ai_hub)"
 
 custom_swagger_message: Final = (
-    "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
+    "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/enterprise#operations--branding)"
 )
 
 ### CUSTOM BRANDING [ENTERPRISE FEATURE] ###
@@ -1459,7 +1464,11 @@ async def initialize_shared_aiohttp_session() -> "ClientSession | None":
             connector_kwargs["socket_factory"] = socket_factory
 
         connector: Final = TCPConnector(**connector_kwargs)
-        session: Final = ClientSession(connector=connector, cookie_jar=DummyCookieJar())
+        session: Final = ClientSession(
+            connector=connector,
+            cookie_jar=DummyCookieJar(),
+            trace_configs=[build_pool_wait_trace_config()],
+        )
 
         verbose_proxy_logger.info(
             "SESSION REUSE: Created shared aiohttp session for connection pooling (ID: %s, limit=%s, limit_per_host=%s)",
@@ -3069,6 +3078,29 @@ redis_usage_cache: RedisCache | None = None  # redis cache used for tracking spe
 polling_via_cache_enabled: Literal["all"] | list[str] | bool = False
 native_background_mode: list[str] = []  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
+
+
+class _ResponseBackgroundSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    polling_via_cache: Literal["all"] | tuple[str, ...] | bool = False
+    native_background_mode: tuple[str, ...] = ()
+    ttl: int = 3600
+
+
+def _apply_background_response_settings(value: SettingsJsonValue) -> None:
+    global polling_via_cache_enabled, native_background_mode, polling_cache_ttl
+
+    responses: Final = _as_settings_mapping(value)
+    settings: Final = _ResponseBackgroundSettings.model_validate(responses.get("background_mode") or {})
+    polling: Final = settings.polling_via_cache
+    polling_via_cache_enabled, native_background_mode, polling_cache_ttl = (  # rebind-ok: Refresh runtime config.
+        list(polling) if isinstance(polling, tuple) else polling,
+        list(settings.native_background_mode),
+        settings.ttl,
+    )
+
+
 user_custom_auth = None
 user_custom_key_generate = None
 # Sentinel: prevents PKCE-no-Redis advisory from re-logging on config hot-reload.
@@ -6931,20 +6963,7 @@ class ProxyConfig:
                     # see usage here: https://docs.litellm.ai/docs/proxy/caching
                     pass
                 elif key == "responses":
-                    # Initialize global polling via cache settings
-                    global polling_via_cache_enabled, native_background_mode, polling_cache_ttl
-                    background_mode = value.get("background_mode", {})
-                    polling_via_cache_enabled = background_mode.get("polling_via_cache", False)
-                    native_background_mode = background_mode.get("native_background_mode", [])
-                    polling_cache_ttl = background_mode.get("ttl", 3600)
-                    verbose_proxy_logger.debug(
-                        "%s Initialized polling via cache: enabled=%s, native_background_mode=%s, ttl=%s%s",
-                        blue_color_code,
-                        polling_via_cache_enabled,
-                        native_background_mode,
-                        polling_cache_ttl,
-                        reset_color_code,
-                    )
+                    _apply_background_response_settings(value)
                 elif key == "max_ui_session_budget":
                     litellm.max_ui_session_budget = float(value) if value is not None else None
                     verbose_proxy_logger.debug(
@@ -7408,20 +7427,24 @@ class ProxyConfig:
                     verbose_proxy_logger.warning(
                         "Key '%s' is not a valid argument for Router.__init__(). Ignoring this key.", k
                     )
-        router = litellm.Router(
-            **router_params,
-            assistants_config=assistants_config,
-            search_tools=search_tools,
-            router_general_settings=RouterGeneralSettings(
-                async_only_mode=True  # only init async clients
-            ),
-            ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
-            fallback_access_check=router_fallback_access_check,
-            fallback_budget_check=RouterFallbackBudgetCheck(
-                is_enforced=router_fallback_budget_check.is_enforced,
-                team_member_model_budget_limiter=model_max_budget_limiter,
-            ),
-            auto_router_capability_limit=_license_check.auto_router_capability_limit,
+        router = litellm.Router.from_config(
+            build_router_config(
+                router_arguments(
+                    **router_params,
+                    assistants_config=assistants_config,
+                    search_tools=search_tools,
+                    router_general_settings=RouterGeneralSettings(
+                        async_only_mode=True  # only init async clients
+                    ),
+                    ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
+                    fallback_access_check=router_fallback_access_check,
+                    fallback_budget_check=RouterFallbackBudgetCheck(
+                        is_enforced=router_fallback_budget_check.is_enforced,
+                        team_member_model_budget_limiter=model_max_budget_limiter,
+                    ),
+                    auto_router_capability_limit=_license_check.auto_router_capability_limit,
+                )
+            )
         )
 
         if redis_usage_cache is not None and router.health().store.redis_cache is None:
@@ -7911,19 +7934,23 @@ class ProxyConfig:
                 # Router can function with model_list=[] if search_tools are configured
                 if len(_model_list) > 0 or search_tools:
                     verbose_proxy_logger.debug("_model_list: %s", _model_list)
-                    llm_router = litellm.Router(
-                        model_list=_model_list,
-                        router_general_settings=RouterGeneralSettings(
-                            async_only_mode=True  # only init async clients
-                        ),
-                        search_tools=search_tools,
-                        ignore_invalid_deployments=True,
-                        fallback_access_check=router_fallback_access_check,
-                        fallback_budget_check=RouterFallbackBudgetCheck(
-                            is_enforced=router_fallback_budget_check.is_enforced,
-                            team_member_model_budget_limiter=model_max_budget_limiter,
-                        ),
-                        auto_router_capability_limit=_license_check.auto_router_capability_limit,
+                    llm_router = litellm.Router.from_config(
+                        build_router_config(
+                            router_arguments(
+                                model_list=_model_list,
+                                router_general_settings=RouterGeneralSettings(
+                                    async_only_mode=True  # only init async clients
+                                ),
+                                search_tools=search_tools,
+                                ignore_invalid_deployments=True,
+                                fallback_access_check=router_fallback_access_check,
+                                fallback_budget_check=RouterFallbackBudgetCheck(
+                                    is_enforced=router_fallback_budget_check.is_enforced,
+                                    team_member_model_budget_limiter=model_max_budget_limiter,
+                                ),
+                                auto_router_capability_limit=_license_check.auto_router_capability_limit,
+                            )
+                        )
                     )
                     verbose_proxy_logger.debug("updated llm_router: %s", llm_router)
             else:
@@ -8644,6 +8671,7 @@ class ProxyConfig:
 
     def _apply_litellm_settings_db_values(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         self.litellm_settings.apply_db_row("litellm_settings", db_values)
+        _apply_background_response_settings(self.litellm_settings.get("responses", {}))
         for key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:
             if key in db_values and (value := self.litellm_settings.get(key)) is not None:
                 setattr(litellm, key, value)
@@ -10161,6 +10189,8 @@ def _event_with_restamped_nested_model(event: Mapping[str, object], target_model
 _SSE_DATA_FIELD: Final = b"data:"
 _SSE_NESTED_RESPONSE_MARKER: Final = b'"response"'
 _SSE_EVENT_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_JSON_OBJECT: Final = TypeAdapter(dict[object, object])
+_JSON_ARRAY: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 def _restamp_nested_response_model_in_sse_frame(frame: bytes, target_model: str) -> bytes:
@@ -10191,105 +10221,89 @@ def _vllm_choice_fields(choice: BaseModel) -> Mapping[str, object]:
     return MappingProxyType({field: choice_extras[field] for field in VLLM_CHOICE_FIELDS if field in choice_extras})
 
 
-def _fast_serialize_simple_model_response_stream(
-    chunk: ModelResponseStream,
-) -> bytes | None:
-    """
-    Serialize the common OpenAI text streaming chunk without the full Pydantic
-    serializer. Fall back for richer chunks so tool calls, logprobs, usage, and
-    provider-specific fields keep the canonical model_dump_json behavior.
-    """
-    if (
-        getattr(chunk, "provider_specific_fields", None) is not None
-        or getattr(chunk, "system_fingerprint", None) is not None
-        or getattr(chunk, "usage", None) is not None
-    ):
-        return None
-
-    choices: Final = getattr(chunk, "choices", None)
-    if not isinstance(choices, list) or len(choices) != 1:
-        return None
-
-    choice: Final = choices[0]
-    if (
-        not isinstance(choice, BaseModel)
-        or getattr(choice, "logprobs", None) is not None
-        or getattr(choice, "enhancements", None) is not None
-    ):
-        return None
-
-    delta: Final[object] = getattr(choice, "delta", None)
-    if delta is None:
-        return None
-
-    unsupported_delta_fields: Final = (
-        "function_call",
-        "tool_calls",
-        "audio",
-        "images",
-        "annotations",
-        "reasoning_content",
-        "thinking_blocks",
-        "provider_specific_fields",
-        "refusal",
-    )
-    if any(getattr(delta, field, None) is not None for field in unsupported_delta_fields):
-        return None
-
-    delta_dict: Final[dict] = {}
-    role: Final = getattr(delta, "role", None)
-    content: Final = getattr(delta, "content", None)
-    if role is not None:
-        delta_dict["role"] = role
-    if content is not None:
-        delta_dict["content"] = content
-
-    choice_dict: Final = {"index": getattr(choice, "index", 0), "delta": delta_dict, **_vllm_choice_fields(choice)}
-    finish_reason: Final = getattr(choice, "finish_reason", None)
-    if finish_reason is not None:
-        choice_dict["finish_reason"] = finish_reason
-
-    # Match the canonical ``model_dump_json(exclude_none=True)`` shape — if a
-    # field is None, omit it entirely rather than emitting ``"key": null``.
-    # Strict OpenAI-compatible clients reject ``null`` for optional fields like
-    # ``model``, so diverging here would surface as a client-side regression
-    # only on the fast path. Fall back to the slow path if a required-looking
-    # top-level identifier is missing.
-    model: Final = getattr(chunk, "model", None)
-    if model is None:
-        return None
-
-    payload: Final[dict] = {
-        "id": getattr(chunk, "id", None),
-        "object": getattr(chunk, "object", None),
-        "created": getattr(chunk, "created", None),
-        "model": model,
-        "service_tier": getattr(chunk, "service_tier", None),
-        "choices": [choice_dict],
-    }
-    for top_level_key in ("id", "object", "created", "service_tier"):
-        if payload[top_level_key] is None:
-            payload.pop(top_level_key)
-    return orjson.dumps(payload)
+def _json_encodes(value: object) -> bool:
+    try:
+        to_jsonable_python(value)
+    except ValueError:
+        return False
+    return True
 
 
-def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
-    if isinstance(chunk, ModelResponseStream):
-        serialized_chunk: Final = _fast_serialize_simple_model_response_stream(chunk)
+def _unencodable_part(value: object, ancestors: frozenset[int]) -> IncEx | bool:
+    if id(value) in ancestors:
+        return True
+    lineage: Final = ancestors | {id(value)}
+    if isinstance(value, BaseModel):
+        return _unencodable_keys(iter(value), lineage) or True
+    if isinstance(value, dict):
+        return _unencodable_entries(_JSON_OBJECT.validate_python(value), lineage)
+    if isinstance(value, (list, tuple)):
+        return _unencodable_indexes(enumerate(_JSON_ARRAY.validate_python(value)), lineage) or True
+    return True
+
+
+def _unencodable_entries(entries: Mapping[object, object], lineage: frozenset[int]) -> IncEx | bool:
+    by_name: Final = {key: item for key, item in entries.items() if isinstance(key, str)}
+    if len(by_name) == len(entries):
+        return _unencodable_keys(by_name.items(), lineage) or True
+    by_index: Final = {key: item for key, item in entries.items() if isinstance(key, int)}
+    if len(by_index) == len(entries):
+        return _unencodable_indexes(by_index.items(), lineage) or True
+    return True
+
+
+def _unencodable_keys(items: Iterable[tuple[str, object]], lineage: frozenset[int]) -> Mapping[str, IncEx | bool]:
+    return {key: _unencodable_part(item, lineage) for key, item in items if not _json_encodes(item)}
+
+
+def _unencodable_indexes(items: Iterable[tuple[int, object]], lineage: frozenset[int]) -> Mapping[int, IncEx | bool]:
+    return {index: _unencodable_part(item, lineage) for index, item in items if not _json_encodes(item)}
+
+
+def _serialize_chat_chunk_leniently(chunk: ModelResponseStream) -> bytes:
+    exclude: Final = _unencodable_keys(iter(chunk), frozenset({id(chunk)}))
+    if exclude:
+        verbose_proxy_logger.warning("Dropping streamed chunk fields that JSON cannot encode: %s", exclude)
+    jsonable: Final = chunk.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=exclude)
+    return json.dumps(jsonable, ensure_ascii=True, separators=(",", ":")).encode()
+
+
+def _serialize_chat_chunk(chunk: ModelResponseStream) -> bytes:
+    try:
+        return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+    except PydanticSerializationError:
+        return _serialize_chat_chunk_leniently(chunk)
+
+
+def _serialize_streaming_chunk(chunk: BaseModel) -> bytes:
+    choices: Final = _streaming_chunk_choices(chunk)
+    null_choice_fields: Final = tuple(_null_vllm_choice_fields(choice) for choice in choices)
+    if any(null_choice_fields):
+        serialized_chunk: Final = _serialize_keeping_null_choice_fields(chunk, choices, null_choice_fields)
         if serialized_chunk is not None:
             return serialized_chunk
+    if isinstance(chunk, ModelResponseStream):
+        return _serialize_chat_chunk(chunk)
+    return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
 
-    choices: Final = _streaming_chunk_choices(chunk)
-    if not any(_null_vllm_choice_fields(choice) for choice in choices):
-        return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
-    return json.dumps(
-        {
-            **_dump_set_fields(chunk, exclude=frozenset({"choices"})),
-            "choices": [{**_dump_set_fields(choice), **_null_vllm_choice_fields(choice)} for choice in choices],
-        },
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
+
+def _serialize_keeping_null_choice_fields(
+    chunk: BaseModel, choices: Sequence[BaseModel], null_choice_fields: Sequence[Mapping[str, None]]
+) -> bytes | None:
+    try:
+        return json.dumps(
+            {
+                **_dump_set_fields(chunk, exclude=frozenset({"choices"})),
+                "choices": [
+                    {**_dump_set_fields(choice), **nulls}
+                    for choice, nulls in zip(choices, null_choice_fields, strict=True)
+                ],
+            },
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode()
+    except ValueError:
+        return None
 
 
 def _streaming_chunk_choices(chunk: BaseModel) -> Sequence[BaseModel]:
@@ -18136,6 +18150,8 @@ async def model_deprecations(
 def get_model_group_info(
     llm_router: Router, all_models_str: Sequence[str], model_group: str | None, team_id: str | None = None
 ) -> list[ModelGroupInfoProxy]:
+    from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
+
     model_groups: Final[list[ModelGroupInfoProxy]] = []
 
     unique_models: Final = tuple(dict.fromkeys(all_models_str))
@@ -18145,6 +18161,14 @@ def get_model_group_info(
         if model_group is not None and model_group != model:
             continue
 
+        supports_background_chat = should_use_polling_for_request(
+            background_mode=True,
+            polling_via_cache_enabled=polling_via_cache_enabled,
+            redis_cache=redis_usage_cache,
+            model=model,
+            llm_router=llm_router,
+            native_background_mode=native_background_mode,
+        )
         _model_group_info = registry.group(model, team_id=team_id)
 
         if _model_group_info is not None:
@@ -18152,6 +18176,7 @@ def get_model_group_info(
                 ModelGroupInfoProxy.model_validate(
                     {
                         **_model_group_info.model_dump(),
+                        "supports_background_chat": supports_background_chat,
                         **model_group_custom_fields(
                             registry.deployments(
                                 resolve_model_group_alias(registry.aliases(), model) or model,
@@ -18166,6 +18191,7 @@ def get_model_group_info(
             model_group_info = ModelGroupInfoProxy(
                 model_group=model,
                 providers=[],
+                supports_background_chat=supports_background_chat,
             )
             model_groups.append(model_group_info)
 

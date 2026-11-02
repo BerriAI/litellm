@@ -2893,11 +2893,11 @@ def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selecto
         },
     )
     assert router.routing_strategy == "lar1"
-    assert "_core_async_get_available_deployment" in router.__dict__
+    assert "_core_async_get_available_deployment" in router._core.__dict__
 
     router._switch_routing_strategy("usage-based-routing-v2", {})
     assert router.lowesttpm_logger_v2 is not None
-    assert "async_get_available_deployment" not in router.__dict__
+    assert "_core_async_get_available_deployment" not in router._core.__dict__
 
 
 @pytest.mark.parametrize(
@@ -6774,6 +6774,151 @@ async def test_aresponses_streaming_content_policy_error_event_routes_to_content
     assert collected == fallback_chunks
     fallback_call.assert_awaited_once()
     assert fallback_call.await_args.kwargs["model"] == "gemini/gemini-2.5-flash"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_stream_keeps_numbering_after_a_mid_stream_fallback():
+    from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+
+    def delta(sequence_number: int, text: str) -> OutputTextDeltaEvent:
+        return OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta=text,
+            sequence_number=sequence_number,
+        )
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router: Final = _InjectedFallbackRouter(_AsyncList([delta(0, "c"), delta(1, "d")]))
+    primary: Final = _make_responses_iterator(
+        chunks=[delta(0, "a"), delta(1, "b")],
+        error=MidStreamFallbackError(
+            message="primary died",
+            model="primary",
+            llm_provider="anthropic",
+            is_pre_first_chunk=False,
+            generated_content="ab",
+        ),
+        model="primary",
+    )
+
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": litellm.aresponses},
+    )
+    events: Final = [event async for event in wrapped]
+
+    assert [(event.delta, event.sequence_number) for event in events] == [("a", 0), ("b", 1), ("c", 2), ("d", 3)]
+
+
+
+@pytest.mark.asyncio
+async def test_aresponses_stream_fallback_keeps_higher_numbers_and_passes_unnumbered_events():
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+
+    def delta(text: str) -> OutputTextDeltaEvent:
+        return OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, item_id="msg_1", output_index=0, content_index=0, delta=text
+        )
+
+    def numbered(sequence_number: int, text: str) -> OutputTextDeltaEvent:
+        return delta(text).model_copy(update={"sequence_number": sequence_number})
+
+    router: Final = _InjectedFallbackRouter(_AsyncList([numbered(7, "c"), delta("d"), numbered(8, "e")]))
+    primary: Final = _make_responses_iterator(
+        chunks=[numbered(0, "a"), numbered(1, "b")],
+        error=MidStreamFallbackError(
+            message="primary died",
+            model="primary",
+            llm_provider="anthropic",
+            is_pre_first_chunk=False,
+            generated_content="ab",
+        ),
+        model="primary",
+    )
+
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": litellm.aresponses},
+    )
+    events: Final = [event async for event in wrapped]
+
+    assert [(event.delta, event.get("sequence_number")) for event in events] == [
+        ("a", 0),
+        ("b", 1),
+        ("c", 7),
+        ("d", None),
+        ("e", 8),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_aresponses_stream_without_fallback_passes_upstream_numbers_unchanged():
+    from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+
+    def delta(sequence_number: int, text: str) -> OutputTextDeltaEvent:
+        return OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta=text,
+            sequence_number=sequence_number,
+        )
+
+    router: Final = _InjectedFallbackRouter(_AsyncList([]))
+    primary: Final = _make_responses_iterator(
+        chunks=[delta(0, "a"), delta(1, "b"), delta(1, "c"), delta(0, "d")], model="primary"
+    )
+
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": litellm.aresponses},
+    )
+    events: Final = [event async for event in wrapped]
+
+    assert [(event.delta, event.sequence_number) for event in events] == [("a", 0), ("b", 1), ("c", 1), ("d", 0)]
+
+
+@pytest.mark.asyncio
+async def test_aresponses_stream_fallback_continues_above_the_highest_number_the_primary_sent():
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+
+    def delta(sequence_number: int, text: str) -> OutputTextDeltaEvent:
+        return OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta=text,
+            sequence_number=sequence_number,
+        )
+
+    router: Final = _InjectedFallbackRouter(_AsyncList([delta(0, "d")]))
+    primary: Final = _make_responses_iterator(
+        chunks=[delta(0, "a"), delta(3, "b"), delta(1, "c")],
+        error=MidStreamFallbackError(
+            message="primary died",
+            model="primary",
+            llm_provider="anthropic",
+            is_pre_first_chunk=False,
+            generated_content="abc",
+        ),
+        model="primary",
+    )
+
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": litellm.aresponses},
+    )
+    events: Final = [event async for event in wrapped]
+
+    assert [(event.delta, event.sequence_number) for event in events] == [("a", 0), ("b", 3), ("c", 1), ("d", 4)]
 
 
 @pytest.mark.asyncio
@@ -24274,7 +24419,7 @@ def _record_phase_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dic
     def record(name: str, attributes: dict[str, str | int]) -> None:
         events.append((name, dict(attributes)))
 
-    monkeypatch.setattr(litellm.router, "phase_event", record)
+    monkeypatch.setattr(litellm.router_python_core, "phase_event", record)
     return events
 
 
@@ -25669,7 +25814,9 @@ def test_get_model_list_from_model_alias_should_not_iterate_for_non_alias_lookup
         ],
         model_group_alias={"alias-1": "gpt-5.5"},
     )
-    router.model_group_alias = NoItemsAliasDict({f"alias-{idx}": "gpt-5.5" for idx in range(200)})
+    # Assigning model_group_alias copies the value (a changeset detaches it), so the tripwire goes
+    # straight onto the core, where the lookup reads it.
+    router._core._core_model_group_alias = NoItemsAliasDict({f"alias-{idx}": "gpt-5.5" for idx in range(200)})
 
     model_alias_list = router.get_model_list_from_model_alias(model_name="gpt-5-mini")
     assert model_alias_list == []
@@ -25689,7 +25836,9 @@ def test_map_team_model_should_not_iterate_aliases_for_non_alias_team_model_name
         ],
         model_group_alias={"alias-1": "gpt-5.5"},
     )
-    router.model_group_alias = NoItemsAliasDict({f"alias-{idx}": "gpt-5.5" for idx in range(200)})
+    # Assigning model_group_alias copies the value (a changeset detaches it), so the tripwire goes
+    # straight onto the core, where the lookup reads it.
+    router._core._core_model_group_alias = NoItemsAliasDict({f"alias-{idx}": "gpt-5.5" for idx in range(200)})
 
     # map_team_model should return the public name unchanged (not the internal UUID name)
     # so the router can find all sibling deployments via team_id filtering
@@ -29142,13 +29291,13 @@ def test_reset_custom_routing_strategy():
     router = _create_custom_routing_router()
     router.set_custom_routing_strategy(SpecialEndpointRoutingStrategy(router))
 
-    assert "get_available_deployment" in router.__dict__
-    assert "_core_async_get_available_deployment" in router.__dict__
+    assert "get_available_deployment" in router._core.__dict__
+    assert "_core_async_get_available_deployment" in router._core.__dict__
 
     router._reset_custom_routing_strategy()
 
-    assert "get_available_deployment" not in router.__dict__
-    assert "async_get_available_deployment" not in router.__dict__
+    assert "get_available_deployment" not in router._core.__dict__
+    assert "_core_async_get_available_deployment" not in router._core.__dict__
     assert router.async_get_available_deployment.__func__ is Router.async_get_available_deployment
 
     router._reset_custom_routing_strategy()
@@ -30988,7 +31137,7 @@ async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_s
 
 
 _SYNC_SECONDS: Final = 10
-_ROUTER_FILE: Final = Router.__init__.__code__.co_filename
+_ROUTER_FILE: Final = Router._update_deployment_indices_after_removal.__code__.co_filename
 _INDEX_LOCK_LINES: Final = frozenset(
     number
     for number, line in enumerate(linecache.getlines(_ROUTER_FILE), start=1)
@@ -31445,6 +31594,7 @@ def test_request_carries_image_sees_chat_parts_and_responses_input_items():
     assert litellm.Router._request_carries_image(None, {"input": _IMAGE_RESPONSES_INPUT}) is True
     assert litellm.Router._request_carries_image([{"role": "user", "content": "Say hi"}], {}) is False
     assert litellm.Router._request_carries_image(None, {"input": "Say hi"}) is False
+    assert litellm.Router._request_carries_image(None, {"input": ["safe text", "more safe text"]}) is False
 
 
 @pytest.mark.asyncio
