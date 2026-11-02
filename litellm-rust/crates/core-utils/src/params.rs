@@ -4,6 +4,8 @@ pub enum Error {
     ExtraBody,
     #[error("invalid request: body must be a JSON object")]
     Body,
+    #[error("invalid request: body could not be serialized")]
+    Serialize(#[source] litellm_error::Source),
 }
 
 use std::ops::{Deref, DerefMut};

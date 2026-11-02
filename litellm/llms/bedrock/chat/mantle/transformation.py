@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
 from litellm.llms.anthropic.chat.transformation import JsonModeRequest
-from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
 from litellm.llms.bedrock.common_utils import build_mantle_messages_url
@@ -53,6 +53,9 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
             aws_bedrock_runtime_endpoint=optional_params.get("aws_bedrock_runtime_endpoint"),
             region=region,
         )
+
+    def _default_max_tokens_models(self, model: str, litellm_params: Mapping[str, object]) -> tuple[str, ...]:
+        return (f"bedrock_mantle/{model}", *super()._default_max_tokens_models(model, litellm_params))
 
     def validate_environment(
         self,

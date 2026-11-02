@@ -102,18 +102,14 @@ class AgentOps(OpenTelemetry):
             "Connection": "keep-alive",
         }
 
-        client: Final = get_httpx_client()
-        try:
-            response: Final = client.post(
-                url=auth_endpoint,
-                headers=headers,
-                json={"api_key": api_key},
-                timeout=10,
-            )
+        response: Final = get_httpx_client().post(
+            url=auth_endpoint,
+            headers=headers,
+            json={"api_key": api_key},
+            timeout=10,
+        )
 
-            if response.status_code != 200:
-                raise Exception(f"Failed to fetch auth token: {response.text}")
+        if response.status_code != 200:
+            raise Exception(f"Failed to fetch auth token: {response.text}")
 
-            return _DECODED_JSON.validate_python(response.json())
-        finally:
-            client.close()
+        return _DECODED_JSON.validate_python(response.json())

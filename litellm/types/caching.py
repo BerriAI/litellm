@@ -13,7 +13,6 @@ class LiteLLMCacheType(str, Enum):
     REDIS_SEMANTIC = "redis-semantic"
     VALKEY_SEMANTIC = "valkey-semantic"
     S3 = "s3"
-    DISK = "disk"
     QDRANT_SEMANTIC = "qdrant-semantic"
     AZURE_BLOB = "azure-blob"
     GCS = "gcs"

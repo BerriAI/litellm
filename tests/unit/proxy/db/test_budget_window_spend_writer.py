@@ -9,6 +9,7 @@ import pytest
 from litellm.proxy.db.budget_window_spend_writer import (
     WindowSeedTotals,
     commit_window_spend_updates,
+    open_window_spend_row,
     roll_window_spend_row,
     spend_logs_seed_totals,
 )
@@ -403,6 +404,29 @@ async def test_roll_window_spend_row_is_conditional_on_the_stored_window_being_o
     assert "WHERE entity_type = $1 AND entity_id = $2 AND window_duration = $3" in normalized
     assert "AND window_start < ($4::timestamptz AT TIME ZONE 'UTC')" in normalized
     assert params[:4] == ("team", "t1", "30d", datetime(2026, 8, 31))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("replaces_window_start", "replaced_param"), [(None, None), (WINDOW_A, datetime(2026, 8, 1))]
+)
+async def test_open_window_spend_row_moves_only_the_window_the_caller_saw_end(replaces_window_start, replaced_param):
+    db = _FakeDB()
+
+    await open_window_spend_row(
+        prisma_client=_FakePrismaClient(db),
+        entity_type="model_max_budget",
+        entity_id="k1",
+        window_duration="1d",
+        window_start=WINDOW_B,
+        replaces_window_start=replaces_window_start,
+    )
+
+    ((query, params),) = db.execute_raw_calls
+    normalized = " ".join(query.split())
+    assert "ON CONFLICT (entity_type, entity_id, window_duration) DO UPDATE" in normalized
+    assert normalized.endswith("WHERE \"LiteLLM_BudgetWindowSpend\".window_start <= ($5::timestamptz AT TIME ZONE 'UTC')")
+    assert params == ("model_max_budget", "k1", "1d", datetime(2026, 8, 31), replaced_param)
 
 
 @pytest.mark.asyncio
