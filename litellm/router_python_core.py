@@ -13202,6 +13202,7 @@ class PythonCore(DeprecatedRouterMembers):
                         "providers": [llm_provider],
                         "description": model_group_description,
                         **model_info,
+                        "supports_continuation": model_info.get("supports_continuation") is True,
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
                         "supported_endpoints": None,

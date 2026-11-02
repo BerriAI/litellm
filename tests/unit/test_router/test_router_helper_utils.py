@@ -1527,6 +1527,21 @@ def test_set_model_group_info_reports_supports_continuation_when_any_deployment_
     assert plain is not None and plain.supports_continuation is False
 
 
+@pytest.mark.parametrize("value", ["maybe", "", ["x"], "true", 1])
+def test_set_model_group_info_counts_only_a_boolean_true_supports_continuation(value: object) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "long-decode",
+                "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"},
+                "model_info": {"supports_continuation": value},
+            },
+        ]
+    )
+    group: Final = router._set_model_group_info(model_group="long-decode", user_facing_model_group_name="long-decode")
+    assert group is not None and group.supports_continuation is False
+
+
 @pytest.mark.asyncio
 async def test_set_response_headers(model_list):
     """Test if the 'set_response_headers' function is working correctly"""
