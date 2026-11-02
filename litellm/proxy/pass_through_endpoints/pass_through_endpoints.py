@@ -6,10 +6,19 @@ import posixpath
 import re
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from datetime import datetime
-from functools import reduce
+from functools import partial, reduce
 from itertools import chain, count, groupby, product, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast
@@ -179,7 +188,7 @@ from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
 )
 from .llm_provider_handlers.vertex_passthrough_logging_handler import VertexPassthroughLoggingHandler
 from .streaming_handler import PassThroughStreamingHandler
-from .success_handler import PassThroughEndpointLogging
+from .success_handler import PassThroughEndpointLogging, finalize_cost_without_success_logs
 from .upstream_usage_headers import (
     UpstreamReportedUsage,
     apply_upstream_reported_model,
@@ -190,9 +199,12 @@ from .upstream_usage_headers import (
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig
 
+_GuardedResponse = TypeVar("_GuardedResponse")
+
 router: Final = APIRouter()
 
 pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
+_blocked_response_cost_logging: Final = PassThroughEndpointLogging(log_dispatch=finalize_cost_without_success_logs)
 
 _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -1028,17 +1040,62 @@ def _post_call_hook_data(
     parsed_body: Mapping[str, object] | None,
     guardrails: Sequence[object],
     logging_obj: LiteLLMLoggingObj,
-    admin_metadata: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    inherited: bool,
 ) -> dict[str, object]:  # mutable-ok: the guardrails record their results in this request payload
     """The body with what the post-call guardrails read and the kwargs split stripped: ``metadata`` naming the guardrails,
     which ``should_run_guardrail`` checks, and the logging object, which unified (apply_guardrail) guardrails resolve a
     pass-through response's call type from when the route has no API_ROUTE_TO_CALL_TYPES entry"""
     body: Final = parsed_body or {}
+    admin_metadata: Final = _admin_guardrail_metadata(user_api_key_dict) if inherited else MappingProxyType({})
     return {
         **body,
         "metadata": {**(as_str_mapping(body.get("metadata")) or {}), "guardrails": guardrails, **admin_metadata},
         "litellm_logging_obj": logging_obj,
     }
+
+
+def _provider_charge_settlement(
+    response: httpx.Response,
+    response_body: Mapping[str, object] | None,
+    url_route: str,
+    start_time: datetime,
+    logging_obj: LiteLLMLoggingObj,
+    parsed_body: Mapping[str, object] | None,
+    custom_llm_provider: str | None,
+    handler_kwargs: Mapping[str, object],
+) -> Callable[[], Awaitable[None]]:
+    return partial(
+        _blocked_response_cost_logging.pass_through_async_success_handler,
+        finalize_before_dispatch=True,
+        httpx_response=response,
+        response_body=response_body,
+        url_route=url_route,
+        result="",
+        start_time=start_time,
+        end_time=datetime.now(start_time.tzinfo),
+        logging_obj=logging_obj,
+        cache_hit=False,
+        request_body=parsed_body or {},
+        custom_llm_provider=custom_llm_provider,
+        **handler_kwargs,
+    )
+
+
+async def _run_post_call_guardrails_keeping_the_charge(
+    run_guardrails: Callable[[], Awaitable[_GuardedResponse]],
+    settle_provider_charge: Callable[[], Awaitable[None]],
+) -> _GuardedResponse:
+    """A guardrail that blocks the response, or fails, does so after the provider answered and billed the call, so the
+    charge is settled before the failure path writes its row, as on the native routes."""
+    try:
+        return await run_guardrails()
+    except Exception:
+        try:
+            await settle_provider_charge()
+        except Exception:  # noqa: BLE001 - the guardrail's outcome still reaches the client
+            verbose_proxy_logger.exception("pass_through_endpoint: could not settle a blocked response's cost")
+        raise
 
 
 def _named_guardrail_runs_post_call(data: Mapping[str, object], entries: Sequence[object]) -> bool:
@@ -1053,7 +1110,7 @@ def _named_guardrail_runs_post_call(data: Mapping[str, object], entries: Sequenc
     )
 
 
-def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict | None) -> None:
+def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict[str, object] | None) -> None:
     """Copy guardrail logging entries from ``guardrail_data`` onto ``request_data``.
 
     Post-call guardrails run against a throwaway ``hook_data`` dict (its
@@ -1067,13 +1124,16 @@ def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict | Non
     if guardrail_data is None:
         return
     source_key: Final = get_metadata_variable_name_from_kwargs(guardrail_data)
-    source_metadata: Final = guardrail_data.get(source_key) or {}
+    source_metadata: Final = as_str_mapping(guardrail_data.get(source_key)) or {}
     entries: Final = source_metadata.get("standard_logging_guardrail_information")
     if not entries:
         return
 
     _, metadata = get_or_create_metadata_bucket(request_data)
-    metadata.setdefault("standard_logging_guardrail_information", list(entries))
+    metadata.setdefault(
+        "standard_logging_guardrail_information",
+        list(cast("Iterable[object]", entries)),  # cast-ok: guardrails record a list of entries here
+    )
 
 
 _GOOGLE_PASSTHROUGH_PROVIDERS: Final = frozenset(
@@ -2151,18 +2211,29 @@ async def pass_through_request(
         )
 
         if response.status_code < 400 and response_body is not None and post_call_guardrails:
+            json_body: Final = cast(dict[str, object] | None, _parsed_body)  # cast-ok: json
             hook_data: Final = _post_call_hook_data(
-                cast(dict[str, object] | None, _parsed_body),  # cast-ok: json
-                post_call_guardrails,
-                logging_obj,
-                _admin_guardrail_metadata(user_api_key_dict) if inherit_auth_guardrails else MappingProxyType({}),
+                json_body, post_call_guardrails, logging_obj, user_api_key_dict, inherit_auth_guardrails
             )
             post_call_guardrail_data = hook_data
-            response_body = await proxy_logging_obj.post_call_success_hook(
-                data=hook_data,
-                user_api_key_dict=user_api_key_dict,
-                response=response_body,
-                guardrails_only=inherit_auth_guardrails,
+            response_body = await _run_post_call_guardrails_keeping_the_charge(
+                partial(
+                    proxy_logging_obj.post_call_success_hook,
+                    data=hook_data,
+                    user_api_key_dict=user_api_key_dict,
+                    response=response_body,
+                    guardrails_only=inherit_auth_guardrails,
+                ),
+                _provider_charge_settlement(
+                    response,
+                    cast(dict[str, object] | None, response_body),  # cast-ok: json
+                    str(url),
+                    start_time,
+                    logging_obj,
+                    json_body,
+                    custom_llm_provider,
+                    cast(dict[str, object], kwargs),  # cast-ok: the logging fields init_kwargs built above
+                ),
             )
             if isinstance(response_body, dict):
                 content = json.dumps(response_body).encode("utf-8")

@@ -11,9 +11,10 @@ import httpx
 import pytest
 import yaml
 from integration._support.anthropic_sse import message_json
-from integration._support.client import Gateway, Scenario
+from integration._support.client import Gateway, Scenario, eventually
 from integration._support.openai_wire import chat_reply
 from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.safeguards_rig import key_hash
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -525,3 +526,33 @@ def test_post_call_pass_leaves_a_logger_hook_for_native_responses_out(rig: AuthG
         assert response.status_code == 200, response.text
         assert len(rig.generic_post_call_vendor.drain()) == 1
         assert len(rig.upstreams[OPENAI_ROUTE].drain()) == 1
+
+
+def _charged_rows(gateway: Gateway, key: str) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        eventually(
+            lambda: gateway.rows(
+                'SELECT status, spend, total_tokens FROM "LiteLLM_SpendLogs" WHERE api_key = %s', (key_hash(key),)
+            ),
+            bool,
+        )
+    )
+
+
+@pytest.mark.parametrize("route", [OPENAI_ROUTE, ANTHROPIC_ROUTE, GEMINI_ROUTE])
+def test_response_a_post_call_guardrail_blocks_still_charges_the_provider_call(
+    rig: AuthGuardrailRig, route: str
+) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": [KEY_POST_CALL]})
+        _drain(rig)
+
+        response: Final = _send(gateway, route, _route_body(route, "What is the capital of France?"), key)
+
+        assert response.status_code == 400, response.text
+        assert len(rig.upstreams[route].drain()) == 1
+        rows: Final = _charged_rows(gateway, key)
+        assert [row["status"] for row in rows] == ["failure"], rows
+        assert float(str(rows[0]["spend"])) > 0, rows
+        assert int(str(rows[0]["total_tokens"])) > 0, rows
