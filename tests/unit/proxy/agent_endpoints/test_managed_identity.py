@@ -1,6 +1,8 @@
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.proxy.agent_endpoints.managed_identity import classify_agent_subject, managed_write_fields
 from litellm.types.agents import AgentResponse
@@ -9,6 +11,7 @@ from litellm.types.proxy.agent_identity import (
     AgentIdentityBinding,
     AgentIdentityFailure,
     AgentSubject,
+    EntraIdentityConfig,
 )
 
 TENANT: Final = "11111111-1111-4111-8111-111111111111"
@@ -255,3 +258,149 @@ def test_empty_requirements_do_not_make_a_scope_less_human_token_valid(scope: ob
     binding: Final = BINDING.model_copy(update={"required_scopes": ()})
     result: Final = classify_agent_subject(binding, claims(oid=HUMAN, scp=scope), "both")
     assert isinstance(result, AgentIdentityFailure)
+
+
+BLUEPRINT: Final = "55555555-5555-4555-8555-555555555555"
+BLUEPRINT_BINDING: Final = BINDING.model_copy(update={"blueprint_id": BLUEPRINT})
+
+
+def blueprint_claims(**overrides: object) -> dict[str, object]:
+    return claims(**{"xms_par_app_azp": BLUEPRINT, "xms_act_fct": "3 9 11", **overrides})
+
+
+def test_blueprint_binding_accepts_matching_agent_identity_token() -> None:
+    result: Final = classify_agent_subject(BLUEPRINT_BINDING, blueprint_claims(), "autonomous")
+    assert result == AgentSubject(kind="application", oid=PRINCIPAL, mode="autonomous")
+
+
+def test_blueprint_binding_accepts_uppercase_blueprint_claim() -> None:
+    result: Final = classify_agent_subject(
+        BLUEPRINT_BINDING, blueprint_claims(xms_par_app_azp=BLUEPRINT.upper()), "autonomous"
+    )
+    assert result == AgentSubject(kind="application", oid=PRINCIPAL, mode="autonomous")
+
+
+def test_blueprint_binding_accepts_matching_delegated_token() -> None:
+    result: Final = classify_agent_subject(
+        BLUEPRINT_BINDING,
+        blueprint_claims(oid=HUMAN, scp="user_impersonation"),
+        "delegated",
+    )
+    assert result == AgentSubject(kind="delegated_subject", oid=HUMAN, mode="delegated")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"xms_par_app_azp": None},
+        {"xms_par_app_azp": "66666666-6666-4666-8666-666666666666"},
+        {"xms_par_app_azp": 11},
+        {"xms_act_fct": None},
+        {"xms_act_fct": "3 9"},
+        {"xms_act_fct": "111"},
+        {"xms_act_fct": [11]},
+    ],
+)
+@pytest.mark.parametrize("shape", ["autonomous", "delegated"])
+def test_blueprint_binding_rejects_tokens_outside_the_pinned_blueprint(
+    overrides: dict[str, object], shape: str
+) -> None:
+    extra: Final = {} if shape == "autonomous" else {"oid": HUMAN, "scp": "user_impersonation"}
+    blue_claims: Final = blueprint_claims(**extra)
+    for key, value in overrides.items():
+        if value is None:
+            blue_claims.pop(key)
+        else:
+            blue_claims[key] = value
+    result: Final = classify_agent_subject(BLUEPRINT_BINDING, blue_claims, "both")
+    assert isinstance(result, AgentIdentityFailure)
+    assert result.message == "Token was not issued to an agent identity of the configured blueprint"
+
+
+def test_unbound_blueprint_binding_accepts_foreign_parent_claim() -> None:
+    result: Final = classify_agent_subject(
+        BINDING,
+        claims(xms_par_app_azp="66666666-6666-4666-8666-666666666666"),
+        "autonomous",
+    )
+    assert result == AgentSubject(kind="application", oid=PRINCIPAL, mode="autonomous")
+
+
+def test_new_binding_carries_normalized_blueprint_id() -> None:
+    created: Final = managed_write_fields(
+        {
+            "identity": {
+                "provider": "microsoft_entra",
+                "tenant_id": TENANT,
+                "client_id": CLIENT,
+                "service_principal_id": PRINCIPAL,
+                "blueprint_id": BLUEPRINT.upper(),
+            }
+        },
+        None,
+        "admin",
+    )
+    assert not isinstance(created, AgentIdentityFailure)
+    assert created.get("identity", {}).get("create", {}).get("blueprint_id") == BLUEPRINT
+    replacement: Final = managed_write_fields(
+        {
+            "identity": {
+                "provider": "microsoft_entra",
+                "tenant_id": TENANT,
+                "client_id": CLIENT,
+                "service_principal_id": PRINCIPAL,
+                "blueprint_id": BLUEPRINT.upper(),
+            }
+        },
+        managed_agent(),
+        "admin",
+    )
+    assert not isinstance(replacement, AgentIdentityFailure)
+    assert replacement.get("identity", {}).get("upsert", {}).get("update", {}).get("blueprint_id") == BLUEPRINT
+
+
+def test_blueprint_only_change_rebinds_with_new_revision_and_cleared_evidence() -> None:
+    agent: Final = managed_agent().model_copy(
+        update={
+            "identity": BLUEPRINT_BINDING.model_copy(
+                update={"last_authenticated_at": datetime(2026, 9, 30, tzinfo=timezone.utc)}
+            )
+        }
+    )
+    result: Final = managed_write_fields(
+        {
+            "identity": {
+                "provider": "microsoft_entra",
+                "tenant_id": TENANT,
+                "client_id": CLIENT,
+                "service_principal_id": PRINCIPAL,
+                "required_roles": ["Agent.Invoke"],
+                "required_scopes": ["user_impersonation"],
+                "blueprint_id": "66666666-6666-4666-8666-666666666666",
+            }
+        },
+        agent,
+        "admin",
+    )
+    assert not isinstance(result, AgentIdentityFailure)
+    update: Final = result.get("identity", {}).get("upsert", {}).get("update", {})
+    assert update
+    assert update.get("revision") != BLUEPRINT_BINDING.revision
+    assert update.get("last_authenticated_at") is None
+
+
+def test_entra_config_normalizes_and_validates_blueprint_id() -> None:
+    config: Final = EntraIdentityConfig(
+        provider="microsoft_entra",
+        tenant_id=TENANT,
+        client_id=CLIENT,
+        blueprint_id=BLUEPRINT.upper(),
+    )
+    assert config.blueprint_id == BLUEPRINT
+    with pytest.raises(ValidationError):
+        EntraIdentityConfig(
+            provider="microsoft_entra",
+            tenant_id=TENANT,
+            client_id=CLIENT,
+            blueprint_id="not-a-uuid",
+        )

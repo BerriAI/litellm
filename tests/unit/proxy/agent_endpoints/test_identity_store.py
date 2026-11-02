@@ -74,7 +74,9 @@ def setup_store(
         )
     )
     return (
-        AgentIdentityStore(AgentsRepository(db), AgentIdentityRepository(db), VerifiedSubjectRepository(db), cache=cache),
+        AgentIdentityStore(
+            AgentsRepository(db), AgentIdentityRepository(db), VerifiedSubjectRepository(db), cache=cache
+        ),
         agents,
         identities,
         humans,
@@ -448,3 +450,17 @@ async def test_application_and_unregistered_clients_do_not_depend_on_human_subje
     else:
         assert result is None
     humans.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stored_blueprint_binding_is_enforced_on_every_request() -> None:
+    blueprint: Final = "55555555-5555-4555-8555-555555555555"
+    bound: Final = BINDING.model_copy(update={"blueprint_id": blueprint})
+    store, _, _, _ = setup_store(agent=stored_agent(identity=bound))
+    matching: Final = {**CLAIMS, "xms_par_app_azp": blueprint, "xms_act_fct": "3 9 11"}
+    assert isinstance(await store.resolve_verified_claims(matching), ManagedAgentContext)
+    foreign: Final = await store.resolve_verified_claims(
+        {**CLAIMS, "xms_par_app_azp": "66666666-6666-4666-8666-666666666666", "xms_act_fct": "3 9 11"}
+    )
+    assert isinstance(foreign, AgentIdentityFailure)
+    assert foreign.code == "identity_denied"

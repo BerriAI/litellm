@@ -15,6 +15,9 @@ const EXECUTION_MODE_OPTIONS = [
   { value: "delegated", label: "On behalf of a user" },
   { value: "both", label: "Both" },
 ];
+const isBlankOrUuid = (value: unknown): boolean =>
+  typeof value !== "string" || !value.trim() || IDENTITY_UUID_PATTERN.test(value.trim());
+
 const EXECUTION_OPTIONS = [
   { value: "enabled", label: "Enabled" },
   { value: "disabled", label: "Disabled" },
@@ -183,6 +186,18 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
                   value.
                 </>
               }
+            >
+              {({ value, onChange, ref, ...control }) => (
+                <Input {...control} ref={ref} value={typeof value === "string" ? value : ""} onChange={onChange} />
+              )}
+            </AgentFormField>
+            <AgentFormField
+              name="identity_blueprint_id"
+              label="Agent ID Blueprint"
+              rules={{
+                validate: (value: unknown) => isBlankOrUuid(value) || "Enter a valid blueprint application UUID",
+              }}
+              description="Optional. The Entra Agent ID blueprint application ID that created this agent identity. When set, tokens from agent identities of other blueprints are rejected"
             >
               {({ value, onChange, ref, ...control }) => (
                 <Input {...control} ref={ref} value={typeof value === "string" ? value : ""} onChange={onChange} />
