@@ -3920,6 +3920,34 @@ def test_convert_response_output_merges_raw_dict_message_and_function_call() -> 
     assert len(choices[0].message.tool_calls) == 1
 
 
+def test_convert_response_output_keeps_reasoning_before_raw_dict_message() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    reasoning: Final = ResponseReasoningItem(
+        id="rs_raw_before",
+        summary=[Summary(type="summary_text", text="Checking the forecast.")],
+        type="reasoning",
+        content=None,
+        encrypted_content=None,
+        status=None,
+    )
+    raw_message: Final = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Let me check.", "annotations": []}],
+    }
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (reasoning, raw_message),
+        handle_raw_dict_callback=handler._handle_raw_dict_response_item,
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "Let me check."
+    assert choices[0].message.reasoning_content == "Checking the forecast."
+    assert choices[0].message.reasoning_items is not None
+    assert [item["id"] for item in choices[0].message.reasoning_items] == ["rs_raw_before"]
+
+
 def test_convert_tools_to_responses_format_flattens_nested_custom_tool():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
