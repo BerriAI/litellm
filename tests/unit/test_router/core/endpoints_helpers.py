@@ -5,12 +5,11 @@ Helpers for the endpoint characterization tests (``test_endpoints_characterizati
 litellm (assistants, skills, realtime, fine-tuning, batches, ...), so every ``host.invoke`` the core
 makes is answered and recorded.
 
-Some endpoints do not go through ``host.invoke``: the Python core binds litellm's own functions for
-them when it is built (vector stores, Google GenAI, OCR, search, videos, containers, interactions,
-managed agents). ``patch_direct_endpoints`` replaces those litellm functions, before the core is
-built, with recording stand-ins that answer from the same host script, under the same ``__name__``
-(the core routes on the handler's name). A call to one of them is recorded with the function's name
-as its ``op``.
+Some endpoints are served by a host op named by its dotted path under ``litellm`` (vector stores,
+Google GenAI, OCR, search, videos, containers, interactions, managed agents), which ``host.invoke``
+resolves from litellm's modules at call time. ``patch_direct_endpoints`` replaces those litellm
+functions with recording stand-ins that answer from the same host script. A call to one of them is
+recorded with the function's name as its ``op``.
 """
 
 import importlib
@@ -180,8 +179,8 @@ RECORDED_NAMES: Final[Mapping[tuple[str, str], str]] = {
 def patch_direct_endpoints(monkeypatch: pytest.MonkeyPatch, host: ScriptedHost) -> None:
     """Replace litellm's directly bound endpoint functions with recording stand-ins on ``host``.
 
-    The stand-in keeps the function's ``__name__`` (the core routes on it); the call is recorded
-    under ``RECORDED_NAMES`` when the bare name is ambiguous, else under the function's name."""
+    The call is recorded under ``RECORDED_NAMES`` when the bare name is ambiguous, else under the
+    function's name."""
     for module_name, attributes in DIRECT_ENDPOINTS.items():
         module: Final = importlib.import_module(module_name)
         for attribute, function_name in attributes.items():

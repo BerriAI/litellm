@@ -510,15 +510,15 @@ async def test_init_responses_api_endpoints():
         return_value=None
     )
 
-    # Call without a response_id (no model extraction should happen)
+    # Call without a response_id or a model: nothing names a deployment, so the handler is called
+    # directly (as litellm's own function is without a router), never routed
+    direct_handler = AsyncMock()
     await router._init_responses_api_endpoints(
-        original_function=AsyncMock(), thread_id="thread_xyz"
+        original_function=direct_handler, thread_id="thread_xyz"
     )
 
-    # Verify _ageneric_api_call_with_fallbacks was called but model wasn't changed
-    first_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
-    assert "model" not in first_call_kwargs
-    assert first_call_kwargs["thread_id"] == "thread_xyz"
+    direct_handler.assert_awaited_once_with(thread_id="thread_xyz")
+    router._ageneric_api_call_with_fallbacks.assert_not_called()
 
     # Reset the mock
     router._ageneric_api_call_with_fallbacks.reset_mock()

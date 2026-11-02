@@ -1057,9 +1057,10 @@ def _router_with_advisor_deployment(
 ):
     """Build a Router whose only deployment is the advisor model on Foundry.
 
-    The recorder replaces ``litellm.anthropic_messages`` before construction
-    because Router binds it at init time, so the returned Router exercises the
-    real deployment-resolution path and records what it dispatched.
+    The router looks ``litellm.anthropic_messages`` up through its host at call
+    time, so each test patches it with the recorder around the call; the router
+    then exercises the real deployment-resolution path and records what it
+    dispatched.
     """
     import litellm
     from litellm.router import Router
@@ -1111,6 +1112,7 @@ async def test_advisor_sub_call_routes_through_proxy_router():
             side_effect=mock_call,
         ),
         patch.object(proxy_server, "llm_router", router),
+        patch("litellm.anthropic_messages", new=recorder),
     ):
         h = AdvisorOrchestrationHandler()
         result = await h.handle(
@@ -1172,6 +1174,7 @@ async def test_advisor_sub_call_routes_through_router_for_alias_and_wildcard(rou
             side_effect=mock_call,
         ),
         patch.object(proxy_server, "llm_router", router),
+        patch("litellm.anthropic_messages", new=recorder),
     ):
         h = AdvisorOrchestrationHandler()
         await h.handle(
@@ -1223,6 +1226,7 @@ async def test_advisor_sub_call_bypasses_router_for_unconfigured_model():
             side_effect=mock_call,
         ),
         patch.object(proxy_server, "llm_router", router),
+        patch("litellm.anthropic_messages", new=recorder),
     ):
         h = AdvisorOrchestrationHandler()
         await h.handle(
@@ -1278,6 +1282,7 @@ async def test_advisor_sub_call_client_override_bypasses_router():
             side_effect=mock_call,
         ),
         patch.object(proxy_server, "llm_router", router),
+        patch("litellm.anthropic_messages", new=recorder),
         patch.dict(proxy_server.general_settings, {"allow_client_side_credentials": True}),
         patch.object(litellm, "user_url_validation", False),
     ):
