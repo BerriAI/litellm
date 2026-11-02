@@ -489,6 +489,52 @@ def test_cache_key_tells_apart_requests_that_differ_only_in_tool_call_id_shape()
     assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=None) == signed_ids_key
 
 
+def test_cache_key_tells_apart_requests_that_differ_only_in_api_base() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "gpt-4o", "messages": _CACHING_TEST_MESSAGES}
+
+    backend_a_key: Final = cache.get_cache_key(**request, api_base="https://backend-a.example.com")
+    backend_b_key: Final = cache.get_cache_key(**request, api_base="https://backend-b.example.com")
+
+    assert backend_a_key != backend_b_key
+    assert cache.get_cache_key(**request, api_base="https://backend-a.example.com") == backend_a_key
+    assert cache.get_cache_key(**request) not in (backend_a_key, backend_b_key)
+
+
+def test_cache_key_tells_apart_deployments_that_differ_only_in_api_key() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {
+        "model": "gpt-4o",
+        "messages": _CACHING_TEST_MESSAGES,
+        "api_base": "https://gateway.example.com/v1",
+    }
+
+    tenant_one_key: Final = cache.get_cache_key(**request, api_key="sk-tenant-one")
+    tenant_two_key: Final = cache.get_cache_key(**request, api_key="sk-tenant-two")
+
+    assert tenant_one_key != tenant_two_key
+    assert cache.get_cache_key(**request, api_key="sk-tenant-one") == tenant_one_key
+
+
+def test_cached_response_is_not_served_to_another_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    prompt: Final = f"which backend am I talking to {uuid.uuid4().hex}"
+    request: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": prompt}]}
+    # only api_base differs between the two calls, everything else is the same request
+    other_backend: Final = {**request, "api_base": "https://backend-b.example.com"}
+
+    first: Final = completion(**request, api_base="https://backend-a.example.com", mock_response="from A", caching=True)
+    second: Final = completion(**other_backend, mock_response="from B", caching=True)
+    repeat: Final = completion(
+        **request, api_base="https://backend-a.example.com", mock_response="from C", caching=True
+    )
+
+    assert first.choices[0].message.content == "from A"
+    assert second.choices[0].message.content == "from B"
+    assert repeat.choices[0].message.content == "from A"
+    assert repeat._hidden_params["cache_hit"] is True
+
+
 class PhaseRecordingCache(InMemoryCache):
     """Records the target and the active span each read / write ran under, as a Redis span would."""
 
@@ -795,7 +841,12 @@ def test_get_cache_key():
 
         print(embedding_cache_key)
 
-        embedding_cache_key_str = "model: azure/text-embedding-ada-002input: ['hi who is ishaan']"
+        embedding_cache_key_str = (
+            "model: azure/text-embedding-ada-002"
+            "api_base: https://openai-gpt-4-test-v-1.openai.azure.com/"
+            "api_key: "
+            "input: ['hi who is ishaan']"
+        )
         hash_object = hashlib.sha256(embedding_cache_key_str.encode())
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
@@ -854,7 +905,12 @@ def test_get_cache_key():
         )
 
         print(embedding_cache_key_2)
-        embedding_cache_key_str_2 = "model: EMBEDDING_MODEL_GROUPinput: ['hi who is ishaan']"
+        embedding_cache_key_str_2 = (
+            "model: EMBEDDING_MODEL_GROUP"
+            "api_base: https://openai-gpt-4-test-v-1.openai.azure.com/"
+            "api_key: "
+            "input: ['hi who is ishaan']"
+        )
         hash_object = hashlib.sha256(embedding_cache_key_str_2.encode())
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
