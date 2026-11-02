@@ -4848,6 +4848,7 @@ class LlmProviders(str, Enum):
     VISPARK = "vispark"
     MORPH = "morph"
     OPENCODE_GO = "opencode_go"
+    KIMCHI = "kimchi"
     LAMBDA_AI = "lambda_ai"
     INCEPTION = "inception"
     TEXT_COMPLETION_INCEPTION = "text-completion-inception"
