@@ -2071,6 +2071,42 @@ def test_invoke_model_that_cannot_force_the_json_tool_gets_native_output_without
     assert ("tools" in body) is not native
 
 
+@pytest.mark.parametrize(
+    ("model", "forced_tool_use", "native_key"),
+    [("us.anthropic.claude-opus-4-8", True, "legacy"), ("us.anthropic.claude-haiku-5-5", False, None)],
+    ids=["native-key", "cannot-force-tool"],
+)
+def test_invoke_caller_output_format_drops_unsupported_constraints_before_going_native(
+    set_native_structured_output: Callable[[str, NativeStructuredOutputKey], None],
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    forced_tool_use: bool,
+    native_key: NativeStructuredOutputKey,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost[model], "supports_forced_tool_use", forced_tool_use)
+    set_native_structured_output(model, native_key)
+    if native_key is None:
+        monkeypatch.delitem(litellm.model_cost[model], "supports_bedrock_native_structured_output")
+    schema: Final = {
+        "type": "object",
+        "properties": {"age": {"type": "integer", "minimum": 0}},
+        "required": ["age"],
+        "additionalProperties": False,
+    }
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "How old is the oldest tree?"}],
+        optional_params={"output_format": {"type": "json_schema", "schema": schema}, "max_tokens": 2048},
+        litellm_params={},
+        headers={},
+    )
+
+    sent_age: Final = body["output_config"]["format"]["schema"]["properties"]["age"]
+    assert sent_age["type"] == "integer"
+    assert "minimum" not in sent_age
+
+
 BEDROCK_HAIKU_45_BASE_ID: Final = "anthropic.claude-haiku-4-5-20251001-v1:0"
 
 

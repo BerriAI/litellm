@@ -533,8 +533,8 @@ def apply_bedrock_invoke_structured_output(
     forwarded as ``output_config.format``, which Bedrock relays to the model for
     enforced structured output. For every other model the schema is inlined into
     the last user message as best-effort text, with a warning because nothing
-    enforces it. ``response_format_is_native`` keeps the native ``output_format``
-    the chat path already built from ``response_format``.
+    enforces it. ``response_format_is_native`` sends the schema natively, after
+    the same cleanup, when the chat path already chose native output for the model.
     """
     legacy_output_format: Final = request_body.pop("output_format", None)
     output_config_format: Final = pop_bedrock_invoke_output_config_format(request_body)
@@ -543,10 +543,14 @@ def apply_bedrock_invoke_structured_output(
     if schema_format is None:
         return
 
-    native_format: Final = (
-        legacy_format
-        if response_format_is_native and legacy_format is not None
-        else bedrock_native_output_format(model, schema_format, model_info=model_info)
+    native_format: Final = bedrock_native_output_format(
+        model,
+        schema_format,
+        model_info=(
+            {**(model_info or {}), "supports_bedrock_native_structured_output": True}
+            if response_format_is_native
+            else model_info
+        ),
     )
     if native_format is not None:
         existing_output_config: Final = request_body.get("output_config")
