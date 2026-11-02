@@ -615,6 +615,7 @@ def test_post_call_policy_pipeline_decides_what_a_flagged_step_does(rig: AuthGua
 
         assert response.status_code == 200, response.text
         assert len(rig.key_post_call_vendor.drain()) == 1
+        assert KEY_POST_CALL in response.headers["x-litellm-applied-guardrails"].split(",")
 
 
 def test_pre_call_policy_pipeline_relays_the_provider_bytes(rig: AuthGuardrailRig) -> None:
