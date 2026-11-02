@@ -282,6 +282,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model_response=model_response,
                 _predictions=_predictions,
                 input=input,
+                raw_usage_metadata=_json_response.get("usageMetadata"),
             )
 
     async def async_batch_embeddings(
@@ -389,4 +390,5 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model_response=model_response,
                 _predictions=_predictions,
                 input=input,
+                raw_usage_metadata=_json_response.get("usageMetadata"),
             )

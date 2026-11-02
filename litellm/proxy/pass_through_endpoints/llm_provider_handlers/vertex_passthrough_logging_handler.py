@@ -540,6 +540,7 @@ class VertexPassthroughLoggingHandler:
                 model_response=model_response,
                 model=model,
                 _predictions=response_json,
+                raw_usage_metadata=response_json.get("usageMetadata"),
             )
         else:
             litellm_embedding_response = process_embed_content_response(
