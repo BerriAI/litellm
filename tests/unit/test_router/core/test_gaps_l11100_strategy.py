@@ -300,7 +300,7 @@ def test_a_failed_edit_rolls_back_to_the_serving_router_even_above_a_tightened_l
     assert restored.litellm_params.tags is None
 
 
-def test_a_failed_edit_without_ignore_invalid_deployments_raises_and_leaves_the_router_removed(
+def test_a_failed_edit_without_ignore_invalid_deployments_raises_and_restores_the_router(
     make_core: MakeCore,
 ) -> None:
     limit: Final = {"value": 2}
@@ -319,8 +319,8 @@ def test_a_failed_edit_without_ignore_invalid_deployments_raises_and_leaves_the_
             ChangeSet(upsert=[Deployment(**complexity_marker("two", "m2", config=HEURISTIC_V2, tags=["edited"]))])  # pyright: ignore[reportArgumentType]
         )
     assert str(raised.value) == HEURISTIC_V2_LIMIT_MESSAGE
-    assert model_ids(core) == ["s", "b", "m1"]
-    assert registered_tags(core, "complexity") == {"one": [()]}
+    assert model_ids(core) == ["s", "b", "m1", "m2"]
+    assert registered_tags(core, "complexity") == {"one": [()], "two": [()]}
 
 
 # --- the adaptive router -------------------------------------------------------------------------------
@@ -373,10 +373,19 @@ def test_an_adaptive_router_registers_one_post_call_hook_and_a_header_hook(
 
     post_call, header = _hook_counts(host)
     assert post_call == 1
-    assert header >= 1
+    assert header == 1
 
 
-def test_deleting_an_adaptive_router_releases_it_and_its_post_call_hook(
+def test_resyncing_an_adaptive_router_keeps_a_single_header_hook(make_core: MakeCore, host: ScriptedHost) -> None:
+    core: Final = make_core(model_list=_adaptive_list())
+
+    core.apply(ChangeSet(upsert=[Deployment(**adaptive_marker("ar", "ar1", ["y"]))]))  # pyright: ignore[reportArgumentType]
+    core.apply(ChangeSet(upsert=[Deployment(**adaptive_marker("ar", "ar1", ["x"]))]))  # pyright: ignore[reportArgumentType]
+
+    assert _hook_counts(host) == (1, 1)
+
+
+def test_deleting_an_adaptive_router_releases_it_its_post_call_hook_and_the_header_hook(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     core: Final = make_core(model_list=_adaptive_list())
@@ -384,7 +393,30 @@ def test_deleting_an_adaptive_router_releases_it_and_its_post_call_hook(
     core.apply(ChangeSet(delete=["ar1"]))
 
     assert registered_tags(core, "adaptive") == {}
-    assert _hook_counts(host)[0] == 0
+    assert _hook_counts(host) == (0, 0)
+
+
+def test_retiring_the_last_adaptive_router_on_the_host_removes_the_header_hook(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=_adaptive_list())
+
+    core.retire()
+
+    assert _hook_counts(host) == (0, 0)
+
+
+def test_retiring_one_adaptive_router_keeps_the_header_hook_for_another_on_the_host(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    first: Final = make_core(model_list=_adaptive_list())
+    second: Final = make_core(model_list=_adaptive_list())
+
+    first.retire()
+
+    assert _hook_counts(host)[1] == 1
+    second.retire()
+    assert _hook_counts(host) == (0, 0)
 
 
 def test_a_complexity_router_with_adaptive_enabled_also_registers_an_adaptive_router(make_core: MakeCore) -> None:

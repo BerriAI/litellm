@@ -7,7 +7,7 @@ that reaches outside itself only through its host; it does not use ``PythonCore`
 picked once, when the router is built, from its ``RouterConfig``.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 from litellm._logging import verbose_router_logger
@@ -50,6 +50,39 @@ class RouterCore(Protocol):
     def register_plugin(self, plugin: "CustomRoutingStrategyBase") -> None: ...
 
     def retire(self) -> None: ...
+
+
+_REQUEST_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
+
+
+def detached_request(
+    request_kwargs: Mapping[str, object] | None,
+) -> dict[str, object]:  # mutable-ok: the selection cores take a dict
+    """
+    A copy of a caller's request for ``select``: selection pops keys, pins tier params and stamps
+    routing metadata on the request it routes, and none of that may reach the caller's dict (or the
+    metadata dicts inside it).
+    """
+    if request_kwargs is None:
+        return {}
+    return {
+        key: dict(value) if key in _REQUEST_METADATA_KEYS and isinstance(value, Mapping) else value  # pyright: ignore[reportUnknownArgumentType]  # a request value
+        for key, value in request_kwargs.items()
+    }
+
+
+def organization_deployment_id(
+    declared_id: str | None, position: int, organization: object, generated: Callable[[], str]
+) -> str:
+    """
+    The id of one deployment a ``litellm_params.organization`` list fans out into: each gets its own.
+    A declared id stays on the first organization's deployment (so lookups by it keep working) and is
+    suffixed with the organization on the others; without one, ``generated`` hashes that
+    organization's own params.
+    """
+    if declared_id is None:
+        return generated()
+    return declared_id if position == 0 else f"{declared_id}-{organization}"
 
 
 def make_core(config: RouterConfig, host: "PythonHost", core_class: "type[PythonCore] | None" = None) -> RouterCore:

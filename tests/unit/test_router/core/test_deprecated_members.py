@@ -663,3 +663,14 @@ def test_cooldown_time_reads_back_as_given(make_core: MakeCore) -> None:
     assert updated == 3 and type(updated) is int
     default: Final = as_router(make_core(model_list=[deployment("gpt", "a")])).settings().cooldown_time
     assert default == 5 and type(default) is int
+
+
+@pytest.mark.asyncio
+async def test_the_old_healthy_listing_takes_the_retry_skip_list_off_the_callers_request(make_core: MakeCore) -> None:
+    router: Final = as_router(make_core(model_list=[deployment("gpt", "a"), deployment("gpt", "b")]))
+    request: Final[dict[str, object]] = {"_retry_skipped_deployment_ids": ("a",)}
+    with pytest.warns(DeprecationWarning, match=r"Router\.async_get_healthy_deployments is deprecated"):
+        healthy: Final = await router.async_get_healthy_deployments("gpt", request)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the old untyped dicts
+    assert isinstance(healthy, list)
+    assert [picked_id(entry) for entry in healthy] == ["b"]  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # see above
+    assert request == {}

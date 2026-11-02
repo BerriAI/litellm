@@ -124,6 +124,7 @@ from litellm.litellm_core_utils.clientside_credential_handler import (
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -255,7 +256,11 @@ from litellm.router_api import (
 )
 from litellm.router_api import RoutingContext as RouterContext
 from litellm.router_api import deployment_id as _deployment_id
+from litellm.router_core import detached_request, organization_deployment_id
 from litellm.router_deprecated import DeprecatedRouterMembers
+from litellm.router_deprecated import (
+    _note as _note_deprecated_member,  # pyright: ignore[reportPrivateUsage]  # the deprecated write notes its use
+)
 from litellm.router_endpoint_table import (
     ENDPOINTS,
     SYNC_DISPATCHES,
@@ -369,9 +374,14 @@ from litellm.router_utils.fallback_event_handlers import (
     run_async_fallback,
 )
 from litellm.router_utils.global_callback_holders import (
+    OUTCOME_CALLBACK_LISTS,
+    adaptive_routers_on_host,
     live_check_owners,
+    on_host,
     routers_holding_global_callbacks,
     routers_holding_global_callbacks_lock,
+    sync_adaptive_response_header_hook,
+    without_router_callbacks,
 )
 from litellm.router_utils.handle_error import (
     async_raise_no_deployment_exception,
@@ -1525,6 +1535,11 @@ class PythonCore(DeprecatedRouterMembers):
             # Settings change only through a changeset, so every core serving this router sees it.
             self.apply(ChangeSet(assign={name.removeprefix("_core_"): value}))
             return
+        if name == "model_list" and "_core_model_list" in self.__dict__:
+            # ``core.model_list = [...]`` on the core itself: noted and reindexed as through the Router.
+            _note_deprecated_member("model_list", "registry().all()")
+            self._assign_model_list(value)  # pyright: ignore[reportUnknownMemberType, reportArgumentType]  # the assigned list, as given
+            return
         if name in _SETTING_ATTRIBUTES:
             self.__dict__.pop("_settings_snapshot", None)
         elif name == "_core_model_list" and "_core_model_list" in self.__dict__:
@@ -1589,12 +1604,37 @@ class PythonCore(DeprecatedRouterMembers):
         """
         Pick a deployment for ``model`` without calling it (``pick``), list the deployments that
         are healthy for the request (``healthy``), or pick one for a pass-through route
-        (``pass_through``).
+        (``pass_through``). The caller's ``request_kwargs`` are left unchanged: selection works on a copy.
         """
+        return await self._select_in_place(  # pyright: ignore[reportUnknownVariableType]  # the selection cores return untyped deployment dicts
+            model,
+            None if request_kwargs is None else detached_request(request_kwargs),
+            kind=kind,
+            messages=messages,
+            input=input,
+            specific_deployment=specific_deployment,
+            parent_otel_span=parent_otel_span,
+            health_check_probe=health_check_probe,
+        )
+
+    async def _select_in_place(  # pyright: ignore[reportUnknownParameterType]  # the selection cores return untyped deployment dicts
+        self,
+        model: str,
+        request_kwargs: dict[str, object] | None = None,  # mutable-ok: pinned and stamped in place
+        *,
+        kind: SelectKind = "pick",
+        messages: list[dict[str, str]] | None = None,  # mutable-ok: the selection cores take a list
+        input: str | list[object] | None = None,  # mutable-ok: the selection cores take a list
+        specific_deployment: bool | None = False,
+        parent_otel_span: Span | None = None,
+        health_check_probe: bool = False,
+    ) -> "list[UntypedDict] | UntypedDict":  # mutable-ok: the core's type (list[dict] | dict), as select returns it
+        """``select`` on the request the router itself routes, which keeps what selection pins on it."""
+        request: Final = request_kwargs if request_kwargs is not None else {}
         if kind == "pick":
             return await self._core_async_get_available_deployment(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selection cores return untyped deployment dicts
                 model=model,
-                request_kwargs=request_kwargs if request_kwargs is not None else {},
+                request_kwargs=request,
                 messages=messages,
                 input=input,
                 specific_deployment=specific_deployment,
@@ -1602,7 +1642,7 @@ class PythonCore(DeprecatedRouterMembers):
         if kind == "healthy":
             return await self._core_async_get_healthy_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selection cores return untyped deployment dicts
                 model=model,
-                request_kwargs=request_kwargs if request_kwargs is not None else {},
+                request_kwargs=request,
                 messages=messages,
                 input=input,
                 specific_deployment=specific_deployment,
@@ -2065,7 +2105,8 @@ class PythonCore(DeprecatedRouterMembers):
                     f"default_fallbacks must be a list of model names, got '{_fallbacks}'. Use ['{_fallbacks}']"
                 )
             if self._core_fallbacks is not None:
-                self._core_fallbacks.append({"*": _fallbacks})
+                # A new list: the configured one may be the process-wide ``litellm.fallbacks``.
+                self._core_fallbacks = [*self._core_fallbacks, {"*": _fallbacks}]  # pyright: ignore[reportUnknownMemberType]  # the configured fallback entries
             else:
                 self._core_fallbacks = [{"*": _fallbacks}]
 
@@ -2224,6 +2265,8 @@ class PythonCore(DeprecatedRouterMembers):
         live_check_owners.discard(self)
         self.retire_routing_state()
         self._release_global_callbacks()
+        # The shared adaptive response header hook leaves with the host's last adaptive router.
+        sync_adaptive_response_header_hook(self._host.callbacks, adaptive_routers_on_host(self._host))
 
     def _release_global_callbacks(self) -> None:
         with _routers_holding_global_callbacks_lock:
@@ -2241,7 +2284,7 @@ class PythonCore(DeprecatedRouterMembers):
             method_owners=(self, *slack_alerting_loggers),
         )
         with _routers_holding_global_callbacks_lock:
-            survivors: Final = tuple(_routers_holding_global_callbacks)
+            survivors: Final = on_host(tuple(_routers_holding_global_callbacks), self._host)
         candidates: Final = chain.from_iterable(router._global_callback_candidates() for router in survivors)
         for candidate in self._host.callbacks.with_custom_logger_keys(candidates, vacated_keys):
             self._register_router_selector(candidate)
@@ -3189,7 +3232,10 @@ class PythonCore(DeprecatedRouterMembers):
         self.optional_callbacks = [cb for cb in self.optional_callbacks if type(cb) is not callback_cls]
         if any(
             router is not self and any(type(cb) is callback_cls for cb in (router.optional_callbacks or []))
-            for router in (*_live_routers, *(owner for owner in live_check_owners if not isinstance(owner, PythonCore)))
+            for router in on_host(
+                (*_live_routers, *(owner for owner in live_check_owners if not isinstance(owner, PythonCore))),
+                self._host,
+            )
         ):
             return
         for cb in tuple(self._host.callback_list("callbacks")):
@@ -11009,7 +11055,6 @@ class PythonCore(DeprecatedRouterMembers):
         changes, otherwise a released router keeps recording turns through its hook."""
         from litellm.router_strategy.adaptive_router.hooks import (
             AdaptiveRouterPostCallHook,
-            AdaptiveRouterResponseHeaderHook,
         )
 
         for callback in self._host.callbacks.get_custom_loggers_for_type(AdaptiveRouterPostCallHook):
@@ -11017,8 +11062,9 @@ class PythonCore(DeprecatedRouterMembers):
         for tagged_adaptive_routers in self._core_adaptive_routers.values():
             for tagged in tagged_adaptive_routers:
                 self._host.callbacks.add_litellm_callback(AdaptiveRouterPostCallHook(adaptive_router=tagged.strategy))
-        if self._core_adaptive_routers:
-            self._host.callbacks.add_litellm_callback(AdaptiveRouterResponseHeaderHook())
+        sync_adaptive_response_header_hook(
+            self._host.callbacks, bool(self._core_adaptive_routers) or adaptive_routers_on_host(self._host)
+        )
 
     def init_adaptive_router_deployment(self, deployment: Deployment) -> None:
         """
@@ -11161,6 +11207,10 @@ class PythonCore(DeprecatedRouterMembers):
             self._core_team_model_to_deployment_indices = {}  # Reset the team_model index
         self._core_team_pattern_routers = {}
         self._core_team_public_model_names = frozenset()
+        # The replaced list's wildcard routes and names go with it.
+        self._core_pattern_router = PatternMatchRouter()
+        self._core_provider_default_deployment_ids.clear()
+        self._core_deployment_names.clear()
         # Reset per-strategy router registries so hot-reload doesn't leave
         # stale routers pointing at the old model_list.
         self._core_quality_routers = {}
@@ -11214,13 +11264,24 @@ class PythonCore(DeprecatedRouterMembers):
             if _litellm_params.get("organization", None) is not None and isinstance(
                 _litellm_params["organization"], list
             ):  # Addresses https://github.com/BerriAI/litellm/issues/3949
-                for org in _litellm_params["organization"]:
+                for position, org in enumerate(tuple(_litellm_params["organization"])):  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # configured organizations
                     _litellm_params["organization"] = org
+                    # Each organization's deployment has its own id: a declared id stays on the
+                    # first and is suffixed with the organization on the rest, a generated one is
+                    # generated for that organization's params.
                     self._create_deployment(
                         deployment_info=model,
                         _model_name=_model_name,
                         _litellm_params=_litellm_params,
-                        _model_info=_model_info,
+                        _model_info={
+                            **_model_info,
+                            "id": organization_deployment_id(
+                                declared_id,
+                                position,
+                                org,  # pyright: ignore[reportUnknownArgumentType]  # a configured organization
+                                lambda: self._core_generate_model_id(_model_name, _litellm_params),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the configured params
+                            ),
+                        },
                         declared_id=declared_id,
                         duplicate_ids=duplicate_ids,
                     )
@@ -11520,6 +11581,8 @@ class PythonCore(DeprecatedRouterMembers):
         )
 
         self._core_pattern_router.remove_deployment(model_id)
+        if model_id in self._core_provider_default_deployment_ids:
+            self._core_provider_default_deployment_ids.remove(model_id)
         for team_id in list(self._core_team_pattern_routers.keys()):
             team_pattern_router = self._core_team_pattern_routers[team_id]
             team_pattern_router.remove_deployment(model_id)
@@ -11642,6 +11705,10 @@ class PythonCore(DeprecatedRouterMembers):
                 )
                 return None
             else:
+                # The failed edit raises, but the deployment it replaced keeps serving.
+                self._restore_deployment_after_failed_upsert(
+                    previous_deployment=_deployment_on_router, model_id=_deployment_model_id
+                )
                 raise e
 
     def _restore_deployment_after_failed_upsert(self, previous_deployment: Deployment | None, model_id: str) -> None:
@@ -13176,6 +13243,28 @@ class PythonCore(DeprecatedRouterMembers):
             apply_remaining_usage_headers(additional_headers, remaining_usage)
         return response
 
+    def _assign_model_list(self, model_list: list[Mapping[str, object]]) -> None:  # mutable-ok: kept as assigned
+        """
+        ``router.model_list = [...]`` (deprecated): the list is swapped as given and reindexed, so a
+        replaced deployment's id, name and team entries stop finding the new list's entries. The
+        registry version moves once.
+        """
+        with self._deployment_index_lock:
+            self._core_model_list = model_list
+            self.model_id_to_deployment_index_map = {
+                str(model_id): idx
+                for idx, entry in enumerate(model_list)
+                if (model_id := (as_str_mapping(entry.get("model_info")) or {}).get("id")) is not None
+            }
+            self._build_model_name_index(model_list)  # pyright: ignore[reportUnknownMemberType]  # the untyped index builder
+            self._core_model_names = {
+                str(entry["model_name"])
+                for entry in model_list
+                if entry.get("model_name") and (as_str_mapping(entry.get("model_info")) or {}).get("id") is not None
+            }
+            self._access_groups_cache = None
+            self._invalidate_model_group_info_cache()
+
     def _build_model_name_index(self, model_list: list) -> None:
         """
         Build model_name -> deployment indices mapping for O(1) lookups.
@@ -13188,6 +13277,10 @@ class PythonCore(DeprecatedRouterMembers):
         self._core_team_public_model_names = frozenset()
 
         for idx, model in enumerate(model_list):
+            if (as_str_mapping(model.get("model_info")) or {}).get("id") is None:  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # an entry of the untyped list
+                # An entry without an id (only ``router.model_list = [...]`` keeps one as given) is
+                # never served, as before that assignment reindexed: routing keys on the id.
+                continue
             model_name = model.get("model_name")
             if model_name:
                 if model_name not in self._core_model_name_to_deployment_indices:
@@ -17235,11 +17328,24 @@ class PythonCore(DeprecatedRouterMembers):
         self._core_prompt_caching_pin_cache.in_memory_cache.flush_cache()
 
     def reset(self):
-        ## clean up on close
-        self._host.set_callback_list("success_callback", [])
-        self._host.set_callback_list("_async_success_callback", [])
-        self._host.set_callback_list("failure_callback", [])
-        self._host.set_callback_list("_async_failure_callback", [])
+        ## clean up on close: drop this router's own success/failure callbacks, never another's
+        slack_alerting_loggers: Final = self._slack_alerting_loggers()
+        owned: Final = (  # pyright: ignore[reportUnknownVariableType]  # the router's callback objects
+            *self._callback_selectors(),
+            *self._override_selectors.values(),
+            *(self.optional_callbacks or ()),  # pyright: ignore[reportUnknownMemberType]  # the router's checks
+            *slack_alerting_loggers,
+            *self._adaptive_router_hooks(),
+        )
+        for name in OUTCOME_CALLBACK_LISTS:
+            self._host.set_callback_list(
+                name,
+                without_router_callbacks(
+                    self._host.callback_list(name),
+                    owned,  # pyright: ignore[reportUnknownArgumentType]  # see above
+                    method_owners=(self, *slack_alerting_loggers),
+                ),
+            )
         self.retry_policy = None
         self.flush_cache()
 

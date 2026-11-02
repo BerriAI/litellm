@@ -320,16 +320,14 @@ def test_default_fallbacks_given_as_a_string_raise_type_error(make_core: MakeCor
         _one(make_core, default_fallbacks="b")
 
 
-def test_default_fallbacks_are_appended_to_the_process_fallbacks_list_itself(
-    make_core: MakeCore, host: ScriptedHost
-) -> None:
-    """Oddity: with no ``fallbacks`` argument the router adopts the process list object and appends the
-    star entry to it, so the process setting is changed too."""
+def test_default_fallbacks_extend_a_copy_of_the_process_fallbacks_list(make_core: MakeCore, host: ScriptedHost) -> None:
+    """With no ``fallbacks`` argument the router starts from the process list, but appends the star
+    entry to its own copy, so the process setting is left alone."""
     process_fallbacks: Final[list[object]] = [{"g": ["e"]}]
     host.set_dynamic(fallbacks=process_fallbacks)
     core: Final = _one(make_core, default_fallbacks=["c"])
     assert core.settings().fallbacks == [{"g": ["e"]}, {"*": ["c"]}]
-    assert process_fallbacks == [{"g": ["e"]}, {"*": ["c"]}]
+    assert process_fallbacks == [{"g": ["e"]}]
 
 
 # --- validation --------------------------------------------------------------------------------
@@ -873,11 +871,22 @@ def test_runtime_optional_pre_call_checks_none_changes_nothing(make_core: MakeCo
     assert host_callback_names(host)["callbacks"] == ["PromptCachingDeploymentCheck"]
 
 
-def test_runtime_removal_keeps_the_host_callback_while_another_live_router_uses_that_check(
+def test_runtime_removal_keeps_the_host_callback_while_another_live_router_on_the_host_uses_that_check(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
-    """Oddity: the check is left in this host's list because some other live router (here on another
-    host) still has one of that type."""
+    collect_other_routers()
+    other: Final = _one(make_core, optional_pre_call_checks=["prompt_caching"])
+    core: Final = _one(make_core, optional_pre_call_checks=["prompt_caching"])
+    core.apply(ChangeSet(settings={"optional_pre_call_checks": []}))
+    assert core.optional_callbacks == []  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    assert all(check in host.lists["callbacks"] for check in other.optional_callbacks)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
+    other.retire()
+
+
+def test_runtime_removal_drops_the_host_callback_though_a_router_on_another_host_uses_that_check(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    """Another host's router keeps its own check on its own host; it does not hold this host's."""
     collect_other_routers()
     other_host: Final = CallbackHost()
     from tests.unit.test_router.core.scripted_host import python_core
@@ -888,7 +897,8 @@ def test_runtime_removal_keeps_the_host_callback_while_another_live_router_uses_
     core: Final = _one(make_core, optional_pre_call_checks=["prompt_caching"])
     core.apply(ChangeSet(settings={"optional_pre_call_checks": []}))
     assert core.optional_callbacks == []  # pyright: ignore[reportAttributeAccessIssue]
-    assert host_callback_names(host)["callbacks"] == ["PromptCachingDeploymentCheck"]
+    assert host_callback_names(host)["callbacks"] == []
+    assert host_callback_names(other_host)["callbacks"] == ["PromptCachingDeploymentCheck"]
     other.retire()
 
 
@@ -946,21 +956,33 @@ def test_retiring_one_router_keeps_the_callbacks_of_another_on_the_same_host(
     assert all(callback.__self__ is second for callback in host.lists["_async_success_callback"])  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def test_retire_hands_a_vacated_check_to_another_live_router_on_a_different_host(
+def test_retire_never_hands_a_vacated_check_to_a_live_router_on_a_different_host(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
-    """Oddity: retire re-registers the same-keyed check of any other live router in the process into
-    this host's list, even one built on a different host."""
+    """Another host's router keeps its check on its own host; this host's list is left empty."""
     collect_other_routers()
     from tests.unit.test_router.core.scripted_host import python_core
 
+    other_host: Final = CallbackHost()
     other: Final = python_core(
-        CallbackHost(), model_list=[deployment("g", "o")], optional_pre_call_checks=["prompt_caching"]
+        other_host, model_list=[deployment("g", "o")], optional_pre_call_checks=["prompt_caching"]
     )
     core: Final = _one(make_core, optional_pre_call_checks=["prompt_caching"])
     core.retire()
-    assert host.lists["callbacks"] == other.optional_callbacks
+    assert host.lists["callbacks"] == []
+    assert other_host.lists["callbacks"] == other.optional_callbacks  # pyright: ignore[reportUnknownMemberType]  # untyped in the checker's view
     other.retire()
+
+
+def test_retire_hands_a_vacated_check_to_another_live_router_on_the_same_host(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    collect_other_routers()
+    first: Final = _one(make_core, optional_pre_call_checks=["prompt_caching"])
+    second: Final = _one(make_core, optional_pre_call_checks=["prompt_caching"])
+    first.retire()
+    assert host.lists["callbacks"] == second.optional_callbacks  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    second.retire()
 
 
 # --- observe -----------------------------------------------------------------------------
@@ -1131,21 +1153,40 @@ def test_flush_cache_drops_the_response_cache_routing_state_and_prompt_caching_p
     assert host_callback_names(host) == before
 
 
-def test_reset_empties_every_success_and_failure_list_and_the_retry_policy(
+def test_reset_drops_the_routers_own_success_and_failure_callbacks_and_the_retry_policy(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
-    """Note: reset clears the host's success/failure lists outright, foreign callbacks included, but
-    leaves ``callbacks`` and ``input_callback`` alone."""
+    """reset drops only this router's entries from the host's success/failure lists (other code's
+    callbacks stay) and leaves ``callbacks`` and ``input_callback`` alone."""
     core: Final = _one(make_core, retry_policy={"RateLimitErrorRetries": 3}, routing_strategy="least-busy")
     host.lists["success_callback"].append("foreign")
+    host.lists["_async_failure_callback"].append("foreign-failure")
     core.health().store.set_cache("k", 1)
     core.reset()  # pyright: ignore[reportAttributeAccessIssue]
     assert {name: callbacks for name, callbacks in host_callback_names(host).items() if callbacks} == {
         "callbacks": ["LeastBusyLoggingHandler"],
         "input_callback": ["LeastBusyLoggingHandler"],
+        "success_callback": ["str"],
+        "_async_failure_callback": ["str"],
     }
+    assert (host.lists["success_callback"], host.lists["_async_failure_callback"]) == (["foreign"], ["foreign-failure"])
     assert core.retry_policy is None  # pyright: ignore[reportAttributeAccessIssue]
     assert core.health().store.get_cache("k") is None
+
+
+def test_resetting_one_router_keeps_another_routers_success_and_failure_callbacks(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    collect_other_routers()
+    first: Final = _one(make_core)
+    before_first: Final = {name: list(callbacks) for name, callbacks in host.lists.items()}
+    second: Final = _one(make_core)
+    first.reset()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    for name in ("success_callback", "_async_success_callback", "failure_callback", "_async_failure_callback"):
+        remaining = host.lists.get(name, [])
+        assert all(getattr(callback, "__self__", None) is not first for callback in remaining)
+        theirs = [callback for callback in before_first.get(name, []) if getattr(callback, "__self__", None) is first]
+        assert len(remaining) == len(theirs) and all(callback.__self__ is second for callback in remaining)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
 
 
 # --- attribute writes ----------------------------------------------------------------------

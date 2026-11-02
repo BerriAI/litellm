@@ -131,8 +131,27 @@ def test_a_list_of_organizations_fans_out_into_one_deployment_per_organization(m
 
     entries = core.registry().all()
     assert [entry["litellm_params"]["organization"] for entry in entries] == ["org-1", "org-2"]
-    assert len(set(ids(entries))) == 1
+    assert len(set(ids(entries))) == 2
     assert core.registry().index("model_name") == {"gpt": [0, 1]}
+    for entry in entries:  # pyright: ignore[reportAny]  # untyped in the checker's view
+        found = core.registry().deployment(entry["model_info"]["id"])  # pyright: ignore[reportAny]  # untyped in the checker's view
+        assert found is not None
+        assert found.litellm_params.organization == entry["litellm_params"]["organization"]
+
+
+def test_organization_deployments_get_the_same_ids_on_every_build(make_core: MakeCore) -> None:
+    first = make_core(model_list=[_bare("gpt", "openai/x", organization=["org-1", "org-2"])])
+    second = make_core(model_list=[_bare("gpt", "openai/x", organization=["org-1", "org-2"])])
+
+    assert ids(first.registry().all()) == ids(second.registry().all())
+
+
+def test_a_declared_id_stays_on_the_first_organization_and_is_suffixed_on_the_rest(make_core: MakeCore) -> None:
+    entry = _bare("gpt", "openai/x", organization=["org-1", "org-2"])
+    entry["model_info"] = {"id": "declared"}
+    core = make_core(model_list=[entry])
+
+    assert ids(core.registry().all()) == ["declared", "declared-org-2"]
 
 
 def test_deployment_names_list_each_deployments_litellm_model(make_core: MakeCore) -> None:

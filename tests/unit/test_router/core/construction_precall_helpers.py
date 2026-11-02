@@ -59,7 +59,8 @@ def windowed(
     group: str, deployment_id: str, max_input_tokens: int, **params: object
 ) -> dict[str, object]:  # mutable-ok: a model_list entry
     """A deployment declaring ``max_input_tokens`` under a model name no other test uses: a deployment's
-    model_info is written into the process-wide cost map under its model name and id."""
+    model_info is written into the process-wide cost map under its id (and its schema fields, though not
+    its token limits, under its model name)."""
     model_info: Final = {"max_input_tokens": max_input_tokens, **dict(params.pop("model_info", None) or {})}  # pyright: ignore[reportArgumentType]
     return deployment(
         group,
