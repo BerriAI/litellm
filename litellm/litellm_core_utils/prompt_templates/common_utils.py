@@ -2068,8 +2068,9 @@ def infer_content_type_from_url_and_content(
 
     # Try to infer from URL extension
     if url:
-        extension: Final = PurePosixPath(urlparse(url).path).suffix.removeprefix(".").lower()
-        inferred_type: Final = extension_to_mime.get(extension)
+        path_extension: Final = PurePosixPath(urlparse(url).path).suffix.removeprefix(".").lower()
+        trailing_extension: Final = url.split(".")[-1].lower().split("?")[0]
+        inferred_type: Final = extension_to_mime.get(path_extension) or extension_to_mime.get(trailing_extension)
         if inferred_type:
             return inferred_type
 

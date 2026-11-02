@@ -4596,6 +4596,32 @@ def test_tool_result_single_document_kept_as_pdf_data_url():
     ]
 
 
+@pytest.mark.parametrize(
+    ("url_documents_as_pdf", "expected_image_url"),
+    (
+        (False, {"url": "https://files.example/download?id=7"}),
+        (True, {"url": "https://files.example/download?id=7", "format": "application/pdf"}),
+    ),
+    ids=("other-providers", "guardrail-write-back"),
+)
+def test_url_document_carries_the_pdf_format_only_where_the_caller_asks_for_it(
+    url_documents_as_pdf: bool, expected_image_url: Mapping[str, str]
+) -> None:
+    document: Final = {"type": "document", "source": {"type": "url", "url": "https://files.example/download?id=7"}}
+    translated: Final = LiteLLMAnthropicMessagesAdapter(
+        url_documents_as_pdf=url_documents_as_pdf
+    ).translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn({"toolu_01": [document]}),
+            AnthropicMessagesUserMessageParam(role="user", content=[document]),
+        ]
+    )
+
+    expected_part: Final = {"type": "image_url", "image_url": expected_image_url}
+    assert [message["content"] for message in translated[1:]] == [[expected_part], [expected_part]]
+
+
 def test_tool_result_text_and_document_reach_bedrock_converse_tool_result():
     """Claude Code >= 2.1.245 sends Read-tool PDF output as a document block inside
     tool_result; dropping it left bedrock converse models blind to the PDF content."""

@@ -21,7 +21,7 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import NON_LLM_CONNECTION_TIMEOUT, REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.asyncify import is_event_loop_running
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
@@ -909,8 +909,11 @@ def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) ->
         )
 
 
+_PDF_MEDIA_TYPES: Final = frozenset({"application/pdf", "application/x-pdf"})
+
+
 def _is_pdf_media_type(media_type: str) -> bool:
-    return media_type.split(";", 1)[0].strip().lower() == "application/pdf"
+    return media_type.split(";", 1)[0].strip().lower() in _PDF_MEDIA_TYPES
 
 
 def _anthropic_url_image_block(image_url: str) -> AnthropicMessagesImageParam:
@@ -922,11 +925,10 @@ def _anthropic_url_image_block(image_url: str) -> AnthropicMessagesImageParam:
 
 def _downloaded_block_or_link(image_url: str) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
     try:
-        return anthropic_content_element_factory(
-            convert_to_anthropic_image_obj(openai_image_url=image_url, format=None)
-        )
+        data_url: Final = convert_url_to_base64(url=image_url, timeout=NON_LLM_CONNECTION_TIMEOUT)
     except litellm.ImageFetchError:
         return _anthropic_url_image_block(image_url)
+    return anthropic_content_element_factory(convert_to_anthropic_image_obj(openai_image_url=data_url, format=None))
 
 
 def _anthropic_https_url_block(

@@ -13,7 +13,7 @@ from openai.types.chat import ChatCompletionChunk
 
 import litellm
 from litellm._uuid import uuid
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import NON_LLM_CONNECTION_TIMEOUT, RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call, make_sync_call
@@ -342,6 +342,49 @@ async def test_anthropic_async_completion_sends_a_pdf_path_link_it_cannot_downlo
 
     assert response.choices[0].message.content == "A chart"
     assert captured["body"]["messages"][0]["content"] == [{"type": "image", "source": {"type": "url", "url": pdf_link}}]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_async_completion_gives_up_on_a_pdf_link_within_the_non_llm_connection_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_link: Final = f"https://unreachable.example/{uuid.uuid4()}/report.pdf"
+    fetch_timeouts: Final[list[object]] = []
+    captured: Final[dict[str, object]] = {}
+
+    async def unreachable(client: object, url: str, **kwargs: object) -> httpx.Response:
+        fetch_timeouts.append(kwargs.get("timeout"))
+        raise httpx.ConnectTimeout("no route to host")
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": "A chart"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    monkeypatch.setattr(image_handling, "async_safe_get", unreachable)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    await litellm.acompletion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": pdf_link}}]}],
+        client=client,
+        api_key="sk-ant-unit-test",
+    )
+
+    assert captured["body"]["messages"][0]["content"] == [{"type": "image", "source": {"type": "url", "url": pdf_link}}]
+    assert fetch_timeouts
+    assert all(isinstance(timeout, float) and 0 < timeout <= NON_LLM_CONNECTION_TIMEOUT for timeout in fetch_timeouts)
 
 
 def test_redacted_thinking_content_block_delta():

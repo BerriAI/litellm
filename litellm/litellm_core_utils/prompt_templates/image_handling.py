@@ -18,7 +18,7 @@ from httpx import Response
 import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
-from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
+from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB, NON_LLM_CONNECTION_TIMEOUT
 from litellm.litellm_core_utils.prompt_templates.common_utils import infer_content_type_from_url_and_content
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, safe_get
 from litellm.types.llms.openai import AllMessageValues
@@ -316,7 +316,7 @@ async def _fetch_data_url(url: str, in_flight: asyncio.Semaphore, timeout: float
 
 async def _fetch_data_url_or_none(url: str, in_flight: asyncio.Semaphore) -> str | None:
     try:
-        return await _fetch_data_url(url, in_flight, None)
+        return await _fetch_data_url(url, in_flight, NON_LLM_CONNECTION_TIMEOUT)
     except litellm.ImageFetchError:
         return None
 

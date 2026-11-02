@@ -376,8 +376,8 @@ _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.va
 
 
 class LiteLLMAnthropicMessagesAdapter:
-    def __init__(self):
-        pass
+    def __init__(self, url_documents_as_pdf: bool = False) -> None:
+        self.url_documents_as_pdf = url_documents_as_pdf
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
@@ -1400,24 +1400,22 @@ class LiteLLMAnthropicMessagesAdapter:
             file=ChatCompletionFileObjectFile(filename=inline_document.filename, file_data=inline_document.file_data),
         )
 
-    def _source_image_url_part(self, image_source: object) -> ChatCompletionImageObject | None:
+    def _source_image_url_part(self, image_source: object, as_pdf: bool = False) -> ChatCompletionImageObject | None:
         if not isinstance(image_source, dict):
             return None
         openai_image_url = self._translate_anthropic_image_to_openai(image_source)
         if not openai_image_url:
             return None
-        return ChatCompletionImageObject(type="image_url", image_url=ChatCompletionImageUrlObject(url=openai_image_url))
+        image_url: Final = (
+            ChatCompletionImageUrlObject(url=openai_image_url, format="application/pdf")
+            if as_pdf
+            else ChatCompletionImageUrlObject(url=openai_image_url)
+        )
+        return ChatCompletionImageObject(type="image_url", image_url=image_url)
 
     def _document_source_image_url_part(self, document_source: object) -> ChatCompletionImageObject | None:
-        if not isinstance(document_source, dict) or document_source.get("type") != "url":
-            return self._source_image_url_part(document_source)
-        document_url: Final = self._translate_anthropic_image_to_openai(document_source)
-        if not document_url:
-            return None
-        return ChatCompletionImageObject(
-            type="image_url",
-            image_url=ChatCompletionImageUrlObject(url=document_url, format="application/pdf"),
-        )
+        is_url_document: Final = isinstance(document_source, dict) and document_source.get("type") == "url"
+        return self._source_image_url_part(document_source, as_pdf=self.url_documents_as_pdf and is_url_document)
 
     def _translate_openai_content_to_anthropic(
         self,

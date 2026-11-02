@@ -18,6 +18,7 @@ import respx
 from litellm.litellm_core_utils.prompt_templates import image_handling
 
 import litellm
+from litellm.constants import NON_LLM_CONNECTION_TIMEOUT
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
     _EMPTY_TEXT_PLACEHOLDER,
@@ -1348,10 +1349,11 @@ PNG_BYTES: Final = base64.b64decode(
     ("content_type", "content", "expected_type", "expected_media_type"),
     (
         ("application/pdf; qs=0.001", PDF_BYTES, "document", "application/pdf"),
+        ("application/x-pdf", PDF_BYTES, "document", "application/pdf"),
         ("image/png", PNG_BYTES, "image", "image/png"),
         ("binary/octet-stream", PNG_BYTES, "image", "image/png"),
     ),
-    ids=("pdf", "png", "png-generic-header"),
+    ids=("pdf", "x-pdf", "png", "png-generic-header"),
 )
 def test_anthropic_messages_pt_lets_a_downloaded_link_pick_its_block_type(
     monkeypatch: pytest.MonkeyPatch,
@@ -1421,6 +1423,52 @@ def test_anthropic_messages_pt_reads_the_pdf_extension_of_a_signed_link_with_dot
             "data": base64.b64encode(PDF_BYTES).decode("utf-8"),
         },
     }
+
+
+@pytest.mark.parametrize("path", ("download?file=report.pdf", "viewer.php?name=report.pdf"))
+def test_anthropic_messages_pt_reads_a_pdf_filename_carried_in_the_query_string(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    url: Final = f"https://files.example.com/{uuid.uuid4()}/{path}"
+
+    with respx.mock:
+        respx.get(url).mock(
+            return_value=httpx.Response(200, content=PDF_BYTES, headers={"content-type": "application/octet-stream"})
+        )
+        result: Final = anthropic_messages_pt(
+            messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}],
+            model="claude-opus-5-5",
+            llm_provider="vertex_ai",
+        )
+
+    assert result[0]["content"][0] == {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": base64.b64encode(PDF_BYTES).decode("utf-8"),
+        },
+    }
+
+
+def test_anthropic_messages_pt_gives_up_on_a_pdf_link_within_the_non_llm_connection_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    url: Final = f"https://unreachable.example.com/{uuid.uuid4()}/report.pdf"
+
+    with respx.mock:
+        route: Final = respx.get(url).mock(side_effect=httpx.ConnectTimeout("no route to host"))
+        result: Final = anthropic_messages_pt(
+            messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}],
+            model="claude-opus-5-5",
+            llm_provider="anthropic",
+        )
+
+    assert result[0]["content"][0] == {"type": "image", "source": {"type": "url", "url": url}}
+    assert route.calls
+    assert all(0 < call.request.extensions["timeout"]["connect"] <= NON_LLM_CONNECTION_TIMEOUT for call in route.calls)
 
 
 @pytest.mark.parametrize("download_limit_mb", (0, 50), ids=("downloads-disabled", "link-unreachable"))
