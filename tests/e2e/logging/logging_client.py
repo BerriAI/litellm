@@ -5,7 +5,7 @@ Holds the shared ProxyClient so the ``resources`` fixture cleans up keys, teams,
 users, orgs, and models it creates. External Langfuse reads go through
 ``e2e_http`` (the only module allowed to call ``requests.*``).
 
-Uses the ``langfuse_otel`` callback (OTLP to ``{host}/api/public/otel``), not
+Uses the ``langfuse_otel`` callback (OTLP to ``{host}/api/public/otel/v1/traces``), not
 the classic ``langfuse`` SDK callback. OTEL generations land as name
 ``litellm_request``; correlate by unique prompt marker and ``user_api_key_alias``
 in metadata. Spend is on ``calculatedTotalCost`` (StandardLogging response_cost).

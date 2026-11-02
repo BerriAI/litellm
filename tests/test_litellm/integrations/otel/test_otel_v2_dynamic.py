@@ -168,7 +168,7 @@ def test_dynamic_headers_do_not_leak_to_other_owners_exporter():
             ),
             ExporterSpec(
                 kind="otlp_http",
-                endpoint="https://cloud.langfuse.com/api/public/otel",
+                endpoint="https://cloud.langfuse.com/api/public/otel/v1/traces",
                 headers="Authorization=Basic base-langfuse",
                 owner="langfuse_otel",
             ),

@@ -24,10 +24,25 @@ else:
     Span = Any
 
 
-LANGFUSE_CLOUD_EU_ENDPOINT: Final = "https://cloud.langfuse.com/api/public/otel"
-LANGFUSE_CLOUD_US_ENDPOINT: Final = "https://us.cloud.langfuse.com/api/public/otel"
+LANGFUSE_CLOUD_EU_ENDPOINT: Final = "https://cloud.langfuse.com"
+LANGFUSE_CLOUD_US_ENDPOINT: Final = "https://us.cloud.langfuse.com"
 LANGFUSE_INGESTION_VERSION_HEADER: Final = "x-langfuse-ingestion-version"
 LANGFUSE_INGESTION_VERSION: Final = "4"
+
+
+def langfuse_otlp_traces_endpoint(host: str) -> str:
+    """Point a Langfuse host at its OTLP trace receiver.
+
+    Accepts a bare host, a URL, or a full endpoint that already carries the path,
+    so an operator who pastes the URL from Langfuse's docs is not sent to a
+    doubled path. Langfuse exposes no OTLP route anywhere but ``/v1/traces``.
+    """
+    base: Final = host if host.startswith("http") else f"https://{host}"
+    stripped: Final = base.rstrip("/")
+    for suffix in ("/api/public/otel/v1/traces", "/api/public/otel"):
+        if stripped.endswith(suffix):
+            return f"{stripped[: -len(suffix)]}/api/public/otel/v1/traces"
+    return f"{stripped}/api/public/otel/v1/traces"
 
 
 class LangfuseOtelLogger(OpenTelemetry):
@@ -325,8 +340,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         given host (US cloud when no host is provided), authorized with the given keys.
         """
         if langfuse_host:
-            normalized_host: Final = langfuse_host if langfuse_host.startswith("http") else f"https://{langfuse_host}"
-            endpoint = f"{normalized_host.rstrip('/')}/api/public/otel"
+            endpoint = langfuse_otlp_traces_endpoint(langfuse_host)
             verbose_logger.debug("Using Langfuse OTEL endpoint from host: %s", endpoint)
         else:
             endpoint = LANGFUSE_CLOUD_US_ENDPOINT
@@ -413,7 +427,11 @@ class LangfuseOtelLogger(OpenTelemetry):
         if not public_key or not secret_key:
             return None
 
-        langfuse_host: Final = standard_callback_dynamic_params.get("langfuse_host") or self._get_langfuse_otel_host()
+        langfuse_host: Final = (
+            standard_callback_dynamic_params.get("langfuse_host")
+            or self._get_langfuse_otel_host()
+            or LANGFUSE_CLOUD_US_ENDPOINT
+        )
         return LangfuseOtelLogger._build_langfuse_otel_config(
             public_key=public_key,
             secret_key=secret_key,

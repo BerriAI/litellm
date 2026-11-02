@@ -44,14 +44,14 @@ def _langfuse_destination(params: StandardCallbackDynamicParams) -> "_Destinatio
     from litellm.integrations.langfuse.langfuse_otel import (
         LANGFUSE_CLOUD_US_ENDPOINT,
         LangfuseOtelLogger,
+        langfuse_otlp_traces_endpoint,
     )
 
     tenant_host: Final = params.get("langfuse_host") or None
     host: Final = tenant_host or LangfuseOtelLogger._get_langfuse_otel_host()  # pyright: ignore[reportPrivateUsage]  # reuse the backend's own env host resolver rather than duplicating it
     if not host:
-        return (LANGFUSE_CLOUD_US_ENDPOINT, None)
-    normalized: Final = host if host.startswith("http") else f"https://{host}"
-    endpoint: Final = f"{normalized.rstrip('/')}/api/public/otel"
+        return (langfuse_otlp_traces_endpoint(LANGFUSE_CLOUD_US_ENDPOINT), None)
+    endpoint: Final = langfuse_otlp_traces_endpoint(host)
     if tenant_host is None:
         return (endpoint, None)
     if not is_url_destination_allowed_by_host(endpoint, litellm.provider_url_destination_allowed_hosts):
