@@ -37,6 +37,8 @@ def _logging_and_kwargs(
     kwargs: dict[str, object],  # mutable-ok: the request kwargs the Python router mutates in place
 ) -> tuple[object, dict[str, object]]:  # mutable-ok: same
     """The request's logging object, else the one `function_setup` builds (with the kwargs it returns)."""
+    import uuid
+
     from litellm.utils import Rules, function_setup, get_utc_datetime
 
     logging_obj: Final = kwargs.get("litellm_logging_obj")
@@ -44,10 +46,11 @@ def _logging_and_kwargs(
         return logging_obj, kwargs
     return function_setup(  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers
         **{  # pyright: ignore[reportArgumentType]  # the request's keyword payload
+            **kwargs,
             "original_function": "acompletion",
             "rules_obj": Rules(),
             "start_time": get_utc_datetime(),
-            **kwargs,
+            "litellm_call_id": kwargs.get("litellm_call_id") or str(uuid.uuid4()),
         }
     )
 
@@ -61,8 +64,10 @@ async def prompt_management_acompletion(
     """`_prompt_management_factory`, on the request as `acompletion` prepared it."""
     from litellm.utils import get_non_default_completion_params
 
-    # `acompletion` hands the routing function along; function_setup consumes it.
-    logging_obj, kwargs = _logging_and_kwargs({**request, "original_function": core.acompletion})
+    # The routing function is no request field: the routed call below drives its own plan.
+    logging_obj, kwargs = _logging_and_kwargs(
+        {key: value for key, value in request.items() if key != "original_function"}
+    )
     caller_timeout: Final = kwargs.get("timeout") or kwargs.get("request_timeout")
     caller_stream_timeout: Final = kwargs.get("stream_timeout")
     specific_deployment: Final = kwargs.pop("specific_deployment", None)
@@ -114,7 +119,6 @@ async def prompt_management_acompletion(
     final["prompt_label"] = prompt_label
     target_list: Final = core._hosted._core_get_model_list(model_name=str(rendered_model))  # pyright: ignore[reportPrivateUsage, reportUnknownArgumentType]  # the core's host registry
     if target_list is None or len(target_list) == 0:  # a direct call to the rendered model
-        _ = final.pop("original_function")
         return await core._host.invoke("acompletion")(**final)  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # the core's host
     timeouts: Final = {
         key: value

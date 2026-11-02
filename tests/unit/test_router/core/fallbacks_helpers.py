@@ -4,7 +4,6 @@ from collections.abc import Callable, Mapping
 from typing import Final
 
 from litellm.router_core import RouterCore
-from litellm.router_python_host import Endpoint
 from tests.unit.test_router.core.scripted_host import Outcome, ScriptedHost, deployment
 
 MakeCore = Callable[..., RouterCore]
@@ -62,20 +61,6 @@ def fails_once_then_answers(error: BaseException) -> Callable[..., Outcome]:
         return error if calls[0] == 1 else None
 
     return outcome
-
-
-class NamedEndpointHost(ScriptedHost):
-    """A ``ScriptedHost`` whose ``anthropic_messages`` endpoint carries that name, as litellm's
-    own function does. The core recognises a /v1/messages call (and its safeguard-refusal gate)
-    by the endpoint's ``__name__``; ``ScriptedHost``'s endpoints are all named ``endpoint``."""
-
-    __slots__ = ()
-
-    def invoke(self, op: str) -> Endpoint:
-        endpoint: Final = super().invoke(op)
-        if op == "anthropic_messages":
-            endpoint.__name__ = op  # pyright: ignore[reportFunctionMemberAccess]  # a plain function
-        return endpoint
 
 
 def anthropic_refusal(*, with_stop_details: bool = True) -> dict[str, object]:  # mutable-ok: a provider response

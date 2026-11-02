@@ -1933,9 +1933,7 @@ class RustCore(
         return await self._drive(plan_for("aspeech"), request)
 
     async def arerank(self, *args: object, **kwargs: object) -> object:  # kwargs-ok: endpoint payload
-        # `arerank` sets kwargs["input"] = input: the Python builtin, which reaches the deployment call.
-        request: Final = {**request_from_call("arerank", args, kwargs), "input": input}
-        return await self._drive(plan_for("arerank"), request)
+        return await self._drive(plan_for("arerank"), request_from_call("arerank", args, kwargs))
 
     async def amoderation(self, *args: object, **kwargs: object) -> object:  # kwargs-ok: endpoint payload
         return await self._endpoints.amoderation(request_from_call("amoderation", args, kwargs))
