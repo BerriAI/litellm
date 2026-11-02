@@ -12,7 +12,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import PTU_SENTINEL_API_KEY
+from litellm.constants import PTU_SENTINEL_API_KEY, SUBSCRIPTION_BACKED_PROVIDERS
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
     attach_user_details,
@@ -295,6 +295,12 @@ def _entity_metadata(
     return stored if stored is not None else {}
 
 
+def provider_bucket_metadata(provider: str, base: Mapping[str, object]) -> Mapping[str, object]:
+    if provider in SUBSCRIPTION_BACKED_PROVIDERS:
+        return {**base, "subscription_covered": True}
+    return dict(base)
+
+
 def update_breakdown_metrics(
     breakdown: BreakdownMetrics,
     record: DailySpendRecord,
@@ -395,7 +401,7 @@ def update_breakdown_metrics(
         if provider not in breakdown.providers:
             breakdown.providers[provider] = MetricWithMetadata(
                 metrics=SpendMetrics(),
-                metadata=provider_metadata.get(provider, {}),  # Add any provider-specific metadata here
+                metadata=provider_bucket_metadata(provider, provider_metadata.get(provider, {})),
             )
         breakdown.providers[provider].metrics = update_metrics(breakdown.providers[provider].metrics, record)
 
@@ -795,12 +801,23 @@ def _aggregate_grouping_sets_records_sync(
             grouped_data[date_str] = bucket
         return bucket
 
-    def assign_metric_with_metadata(target: dict[str, MetricWithMetadata], key: str, metrics: SpendMetrics) -> None:
+    def assign_metric_with_metadata(
+        target: dict[str, MetricWithMetadata],
+        key: str,
+        metrics: SpendMetrics,
+        metadata: Mapping[str, object] | None = None,
+    ) -> None:
         existing: Final = target.get(key)
-        if existing is None:
-            target[key] = MetricWithMetadata(metrics=metrics, metadata={})
-        else:
-            existing.metrics = sum_spend_metrics((existing.metrics, metrics))
+        target[key] = (
+            MetricWithMetadata(metrics=metrics, metadata=dict(metadata or {}))
+            if existing is None
+            else existing.model_copy(
+                update={
+                    "metrics": sum_spend_metrics((existing.metrics, metrics)),
+                    "metadata": {**existing.metadata, **(metadata or {})},
+                }
+            )
+        )
 
     def assign_api_key_breakdown(
         target: dict[str, MetricWithMetadata],
@@ -864,7 +881,9 @@ def _aggregate_grouping_sets_records_sync(
             # provider the base build reported.
             provider_metrics = metrics.model_copy(update={"flat_cost": 0.0})
             provider = record.custom_llm_provider or "unknown"
-            assign_metric_with_metadata(breakdown.providers, provider, provider_metrics)
+            assign_metric_with_metadata(
+                breakdown.providers, provider, provider_metrics, provider_bucket_metadata(provider, {})
+            )
         elif level == _GROUP_DATE_PROVIDER_API_KEY:
             if not is_ptu_sentinel:
                 provider = record.custom_llm_provider or "unknown"
