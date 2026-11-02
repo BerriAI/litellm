@@ -41,6 +41,7 @@ from litellm._logging import (
 from litellm._logging import suppress_startup_output as suppress_startup_output
 import re
 from litellm.constants import (
+    DEFAULT_MODEL_COST_MAP_URL,
     DEFAULT_BATCH_SIZE,
     DEFAULT_FLUSH_INTERVAL_SECONDS,
     ROUTER_MAX_FALLBACKS,
@@ -410,7 +411,7 @@ aclient_session: Optional[Union[httpx.AsyncClient, DefaultAsyncHttpxClient]] = N
 model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = os.getenv(
     "LITELLM_MODEL_COST_MAP_URL",
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+    DEFAULT_MODEL_COST_MAP_URL,
 )
 blog_posts_url: str = os.getenv(
     "LITELLM_BLOG_POSTS_URL",
