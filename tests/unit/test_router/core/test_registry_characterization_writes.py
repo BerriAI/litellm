@@ -154,14 +154,20 @@ def test_an_upsert_that_empties_a_group_drops_the_group_name(make_core: MakeCore
     assert core.registry().deployments("emb") == []
 
 
-def test_a_failing_upsert_of_an_existing_deployment_raises_and_leaves_it_removed(make_core: MakeCore) -> None:
-    """Odd but current: without ignore_invalid_deployments the old deployment is popped and not restored."""
+def test_a_failing_upsert_of_an_existing_deployment_raises_and_restores_the_previous_deployment(
+    make_core: MakeCore,
+) -> None:
+    """Without ignore_invalid_deployments the failed edit raises, and the deployment it would have
+    replaced keeps serving its previous configuration."""
     core = _core(make_core)
 
     with pytest.raises(litellm.BadRequestError):
         core.apply(ChangeSet(upsert=[typed("gpt", "a", model="notaprovider/x")]))
 
-    assert core.registry().names(kind="ids") == ["b", "e", "w", "t1"]
+    restored = core.registry().deployment("a")
+    assert restored is not None
+    assert restored.litellm_params.model == "openai/a"
+    assert core.registry().names(kind="ids") == ["b", "e", "w", "t1", "a"]
 
 
 def test_a_failing_upsert_under_ignore_invalid_deployments_restores_the_previous_deployment(
@@ -241,11 +247,18 @@ def test_deleting_a_wildcard_deployment_stops_it_serving_matching_names(make_cor
     assert core.registry().deployments("openai/gpt-x") == []
 
 
-def test_deleting_a_wildcard_deployment_keeps_it_among_provider_default_deployment_ids(make_core: MakeCore) -> None:
-    """Odd but current: the provider default id list is append-only."""
+def test_deleting_a_wildcard_deployment_drops_it_from_the_provider_default_deployment_ids(make_core: MakeCore) -> None:
     core = _core(make_core)
 
     core.apply(ChangeSet(delete=["w"]))
+
+    assert core.settings().provider_default_deployment_ids == []
+
+
+def test_deleting_a_plain_deployment_keeps_the_wildcards_provider_default_deployment_id(make_core: MakeCore) -> None:
+    core = _core(make_core)
+
+    core.apply(ChangeSet(delete=["a"]))
 
     assert core.settings().provider_default_deployment_ids == ["w"]
 
@@ -300,23 +313,31 @@ def test_set_model_list_leaves_the_given_list_unchanged(make_core: MakeCore) -> 
     assert given == [{"model_name": "new", "litellm_params": {"model": "openai/n", "api_key": "k"}}]
 
 
-def test_set_model_list_keeps_the_old_wildcard_routes(make_core: MakeCore) -> None:
-    """Odd but current: the wildcard pattern router is not reset, so a replaced wildcard still matches."""
+def test_set_model_list_drops_the_old_wildcard_routes(make_core: MakeCore) -> None:
     core = _core(make_core)
 
     core.set_model_list([deployment("new", "n")])  # pyright: ignore[reportAttributeAccessIssue]  # public on the core
 
-    assert names_and_ids(core.registry().deployments("openai/gpt-x")) == [("openai/gpt-x", "w")]
-    assert core.settings().provider_default_deployment_ids == ["w"]
+    assert core.registry().deployments("openai/gpt-x") == []
+    assert core.settings().provider_default_deployment_ids == []
 
 
-def test_set_model_list_appends_to_the_deployment_names(make_core: MakeCore) -> None:
-    """Odd but current: deployment_names keep the replaced deployments' models."""
+def test_set_model_list_serves_the_new_lists_wildcard_routes(make_core: MakeCore) -> None:
+    core = _core(make_core)
+
+    core.set_model_list([deployment("anthropic/*", "w2", model="anthropic/*")])  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # public on the core
+
+    assert core.registry().deployments("openai/gpt-x") == []
+    assert names_and_ids(core.registry().deployments("anthropic/claude-x")) == [("anthropic/claude-x", "w2")]
+    assert core.settings().provider_default_deployment_ids == ["w2"]
+
+
+def test_set_model_list_replaces_the_deployment_names(make_core: MakeCore) -> None:
     core = make_core(model_list=[deployment("gpt", "a")])
 
     core.set_model_list([deployment("new", "n")])  # pyright: ignore[reportAttributeAccessIssue]  # public on the core
 
-    assert core.registry().names(kind="deployment_names") == ["openai/a", "openai/n"]
+    assert core.registry().names(kind="deployment_names") == ["openai/n"]
 
 
 @pytest.mark.asyncio
