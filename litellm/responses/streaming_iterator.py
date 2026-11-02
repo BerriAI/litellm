@@ -1157,7 +1157,8 @@ class BaseResponsesAPIStreamingIterator:
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
         self._yielded_first_chunk = True
-        if event.type not in PRE_OUTPUT_LIFECYCLE_EVENT_TYPES:
+        event_type: Final[object] = getattr(event, "type", None)
+        if event_type not in PRE_OUTPUT_LIFECYCLE_EVENT_TYPES:
             self._output_started = True
 
     def _fallback_error(self, original: Exception) -> MidStreamFallbackError:
