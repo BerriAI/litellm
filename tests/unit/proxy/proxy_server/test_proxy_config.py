@@ -6264,3 +6264,34 @@ async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, 
         return
     with pytest.raises(ValidationError):
         await ProxyConfig().load_config(router=None, config_file_path=str(config))
+
+
+@pytest.mark.asyncio
+async def test_provider_config_management_and_removal_without_database(monkeypatch):
+    from starlette.requests import Request
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import fetch_all_mcp_servers, fetch_mcp_server
+    from litellm.proxy.mcp_server import mcp_server_manager
+    from litellm.proxy.management_endpoints import mcp_management_endpoints
+
+    manager = mcp_server_manager.MCPServerManager()
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(mcp_management_endpoints, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    config = proxy_server.ProxyConfig()
+    await config._init_non_llm_configs({"mcp_servers": {"config_docs": {
+        "server_id": "config-docs", "execution_mode": "provider", "url": "https://docs.example/mcp",
+        "allowed_tools": ["search"],
+    }}})
+    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    inventory = await fetch_all_mcp_servers(admin, team_id=None, user_id=None)
+    assert len(inventory) == 1 and inventory[0].is_config
+    request = Request({"type": "http", "headers": [], "client": ("127.0.0.1", 12345)})
+    detail = await fetch_mcp_server(request, "config_docs", admin, include_reachability=True)
+    assert detail.server_id == "config-docs" and detail.allowed_tools == ["search"]
+    assert detail.last_health_check is None
+    await config._init_non_llm_configs({})
+    assert await fetch_all_mcp_servers(admin, team_id=None, user_id=None) == []
+    assert not manager.get_registry()

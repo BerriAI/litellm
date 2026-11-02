@@ -7453,17 +7453,18 @@ class ProxyConfig:
 
             global_agent_registry.load_agents_from_config(agent_config)
 
+        from litellm.proxy.mcp_server.utils import is_mcp_available
+
         mcp_servers_config: Final = config.get("mcp_servers", None)
-        if mcp_servers_config:
-            from litellm.proxy.mcp_server.mcp_server_manager import (
-                global_mcp_server_manager,
-            )
+        if mcp_servers_config or is_mcp_available():
+            from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
-            # Get mcp_aliases from litellm_settings if available
-            litellm_settings: Final = config.get("litellm_settings", {})
-            mcp_aliases: Final = litellm_settings.get("mcp_aliases", None)
-
-            await global_mcp_server_manager.load_servers_from_config(mcp_servers_config, mcp_aliases)
+            if mcp_servers_config:
+                litellm_settings: Final = config.get("litellm_settings", {})
+                mcp_aliases: Final = litellm_settings.get("mcp_aliases", None)
+                await global_mcp_server_manager.load_servers_from_config(mcp_servers_config, mcp_aliases)
+            elif global_mcp_server_manager.catalog.config_registrations:
+                global_mcp_server_manager.catalog.publish_config_registrations({})
 
         ## VECTOR STORES
         vector_store_registry_config: Final = config.get("vector_store_registry", None)

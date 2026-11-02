@@ -258,6 +258,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy.mcp_server.server_resolution import (
         MCPServerTargetCatalog,
+        ResolvedMCPServer,
         authorize_mcp_server,
         resolve_mcp_server,
     )
@@ -1350,14 +1351,17 @@ if MCP_AVAILABLE:
             await global_mcp_server_manager.get_all_mcp_servers_unfiltered() if view_all or view_providers else []
         )
         visible_inventory: Final = [
-            server for server in inventory
-            if view_providers or getattr(server, "execution_mode", MCPExecutionMode.litellm) != MCPExecutionMode.provider
+            server
+            for server in inventory
+            if view_providers
+            or getattr(server, "execution_mode", MCPExecutionMode.litellm) != MCPExecutionMode.provider
         ]
         if view_all:
             return visible_inventory
 
         provider_servers: Final = [
-            server for server in visible_inventory
+            server
+            for server in visible_inventory
             if getattr(server, "execution_mode", MCPExecutionMode.litellm) == MCPExecutionMode.provider
         ]
         aggregated: Final[dict[str, LiteLLM_MCPServerTable]] = {server.server_id: server for server in provider_servers}
@@ -1964,20 +1968,40 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
-        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-
         from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
         client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
         is_admin_view: Final = user_api_key_has_admin_view(user_api_key_dict)
         is_restricted_virtual_key: Final = _is_restricted_virtual_key_request(user_api_key_dict)
-        resolved: Final = await resolve_mcp_server(
-            server_id,
-            manager=global_mcp_server_manager,
-            db_lookup=lambda sid: get_mcp_server(prisma_client, sid),
-            id_client_ip=client_ip,
-            name_client_ip=client_ip,
-            match_name=True,
+        snapshot: Final = global_mcp_server_manager.catalog.current()
+        config_match: Final = (
+            next(
+                (
+                    server
+                    for server in snapshot.management_servers.values()
+                    if server.is_config
+                    and server.execution_mode == MCPExecutionMode.provider
+                    and server_id in (server.server_id, server.server_name, server.alias)
+                ),
+                None,
+            )
+            if snapshot is not None
+            else None
+        )
+        resolved: Final = (
+            ResolvedMCPServer(table=config_match, runtime=None, source="registry")
+            if config_match is not None
+            else await resolve_mcp_server(
+                server_id,
+                manager=global_mcp_server_manager,
+                db_lookup=lambda sid: get_mcp_server(
+                    get_prisma_client_or_throw("Database not connected. Connect a database to your proxy"),
+                    sid,
+                ),
+                id_client_ip=client_ip,
+                name_client_ip=client_ip,
+                match_name=True,
+            )
         )
         authorized: Final = await authorize_mcp_server(
             resolved,
@@ -2109,6 +2133,8 @@ if MCP_AVAILABLE:
             raise HTTPException(
                 status_code=409, detail="An MCP registration already uses this identity or provider endpoint"
             ) from exc
+        except HTTPException:
+            raise
         except Exception as e:
             verbose_proxy_logger.exception("Error creating mcp server: %s", e)
             raise HTTPException(

@@ -1375,6 +1375,7 @@ async def test_issuer_edit_preserves_replacement_with_same_client_id(replacement
         {"mcp_info": {"tool_allowlist_enforced": False}},
         {"tool_name_to_description": {"write": "Not approved"}},
         {"credentials": {"auth_value": "synthetic"}},
+        {"gateway_custom_option": {"enabled": True}},
     ],
 )
 def test_provider_update_validates_the_merged_stored_registration(patch: dict[str, object]) -> None:
@@ -1444,7 +1445,6 @@ async def test_provider_accepts_neutral_connection_settings_without_credentials_
     updated = await update_mcp_server(prisma, UpdateMCPServerRequest(server_id="provider", **neutral), "admin")
     assert updated.allowed_tools == ["search"]
     written = prisma.db.litellm_mcpservertable.update.call_args.kwargs["data"]
-    assert written["transport"] is None
-    assert _credentials_cleared(written["credentials"])
+    assert not neutral.keys() & written.keys()
     assert "allowed_tools" not in written
     assert json.loads(written["mcp_info"])["tool_allowlist_enforced"] is True

@@ -89,6 +89,7 @@ from litellm.proxy._types import (
     MCPEnvVar,
     MCPTransport,
     MCPTransportType,
+    NewMCPServerRequest,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
     is_per_server_oauth_discovery_eligible,
@@ -408,6 +409,7 @@ class MCPServerConfig(TypedDict, total=False):
 
     server_id: ReadOnly[str]
     execution_mode: ReadOnly[MCPExecutionMode]
+    tool_name_to_description: ReadOnly[Mapping[str, str]]
     protocol_version: ReadOnly[MCPUpstreamProtocol]
     alias: str
     description: str
@@ -2558,13 +2560,83 @@ class MCPServerManager:
         store; a rowless server that is NOT config-declared is a throwaway temp/session server whose
         client must not be persisted. This never overrides the row-existence check: a server that has
         a LiteLLM_MCPServerTable row is always resolved to that row first."""
-        return server_id in self.config_mcp_servers
+        return server_id in self.config_mcp_servers or server_id in self.catalog.config_registrations
+
+    def _config_registration(
+        self,
+        name: str,
+        values: MCPServerConfig,
+        aliases: Mapping[str, str] | None,
+    ) -> LiteLLM_MCPServerTable:
+        alias: Final = _assigned_alias(name, values, aliases)
+        pinned_id: Final = _pinned_config_server_id(values.get("server_id"), name)
+        if values.get("execution_mode", MCPExecutionMode.litellm) == MCPExecutionMode.provider:
+            request: Final = NewMCPServerRequest.model_validate(
+                {
+                    **{field: value for field, value in values.items() if field != "access_groups"},
+                    "server_name": name,
+                    "alias": alias,
+                    "mcp_access_groups": values.get("access_groups", []),
+                }
+            )
+            stable_id: Final = hashlib.sha256(f"provider|{name}|{request.url}|{alias or ''}".encode()).hexdigest()[:32]
+            return LiteLLM_MCPServerTable.model_validate(
+                {
+                    **request.model_dump(exclude_none=True),
+                    "server_id": pinned_id or stable_id,
+                    "transport": request.transport,
+                    "is_config": True,
+                }
+            )
+        validate_mcp_gateway_execution(values.get("execution_mode", MCPExecutionMode.litellm))
+        return LiteLLM_MCPServerTable(
+            server_id=pinned_id
+            or self._generate_stable_server_id(
+                name,
+                values.get("url") or "",
+                values.get("transport", MCPTransport.http),
+                values.get("auth_type"),
+                alias,
+            ),
+            server_name=name,
+            alias=alias,
+            url=values.get("url"),
+            transport=values.get("transport", MCPTransport.http),
+            is_config=True,
+        )
 
     async def load_servers_from_config(
         self,
         mcp_servers_config: dict[str, MCPServerConfig],
         mcp_aliases: dict[str, str] | None = None,
-    ):
+    ) -> None:
+        _validate_config_server_names(mcp_servers_config)
+        registrations: Final = tuple(
+            self._config_registration(name, config, mcp_aliases) for name, config in mcp_servers_config.items()
+        )
+        self.catalog.validate_config_inventory(registrations)
+        providers: Final = {
+            server.server_id: server for server in registrations if server.execution_mode == MCPExecutionMode.provider
+        }
+        provider_names: Final = frozenset(server.server_name for server in providers.values())
+        for server in tuple(self.config_mcp_servers.values()):
+            if server.server_name in provider_names or server.server_id in providers:
+                self._cleanup_server_tool_routing_artifacts(server)
+                self.invalidate_oauth_discovery_state(server.server_id)
+                self.config_mcp_servers.pop(server.server_id, None)
+        gateway_config: Final = {
+            name: config
+            for name, config in mcp_servers_config.items()
+            if config.get("execution_mode", MCPExecutionMode.litellm) != MCPExecutionMode.provider
+        }
+        await self._load_gateway_servers_from_config(gateway_config, mcp_aliases)
+        self.catalog.publish_config_registrations(providers)
+
+    async def _load_gateway_servers_from_config(
+        self,
+        mcp_servers_config: dict[str, MCPServerConfig],
+        mcp_aliases: dict[str, str] | None = None,
+    ) -> None:
         """
         Load the MCP Servers from the config
 
@@ -3527,9 +3599,10 @@ class MCPServerManager:
         # If a previously-active server has been moved out of the active
         # state, evict any stale registry entry so subsequent tool calls and
         # health probes can't reach it.
-        if (
-            mcp_server.execution_mode == MCPExecutionMode.provider
-            or mcp_server.approval_status not in (None, "active", "approved")
+        if mcp_server.execution_mode == MCPExecutionMode.provider or mcp_server.approval_status not in (
+            None,
+            "active",
+            "approved",
         ):
             evicted = self.registry.pop(mcp_server.server_id, None)
             if evicted is None and mcp_server.server_name:

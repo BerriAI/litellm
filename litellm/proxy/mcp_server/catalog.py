@@ -26,6 +26,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.models.mcp_server import LiteLLM_MCPServerTable
 from litellm.proxy.mcp_server.result_conversion import age_freshness, aggregate_freshness
 from litellm.types.mcp import MCPExecutionMode
+from litellm.types.mcp_server.provider_registration import canonical_provider_mcp_url
 
 if TYPE_CHECKING:
     from mcp.types import ListToolsResult, PaginatedRequestParams, PaginatedResult
@@ -92,8 +93,39 @@ def _check_oauth_revision(selected: MCPServer, candidate: MCPServer | None) -> N
         raise HTTPException(status_code=503, detail="OAuth metadata discovery changed repeatedly; retry shortly")
 
 
+def _provider_registration_conflicts(first: LiteLLM_MCPServerTable, second: LiteLLM_MCPServerTable) -> bool:
+    if MCPExecutionMode.provider not in (first.execution_mode, second.execution_mode):
+        return False
+    identifiers: Final = frozenset(
+        value.lower() for value in (first.server_id, first.server_name, first.alias) if value
+    )
+    other_identifiers: Final = frozenset(
+        value.lower() for value in (second.server_id, second.server_name, second.alias) if value
+    )
+    same_provider_url: Final = (
+        first.execution_mode == second.execution_mode == MCPExecutionMode.provider
+        and first.url is not None
+        and second.url is not None
+        and canonical_provider_mcp_url(first.url) == canonical_provider_mcp_url(second.url)
+    )
+    return bool(identifiers & other_identifiers) or same_provider_url
+
+
+def validate_provider_registration_conflicts(
+    config_servers: Sequence[LiteLLM_MCPServerTable],
+    database_servers: Sequence[LiteLLM_MCPServerTable] = (),
+) -> None:
+    for index, config_server in enumerate(config_servers):
+        for other in (*config_servers[index + 1 :], *database_servers):
+            if _provider_registration_conflicts(config_server, other):
+                raise ValueError(
+                    f"MCP config registration '{config_server.server_name}' conflicts with registration '{other.server_name}'"
+                )
+
+
 def _snapshot(
-    manager: MCPServerManager, database_identity: str,
+    manager: MCPServerManager,
+    database_identity: str,
     registration_only_servers: Mapping[str, LiteLLM_MCPServerTable],
 ) -> CatalogSnapshot:
     from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
@@ -103,6 +135,7 @@ def _snapshot(
     serialized: Final = json.dumps(
         (
             database_identity,
+            tuple(server.model_dump(mode="json") for server in manager.catalog.config_registrations.values()),
             tuple(sorted(manager.registry)),
             tuple((key, _configuration_identity(value)) for key, value in sorted(manager.config_mcp_servers.items())),
         ),
@@ -113,10 +146,13 @@ def _snapshot(
         hashlib.sha256(serialized.encode()).hexdigest(),
         MappingProxyType(dict(global_mcp_tool_registry.published_tools)),
         dict(manager.published_tool_routes),
-        MappingProxyType({
-            **{key: manager.build_mcp_server_table(value) for key, value in servers.items()},
-            **{key: value.model_copy(deep=True) for key, value in registration_only_servers.items()},
-        }),
+        MappingProxyType(
+            {
+                **{key: value.model_copy(deep=True) for key, value in manager.catalog.config_registrations.items()},
+                **{key: manager.build_mcp_server_table(value) for key, value in servers.items()},
+                **{key: value.model_copy(deep=True) for key, value in registration_only_servers.items()},
+            }
+        ),
     )
 
 
@@ -126,6 +162,7 @@ class CatalogSnapshots:
         self._refresh_lock = asyncio.Lock()
         self._database_identity = ""
         self._registration_only_servers: Mapping[str, LiteLLM_MCPServerTable] = MappingProxyType({})
+        self.config_registrations: Mapping[str, LiteLLM_MCPServerTable] = MappingProxyType({})
         self._arrival_ticket = 0
         self._completed_ticket = 0
         self._shared_snapshot: CatalogSnapshot | None = None
@@ -138,6 +175,24 @@ class CatalogSnapshots:
         self._staged_routing: ContextVar[tuple[dict[str, str], asyncio.Event] | None] = ContextVar(
             "mcp_catalog_routing", default=None
         )
+
+    def validate_config_inventory(self, servers: Sequence[LiteLLM_MCPServerTable]) -> None:
+        database_servers: Final = (
+            *(self.manager.build_mcp_server_table(server) for server in self.manager.registry.values()),
+            *self._registration_only_servers.values(),
+        )
+        validate_provider_registration_conflicts(servers, database_servers)
+
+    def publish_config_registrations(self, servers: Mapping[str, LiteLLM_MCPServerTable]) -> None:
+        self.config_registrations = MappingProxyType(dict(servers))
+        self._shared_snapshot = None
+
+    def validate_database_registration(self, server: LiteLLM_MCPServerTable) -> None:
+        config_servers: Final = (
+            *self.config_registrations.values(),
+            *(self.manager.build_mcp_server_table(value) for value in self.manager.config_mcp_servers.values()),
+        )
+        validate_provider_registration_conflicts(config_servers, (server,))
 
     def current(self) -> CatalogSnapshot | None:
         scoped: Final = self._operation.get()
@@ -222,9 +277,9 @@ class CatalogSnapshots:
             shared,
             servers=MappingProxyType({key: value.model_copy(deep=True) for key, value in shared.servers.items()}),
             routing=routing,
-            management_servers=MappingProxyType({
-                key: value.model_copy(deep=True) for key, value in shared.management_servers.items()
-            }),
+            management_servers=MappingProxyType(
+                {key: value.model_copy(deep=True) for key, value in shared.management_servers.items()}
+            ),
         )
         closed: Final = asyncio.Event()
         token: Final = self._operation.set((snapshot, closed))
@@ -507,13 +562,24 @@ class CatalogSnapshots:
         ).hexdigest()
         verbose_logger.info("Found %s MCP servers in database", len(raw_rows))
 
-        registration_only_servers: Final = MappingProxyType({
-            server.server_id: server
-            for server in (
-                LiteLLM_MCPServerTable.model_validate(row.model_dump())
-                for row in raw_rows if row.model_dump().get("execution_mode") == MCPExecutionMode.provider
+        registration_only_servers: Final = MappingProxyType(
+            {
+                server.server_id: server
+                for server in (
+                    LiteLLM_MCPServerTable.model_validate(row.model_dump())
+                    for row in raw_rows
+                    if row.model_dump().get("execution_mode") == MCPExecutionMode.provider
+                )
+            }
+        )
+        config_servers: Final = (
+            *self.config_registrations.values(),
+            *(self.manager.build_mcp_server_table(value) for value in self.manager.config_mcp_servers.values()),
+        )
+        if self.config_registrations or registration_only_servers:
+            validate_provider_registration_conflicts(
+                config_servers, tuple(LiteLLM_MCPServerTable.model_validate(row.model_dump()) for row in raw_rows)
             )
-        })
         previous_registry: Final = self.manager.registry
         new_registry: Final = await self._stage_servers(raw_rows, reuse_unchanged=reuse_unchanged)
 

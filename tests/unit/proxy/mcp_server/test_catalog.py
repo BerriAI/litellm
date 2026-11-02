@@ -891,3 +891,164 @@ async def test_management_and_runtime_inventory_share_refresh_and_request_snapsh
     assert await manager.get_all_mcp_servers_unfiltered() == []
     assert await manager.catalog.list() == {}
     assert read_rows.await_count == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pinned_id", [None, "configured-docs"])
+async def test_provider_config_inventory_reloads_without_entering_gateway(
+    monkeypatch: pytest.MonkeyPatch, pinned_id: str | None,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    manager: Final = MCPServerManager()
+    config: Final = {
+        "docs": {
+            "execution_mode": "provider", "url": "https://DOCS.example:443/mcp", "allowed_tools": ["search"],
+            "tool_name_to_description": {"search": "Search documentation"},
+            **({"server_id": pinned_id} if pinned_id else {}),
+        },
+    }
+    await manager.load_servers_from_config(config)
+    first: Final = (await manager.get_all_mcp_servers_unfiltered())[0]
+    assert first.is_config and first.execution_mode == "provider"
+    assert first.url == "https://docs.example/mcp"
+    assert first.allowed_tools == ["search"]
+    assert first.tool_name_to_description == {"search": "Search documentation"}
+    assert first.transport is None and first.credentials is None
+    assert first.mcp_info["tool_allowlist_enforced"] is True
+    assert not manager.get_registry()
+    async with manager.catalog.operation():
+        await manager.load_servers_from_config({"docs": {
+            **config["docs"], "url": first.url, "allowed_tools": [], "tool_name_to_description": {},
+        }})
+        assert (await manager.get_all_mcp_servers_unfiltered())[0].allowed_tools == ["search"]
+    updated: Final = (await manager.get_all_mcp_servers_unfiltered())[0]
+    assert updated.server_id == first.server_id
+    assert updated.allowed_tools == []
+    await manager.load_servers_from_config({})
+    assert await manager.get_all_mcp_servers_unfiltered() == []
+    assert not manager.get_registry()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,value", [
+    ("authentication_token", "synthetic"), ("client_secret", "synthetic"),
+    ("aws_access_key_id", "synthetic"), ("client_private_key", "synthetic"),
+    ("allow_sampling", True), ("protocol_version", "2025-03-26"),
+    ("gateway_custom_option", {"enabled": True}),
+])
+async def test_provider_config_rejects_active_config_only_connection_fields(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: object,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    manager: Final = MCPServerManager()
+    config: Final = {"execution_mode": "provider", "url": "https://docs.example/mcp", "allowed_tools": ["search"]}
+    await manager.load_servers_from_config({"docs": config})
+    previous: Final = await manager.get_all_mcp_servers_unfiltered()
+    with pytest.raises(ValueError, match=field):
+        await manager.load_servers_from_config({"docs": {**config, field: value}})
+    assert await manager.get_all_mcp_servers_unfiltered() == previous
+    assert not manager.get_registry()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("other", [
+    {"execution_mode": "provider", "url": "https://DOCS.example:443/mcp", "allowed_tools": []},
+    {"execution_mode": "provider", "url": "https://other.example/mcp", "allowed_tools": [], "alias": "docs"},
+    {"url": "https://gateway.example/mcp", "transport": "http", "server_id": "docs"},
+])
+async def test_provider_config_rejects_ambiguous_config_identities(
+    monkeypatch: pytest.MonkeyPatch, other: dict[str, object],
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    manager: Final = MCPServerManager()
+    with pytest.raises(ValueError, match="conflicts"):
+        await manager.load_servers_from_config({
+            "docs": {"execution_mode": "provider", "url": "https://docs.example/mcp", "allowed_tools": []},
+            "other": other,
+        })
+    assert not manager.get_registry()
+    assert await manager.get_all_mcp_servers_unfiltered() == []
+
+
+@pytest.mark.asyncio
+async def test_provider_config_replaces_gateway_entry_without_retaining_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    manager: Final = MCPServerManager()
+    await manager.load_servers_from_config({"docs": {"transport": "http", "url": "https://docs.example/mcp"}})
+    assert manager.get_mcp_server_by_name("docs") is not None
+    await manager.load_servers_from_config({"docs": {
+        "execution_mode": "provider", "url": "https://docs.example/mcp", "allowed_tools": [],
+    }})
+    assert manager.get_mcp_server_by_name("docs") is None
+    assert not manager.get_registry()
+    assert (await manager.get_all_mcp_servers_unfiltered())[0].execution_mode == "provider"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("database_first", [False, True])
+async def test_provider_config_rejects_database_url_conflict_in_either_loading_order(
+    monkeypatch: pytest.MonkeyPatch, database_first: bool,
+) -> None:
+    from fastapi import HTTPException
+
+    from litellm.models.mcp_server import LiteLLM_MCPServerTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+    row: Final = LiteLLM_MCPServerTable(
+        server_id="database-docs", server_name="database-docs", execution_mode="provider", transport=None,
+        url="https://docs.example/mcp", allowed_tools=["search"],
+    )
+    tables: Final = SimpleNamespace(
+        litellm_mcpservertable=SimpleNamespace(find_many=AsyncMock(return_value=[row])),
+        litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=SimpleNamespace(reload_revision=1))),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=tables, writer_db=tables))
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    manager: Final = MCPServerManager()
+    config: Final = {"docs": {"execution_mode": "provider", "url": row.url, "allowed_tools": []}}
+    if database_first:
+        await manager.get_all_mcp_servers_unfiltered()
+        with pytest.raises(ValueError, match="conflicts"):
+            await manager.load_servers_from_config(config)
+    else:
+        await manager.load_servers_from_config(config)
+        with pytest.raises(HTTPException) as unavailable:
+            await manager.get_all_mcp_servers_unfiltered()
+        assert unavailable.value.status_code == 503
+    assert not manager.get_registry()
+
+
+@pytest.mark.asyncio
+async def test_provider_config_changes_invalidate_cached_inventory_without_database_revision_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+    tables: Final = SimpleNamespace(
+        litellm_mcpservertable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=SimpleNamespace(reload_revision=1))),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=tables, writer_db=tables))
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    manager: Final = MCPServerManager()
+    initial: Final = {"execution_mode": "provider", "url": "https://docs.example/mcp", "allowed_tools": ["search"]}
+    await manager.load_servers_from_config({"docs": initial})
+    assert (await manager.get_all_mcp_servers_unfiltered())[0].allowed_tools == ["search"]
+    await manager.load_servers_from_config({"docs": {**initial, "allowed_tools": []}})
+    assert (await manager.get_all_mcp_servers_unfiltered())[0].allowed_tools == []
+    await manager.load_servers_from_config({})
+    assert await manager.get_all_mcp_servers_unfiltered() == []

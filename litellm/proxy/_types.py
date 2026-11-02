@@ -15,7 +15,9 @@ from pydantic import (
     Field,
     Json,
     JsonValue,
+    ModelWrapValidatorHandler,
     PositiveInt,
+    PrivateAttr,
     TypeAdapter,
     field_validator,
     model_validator,
@@ -70,7 +72,7 @@ from litellm.types.mcp import (
     validate_mcp_protocol_transport,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
-from litellm.types.mcp_server.provider_registration import normalize_provider_registration
+from litellm.types.mcp_server.provider_registration import active_registration_extras, normalize_provider_registration
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.special_headers import (
     SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
@@ -1499,6 +1501,8 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
 
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
+    _provider_extra_fields: tuple[str, ...] = PrivateAttr(default=())
+
     server_id: str
     server_name: str | None = None
     alias: str | None = None
@@ -1547,6 +1551,28 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     timeout: float | None = None
     max_concurrent_requests: int | None = None
     rpm: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def retain_extra_field_names(
+        cls,
+        values: object,
+        handler: ModelWrapValidatorHandler["UpdateMCPServerRequest"],
+    ) -> "UpdateMCPServerRequest":
+        validated: Final = handler(values)
+        if isinstance(values, Mapping):
+            validated._provider_extra_fields = active_registration_extras(
+                TypeAdapter(dict[str, object]).validate_python(values),
+                cls.model_fields.keys(),
+            )
+        return validated
+
+    def provider_registration_patch(self, fields_set: set[str] | None = None) -> dict[str, object]:
+        if self._provider_extra_fields:
+            raise ValueError(
+                f"Provider-executed MCP registrations do not accept {', '.join(self._provider_extra_fields)}"
+            )
+        return self.model_dump(include=fields_set, exclude_unset=True)
 
     @model_validator(mode="before")
     @classmethod

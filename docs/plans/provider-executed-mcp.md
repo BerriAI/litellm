@@ -1,6 +1,6 @@
 # Provider-executed MCP registration
 
-Status: database, isolation, and admin registration API slices approved. Scoped retrieval and provider config loading are intentionally deferred
+Status: database, isolation, and admin registration API slices approved and pushed through `1ba99633e4`. Provider YAML registration and the explicit provider input model are reviewed and approved for commit and push. Permission integration and native-request enforcement are next
 
 ## Implementation plan
 
@@ -9,10 +9,14 @@ Work through these layers in order on `litellm_provider_mcp_registration`. Updat
 | Layer | Scope | Status |
 | --- | --- | --- |
 | 1 | Settle registration fields, values, storage, and validation | Approved |
-| 2 | Implement persistence and execution-mode isolation before enabling provider registration | Database and isolation committed; API persistence validation approved; YAML provider inventory pending |
+| 2 | Implement persistence and execution-mode isolation before enabling provider registration | Database, isolation, and admin API committed; YAML registration and provider input model reviewed and approved |
 | 3 | Management UI/API, stored tool options, and existing key/team/toolset selectors | Admin CRUD and inventory API approved; UI and scoped selectors pending |
 | 4 | Authorize effective OpenAI Responses and Anthropic Messages MCP attachments through existing MCP permissions | Pending |
 | 5 | Live provider tests, streaming admission tests, UI tests, and gateway regressions | Pending |
+
+The next phase connects existing object permissions to provider registrations and enforces native attachments before provider dispatch. Existing permission storage can represent the IDs and tools, but listing a server in the admin catalog does not complete this integration. Assignment validation still resolves config entries through executable inventory, scoped lists still retrieve executable server objects, and tool pickers still call `/mcp-rest/tools/list`. Those paths must read registration identity and stored allowed tools from management inventory for provider mode
+
+Reuse the existing server/tool grant resolution functions, groups, toolsets, and explicit denies. Apply the agreed key/team/server ceiling to provider authorization. The current resolver also has legacy additive access-group grants and some permissive lookup-error handling, so calling it unchanged would not guarantee that contract. Native admission must resolve the canonical URL, require provider execution mode, and validate a finite requested tool scope after effective request configuration is assembled. Cover both native APIs and streaming, with denied requests producing no provider dispatch. Provider MCP discovery/execution stays outside LiteLLM
 
 V1 supports URL-based OpenAI Responses MCP and both Anthropic Messages connector formats. Request authorization applies to streaming and non-streaming calls before provider dispatch. Server restrictions, team permissions, and key permissions intersect. Existing applicable permission ceilings and explicit denies continue to apply
 
@@ -20,7 +24,7 @@ Response/SSE inspection, per-invocation argument policy inside a provider's tool
 
 ## Current review acceptance criteria
 
-This batch covers admin CRUD, input validation, cached management inventory, and execution isolation. Key/team-scoped retrieval, selectors, toolsets, and native-request admission remain later layers. Their absence is intentional for this batch
+The approved batch covered admin CRUD, input validation, cached management inventory, and execution isolation. The current batch adds YAML registration to that same catalog. Key/team-scoped retrieval, selectors, toolsets, and native-request admission remain later layers. Their absence is intentional for this batch
 
 Core provider fields remain `execution_mode`, `server_name`, `url`, `allowed_tools`, and optional `tool_name_to_description`, alongside the existing shared management fields. Neutral connection values remain accepted where the shared schema permits them, but never enable MCP execution. Active credentials, transports, OAuth settings, commands, and other connection configuration are rejected. No strict five-field schema rewrite is part of this revision
 
@@ -36,7 +40,41 @@ Provider updates keep read-merge-validation atomic through the existing writer. 
 
 The later permissions layer will test matching list/detail visibility under key/team intersection, explicit denial, disjoint scopes, revocation after caching, and separation of read grants from mutation privileges. The admin-only live run is not evidence for that layer
 
-The next config slice should accept provider entries under the existing `mcp_servers` key, reuse registration validation, and publish read-only management records in the shared catalog without constructing gateway clients. Verify startup and reload, removal, stable IDs, conflicting config/database identities or URLs, and zero upstream activity. Existing LiteLLM config loading must remain unchanged
+The config slice accepts provider entries under the existing `mcp_servers` key, reuses registration validation, and publishes read-only management records in the shared catalog without constructing gateway clients. It covers startup and reload, removal, stable IDs, conflicting config/database identities or URLs, and zero upstream activity. Existing LiteLLM entries use the existing gateway loader
+
+```yaml
+mcp_servers:
+  docs:
+    server_id: docs-native
+    execution_mode: provider
+    url: https://docs.example/mcp
+    allowed_tools:
+      - search_docs
+      - fetch_doc
+    tool_name_to_description:
+      search_docs: Search documentation
+      fetch_doc: Read a documentation page
+```
+
+`server_id` is optional. Without it, the ID is derived from execution mode, config name, canonical URL, and alias. Tool-list edits keep the derived ID stable. Pin the ID when it must survive renaming or endpoint changes. Config registrations return `is_config=true`, appear in admin list/detail, and are edited through config rather than management CRUD
+
+Config registration review follows this control flow
+
+1. `ProxyConfig._init_non_llm_configs` passes nonempty `mcp_servers` to the manager. Removing the section clears provider config registrations without reloading unrelated gateway entries
+2. `MCPServerManager.load_servers_from_config` validates provider entries through `NewMCPServerRequest` and its `ProviderMCPRegistration` model, assigns identities, and checks conflicts before invoking the existing loader with gateway entries only. It publishes provider records into the catalog after validation
+3. `CatalogSnapshots` combines provider config records, database registrations, and gateway inventory into one management snapshot. Only gateway records enter executable inventory. Config publication invalidates the shared snapshot, while an in-flight operation retains its captured snapshot
+4. Admin list/detail read the catalog. Provider config detail works without a database and skips reachability probes. Config entries remain read-only through the management API
+5. API create/update reject collisions with config IDs, names, aliases, or canonical provider URLs. Database refresh applies the same conflict rule when config was loaded first. A gateway and provider registration may share a URL if their identities are distinct
+
+Validation passed 1,333 focused tests and 37 live proxy/PostgreSQL checks. A separate production-initializer run covered YAML reload, removal, stable IDs, request snapshot consistency, and rejected-input preservation with a real loopback recorder and no mocks. Both live runs recorded zero provider MCP connections. The initializer run fails on approved HEAD because provider config was previously rejected
+
+`ProviderMCPRegistration` now declares the supported fields and owns their validation. There is no connection-field blacklist to extend when gateway settings are added. Other active fields reject automatically, while neutral values are discarded. The existing create/update request models remain the shared API types. For updates, validation waits until the stored mode is known and the patch is merged under the existing row lock. The update model retains unknown active field names privately so Pydantic cannot silently discard them before provider validation. It retains no unknown field values and preserves legacy gateway handling
+
+Provider updates project stored data onto the existing request schema, excluding response-only audit/health fields before validation. Only supported supplied fields are written. Neutral connection settings do not cause credential or transport writes. Three regression cases for an unrecognized active setting failed before this revision and pass afterward across create validation, YAML loading, and updates
+
+One SSRF test was excluded from the focused pass count. It fails identically on approved HEAD at the initial `validate_url` assertion, before config loading. Changed-file Ruff and formatting passed, strict rule counts did not increase, and the type-check comparison introduced no diagnostics. These are focused local checks, not a full repository CI run
+
+The separate usage audit made eight real OpenAI Responses and Anthropic Messages requests, comparing control/native MCP and JSON/streaming. All four MCP cases executed successfully. Client usage, normalized token totals, and model costs matched upstream usage and registry pricing. Native server/tool spend attribution and some Anthropic normalized usage details remain follow-ups. No accounting changes are included in this slice
 
 ## Current invocation routing
 
@@ -221,11 +259,11 @@ Existing `metadata.allowed_tools` remains an independent compatibility restricti
 
 The approved database slice was committed as `fd0ac3ca76` and the approved isolation slice as `42ea534932`. Stored records can represent both modes, while the connection-capable `MCPServer` type permits only `litellm`. The redundant named gateway-mode alias is replaced with a literal annotation, leaving one named execution-mode enum
 
-Provider records remain excluded during incremental add/update and database catalog reload, before cached gateway entries can be reused. Direct table-to-runtime conversion and both shared client-creation boundaries reject provider mode before OAuth discovery, credential resolution, or MCP connection. YAML loading still rejects provider mode until its inventory path is implemented
+Provider records remain excluded during incremental add/update and database catalog reload, before cached gateway entries can be reused. Direct table-to-runtime conversion and both shared client-creation boundaries reject provider mode before OAuth discovery, credential resolution, or MCP connection. The current YAML slice adds provider registrations to management inventory while preserving that execution boundary
 
 The current review slice enables provider registration on the existing create API, canonicalizes HTTPS endpoint identity, requires an explicit finite tool list, and rejects active gateway connection settings. Create persists null transport/auth fields and an enforced allowlist. Update validates the merged record under a row lock, preserves omitted fields, rejects null tool lists, and rejects changes to execution mode. The existing provider-only unique index rejects duplicate endpoints with HTTP 409
 
-Admin management inventory includes active provider records. Detail reads return stored allowed tools without running health probes. The UI, scoped key/team selectors, toolset integration, YAML provider inventory, and native LLM admission authorization remain pending. Registration management alone does not yet enforce native-request permissions
+Admin management inventory includes active provider records. Detail reads return stored allowed tools without running health probes. The UI, scoped key/team selectors, toolset integration, and native LLM admission authorization remain pending. YAML provider inventory is implemented for review. Registration management alone does not yet enforce native-request permissions
 
 Management inventory and executable servers share one revision-based catalog snapshot. A refresh reads active rows once, retains provider registrations for management, and excludes them from runtime construction. Management listing does not issue a second database inventory query
 

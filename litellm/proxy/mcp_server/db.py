@@ -1084,6 +1084,30 @@ async def delete_mcp_server(
     return deleted_server  # pyright: ignore[reportReturnType]  # prisma row, not domain LiteLLM_MCPServerTable
 
 
+def _validate_mcp_config_registration_write(values: Mapping[str, object]) -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    catalog: Final = global_mcp_server_manager.catalog
+    if not catalog.config_registrations and values.get("execution_mode") != MCPExecutionMode.provider:
+        return
+    identity: Final = {
+        key: values[key]
+        for key in (
+            "server_id",
+            "server_name",
+            "alias",
+            "url",
+            "transport",
+            "execution_mode",
+        )
+        if key in values
+    }
+    try:
+        catalog.validate_database_registration(LiteLLM_MCPServerTable.model_validate(identity))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 async def create_mcp_server(
     prisma_client: PrismaClient, data: NewMCPServerRequest, touched_by: str
 ) -> LiteLLM_MCPServerTable:
@@ -1099,6 +1123,7 @@ async def create_mcp_server(
         data.server_id = str(uuid.uuid4())
 
     # Use helper to prepare data with proper JSON serialization
+    _validate_mcp_config_registration_write(data.model_dump())
     data_dict: Final = _prepare_mcp_server_data(data)
 
     # Add audit fields
@@ -1123,6 +1148,7 @@ async def create_mcp_server_if_identifier_free(
     if data.server_id is None:
         data.server_id = str(uuid.uuid4())
 
+    _validate_mcp_config_registration_write(data.model_dump())
     data_dict: Final = _prepare_mcp_server_data(data)
     data_dict["created_by"] = touched_by
     data_dict["updated_by"] = touched_by
@@ -1260,13 +1286,14 @@ def _validate_mcp_protocol_write(
 
 
 def _validate_provider_registration_update(
-    stored: "prisma_db_models.LiteLLM_MCPServerTable", data: UpdateMCPServerRequest,
+    stored: "prisma_db_models.LiteLLM_MCPServerTable",
+    data: UpdateMCPServerRequest,
     fields_set: set[str] | None = None,
 ) -> NewMCPServerRequest:
-    patch: Final = data.model_dump(include=fields_set, exclude_unset=True)
     try:
+        patch: Final = data.provider_registration_patch(fields_set)
         registration: Final = LiteLLM_MCPServerTable.model_validate(stored.model_dump())
-        merged: Final = {**registration.model_dump(), **patch}
+        merged: Final = {**registration.model_dump(include=set(NewMCPServerRequest.model_fields)), **patch}
         return NewMCPServerRequest.model_validate(merged)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1278,15 +1305,19 @@ def _prepare_provider_registration_update(
     touched_by: str,
     fields_set: set[str] | None,
 ) -> Mapping[str, object]:
-    from prisma import Json
+    from litellm.types.mcp_server.provider_registration import ProviderMCPRegistration
 
     validated: Final = _validate_provider_registration_update(stored, data, fields_set)
+    _validate_mcp_config_registration_write(validated.model_dump())
     supplied_fields: Final = fields_set if fields_set is not None else data.model_fields_set
-    normalized_patch: Final = data.model_copy(update=validated.model_dump(include=supplied_fields | {"mcp_info"}))
+    normalized_patch: Final = UpdateMCPServerRequest.model_validate(
+        validated.model_dump(
+            include=(supplied_fields & ProviderMCPRegistration.model_fields.keys()) | {"server_id", "mcp_info"}
+        )
+    )
     serialized: Final = _prepare_mcp_server_data(normalized_patch, exclude_unset=True, fields_set=supplied_fields)
     return {
         **serialized,
-        **({"credentials": Json(None)} if "credentials" in serialized and serialized["credentials"] is None else {}),
         "updated_by": touched_by,
     }
 
@@ -1378,6 +1409,9 @@ async def update_mcp_server(
             else LiteLLM_MCPServerTable.model_validate(updated_provider.model_dump())
         )
 
+    if registration is not None:
+        _validate_mcp_config_registration_write({**registration.model_dump(), **data.model_dump(exclude_unset=True)})
+
     # Use helper to prepare data with proper JSON serialization.
     # exclude_unset=True makes this a true partial update: fields the caller did
     # not provide are not written, so they keep their existing DB value instead
@@ -1385,15 +1419,17 @@ async def update_mcp_server(
     prepared_data: Final = _prepare_mcp_server_data(data, exclude_unset=True, fields_set=fields_set)
 
     # Pre-fetch existing record once if we need it for auth_type, url, or credential logic
-    existing = None
     has_credentials: Final = "credentials" in prepared_data and prepared_data["credentials"] is not None
     # An explicit token-exchange column write (set or clear) also migrates the
     # legacy blob copies below, so the existing row is needed for those updates.
     explicit_te_write: Final = bool(_TOKEN_EXCHANGE_COLUMN_FIELDS & prepared_data.keys())
     url_provided: Final = "url" in prepared_data and prepared_data["url"] is not None
     issuer_provided: Final = "issuer" in prepared_data
-    if data.auth_type or has_credentials or explicit_te_write or url_provided or issuer_provided:
-        existing = registration
+    existing: Final = (
+        registration
+        if data.auth_type or has_credentials or explicit_te_write or url_provided or issuer_provided
+        else None
+    )
 
     auth_type_changed: Final = bool(
         data.auth_type

@@ -44,6 +44,7 @@ def test_unsafe_endpoint_identity_is_rejected(url: str) -> None:
         {"credentials": {"auth_value": "synthetic"}},
         {"static_headers": {"Authorization": "synthetic"}},
         {"command": "python"},
+        {"gateway_custom_option": {"enabled": True}},
         {"timeout": 0},
         {"mcp_info": {"tool_allowlist_enforced": False}},
         {"mcp_info": {"tool_allowlist_enforced": None}},
@@ -65,3 +66,31 @@ def test_empty_tool_list_is_enforced_without_transport_or_stored_credentials() -
     assert prepared["transport"] is None
     assert not prepared.get("credentials")
     assert prepared.get("auth_type") is None
+
+
+@pytest.mark.parametrize("neutral", [None, False, "", {}, []])
+def test_provider_registration_ignores_neutral_unknown_settings(neutral: object) -> None:
+    request: Final = NewMCPServerRequest(
+        execution_mode="provider", url="https://docs.example/mcp", allowed_tools=["search"],
+        gateway_custom_option=neutral,
+    )
+    assert request.allowed_tools == ["search"]
+    assert request.transport is None
+    assert "gateway_custom_option" not in request.model_dump()
+
+
+def test_provider_registration_preserves_supported_management_fields() -> None:
+    request: Final = NewMCPServerRequest(
+        execution_mode="provider", server_name="docs", alias="documentation",
+        url="https://docs.example/mcp", allowed_tools=["search"], description="Documentation",
+        instructions="Search docs", source_url="https://docs.example", mcp_access_groups=["research"],
+        allow_all_keys=True, tool_name_to_description={"search": "Search docs"},
+        tool_name_to_display_name={"search": "Search"}, mcp_info={"custom_metadata": "retained"},
+    )
+    assert request.server_name == "docs" and request.alias == "documentation"
+    assert request.description == "Documentation" and request.instructions == "Search docs"
+    assert request.source_url == "https://docs.example" and request.mcp_access_groups == ["research"]
+    assert request.allow_all_keys
+    assert request.tool_name_to_description == {"search": "Search docs"}
+    assert request.tool_name_to_display_name == {"search": "Search"}
+    assert request.mcp_info == {"custom_metadata": "retained", "tool_allowlist_enforced": True}
