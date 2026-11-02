@@ -1782,6 +1782,15 @@ class TestGeminiContents:
             == GEMINI_INSPECTION_MESSAGES
         )
 
+    def test_gemini_function_response_reaches_inspection_exactly_as_the_provider_gets_it(self):
+        result: Final = {"output": "4111 1111 1111 1111", "\x00output": "clean", "name": "José"}
+        data: Final = {"contents": [{"parts": [{"functionResponse": {"name": "lookup", "response": result}}]}]}
+
+        messages: Final = _build_lakera_inspection_messages(data, call_type="pass_through_endpoint")
+
+        assert json.loads(messages[0]["content"]) == result
+        assert "José" in messages[0]["content"]
+
     @pytest.mark.parametrize("field", ["functionResponse", "function_response"])
     def test_gemini_function_response_is_read_as_a_tool_turn(self, field: str):
         data: Final = {
