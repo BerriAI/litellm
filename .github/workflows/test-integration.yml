@@ -48,7 +48,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: ${{ fromJSON((inputs.suite || 'all') == 'all' && '["providers","extensions","accounting","management","management-replica","database","database-replica","mcp","security","cost","sdk","browser"]' || format('["{0}"]', inputs.suite)) }}
+        suite: ${{ fromJSON((inputs.suite || 'all') == 'all' && '["management","extensions"]' || format('["{0}"]', inputs.suite)) }}
     env:
       UV_PYTHON: "3.12"
       INTEGRATION_WORKERS: ${{ inputs.workers || fromJSON('{"providers":"32","extensions":"48","accounting":"16","management":"16","management-replica":"16","cost":"16","mcp":"8","security":"8","database":"4","database-replica":"4"}')[matrix.suite] || '' }}
@@ -81,6 +81,18 @@ jobs:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
+          ref: 61fe5be5b89df971a97be580f6f2d6d18615810d
+
+      - name: Apply RC integration diagnostics
+        env:
+          DIAGNOSTIC_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          [[ "$DIAGNOSTIC_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --depth 1 origin "$DIAGNOSTIC_SOURCE_SHA"
+          git show "$DIAGNOSTIC_SOURCE_SHA:.github/diagnostics/rc108-integration.patch" > "$RUNNER_TEMP/rc108-integration.patch"
+          git apply --check "$RUNNER_TEMP/rc108-integration.patch"
+          git apply "$RUNNER_TEMP/rc108-integration.patch"
+          git diff --exit-code HEAD -- litellm enterprise litellm-proxy-extras
 
       - name: Set up Python
         timeout-minutes: 3

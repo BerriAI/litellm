@@ -1,0 +1,134 @@
+diff --git a/.circleci/scripts/run_integration.sh b/.circleci/scripts/run_integration.sh
+index 1380b07de5..64b492015e 100644
+--- a/.circleci/scripts/run_integration.sh
++++ b/.circleci/scripts/run_integration.sh
+@@ -254,6 +254,13 @@ elif [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
+   worker_coverage=("INTEGRATION_COVERAGE_FILE=$coverage_data")
+ fi
+ 
++diagnostic_tests=()
++if [ "$suite" = management ]; then
++  diagnostic_tests=(tests/integration/management/test_team_delete_large_membership.py::test_deleting_a_team_with_more_keys_than_the_publish_cap_revokes_every_key_on_a_warmed_peer tests/integration/management/test_user_rate_limit_updates.py::test_user_rate_limit_explicit_null_clears_and_omitted_limit_is_untouched 'tests/integration/management/test_team_update_multi_instance.py::test_team_update_adds_model_on_peer_for_inference_routes[responses]')
++elif [ "$suite" = extensions ]; then
++  diagnostic_tests=(tests/integration/observability/test_logging_only_scope_chaos.py::test_K4_proxy_restart_after_fifteen_responses_records_lost_ids)
++fi
++
+ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
+   INTEGRATION_RUN_ID="$integration_identity" \
+   DATABASE_URL="$DATABASE_URL" \
+@@ -270,7 +277,7 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
+   INTEGRATION_ROUTING="$INTEGRATION_ROUTING" \
+   MCP_TEST_PEER_PYTHON="${MCP_TEST_PEER_PYTHON:-}" \
+   .venv/bin/python tests/integration/run.py "$suite" --results "$results" \
+-  "${shard_arguments[@]}"
++  "${shard_arguments[@]}" "${diagnostic_tests[@]}"
+ 
+ if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
+   for covered_pid in "$proxy_pid" "$peer_pid"; do
+diff --git a/tests/integration/management/test_team_delete_large_membership.py b/tests/integration/management/test_team_delete_large_membership.py
+index e752c835e4..c6de799d0f 100644
+--- a/tests/integration/management/test_team_delete_large_membership.py
++++ b/tests/integration/management/test_team_delete_large_membership.py
+@@ -10,6 +10,8 @@ from __future__ import annotations
+ 
+ import json
+ import os
++import time
++import traceback
+ import uuid
+ from collections.abc import Callable, Mapping, Sequence
+ from concurrent.futures import Future, ThreadPoolExecutor
+@@ -732,16 +734,69 @@ def _statuses(proxy: Gateway, keys: Sequence[str]) -> dict[int, int]:
+     return {status: statuses.count(status) for status in frozenset(statuses)}
+ 
+ 
++@pytest.mark.parametrize("diagnostic_repeat", range(20))
+ def test_deleting_a_team_with_more_keys_than_the_publish_cap_revokes_every_key_on_a_warmed_peer(
+-    gateway: Gateway, peer: Gateway
++    gateway: Gateway, peer: Gateway, diagnostic_repeat: int
+ ) -> None:
+     with gateway.scenario() as scenario:
+         team: Final = _create_team(scenario)
+         scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_VerificationToken" WHERE team_id = %s', (team,))
+         keys: Final = _seeded_team_keys(team, KEYS_WELL_PAST_THE_PUBLISH_CAP)
++        warm_started: Final = time.monotonic()
+         assert _statuses(peer, keys) == {200: len(keys)}
+-
+-        response: Final = _delete_teams(gateway, [team])
++        print(
++            json.dumps(
++                {"diagnostic": "warm_complete", "repeat": diagnostic_repeat, "seconds": time.monotonic() - warm_started}
++            ),
++            flush=True,
++        )
++        delete_started: Final = time.monotonic()
++        try:
++            response: Final = _delete_teams(gateway, [team])
++        except httpx.TimeoutException:
++            print(traceback.format_exc(), flush=True)
++            snapshot: Final = read_rows(
++                "SELECT pid, state, wait_event_type, wait_event, "
++                "extract(epoch FROM clock_timestamp() - xact_start)::float AS xact_seconds, "
++                "pg_blocking_pids(pid) AS blockers, left(query, 3000) AS query "
++                "FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() ORDER BY pid",
++                (),
++            )
++            print(
++                json.dumps(
++                    {
++                        "diagnostic": "initial_delete_timeout",
++                        "team": team,
++                        "seconds": time.monotonic() - delete_started,
++                        "activity": snapshot,
++                    }
++                ),
++                flush=True,
++            )
++            still_present: Final = eventually(
++                lambda: bool(_team_rows(team)), lambda present: not present, seconds=75, return_last_on_timeout=True
++            )
++            print(
++                json.dumps(
++                    {
++                        "diagnostic": "after_initial_delete",
++                        "team_present": still_present,
++                        "seconds": time.monotonic() - delete_started,
++                    }
++                ),
++                flush=True,
++            )
++            raise
++        print(
++            json.dumps(
++                {
++                    "diagnostic": "delete_complete",
++                    "repeat": diagnostic_repeat,
++                    "seconds": time.monotonic() - delete_started,
++                }
++            ),
++            flush=True,
++        )
+         assert response.status_code == 200, response.text
+         assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE team_id = %s', (team,)) == []
+ 
+diff --git a/tests/integration/observability/test_logging_only_scope_chaos.py b/tests/integration/observability/test_logging_only_scope_chaos.py
+index be38d5a6f1..a3f9b9e57a 100644
+--- a/tests/integration/observability/test_logging_only_scope_chaos.py
++++ b/tests/integration/observability/test_logging_only_scope_chaos.py
+@@ -13,6 +13,7 @@ from typing import Final
+ import httpx
+ import psutil
+ import pytest
++from tests.integration._support.budget import case_timeout_seconds
+ from _logging_only_scope_support import (
+     JSON_OBJECT,
+     CallerResult,
+@@ -568,7 +569,7 @@ def test_K3_two_worker_sigkill_checks_post_kill_spend_rows(
+                     )
+ 
+ 
+-@pytest.mark.timeout(180)
++@pytest.mark.timeout(case_timeout_seconds() * 2)
+ def test_K4_proxy_restart_after_fifteen_responses_records_lost_ids(
+     gateway: Gateway,
+     tmp_path: Path,
