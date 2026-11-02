@@ -110,7 +110,7 @@ def _install_base_native(worktree: Path, repo_root: Path) -> None:
     }
     _run(
         [
-            "uv", "pip", "install", "--offline", "--python", sys.executable, "--no-deps",
+            "uv", "pip", "install", "--python", sys.executable, "--no-deps",
             "--target", str(worktree.parent / "native-install"), "--editable", str(worktree),
         ],
         cwd=worktree,
