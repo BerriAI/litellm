@@ -25,6 +25,19 @@ MODEL_POST_CALL: Final = "passthrough-model-post-call"
 GUARDED_MODEL: Final = "passthrough-guarded-model"
 POST_CALL_GUARDED_MODEL: Final = "passthrough-post-call-guarded-model"
 BLOCK_MARKER: Final = "block-this-prompt"
+RAISING_HOOK_MODEL: Final = "passthrough-model-a-logger-hook-cannot-read"
+_RAISING_HOOK_MODULE: Final = f"""
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class RaisingHook(CustomLogger):
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        if data.get("model") == "{RAISING_HOOK_MODEL}":
+            raise ValueError("this hook only reads native responses")
+
+
+proxy_handler_instance = RaisingHook()
+"""
 OPENAI_ROUTE: Final = "/openai/v1/chat/completions"
 ANTHROPIC_ROUTE: Final = "/anthropic/v1/messages"
 GEMINI_ROUTE: Final = "/gemini/v1beta/models/gemini-2.5-flash:generateContent"
@@ -128,11 +141,16 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
         )
         config: Final = _JSON.validate_python(yaml.safe_load(_CONFIG.read_text()))
         general_settings: Final = _JSON.validate_python(config.get("general_settings") or {})
+        (directory / "passthrough_raising_hook.py").write_text(_RAISING_HOOK_MODULE)
         path: Final = directory / "passthrough-auth-guardrails.yaml"
         path.write_text(
             yaml.safe_dump(
                 {
                     **config,
+                    "litellm_settings": {
+                        **_JSON.validate_python(config.get("litellm_settings") or {}),
+                        "callbacks": ["passthrough_raising_hook.proxy_handler_instance"],
+                    },
                     "general_settings": {
                         **general_settings,
                         "pass_through_endpoints": [
@@ -489,3 +507,21 @@ def test_model_guardrail_does_not_run_on_pass_through_traffic_that_names_the_mod
         assert response.status_code == 200, response.text
         assert len(rig.generic_post_call_vendor.drain()) == 1
         assert rig.model_post_call_vendor.drain() == ()
+
+
+def test_post_call_pass_leaves_a_logger_hook_for_native_responses_out(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": [GENERIC_POST_CALL]})
+        _drain(rig)
+
+        response: Final = _send(
+            gateway,
+            OPENAI_ROUTE,
+            {**_route_body(OPENAI_ROUTE, "What is the capital of France?"), "model": RAISING_HOOK_MODEL},
+            key,
+        )
+
+        assert response.status_code == 200, response.text
+        assert len(rig.generic_post_call_vendor.drain()) == 1
+        assert len(rig.upstreams[OPENAI_ROUTE].drain()) == 1
