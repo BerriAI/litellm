@@ -87,3 +87,74 @@ def test_gateway_preserves_metrics_bind_and_mcp_client_ip(
             finally:
                 assert stop_root_process(supervisor), (tmp_path / "proxy.log").read_text()
             assert supervisor.returncode == 0, (tmp_path / "proxy.log").read_text()
+
+
+@pytest.mark.parametrize(
+    "server_arguments",
+    [("--no-proxy-headers",), ("--forwarded-allow-ips", "127.0.0.1")],
+)
+def test_gateway_launcher_private_hop_preserves_client_address(
+    tmp_path: Path, server_arguments: tuple[str, ...]
+) -> None:
+    config: Final = tmp_path / "config.yaml"
+    config.write_text(
+        json.dumps({"model_list": [], "general_settings": {"master_key": "os.environ/LITELLM_MASTER_KEY"}})
+    )
+    public_port: Final = allocate_port()
+    environment: Final = {
+        **{key: value for key, value in os.environ.items() if not key.startswith("DATABASE_") and key != "DIRECT_URL"},
+        "LITELLM_MASTER_KEY": "sk-rust-forwarding-integration-key-not-a-secret",
+        "LITELLM_RUST_GATEWAY": "true",
+        "LITELLM_PGBOUNCER_ENABLED": "false",
+        "CONFIG_FILE_PATH": str(config),
+        "STORE_MODEL_IN_DB": "False",
+        "PYTHON_DOTENV_DISABLED": "1",
+    }
+    log: Final = tmp_path / "gateway.log"
+    with log.open("wb") as output:
+        with subprocess.Popen(
+            (
+                sys.executable,
+                "-I",
+                "-m",
+                "gateway.launch",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(public_port),
+                "--workers",
+                "2",
+                "--timeout-worker-healthcheck",
+                "120",
+                *server_arguments,
+            ),
+            env=environment,
+            stdout=output,
+            stderr=output,
+        ) as supervisor:
+            try:
+                with httpx.Client(
+                    base_url=f"http://127.0.0.1:{public_port}",
+                    transport=httpx.HTTPTransport(local_address="127.0.0.2"),
+                    trust_env=False,
+                    timeout=5,
+                ) as external:
+                    assert eventually(lambda: ready(external), bool, seconds=180), log.read_text()
+                    response: Final = external.get(
+                        "/health/liveliness?client-ip-proof", headers={"X-Forwarded-For": "198.51.100.10"}
+                    )
+                    assert response.status_code == 200, response.text
+                    events: Final = eventually(
+                        lambda: tuple(
+                            line
+                            for line in log.read_text().splitlines()
+                            if "GET /health/liveliness?client-ip-proof " in line
+                        ),
+                        bool,
+                        seconds=10,
+                    )
+                    assert len(events) == 1, log.read_text()
+                    assert "127.0.0.2:" in events[0], events
+            finally:
+                assert stop_root_process(supervisor), log.read_text()
+            assert supervisor.returncode == 0, log.read_text()
