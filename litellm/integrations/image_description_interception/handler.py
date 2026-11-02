@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from itertools import chain
-from typing import Final, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -28,7 +28,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_convert_url_to_base64
+from litellm.types.llms.openai import ChatCompletionUserMessage
 from litellm.types.utils import CallTypes
+
+if TYPE_CHECKING:
+    from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.utils import is_vision_explicitly_disabled
 
 DEFAULT_IMAGE_DESCRIPTION_PROMPT: Final = """You are an image-to-evidence extractor. A text-only model will read your output instead of the image. It cannot see the image and cannot check you. A wrong value is worse than a missing value.
@@ -186,9 +190,10 @@ def _request_metadatas(kwargs: Mapping[str, object]) -> tuple[Mapping[str, objec
     )
 
 
-def _tenant_scope(kwargs: Mapping[str, object]) -> str:
-    """Cache and dedup scope for a request: its team, else its hashed key. Descriptions are never shared across
-    tenants, so a tenant cannot learn from a fast answer that another tenant sent the same image"""
+def _tenant_scope(kwargs: Mapping[str, object]) -> str | None:
+    """Cache and dedup scope for a request: its team, else its hashed key, else its user. Descriptions are never
+    shared across tenants, so a tenant cannot learn from a fast answer that another tenant sent the same image.
+    None when the request carries no such identity: its descriptions are then not shared at all"""
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
     auth: Final = next(
@@ -203,7 +208,64 @@ def _tenant_scope(kwargs: Mapping[str, object]) -> str:
         return f"team:{auth.team_id}"
     if auth is not None and auth.token:
         return f"key:{auth.token}"
-    return "anonymous"
+    if auth is not None and auth.user_id:
+        return f"user:{auth.user_id}"
+    return None
+
+
+def _logging_disabled(kwargs: dict[str, object]) -> bool:  # mutable-ok: the dynamic params helper takes a dict
+    """The request's own message-logging opt-out, read with the logging code's rules (a bool, or a string like
+    "true")"""
+    from litellm.secret_managers.main import str_to_bool
+
+    # Read through a plain mapping: the typed field says bool, but requests also send strings
+    params: Final = as_str_mapping(initialize_standard_callback_dynamic_params(kwargs)) or {}
+    value: Final = params.get("turn_off_message_logging")
+    if isinstance(value, str):
+        return str_to_bool(value) is True
+    return value is True
+
+
+def _input_guardrails(kwargs: dict[str, object]) -> "tuple[CustomGuardrail, ...]":  # mutable-ok: guardrail API
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    return tuple(
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, CustomGuardrail)
+        and callback.should_run_guardrail(data=kwargs, event_type=GuardrailEventHooks.pre_call)  # pyright: ignore[reportUnknownMemberType]  # CustomGuardrail.should_run_guardrail leaves data untyped
+    )
+
+
+async def _scanned_description(
+    result: DescriptionResult,
+    guardrails: "Sequence[CustomGuardrail]",
+    request_data: Mapping[str, object],
+) -> DescriptionResult:
+    """Run a description through the request's input guardrails. They ran before the image became text, so the
+    text would otherwise reach the model unchecked. A guardrail that rejects it raises and blocks the request"""
+    if isinstance(result, DescriptionFailed) or not guardrails:
+        return result
+    scanned: Final = await guardrails[0].async_pre_call_hook_on_messages(
+        request_data=request_data, messages=(ChatCompletionUserMessage(role="user", content=result.text),)
+    )
+    text: Final = _message_text(scanned[0]) if len(scanned) == 1 else None
+    if text is None:
+        return DescriptionFailed("a guardrail changed the description into something other than text")
+    return await _scanned_description(Described(text), guardrails[1:], request_data)
+
+
+def _message_text(message: Mapping[str, object]) -> str | None:
+    content: Final = message.get("content")
+    if isinstance(content, str):
+        return content
+    parts: Final = _list_items(content)
+    texts: Final = tuple(
+        text for part in parts or () if isinstance(text := (as_str_mapping(part) or {}).get("text"), str)
+    )
+    return "".join(texts) if parts is not None and len(texts) == len(parts) else None
 
 
 def _nonempty_str(value: object) -> str | None:
@@ -344,8 +406,7 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
             prompt=self.prompt,
             image_data_uri="",
             timeout=self.timeout,
-            logging_disabled=initialize_standard_callback_dynamic_params(kwargs).get("turn_off_message_logging")
-            is True,
+            logging_disabled=_logging_disabled(kwargs),
             trace_id=_nonempty_str(kwargs.get("litellm_trace_id")),
             session_id=_nonempty_str(kwargs.get("litellm_session_id")),
         )
@@ -355,10 +416,26 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
             for part in image_parts
         ]
         keys: Final = [self._cache_key(scope, image) if isinstance(image, _LoadedImage) else None for image in loaded]
-        new_keys: Final = [key for key in dict.fromkeys(keys) if key is not None and await self._needs_description(key)]
+        images: Final = {
+            key: image
+            for image, key in zip(loaded, keys, strict=True)
+            if isinstance(image, _LoadedImage) and key is not None
+        }
+        new_keys: Final = [key for key in images if scope is None or await self._needs_description(key)]
         allowed: Final = frozenset(new_keys[: self.max_descriptions_per_request])
+        # One outcome per distinct image: a repeated image is described, or fails, once per request
+        outcomes: Final = {
+            key: await self._describe(
+                key, replace(template, image_data_uri=image.data_uri), key in allowed, shared=scope is not None
+            )
+            for key, image in images.items()
+        }
+        guardrails: Final = _input_guardrails(kwargs)
+        scanned: Final = {
+            key: await _scanned_description(outcome, guardrails, kwargs) for key, outcome in outcomes.items()
+        }
         texts: Final = [
-            await self._replacement_text(number, image, key, template, key in allowed)
+            self._replacement_text(number, image, scanned[key] if key is not None else None)
             for number, (image, key) in enumerate(zip(loaded, keys, strict=True), 1)
         ]
         replacements: Final = {
@@ -370,8 +447,8 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
             "messages": [_with_text_parts(index, message, replacements) for index, message in enumerate(messages)],
         }
 
-    def _cache_key(self, scope: str, image: _LoadedImage) -> str:
-        return f"image_description:{scope}:{self.image_model}:{self._prompt_hash}:{image.sha256}"
+    def _cache_key(self, scope: str | None, image: _LoadedImage) -> str:
+        return f"image_description:{scope or 'unshared'}:{self.image_model}:{self._prompt_hash}:{image.sha256}"
 
     async def _cached_description(self, key: str) -> str | None:
         cached: Final[object] = await self.cache.async_get_cache(key)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the legacy DualCache API is untyped
@@ -380,18 +457,12 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
     async def _needs_description(self, key: str) -> bool:
         return key not in self._in_flight and await self._cached_description(key) is None
 
-    async def _replacement_text(
-        self,
-        number: int,
-        image: _LoadedImage | DescriptionFailed,
-        key: str | None,
-        template: DescriptionRequest,
-        may_start: bool,
+    def _replacement_text(
+        self, number: int, image: _LoadedImage | DescriptionFailed, result: DescriptionResult | None
     ) -> str:
-        if isinstance(image, DescriptionFailed) or key is None:
+        if isinstance(image, DescriptionFailed) or result is None:
             failure: Final = image.reason if isinstance(image, DescriptionFailed) else "no image"
             return f"[Image #{number} could not be described: {failure}]"
-        result: Final = await self._describe_cached(key, replace(template, image_data_uri=image.data_uri), may_start)
         label: Final = f"Image #{number} (sha256:{image.sha256[:12]})"
         match result:
             case Described(text=text):
@@ -402,15 +473,24 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
             case DescriptionFailed(reason=reason):
                 return f"[{label} could not be described: {reason}]"
 
-    async def _describe_cached(self, key: str, request: DescriptionRequest, may_start: bool) -> DescriptionResult:
+    def _over_the_limit(self) -> DescriptionFailed:
+        return DescriptionFailed(
+            f"over the limit of {self.max_descriptions_per_request} new image descriptions per request"
+        )
+
+    async def _describe(
+        self, key: str, request: DescriptionRequest, may_start: bool, *, shared: bool
+    ) -> DescriptionResult:
+        if not shared:
+            # No identity to scope a cache to: describe for this request only, in its own task so the
+            # recursion marker stays out of the caller's context
+            return await asyncio.create_task(self._describe_once(request)) if may_start else self._over_the_limit()
         cached: Final = await self._cached_description(key)
         if cached is not None:
             return Described(cached)
         pending: Final = self._in_flight.get(key)
         if pending is None and not may_start:
-            return DescriptionFailed(
-                f"over the limit of {self.max_descriptions_per_request} new image descriptions per request"
-            )
+            return self._over_the_limit()
         task: Final = pending or self._start_description(key, request)
         # The task is shared by every request that carries this image, so one cancelled request must not cancel it
         return await asyncio.shield(task)
@@ -425,9 +505,12 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
         if self._in_flight.get(key) is task:
             del self._in_flight[key]
 
-    async def _describe_and_store(self, key: str, request: DescriptionRequest) -> DescriptionResult:
+    async def _describe_once(self, request: DescriptionRequest) -> DescriptionResult:
         _describing_image.set(True)
-        result: Final = await self.describer(request)
+        return await self.describer(request)
+
+    async def _describe_and_store(self, key: str, request: DescriptionRequest) -> DescriptionResult:
+        result: Final = await self._describe_once(request)
         if isinstance(result, Described):
             await self.cache.async_set_cache(key, result.text, ttl=_CACHE_TTL_SECONDS)  # pyright: ignore[reportUnknownMemberType]  # the legacy DualCache API is untyped
         return result

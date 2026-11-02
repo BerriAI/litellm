@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.image_description_interception.handler import (
     Described,
     DescriptionFailed,
@@ -23,12 +24,14 @@ from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.child_request import ChildResponse, chat_child_request
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes
 
 IMAGE_BYTES: Final = b"\x89PNG\r\n\x1a\nfake image bytes"
 IMAGE_URI: Final = "data:image/png;base64," + base64.b64encode(IMAGE_BYTES).decode()
 IMAGE_SHA12: Final = hashlib.sha256(IMAGE_BYTES).hexdigest()[:12]
 TEXT_ONLY: Final[Mapping[str, object]] = {"supports_vision": False}
+TEAM_AUTH: Final = UserAPIKeyAuth(api_key="sk-test", team_id="team-1")
 
 
 class _RecordingDescriber:
@@ -81,7 +84,12 @@ def _described_turn(text: str, number: int, description: str) -> Mapping[str, ob
 def _request(
     messages: Sequence[Mapping[str, object]], model_info: Mapping[str, object] = TEXT_ONLY
 ) -> dict[str, object]:  # mutable-ok: the hook takes and returns the request dict
-    return {"model": "openai/coder", "messages": list(messages), "model_info": dict(model_info)}
+    return {
+        "model": "openai/coder",
+        "messages": list(messages),
+        "model_info": dict(model_info),
+        "metadata": {"user_api_key_auth": TEAM_AUTH},
+    }
 
 
 @pytest.mark.asyncio
@@ -459,3 +467,104 @@ async def test_default_describer_sends_a_marked_child_request_and_reads_its_answ
             None,
         )
     ]
+
+
+class _MaskingGuardrail(CustomGuardrail):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: object, data: dict, call_type: object
+    ) -> dict:  # mutable-ok: the guardrail hook contract hands over the request dict
+        self.scanned = [*getattr(self, "scanned", []), data["messages"][0]["content"]]
+        if "forbidden" in data["messages"][0]["content"]:
+            raise ValueError("blocked by the masking guardrail")
+        return {
+            **data,
+            "messages": [{"role": "user", "content": data["messages"][0]["content"].replace("1234", "[PIN]")}],
+        }
+
+
+@pytest.mark.asyncio
+async def test_descriptions_pass_the_input_guardrails_including_cache_hits(monkeypatch: pytest.MonkeyPatch):
+    guardrail: Final = _MaskingGuardrail(
+        guardrail_name="mask", event_hook=GuardrailEventHooks.pre_call, default_on=True
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    describer: Final = _RecordingDescriber([Described("the PIN is 1234")])
+    logger: Final = _logger(describer)
+
+    results: Final = [
+        await logger.async_pre_call_deployment_hook(_request([_image_turn("hi")]), CallTypes.acompletion)
+        for _ in range(2)
+    ]
+
+    assert results == [_request([_described_turn("hi", 1, "the PIN is [PIN]")])] * 2
+    assert (guardrail.scanned, len(describer.requests)) == (["the PIN is 1234", "the PIN is 1234"], 1)
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_that_rejects_a_description_blocks_the_request(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [_MaskingGuardrail(guardrail_name="mask", event_hook=GuardrailEventHooks.pre_call, default_on=True)],
+    )
+    logger: Final = _logger(_RecordingDescriber([Described("a forbidden picture")]))
+
+    with pytest.raises(ValueError, match="blocked by the masking guardrail"):
+        await logger.async_pre_call_deployment_hook(_request([_image_turn("hi")]), CallTypes.acompletion)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("value", "disabled"), [(True, True), ("true", True), ("True", True), ("false", False)])
+async def test_a_string_logging_opt_out_reaches_the_description_request(value: object, disabled: bool):
+    describer: Final = _RecordingDescriber([Described("a cat")])
+    request: Final = {
+        **_request([_image_turn("hi")]),
+        "metadata": {"user_api_key_auth": TEAM_AUTH, "turn_off_message_logging": value},
+    }
+
+    await _logger(describer).async_pre_call_deployment_hook(request, CallTypes.acompletion)
+
+    assert describer.received[0].logging_disabled is disabled
+
+
+def _identity_request(auth: UserAPIKeyAuth | None) -> dict[str, object]:  # mutable-ok: hook request dict
+    return {**_request([_image_turn("hi")]), "metadata": {} if auth is None else {"user_api_key_auth": auth}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first", "second", "calls"),
+    [
+        (UserAPIKeyAuth(user_id="user-1"), UserAPIKeyAuth(user_id="user-1"), 1),
+        (UserAPIKeyAuth(user_id="user-1"), UserAPIKeyAuth(user_id="user-2"), 2),
+        (UserAPIKeyAuth(), UserAPIKeyAuth(), 2),
+        (None, None, 2),
+    ],
+)
+async def test_callers_without_team_or_key_share_only_within_their_user(
+    first: UserAPIKeyAuth | None, second: UserAPIKeyAuth | None, calls: int
+):
+    describer: Final = _RecordingDescriber([Described("a cat")])
+    logger: Final = _logger(describer)
+
+    for auth in (first, second):
+        await logger.async_pre_call_deployment_hook(_identity_request(auth), CallTypes.acompletion)
+
+    assert len(describer.requests) == calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth", [TEAM_AUTH, None])
+async def test_a_repeated_image_that_fails_is_described_once_per_request(auth: UserAPIKeyAuth | None):
+    describer: Final = _RecordingDescriber([DescriptionFailed("empty description")])
+    logger: Final = ImageDescriptionInterceptionLogger(
+        image_model="vision-describer", describer=describer, max_descriptions_per_request=1
+    )
+    request: Final = {
+        **_request([_image_turn(f"turn {number}") for number in range(5)]),
+        "metadata": {} if auth is None else {"user_api_key_auth": auth},
+    }
+
+    await logger.async_pre_call_deployment_hook(request, CallTypes.acompletion)
+
+    assert len(describer.requests) == 1
