@@ -1,3 +1,4 @@
+import json
 from collections.abc import Mapping
 from typing import Any, Final, cast
 
@@ -47,6 +48,12 @@ def test_realtime_request_body_preserves_model_names(model: str | None) -> None:
     body: Final = TypeAdapter(Mapping[str, object]).validate_json(realtime_request_body(model))
 
     assert body["model"] == model
+
+
+def test_realtime_request_body_keeps_a_model_name_with_quotes_inside_its_own_field():
+    body: Final = realtime_request_body('gpt-4o", "user": "someone-else')
+
+    assert json.loads(body) == {"model": 'gpt-4o", "user": "someone-else'}
 
 
 def test_realtime_query_params_template_caches_each_pair_separately():

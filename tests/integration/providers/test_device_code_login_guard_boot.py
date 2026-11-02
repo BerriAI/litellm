@@ -28,7 +28,6 @@ from pydantic import JsonValue, TypeAdapter
 pytestmark: Final = [pytest.mark.timeout(900), pytest.mark.shares_worker_state]
 
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
-_DROPPED: Final = re.compile(r"original model: (\S+), ignoring and continuing")
 _FIXED: Final[Mapping[str, str]] = MappingProxyType(
     {"chatgpt-fixed": "chatgpt/gpt-5.6-terra", "copilot-fixed": "github_copilot/gpt-5.4"}
 )
@@ -41,8 +40,6 @@ _CONTROL_CALLS_BEFORE_THE_RELOAD: Final = 1
 _SHAPES: Final[Mapping[str, bool]] = MappingProxyType(
     {"docs-shapes": False, "docs-shapes-beside-a-universal-wildcard": True}
 )
-_NOT_FOUND: Final = "Invalid model name passed in model="
-_NO_HEALTHY: Final = "There are no healthy deployments for this model"
 _CONTROL: Final = "device-login-boot-control"
 _EXTRA: Final[Mapping[str, JsonValue]] = MappingProxyType({"num_retries": 0, "cache": {"no-cache": True}})
 _CALL_ID: Final = "x-litellm-call-id"
@@ -174,15 +171,11 @@ def _lists_login_models(listed: tuple[str, ...]) -> bool:
     )
 
 
-def _every_worker_lists(
-    owned: OwnedProxy, workers: tuple[int, ...], *, login_models: bool
-) -> Mapping[int, tuple[str, ...]]:
+def _every_worker_lists(owned: OwnedProxy, workers: tuple[int, ...]) -> Mapping[int, tuple[str, ...]]:
     def settled(by_worker: Mapping[int, tuple[str, ...]]) -> bool:
         if set(by_worker) != set(workers):
             return False
-        if login_models:
-            return all(_lists_login_models(listed) for listed in by_worker.values())
-        return all(_login_names_listed(listed) == frozenset() for listed in by_worker.values())
+        return all(_lists_login_models(listed) for listed in by_worker.values())
 
     return eventually(lambda: _listing_by_worker(owned, workers), settled, seconds=90)
 
@@ -212,16 +205,8 @@ def _reload(owned: OwnedProxy) -> None:
     assert response.status_code == 200, response.text
 
 
-def _refusal_before_the_reload(name: str, universal: bool) -> str:
-    if name in _FIXED:
-        return _NO_HEALTHY
-    if not universal:
-        return _NOT_FOUND
-    return dl.CHATGPT_REFUSAL if name.startswith("chatgpt/") else dl.COPILOT_REFUSAL
-
-
 @pytest.mark.parametrize("universal", _SHAPES.values(), ids=_SHAPES.keys())
-def test_booting_without_tokens_drops_the_login_deployments_and_a_reload_after_mounting_brings_them_back(
+def test_booting_without_tokens_lists_login_deployments_and_serves_only_after_tokens_are_mounted(
     gateway: Gateway, tmp_path: Path, universal: bool
 ) -> None:
     dirs: Final = _token_dirs(tmp_path)
@@ -240,20 +225,18 @@ def test_booting_without_tokens_drops_the_login_deployments_and_a_reload_after_m
             workers=2,
         ) as owned:
             workers: Final = _workers(owned)
-            _every_worker_lists(owned, workers, login_models=False)
+            _every_worker_lists(owned, workers)
             boot_log: Final = owned.log.read_text()
             assert peers.auth_connections() == ()
             assert dl.CHATGPT_USER_CODE not in boot_log and dl.COPILOT_USER_CODE not in boot_log, boot_log[-3000:]
-            dropped_models: Final = _DROPPED.findall(boot_log)
-            expected_drops: Final = frozenset((*_FIXED.values(), *_WILDCARDS))
-            assert frozenset(dropped_models) == expected_drops, boot_log[-3000:]
-            assert all(dropped_models.count(model) >= len(workers) for model in expected_drops), boot_log[-3000:]
             with owned.gateway.scenario() as scenario:
                 key: Final = scenario.key()
                 for name in _LOGIN_NAMES:
                     refused: Final = _chat(_base_url(owned), key, name, uuid.uuid4().hex)
                     assert refused.status == 400, refused.text
-                    assert _refusal_before_the_reload(name, universal) in refused.message(), refused.text
+                    refusal: Final = dl.CHATGPT_REFUSAL if name.startswith("chatgpt") else dl.COPILOT_REFUSAL
+                    assert refusal in refused.message(), refused.text
+                assert peers.api.drain() == ()
                 control: Final = _chat(_base_url(owned), key, _CONTROL, uuid.uuid4().hex)
                 assert control.status == 200, control.text
                 assert peers.auth_connections() == ()
@@ -261,7 +244,7 @@ def test_booting_without_tokens_drops_the_login_deployments_and_a_reload_after_m
 
                 dirs.store_valid_tokens(peers.api.url)
                 _reload(owned)
-                _every_worker_lists(owned, workers, login_models=True)
+                _every_worker_lists(owned, workers)
                 for served_logins, name in enumerate(_LOGIN_NAMES, start=1):
                     served: Final = _chat(_base_url(owned), key, name, uuid.uuid4().hex)
                     assert served.status == 200, served.text

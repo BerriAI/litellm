@@ -172,10 +172,10 @@ def test_responses_call_forwards_previous_response_id_and_store() -> None:
 
 
 def test_responses_call_folds_developer_items_into_instructions() -> None:
-    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/qwen3p8-2p4t-a95b"))
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):
         litellm.responses(
-            model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+            model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
             input=[
                 {"role": "user", "content": "Hi there"},
                 {"role": "developer", "content": "Answer with exactly one word."},
@@ -216,15 +216,77 @@ def test_responses_call_keeps_developer_items_in_place_for_a_deployment_that_acc
 
 @respx.mock
 @pytest.mark.parametrize(
+    "model",
+    [
+        "fireworks_ai/accounts/fireworks/models/kimi-k3",
+        "fireworks_ai/accounts/fireworks/models/glm-5p3",
+        "fireworks_ai/accounts/fireworks/routers/kimi-k3-fast",
+        "fireworks_ai/glm-5p3-us",
+        "fireworks_ai/models/kimi-k3",
+        "fireworks_ai/routers/kimi-k3-fast",
+    ],
+)
+def test_responses_call_keeps_developer_items_in_place_for_a_model_the_cost_map_declares_accepts_them(
+    model: str,
+) -> None:
+    route: Final = _fireworks_responses_route(model.removeprefix("fireworks_ai/"))
+    litellm.responses(
+        model=model,
+        instructions="You are Codex",
+        input=[
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ],
+        api_key="fw-test-key",
+    )
+    body: Final = _routed_body(route)
+    assert body["instructions"] == "You are Codex"
+    assert tuple(body["input"]) == (
+        {"role": "user", "content": "Hi there"},
+        {"role": "system", "content": "Answer with exactly one word.", "type": "message"},
+        {"role": "user", "content": "What is the capital of France?"},
+    )
+
+
+@respx.mock
+def test_responses_call_folds_developer_items_when_the_loaded_cost_map_turns_the_flag_off(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+) -> None:
+    declare_mid_conversation_system("fireworks_ai/accounts/fireworks/models/kimi-k3", False)
+    route: Final = _fireworks_responses_route("accounts/fireworks/models/kimi-k3")
+    litellm.responses(
+        model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+        input=[
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+            {"type": "message", "role": "assistant", "content": "Paris"},
+            {"role": "developer", "content": "Reply with PONG."},
+        ],
+        api_key="fw-test-key",
+    )
+    body: Final = _routed_body(route)
+    assert body["instructions"] == "Answer with exactly one word."
+    assert tuple(body["input"]) == (
+        {"role": "user", "content": "Hi there"},
+        {"role": "user", "content": "What is the capital of France?"},
+        {"type": "message", "role": "assistant", "content": "Paris"},
+        {"role": "user", "content": "Reply with PONG.", "type": "message"},
+    )
+
+
+@respx.mock
+@pytest.mark.parametrize(
     ("model_info", "closing_role"),
     [(None, "system"), ({"id": "deployment-1", "supports_mid_conversation_system": False}, "user")],
 )
 def test_responses_call_sends_the_closing_developer_item_as_a_user_turn_only_for_a_declared_system_first_deployment(
     model_info: Mapping[str, object] | None, closing_role: str
 ) -> None:
-    route: Final = _fireworks_responses_route("accounts/fireworks/models/kimi-k3")
+    route: Final = _fireworks_responses_route("accounts/fireworks/models/qwen3p8-2p4t-a95b")
     litellm.responses(
-        model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+        model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
         input=[
             {"role": "user", "content": "Hi there"},
             {"role": "developer", "content": "Answer with exactly one word."},
@@ -402,7 +464,7 @@ def test_transform_request_forwards_non_string_instructions_and_input_untouched(
     developer_item: Final = {"role": "developer", "content": "Answer with exactly one word."}
     user_item: Final = {"role": "user", "content": "What is the capital of France?"}
     request: Final = FireworksAIResponsesAPIConfig().transform_responses_api_request(
-        model="accounts/fireworks/models/kimi-k3",
+        model="accounts/fireworks/models/qwen3p8-2p4t-a95b",
         input=cast(ResponseInputParam, [developer_item, user_item]),
         response_api_optional_request_params={"instructions": ["not", "a", "string"]},
         litellm_params=GenericLiteLLMParams(),
@@ -416,7 +478,7 @@ def test_transform_request_forwards_non_string_instructions_and_input_untouched(
 
 
 def test_responses_call_maps_pydantic_developer_items_and_replays_pydantic_output_items() -> None:
-    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/qwen3p8-2p4t-a95b"))
     pydantic_input: Final = cast(
         ResponseInputParam,
         [
@@ -435,7 +497,9 @@ def test_responses_call_maps_pydantic_developer_items_and_replays_pydantic_outpu
     )
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):
         litellm.responses(
-            model="fireworks_ai/accounts/fireworks/models/kimi-k3", input=pydantic_input, api_key="fw-test-key"
+            model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
+            input=pydantic_input,
+            api_key="fw-test-key",
         )
     _, _, body = _sent_request(client)
     assert body["instructions"] == "Answer with exactly one word."

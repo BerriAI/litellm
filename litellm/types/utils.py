@@ -246,6 +246,9 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     bedrock_converse_supports_strict_tools: bool | None
     supports_regex_lookaround: ReadOnly[bool | None]
     token_count_framing: ReadOnly[int | None]
+    token_count_tool_framing: ReadOnly[int | None]
+    token_count_responses_framing: ReadOnly[int | None]
+    token_count_responses_tool_framing: ReadOnly[int | None]
     token_count_model: ReadOnly[TokenCountModelInfo | None]
     token_count_tokenizer: ReadOnly[TokenCountTokenizer | None]
 
@@ -1164,6 +1167,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # A2A (Agent-to-Agent)
     "/a2a/{agent_id}": [CallTypes.asend_message, CallTypes.send_message],
     "/a2a/{agent_id}/message/send": [CallTypes.asend_message, CallTypes.send_message],
+    "/a2a/{agent_id}/message/stream": [CallTypes.asend_message, CallTypes.send_message],
+    "/v1/a2a/{agent_id}/message/stream": [CallTypes.asend_message, CallTypes.send_message],
     # Passthrough endpoints
     "/llm_passthrough": [
         CallTypes.allm_passthrough_route,
@@ -4277,7 +4282,15 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
     }
 )
 
-DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset({"token_count_framing", "token_count_model"})
+DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "token_count_framing",
+        "token_count_tool_framing",
+        "token_count_responses_framing",
+        "token_count_responses_tool_framing",
+        "token_count_model",
+    }
+)
 
 SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
