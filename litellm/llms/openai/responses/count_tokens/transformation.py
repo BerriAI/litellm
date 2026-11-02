@@ -20,6 +20,7 @@ from litellm.llms.anthropic.messages.native.utils import normalize_native_messag
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
+from litellm.responses.litellm_completion_transformation.tool_search import tools_with_anthropic_tool_search_mapped
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicOutputSchema
 from litellm.types.llms.openai import ResponsesAPIRequestParams, replayable_responses_input
@@ -343,6 +344,7 @@ class OpenAICountTokensConfig:
         system: object,
         tools: Sequence[Mapping[str, object]] | None,
         output_format: JsonValue = None,
+        maps_tool_search: bool = False,
     ) -> ResponsesCountRequestParts:
         """Convert with the adapter /v1/messages inference uses, so the count sees the same input it bills."""
         anthropic_request: Final = AnthropicMessagesRequest(
@@ -354,15 +356,19 @@ class OpenAICountTokensConfig:
         )
         translated: Final = _TRANSLATED_REQUEST.validate_python(
             LiteLLMAnthropicToResponsesAPIAdapter().translate_request(
-                anthropic_request, include_encrypted_reasoning=False
+                anthropic_request, include_encrypted_reasoning=False, maps_tool_search=maps_tool_search
             )
         )
-        return OpenAICountTokensConfig.count_request_parts(
+        input_items, instructions, translated_tools, text = OpenAICountTokensConfig.count_request_parts(
             ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(translated.get("input")),
             translated.get("instructions"),
             translated.get("tools"),
             translated.get("text"),
         )
+        counted_tools: Final = (
+            tools_with_anthropic_tool_search_mapped(translated_tools) if maps_tool_search else translated_tools
+        )
+        return input_items, instructions, None if counted_tools is None else tuple(counted_tools), text
 
     @staticmethod
     def count_request_parts(

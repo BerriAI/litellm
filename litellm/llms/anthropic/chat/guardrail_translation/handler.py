@@ -394,6 +394,39 @@ def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[s
     return {**tool, "function": {**function, "name": original}}
 
 
+def _request_deferral(tool: Mapping[str, object]) -> Mapping[str, object] | None:
+    match tool:
+        case {"defer_loading": bool() as deferred}:
+            return {"defer_loading": deferred}
+        case {"custom": {"defer_loading": bool() as wrapped}}:
+            return {"custom": {"defer_loading": wrapped}}
+        case _:
+            return None
+
+
+def _request_deferrals(request: Mapping[str, object]) -> Mapping[str, Mapping[str, object]]:
+    tools: Final = tuple(
+        fields for tool in list_field(request, "tools") if (fields := as_str_mapping(tool)) is not None
+    )
+    return MappingProxyType(
+        {
+            name: deferral
+            for tool in tools
+            if isinstance(name := tool.get("name"), str) and (deferral := _request_deferral(tool)) is not None
+        }
+    )
+
+
+def _with_request_deferral(
+    tool: AllAnthropicToolsValues, deferrals: Mapping[str, Mapping[str, object]]
+) -> Mapping[str, object]:
+    fields: Final = as_str_mapping(tool) or {}
+    name: Final = fields.get("name")
+    if "defer_loading" in fields or "custom" in fields or not isinstance(name, str) or name not in deferrals:
+        return fields
+    return {**fields, **deferrals[name]}
+
+
 def _write_back_system_block(system: object, block_idx: int, response: str) -> None:
     if not isinstance(system, list):
         return
@@ -901,9 +934,8 @@ class AnthropicMessagesHandler(BaseTranslation):
             model: Final = data.get("model")
             if model:
                 inputs["model"] = model
-            original_tool_names: Final = _original_tool_names(
-                cast(Mapping[str, object], data)  # cast-ok: Anthropic request body
-            )
+            request_body: Final = cast(Mapping[str, object], data)  # cast-ok: Anthropic request body
+            original_tool_names: Final = _original_tool_names(request_body)
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data,
@@ -916,13 +948,14 @@ class AnthropicMessagesHandler(BaseTranslation):
             if guardrailed_tools is not None:
                 # Convert tools back from OpenAI format to Anthropic format
                 anthropic_config: Final = AnthropicConfig()
-                anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
+                deferrals: Final = _request_deferrals(request_body)
+                anthropic_tools: Final[list[Mapping[str, object]]] = []
                 for tool in guardrailed_tools:
                     converted_tool, mcp_server = anthropic_config.map_tool_helper(
                         _with_original_name(tool, original_tool_names.declared)
                     )
                     if converted_tool is not None:
-                        anthropic_tools.append(converted_tool)
+                        anthropic_tools.append(_with_request_deferral(converted_tool, deferrals))
                     # Note: MCP servers are handled separately in the main transformation
                 data["tools"] = (
                     merge_returned_tools_into_request_tools(
