@@ -931,7 +931,21 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
         assert payload["call_type"] == ""
 
     @pytest.mark.asyncio
-    async def test_speech_request_rejected_by_the_proxy_records_aspeech(self, monkeypatch: pytest.MonkeyPatch):
+    @pytest.mark.parametrize(
+        ("request_data", "route", "endpoint_call_type"),
+        [
+            ({"model": "gemini-tts", "input": "Hello there", "voice": "Kore"}, "/v1/audio/speech", "aspeech"),
+            ({"model": "omni-moderation", "input": ["one", "two"]}, "/v1/moderations", "amoderation"),
+            ({"model": "gpt-transcribe"}, "/v1/audio/transcriptions", "atranscription"),
+        ],
+    )
+    async def test_request_rejected_by_the_proxy_records_the_endpoint_call_type(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        request_data: dict[str, object],
+        route: str,
+        endpoint_call_type: str,
+    ):
         from types import SimpleNamespace
 
         from fastapi import HTTPException
@@ -946,10 +960,10 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
         try:
             with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
                 await proxy_logging_obj.post_call_failure_hook(
-                    request_data={"model": "gemini-tts", "input": "Hello there", "voice": "Kore"},
+                    request_data=dict(request_data),
                     original_exception=HTTPException(status_code=429, detail="Rate limit exceeded"),
-                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route="/v1/audio/speech"),
-                    dispatched_call_type="aspeech",
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route=route),
+                    dispatched_call_type=endpoint_call_type,
                 )
         finally:
             ProxyLogging._callback_capabilities_cache.clear()
@@ -961,7 +975,7 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
             start_time=db_call["start_time"],
             end_time=db_call["end_time"],
         )
-        assert payload["call_type"] == "aspeech"
+        assert payload["call_type"] == endpoint_call_type
 
 
 class TestPostCallFailureHookEstimatesDispatchedInputTokens:

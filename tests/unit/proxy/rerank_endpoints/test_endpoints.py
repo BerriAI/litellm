@@ -209,3 +209,48 @@ async def test_a_rejection_raised_before_routing_keeps_its_own_status(monkeypatc
     error = await _rerank_failure(rejection, raised_before_routing=True, monkeypatch=monkeypatch)
 
     assert (error.type, error.param, error.code) == ("bad_request_error", "session_id", "400")
+
+
+@pytest.mark.asyncio
+async def test_failed_rerank_spend_row_records_arerank(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.alert_types = []
+    spend_writer = MagicMock(update_database=AsyncMock())
+
+    async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
+        return {**kwargs["data"], "call_type": "acompletion"}
+
+    async def provider_rejects(**kwargs: object) -> None:
+        raise litellm.BadRequestError(message="invalid documents", model="rerank-model", llm_provider="cohere")
+
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+    monkeypatch.setattr(proxy_server_mod, "add_litellm_data_to_request", fake_add_litellm_data_to_request)
+    monkeypatch.setattr(proxy_server_mod, "route_request", provider_rejects)
+    monkeypatch.setattr(proxy_server_mod, "proxy_logging_obj", proxy_logging_obj)
+    monkeypatch.setattr(proxy_server_mod, "llm_router", MagicMock())
+    monkeypatch.setattr(proxy_server_mod, "version", "1.2.3")
+    monkeypatch.setattr(proxy_logging_obj, "update_request_status", AsyncMock())
+    try:
+        with pytest.raises(ProxyException):
+            await rerank(
+                request=_build_request(),
+                fastapi_response=Response(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            )
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    db_call = spend_writer.update_database.call_args.kwargs
+    payload = get_logging_payload(
+        kwargs=db_call["kwargs"],
+        response_obj=db_call["completion_response"],
+        start_time=db_call["start_time"],
+        end_time=db_call["end_time"],
+    )
+    assert (payload["status"], payload["call_type"]) == ("failure", "arerank")
