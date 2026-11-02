@@ -8,6 +8,7 @@ from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakeredis import FakeAsyncRedis, FakeServer
 
 import litellm
 from litellm._service_logger import ServiceLogging
@@ -1472,6 +1473,55 @@ async def test_async_increment_pipelines_the_ttl_command(
     assert client.values == {"ns:spend:key:k": 3.5}
     assert client.ttls == {"ns:spend:key:k": expected_ttl}
     assert client.round_trips == expected_round_trips
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("existing", "expected"),
+    [
+        pytest.param(None, 1.5, id="missing key: set to the value"),
+        pytest.param(0.25, 0.25, id="key below the value: kept"),
+        pytest.param(4.0, 4.0, id="key above the value: kept"),
+    ],
+)
+async def test_async_increment_only_if_missing_sets_a_missing_key_and_refreshes_the_ttl(
+    monkeypatch, redis_no_ping, existing, expected
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="ns")
+    client = FakeAsyncRedis(server=FakeServer())
+    if existing is not None:
+        await client.set("ns:spend:key:k", existing, ex=5)
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        current = await redis_cache.async_increment(
+            key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True
+        )
+        after_add = await redis_cache.async_increment(key="spend:key:k", value=2.0, ttl=60, refresh_ttl=True)
+
+    assert current == expected
+    assert after_add == expected + 2.0
+    assert await client.ttl("ns:spend:key:k") == 60
+
+
+@pytest.mark.asyncio
+async def test_async_increment_only_if_missing_reports_a_redis_failure_like_an_increment(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="ns")
+    client = MagicMock()
+    client.pipeline.side_effect = ConnectionError("connection reset")
+    failure_hook = AsyncMock()
+
+    with (
+        patch.object(redis_cache, "init_async_client", return_value=client),
+        patch.object(redis_cache.service_logger_obj, "async_service_failure_hook", failure_hook),
+        pytest.raises(ConnectionError),
+    ):
+        await redis_cache.async_increment(key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True)
+    await asyncio.sleep(0)
+
+    assert failure_hook.await_args.kwargs["call_type"] == "async_increment"
+    assert redis_cache._circuit_breaker._hard_failure_count == 1
 
 
 class _SetRecordingPipeline:

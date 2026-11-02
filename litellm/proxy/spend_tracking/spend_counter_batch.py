@@ -188,7 +188,8 @@ def active_spend_counter_batch() -> SpendCounterBatch | None:
 
 
 def spend_counter_read(counter_key: str) -> SpendCounterRead:
-    """When this context's read of the counter went out and came back: the open batch's MGET for it, else now."""
+    """When this context's read of the counter went out and came back: the open batch's MGET for it, else now, since
+    ``SpendCounterReseed.coalesced`` reads the counter again after a read outside the batch."""
     batch: Final = _active_batch.get()
     batched: Final = batch.counter_read(counter_key) if batch is not None else None
     if batched is not None:

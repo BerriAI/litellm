@@ -16,6 +16,7 @@ import asyncio
 import functools
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -30,7 +31,6 @@ from litellm.proxy.db.db_lookup_gate import bounded_db_lookup, db_lookup_gate
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     SPEND_COUNTERS_TARGET,
     SpendCounterRead,
-    forget_spend_counter,
     read_batched_spend_counter,
     record_spend_counter_value,
     spend_counter_tick,
@@ -75,11 +75,12 @@ _WINDOW_SPEND_LOG_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
 
 @dataclass(slots=True)
 class _CachedSpendSeed:
-    """This process adding its cached spend to one cold counter: the add in flight, the tick it started at, and the
-    tick the last one landed at."""
+    """This process adding its cached spend to one cold counter: the add in flight, the tick it started at, the tick
+    the last one landed at, and the least the counter held when that one landed."""
 
     started_at: int = 0
     landed_at: int = 0
+    landed_spend: float = 0.0
     in_flight: asyncio.Future[float | None] | None = None
 
     def on_this_loop(self) -> bool:
@@ -105,6 +106,18 @@ class _CachedSpendSeed:
 @functools.lru_cache(maxsize=SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE)
 def _cached_spend_seed(spend_counter_cache: "DualCache", counter_key: str) -> _CachedSpendSeed:
     return _CachedSpendSeed()
+
+
+_cold_seed_waited: Final[ContextVar[float]] = ContextVar("cold_spend_seed_waited", default=0.0)
+
+
+async def _wait_for_cold_seed(in_flight: asyncio.Future[float | None]) -> None:
+    """Wait on ``in_flight`` for what this context has left of ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS``."""
+    loop: Final = asyncio.get_running_loop()
+    waited: Final = _cold_seed_waited.get()
+    started: Final = loop.time()
+    await asyncio.wait((in_flight,), timeout=max(0.0, SPEND_COUNTER_COLD_SEED_JOIN_SECONDS - waited))
+    _cold_seed_waited.set(waited + loop.time() - started)
 
 
 def _redis_breaker_closed(spend_counter_cache: "DualCache") -> bool:
@@ -161,56 +174,66 @@ class SpendCounterReseed:
         spend_counter_cache: "DualCache",
         counter_key: str,
         read: SpendCounterRead,
+        spend: float,
         add: Callable[[], Awaitable[float | None]],
-        is_warm: Callable[[], Awaitable[bool]],
+        set_if_missing: Callable[[], Awaitable[float | None]],
     ) -> None:
-        """Run ``add``, this process adding its cached spend to a cold counter, once for all of this process's
-        requests that read the counter cold before that add landed. A request joins an add that started after its read
-        came back and gets its result, and starts or joins another add when that one fails or is cancelled. When an add
-        landed after its read went out, or one that started before its read came back finishes, the request re-reads
-        the counter and adds again only if the counter is gone. A request waits on other requests' adds for at most
-        ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS`` in all, has that long again to finish a re-read, and then adds its own.
-        A request on another event loop than the add in flight, one that finds the Redis circuit breaker not closed, and
-        each other process, still add their own cached spend."""
+        """Run ``add``, this process adding ``spend`` to a cold counter, once for all of this process's requests that
+        read the counter cold before that add landed. A request joins an add that started after its read came back and
+        gets its result, and starts or joins another add when that one fails or is cancelled. A request whose read went
+        out before an add landed, and one still waiting on an add after ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS`` across
+        its counters, runs ``set_if_missing`` in place of ``add``, then runs ``add`` too if the counter holds less than
+        the spend it should already hold. A request on another event loop than the add in flight, one that finds the
+        Redis circuit breaker not closed, and each other process, still run ``add``."""
         seed: Final = _cached_spend_seed(spend_counter_cache, counter_key)
-        loop: Final = asyncio.get_running_loop()
-        join_by: Final = loop.time() + SPEND_COUNTER_COLD_SEED_JOIN_SECONDS
-        re_read_by: Final = join_by + SPEND_COUNTER_COLD_SEED_JOIN_SECONDS
 
-        async def add_unless_covered(cold: SpendCounterRead) -> float | None:
+        async def add_spend() -> float | None:
+            added: Final = await add()
+            seed.landed_spend = spend
+            return added
+
+        async def add_if_short() -> float | None:
+            least: Final = min(spend, seed.landed_spend) if seed.landed_at >= read.sent_at else spend
+            current: Final = await set_if_missing()
+            if current is not None and current < least:
+                return await add_spend()
+            seed.landed_spend = least
+            return current
+
+        async def add_unless_covered() -> float | None:
             in_flight: Final = seed.in_flight
             if not seed.on_this_loop() or not _redis_breaker_closed(spend_counter_cache):
                 return await add()
             if in_flight is None:
-                if seed.landed_at < cold.sent_at:
-                    return await seed.run(add)
-                forget_spend_counter(counter_key)
-                sent_at: Final = spend_counter_tick()
-                try:
-                    warm: Final = await asyncio.wait_for(is_warm(), timeout=max(0.0, re_read_by - loop.time()))
-                except asyncio.TimeoutError:
-                    return await seed.run(add)
-                if warm:
-                    return None
-                return await add_unless_covered(SpendCounterRead(sent_at=sent_at, returned_at=spend_counter_tick()))
-            covers: Final = seed.started_at > cold.returned_at
-            await asyncio.wait((in_flight,), timeout=max(0.0, join_by - loop.time()))
+                return await seed.run(add_spend if seed.landed_at < read.sent_at else add_if_short)
+            covers: Final = seed.started_at > read.returned_at
+            await _wait_for_cold_seed(in_flight)
             if not in_flight.done():
-                return await seed.run(add)
+                return await seed.run(add_if_short)
             if covers and not in_flight.cancelled():
                 return in_flight.result()
-            return await add_unless_covered(cold)
+            return await add_unless_covered()
 
-        added: Final = await add_unless_covered(read)
+        added: Final = await add_unless_covered()
         if added is not None:
             record_spend_counter_value(counter_key, added)
 
     @staticmethod
     @with_service_target(SPEND_COUNTERS_TARGET)
-    async def increment_in_memory(spend_counter_cache: "DualCache", counter_key: str, increment: float) -> float | None:
-        """Apply local deltas after an in-flight reseed establishes the spend balance."""
+    async def increment_in_memory(
+        spend_counter_cache: "DualCache", counter_key: str, increment: float, only_if_missing: bool = False
+    ) -> float | None:
+        """Apply local deltas after an in-flight reseed establishes the spend balance. With ``only_if_missing``, a
+        counter that exists keeps its value, which is returned."""
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
+            current: Final[float | None] = (  # pyright: ignore[reportUnknownVariableType]  # untyped in-memory cache
+                spend_counter_cache.in_memory_cache.get_cache(key=counter_key)  # pyright: ignore[reportUnknownMemberType]  # untyped in-memory cache
+                if only_if_missing
+                else None
+            )
+            if current is not None:
+                return float(current)
             return await spend_counter_cache.async_increment_cache(
                 key=counter_key, value=increment, local_only=True, refresh_ttl=True
             )

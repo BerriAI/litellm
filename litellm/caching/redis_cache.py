@@ -1473,15 +1473,29 @@ class RedisCache(BaseCache):
             await _redis_client.expire(key, ttl)
         return float(result)
 
+    async def _set_if_missing_with_ttl(self, key: str, value: float, ttl: int | None) -> float:
+        """SET NX, its TTL command and a GET in one round trip; the value the key holds afterwards."""
+        async with self._async_commands().pipeline(transaction=False) as pipe:
+            pipe.set(name=key, value=value, nx=True)
+            if ttl is not None:
+                pipe.expire(key, ttl)
+            pipe.get(key)
+            replies: Final[Sequence[object]] = await pipe.execute()  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # redis generics
+        current: Final = _LUA_OPTIONAL_TOTAL.validate_python(replies[-1])
+        return value if current is None else current
+
     @_redis_circuit_breaker_guard
     async def async_increment(
         self,
-        key,
+        key: str,
         value: float,
         ttl: int | None = None,
         parent_otel_span: Span | None = None,
         refresh_ttl: bool = False,
+        only_if_missing: bool = False,
     ) -> float:
+        """Add ``value`` to the key and return its new value. With ``only_if_missing``, a key that exists keeps its
+        value, which is returned, and only the TTL is refreshed."""
         from redis.asyncio import Redis
 
         _redis_client: Final[Redis] = self.init_async_client()
@@ -1489,8 +1503,12 @@ class RedisCache(BaseCache):
         _used_ttl: Final = self.get_ttl(ttl=ttl)
         key = self.check_and_fix_namespace(key=key)
         try:
-            result: Final = await self._incrbyfloat_with_ttl(
-                _redis_client, key=key, value=value, ttl=_used_ttl, refresh_ttl=refresh_ttl
+            result: Final = await (
+                self._set_if_missing_with_ttl(key=key, value=value, ttl=_used_ttl)
+                if only_if_missing
+                else self._incrbyfloat_with_ttl(
+                    _redis_client, key=key, value=value, ttl=_used_ttl, refresh_ttl=refresh_ttl
+                )
             )
 
             ## LOGGING ##

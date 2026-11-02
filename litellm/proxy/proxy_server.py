@@ -930,7 +930,6 @@ from litellm.proxy.spend_tracking.spend_capture_rate import (
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     SPEND_COUNTERS_TARGET,
     PendingSpendIncrement,
-    SpendCounterRead,
     active_spend_counter_batch,
     forget_spend_counter,
     post_call_counter_keys,
@@ -4087,8 +4086,9 @@ async def ensure_spend_counter_initialized(
     counter_key: str,
     source_cache_key: str | list[str],
 ) -> None:
-    read: Final = await _cold_spend_counter_read(counter_key)
-    if read is not None:
+    is_warm: Final = await _is_spend_counter_cache_warm(counter_key=counter_key)
+    if is_warm is False:
+        read: Final = spend_counter_read(counter_key)
         # Shares the per-counter lock with get_current_spend.
         db_spend: Final = await SpendCounterReseed.coalesced(
             prisma_client=prisma_client,
@@ -4104,8 +4104,11 @@ async def ensure_spend_counter_initialized(
                     spend_counter_cache=spend_counter_cache,
                     counter_key=counter_key,
                     read=read,
+                    spend=base_spend,
                     add=lambda: increment_spend_counter_cache(counter_key=counter_key, increment=base_spend),
-                    is_warm=lambda: _is_spend_counter_warm_outside_batch(counter_key),
+                    set_if_missing=lambda: increment_spend_counter_cache(
+                        counter_key=counter_key, increment=base_spend, only_if_missing=True
+                    ),
                 )
 
 
@@ -4160,22 +4163,14 @@ _ensure_window_spend_counter_initialized: Final = ensure_window_spend_counter_in
 
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def _is_spend_counter_cache_warm(counter_key: str) -> bool:
-    return await _cold_spend_counter_read(counter_key) is None
-
-
-async def _cold_spend_counter_read(counter_key: str) -> SpendCounterRead | None:
-    """When the read that found the counter missing went out and came back, None when the counter has a value. A read
-    outside the batch counts as now, since ``SpendCounterReseed.coalesced`` reads the counter again after it."""
     batched: Final = await read_batched_spend_counter(counter_key)
-    if batched is not None and batched[0] is not None:
-        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=batched[0])
-        return None
-    if batched is None and await _is_spend_counter_warm_outside_batch(counter_key):
-        return None
-    return spend_counter_read(counter_key)
+    if batched is not None:
+        batched_value, _ = batched
+        if batched_value is None:
+            return False
+        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=batched_value)
+        return True
 
-
-async def _is_spend_counter_warm_outside_batch(counter_key: str) -> bool:
     if spend_counter_cache.redis_cache is not None:
         try:
             current_value: Final[object] = await spend_counter_cache.redis_cache.async_get_cache(
@@ -4217,13 +4212,24 @@ async def refresh_spend_counter_ttl(counter_key: str) -> bool:
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)
-async def increment_spend_counter_cache(counter_key: str, increment: float) -> float | None:
+async def increment_spend_counter_cache(
+    counter_key: str, increment: float, only_if_missing: bool = False
+) -> float | None:
     if spend_counter_cache.redis_cache is not None:
         try:
-            current_value: Final = await spend_counter_cache.redis_cache.async_increment(
-                key=counter_key,
-                value=increment,
-                refresh_ttl=True,
+            current_value: Final = await (
+                spend_counter_cache.redis_cache.async_increment(
+                    key=counter_key,
+                    value=increment,
+                    refresh_ttl=True,
+                    only_if_missing=True,
+                )
+                if only_if_missing
+                else spend_counter_cache.redis_cache.async_increment(
+                    key=counter_key,
+                    value=increment,
+                    refresh_ttl=True,
+                )
             )
         except Exception:
             await invalidate_spend_counter(counter_key=counter_key)
@@ -4236,7 +4242,10 @@ async def increment_spend_counter_cache(counter_key: str, increment: float) -> f
         return current_value
 
     return await SpendCounterReseed.increment_in_memory(
-        spend_counter_cache=spend_counter_cache, counter_key=counter_key, increment=increment
+        spend_counter_cache=spend_counter_cache,
+        counter_key=counter_key,
+        increment=increment,
+        only_if_missing=only_if_missing,
     )
 
 
