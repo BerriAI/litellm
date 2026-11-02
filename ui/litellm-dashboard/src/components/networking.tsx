@@ -48,7 +48,7 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
   }
 };
 
-export type AssembledPromptTierSource =
+type AssembledPromptTierSource =
   | { tierDefinitions: { name: string; description?: string }[] }
   | { tierLabels?: Record<string, string>; classificationRubric?: string };
 
@@ -127,16 +127,6 @@ import type {
   SubscriptionUsageResponse,
 } from "@/app/(dashboard)/usage/_components/components/SubscriptionCost/types";
 import type { RoutingDecision } from "./logs/detail/RoutingDecisionCard";
-import type {
-  SpanDetail,
-  SpanErrorPage,
-  SpanErrorQuery,
-  SpanQuery,
-  Trace,
-  TraceDetailQuery,
-  TraceListQuery,
-  TracePage,
-} from "@litellm/lens-ui";
 import {
   createApiClient,
   deriveErrorMessage,
@@ -541,7 +531,7 @@ export const apiClient = createApiClient({
   onError: handleError,
 });
 
-export const gatewayApiClient = createApiClient({
+const gatewayApiClient = createApiClient({
   getBaseUrl: getGatewayBaseUrl,
   getAuthHeaderName: getGlobalLitellmHeaderName,
   onError: handleError,
@@ -1725,37 +1715,6 @@ export const modelInfoCall = async (
   }
 };
 
-export const modelInfoV1Call = async (accessToken: string, modelId: string) => {
-  /**
-   * Get all models on proxy
-   */
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/model/info` : `/v1/model/info`;
-    url += `?litellm_model_id=${modelId}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
 export const modelHubPublicModelsCall = async () => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/public/model_hub` : `/public/model_hub`;
   const response = await fetch(url, {
@@ -1906,66 +1865,6 @@ export const modelAvailableCall = async (
   }
 };
 
-export const teamSpendLogsCall = async (accessToken: string) => {
-  try {
-    const data = await apiClient.get(`/global/spend/teams`, { accessToken });
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const tagsSpendLogsCall = async (
-  accessToken: string,
-  startTime: string | undefined,
-  endTime: string | undefined,
-  tags: string[] | undefined,
-) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/tags` : `/global/spend/tags`;
-
-    if (startTime && endTime) {
-      url = `${url}?start_date=${startTime}&end_date=${endTime}`;
-    }
-
-    // if tags, convert the list to a comma separated string
-    if (tags) {
-      url += `&tags=${tags.join(",")}`;
-    }
-
-    const response = await fetch(`${url}`, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const allTagNamesCall = async (accessToken: string) => {
-  try {
-    const data = await apiClient.get(`/global/spend/all_tag_names`, { accessToken });
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
 export const userFilterUICall = async (accessToken: string, params: URLSearchParams) => {
   try {
     return await apiClient.get(`/user/filter/ui`, {
@@ -2077,214 +1976,6 @@ export const uiSpendLogsCall = async ({
     return data;
   } catch (error) {
     console.error("Failed to fetch spend logs:", error);
-    throw error;
-  }
-};
-
-/**
- * Agent tracing. All three respond 501 `{detail}` when `general_settings.tracing` is not
- * configured; callers can detect that through the thrown `ApiError`'s `status`.
- */
-export const agentTraceListCall = async ({
-  accessToken,
-  startMs,
-  endMs,
-  cursor,
-}: {
-  accessToken: string;
-  startMs: number;
-  endMs: number;
-  cursor?: string | null;
-}): Promise<TracePage> => {
-  const query = { start_ms: startMs, end_ms: endMs, cursor: cursor ?? undefined } satisfies TraceListQuery;
-  return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
-};
-
-export const sendOtlpTraceCall = async (accessToken: string, exportRequest: object): Promise<void> =>
-  apiClient.post(`/v1/traces`, { accessToken, body: exportRequest });
-
-export const agentTraceCall = async (
-  accessToken: string,
-  traceId: string,
-  traceRef?: string,
-  cursor?: string | null,
-): Promise<Trace> =>
-  apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
-    accessToken,
-    query: { trace_ref: traceRef || undefined, cursor: cursor ?? undefined, page_size: 200 } satisfies TraceDetailQuery,
-  });
-
-export const agentTraceSpanCall = async (
-  accessToken: string,
-  traceId: string,
-  spanId: string,
-  traceRef?: string,
-): Promise<SpanDetail> =>
-  apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}`, {
-    accessToken,
-    query: { trace_ref: traceRef || undefined } satisfies SpanQuery,
-  });
-
-export const agentTraceSpanErrorCall = async (
-  accessToken: string,
-  traceId: string,
-  spanId: string,
-  options: { traceRef?: string; cursor?: string | null },
-): Promise<SpanErrorPage> =>
-  apiClient.get<SpanErrorPage>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}/error`, {
-    accessToken,
-    query: { trace_ref: options.traceRef || undefined, cursor: options.cursor || undefined } satisfies SpanErrorQuery,
-  });
-
-export const adminSpendLogsCall = async (accessToken: string) => {
-  try {
-    const data = await apiClient.get(`/global/spend/logs`, { accessToken });
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const adminTopKeysCall = async (accessToken: string) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/keys?limit=5` : `/global/spend/keys?limit=5`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const adminTopEndUsersCall = async (
-  accessToken: string,
-  keyToken: string | null,
-  startTime: string | undefined,
-  endTime: string | undefined,
-) => {
-  try {
-    const body = keyToken
-      ? { api_key: keyToken, startTime: startTime, endTime: endTime }
-      : { startTime: startTime, endTime: endTime };
-
-    const data = await apiClient.post(`/global/spend/end_users`, { accessToken, body });
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const adminspendByProvider = async (
-  accessToken: string,
-  startTime: string | undefined,
-  endTime: string | undefined,
-) => {
-  try {
-    const data = await apiClient.get(`/global/spend/provider`, {
-      accessToken,
-      query: {
-        ...(startTime && endTime ? { start_date: startTime, end_date: endTime } : {}),
-      },
-    });
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch spend data:", error);
-    throw error;
-  }
-};
-
-export const adminGlobalActivity = async (
-  accessToken: string,
-  startTime: string | undefined,
-  endTime: string | undefined,
-) => {
-  try {
-    const data = await apiClient.get(`/global/activity`, {
-      accessToken,
-      query: startTime && endTime ? { start_date: startTime, end_date: endTime } : undefined,
-    });
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch spend data:", error);
-    throw error;
-  }
-};
-
-export const adminGlobalActivityPerModel = async (
-  accessToken: string,
-  startTime: string | undefined,
-  endTime: string | undefined,
-) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity/model` : `/global/activity/model`;
-
-    if (startTime && endTime) {
-      url += `?start_date=${startTime}&end_date=${endTime}`;
-    }
-
-    const requestOptions = {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
-    };
-
-    const response = await fetch(url, requestOptions);
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch spend data:", error);
-    throw error;
-  }
-};
-
-export const adminTopModelsCall = async (accessToken: string) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/models?limit=5` : `/global/spend/models?limit=5`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
     throw error;
   }
 };
@@ -2421,7 +2112,7 @@ export const testAutoRouterRouting = async (
   }
 };
 
-export interface ComplexityRouterConfigValidation {
+interface ComplexityRouterConfigValidation {
   valid: boolean;
   error?: string | null;
 }
@@ -2733,7 +2424,7 @@ export interface UserConnectionStartResponse {
   flow_handle: string;
 }
 
-export type UserConnectionPollStatus = "pending" | "slow_down" | "expired" | "denied" | "no_copilot_seat" | "connected";
+type UserConnectionPollStatus = "pending" | "slow_down" | "expired" | "denied" | "no_copilot_seat" | "connected";
 
 export interface UserConnectionPollResponse {
   status: UserConnectionPollStatus;
@@ -3697,35 +3388,6 @@ export const getProxyUISettings = async (accessToken: string) => {
   }
 };
 
-export const getUISettings = async (accessToken: string) => {
-  /**
-   * Get UI-specific configuration flags from the database
-   */
-  try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_settings` : `/get/ui_settings`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      console.error("Failed to get UI settings:", errorMessage);
-      return null;
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to get UI settings:", error);
-    return null;
-  }
-};
-
 export const getMCPSemanticFilterSettings = async (accessToken: string) => {
   /**
    * Get MCP semantic filter configuration
@@ -4685,12 +4347,12 @@ export const createAgentCall = async (accessToken: string, agentData: any) => {
 
 export type DiscoveredAgentCard = Agent["agent_card_params"];
 
-export type DiscoverAgentCardResponse = Omit<components["schemas"]["DiscoverAgentResponse"], "agent_card"> & {
+type DiscoverAgentCardResponse = Omit<components["schemas"]["DiscoverAgentResponse"], "agent_card"> & {
   agent_card: DiscoveredAgentCard;
 };
 
 export type DiscoveryMode = components["schemas"]["DiscoveryMode"];
-export type DiscoverAgentCardOptions = Partial<
+type DiscoverAgentCardOptions = Partial<
   Pick<components["schemas"]["DiscoverAgentRequest"], "discovery_mode" | "params">
 >;
 
@@ -5613,7 +5275,7 @@ export const vectorStoreListCall = async (
   }
 };
 
-export interface IndexesListResponse {
+interface IndexesListResponse {
   object: string;
   data: VectorStoreIndex[];
 }

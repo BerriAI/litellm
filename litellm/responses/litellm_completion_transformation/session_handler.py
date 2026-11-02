@@ -200,6 +200,7 @@ class ResponsesSessionHandler:
         previous_response_id: str,
         item_cache_control: bool = False,
         client_response_ids: tuple[str, ...] = (),
+        tool_call_provider_fields: bool = False,
         stored_turns: StoredTurns | None = None,
     ) -> ChatCompletionSession:
         """
@@ -241,9 +242,13 @@ class ResponsesSessionHandler:
                 for index in range(start.index, replayed_turns)
             ],
             item_cache_control,
+            tool_call_provider_fields,
         )
         history_before_replay: Final = ResponsesSessionHandler._history_of_turns(
-            all_spend_logs[: start.index], proxy_server_requests[: start.index], item_cache_control
+            all_spend_logs[: start.index],
+            proxy_server_requests[: start.index],
+            item_cache_control,
+            tool_call_provider_fields,
         )
         chat_completion_message_history: Final = (
             list(with_stored_calls_the_input_answers(replayed_history, history_before_replay))
@@ -305,6 +310,7 @@ class ResponsesSessionHandler:
         spend_logs: Sequence["SpendLogsPayload"],
         proxy_server_requests: Sequence[Mapping[str, object] | None],
         item_cache_control: bool,
+        tool_call_provider_fields: bool,
     ) -> list["SessionMessage"]:
         return list(
             chain.from_iterable(
@@ -313,6 +319,7 @@ class ResponsesSessionHandler:
                     proxy_server_request_dict=proxy_server_request,
                     chat_completion_message_history=[],
                     item_cache_control=item_cache_control,
+                    tool_call_provider_fields=tool_call_provider_fields,
                 )
                 for spend_log, proxy_server_request in zip(spend_logs, proxy_server_requests, strict=True)
             )
@@ -330,6 +337,7 @@ class ResponsesSessionHandler:
             | Message
         ],
         item_cache_control: bool = False,
+        tool_call_provider_fields: bool = False,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -362,6 +370,7 @@ class ResponsesSessionHandler:
                     responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
+                    tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
                 )
             )
@@ -377,6 +386,7 @@ class ResponsesSessionHandler:
                     responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
+                    tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
                 )
             )

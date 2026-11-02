@@ -9,6 +9,7 @@ from pydantic import ValidationError
 import litellm
 from litellm import ModelResponse, Router
 from litellm.caching.dual_cache import DualCache
+from litellm.router_api import RoutingContext
 from litellm.router_strategy.auto_router.auto_router_model_naming import strategy_router_dependencies
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig, ComplexityTier
@@ -90,7 +91,7 @@ def _router(content: str, config: ComplexityRouterConfig | None = None) -> tuple
     client.acompletion = AsyncMock(return_value=_response(content))
     router: Final = ComplexityRouter(
         model_name="v2-router",
-        litellm_router_instance=client,
+        ctx=RoutingContext(client),
         complexity_router_config=(config or _config()).model_dump(),
         derive_savings_baseline=False,
     )
@@ -570,7 +571,7 @@ def test_response_schema_requires_both_model_forecasts() -> None:
 @pytest.mark.asyncio
 async def test_user_turn_mode_reuses_forecast_until_a_new_user_requirement() -> None:
     router, client = _router(_verdict().model_dump_json(), _config(classification_mode="user_turn"))
-    client.cache = DualCache()
+    client.health.return_value.store = DualCache()
     initial: Final = [{"role": "user", "content": "Fix nested behavior"}]
     first: Final = await router.async_pre_routing_hook(
         model="v2-router", messages=initial, request_kwargs={"metadata": {"session_id": "v2-task"}}
@@ -670,7 +671,7 @@ def test_v2_judge_is_a_declared_dependency_for_authorization() -> None:
 async def test_v2_forwards_inline_images_only_when_vision_is_enabled(vision_enabled: bool) -> None:
     config: Final = _config(classifier_llm_config={"model": "judge", "vision": {"enabled": vision_enabled}})
     router, client = _router(_verdict().model_dump_json(), config)
-    client.get_model_list.return_value = [
+    client.registry.return_value.deployments.return_value = [
         {"model_name": "judge", "litellm_params": {"model": "judge"}, "model_info": {"supports_vision": True}}
     ]
     image: Final = {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGk="}}

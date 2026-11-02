@@ -4,10 +4,10 @@ https://docs.cohere.com/reference/rerank
 
 """
 
-from collections.abc import Sequence
-from typing import Literal, overload
+from collections.abc import Mapping, Sequence
+from typing import Final, Literal, overload
 
-from pydantic import ConfigDict, PrivateAttr
+from pydantic import ConfigDict, PrivateAttr, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -57,6 +57,8 @@ class OptionalRerankParams(TypedDict, total=False):
 class RerankBilledUnits(TypedDict, total=False):
     search_units: int | None
     total_tokens: int | None
+    input_tokens: ReadOnly[int | None]
+    output_tokens: ReadOnly[int | None]
 
 
 class RerankTokens(TypedDict, total=False):
@@ -65,9 +67,45 @@ class RerankTokens(TypedDict, total=False):
 
 
 class RerankResponseMeta(TypedDict, total=False):
-    api_version: dict | None
+    api_version: dict[str, object] | None
     billed_units: RerankBilledUnits | None
     tokens: RerankTokens | None
+
+
+class RerankUsage(TypedDict):
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+
+
+_RERANK_META: Final = TypeAdapter(RerankResponseMeta)
+
+
+def get_rerank_usage(response: Mapping[str, object]) -> RerankUsage | None:
+    if "results" not in response or response.get("meta") is None:
+        return None
+    try:
+        meta: Final = _RERANK_META.validate_python(response.get("meta"))
+    except ValidationError:
+        return None
+    tokens: Final = meta.get("tokens") or RerankTokens()
+    billed: Final = meta.get("billed_units") or RerankBilledUnits()
+    input_tokens: Final = next(
+        (count for count in (tokens.get("input_tokens"), billed.get("input_tokens")) if count is not None), None
+    )
+    output_tokens: Final = next(
+        (count for count in (tokens.get("output_tokens"), billed.get("output_tokens")) if count is not None), None
+    )
+    total_tokens: Final = billed.get("total_tokens")
+    if input_tokens is None and output_tokens is None and total_tokens is None:
+        return None
+    completion_tokens: Final = output_tokens or 0
+    prompt_tokens: Final = input_tokens if input_tokens is not None else max((total_tokens or 0) - completion_tokens, 0)
+    return RerankUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens if total_tokens is not None else prompt_tokens + completion_tokens,
+    )
 
 
 class RerankResponseDocument(TypedDict):

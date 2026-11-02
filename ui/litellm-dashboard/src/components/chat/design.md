@@ -80,7 +80,7 @@ Show available providers in a single-select dropdown beside model search. “All
 ```tsx
 // Page/greeting heading
 <header className="moyai-chat-home-header">
-  <h1>What are we building?</h1>
+  <h1>What are we working on?</h1>
 </header> // Moyai: 500 weight, clamp(32px, 3.4vw, 46px), 1.13 line-height
 
 // Section heading (panel titles: "Your API Keys", "Your Usage")

@@ -16,8 +16,11 @@ from pydantic import BeforeValidator, TypeAdapter, ValidationError
 import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.router_utils.common_utils import is_proxy_admin_request
+from litellm.router import router_arguments
+from litellm.router_api import router_init_args
+from litellm.router_config import build_router_config
 
 # Client-supplied params that make the router or the call path fabricate a
 # failure or a delay instead of calling the provider. The ``mock_testing_*``
@@ -93,11 +96,13 @@ async def _route_user_config_request(data: dict, route_type: str):
 
     # Filter router_config to only include valid Router.__init__ arguments
     # This prevents TypeError when invalid parameters are stored in the database
-    valid_args: Final = litellm.Router.get_valid_args()
+    valid_args: Final = router_init_args()
     filtered_config: Final = {k: v for k, v in router_config.items() if k in valid_args}
 
     logging_obj: Final = _request_logging_obj(JSON_OBJECT_ADAPTER.validate_python(data), route_type)
-    cached_router: Final = user_config_routers.get(filtered_config, lambda: litellm.Router(**filtered_config))
+    cached_router: Final = user_config_routers.get(
+        filtered_config, lambda: litellm.Router.from_config(build_router_config(router_arguments(**filtered_config)))
+    )
     cached_router.observe(logging_obj)
     return await getattr(cached_router, f"{route_type}")(**{**data, "litellm_logging_obj": logging_obj})
 

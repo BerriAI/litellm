@@ -1,16 +1,13 @@
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm.exceptions import RateLimitError, RateLimitErrorCategory, RateLimitType
+from litellm.router_deprecated import renamed_router_param
 from litellm.types.router import RouterErrors
 from litellm.utils import calculate_max_parallel_requests
 
 if TYPE_CHECKING:
-    from litellm.router import Router as _Router
-
-    LitellmRouter = _Router
-else:
-    LitellmRouter = Any
+    from litellm.router_api import RoutingContext
 
 
 class MaxParallelRequestsLimit:
@@ -52,7 +49,8 @@ class MaxParallelRequestsLimit:
 
 class InitalizeCachedClient:
     @staticmethod
-    def set_max_parallel_requests_client(litellm_router_instance: LitellmRouter, model: dict):
+    @renamed_router_param("litellm_router_instance")
+    def set_max_parallel_requests_client(ctx: "RoutingContext", model: dict):
         litellm_params: Final = model.get("litellm_params", {})
         model_id: Final = model["model_info"]["id"]
         rpm: Final = litellm_params.get("rpm", None)
@@ -62,7 +60,7 @@ class InitalizeCachedClient:
             rpm=rpm,
             max_parallel_requests=max_parallel_requests,
             tpm=tpm,
-            default_max_parallel_requests=litellm_router_instance.default_max_parallel_requests,
+            default_max_parallel_requests=ctx.settings().default_max_parallel_requests,
         )
         if calculated_max_parallel_requests:
             limit: Final = MaxParallelRequestsLimit(
@@ -71,7 +69,7 @@ class InitalizeCachedClient:
                 model_group=model.get("model_name", ""),
             )
             cache_key: Final = f"{model_id}_max_parallel_requests_client"
-            litellm_router_instance.cache.set_cache(
+            ctx.health().store.set_cache(
                 key=cache_key,
                 value=limit,
                 local_only=True,

@@ -54,7 +54,7 @@ def _assert_otel_destination_configured(client: LoggingClient) -> None:
     details = _ReadinessDetails.model_validate_json(readiness_details_body(client))
     assert OTEL_V2_LOGGER_NAME in details.success_callbacks, (
         f"the proxy must report the {OTEL_V2_LOGGER_NAME} callback active "
-        f"(LITELLM_OTEL_V2 + arize_phoenix preset in the compose config); got: {details.success_callbacks}"
+        f"(LITELLM_OTEL_V2=true + the otel callback in the stack config); got: {details.success_callbacks}"
     )
 
 

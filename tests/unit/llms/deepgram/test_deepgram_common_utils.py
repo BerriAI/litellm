@@ -7,6 +7,7 @@ import pytest
 
 import litellm
 from litellm.llms.deepgram.common_utils import (
+    DeepgramSpeakMeter,
     deepgram_listen_addon_pricing_models,
     deepgram_listen_audio_seconds,
     deepgram_listen_callback_params,
@@ -18,7 +19,12 @@ from litellm.llms.deepgram.common_utils import (
     deepgram_listen_requested_model,
     deepgram_listen_transcript,
     deepgram_listen_websocket_target,
+    deepgram_speak_character_rate,
+    deepgram_speak_registry_key,
+    deepgram_speak_requested_model,
+    deepgram_speak_websocket_target,
 )
+from litellm.types.passthrough_endpoints.pass_through_endpoints import WebSocketSessionUsage
 
 NOVA_3_URL: Final = "wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000"
 
@@ -324,3 +330,102 @@ def test_deepgram_listen_is_priced(
 )
 def test_deepgram_listen_addon_pricing_models(upstream_url: str, expected: tuple[str, ...]):
     assert deepgram_listen_addon_pricing_models(upstream_url) == expected
+
+
+@pytest.mark.parametrize(
+    ("api_base", "query_string", "expected"),
+    [
+        pytest.param(
+            None,
+            "encoding=linear16",
+            "wss://api.deepgram.com/v1/speak?encoding=linear16&model=aura-asteria-en",
+            id="no model: Deepgram's own default, named so billing and upstream agree",
+        ),
+        pytest.param(
+            None,
+            "model=aura-asteria-en&model=aura-2-thalia-en",
+            "wss://api.deepgram.com/v1/speak?model=aura-asteria-en",
+            id="second model dropped: Deepgram honours the last, auth and pricing read the first",
+        ),
+        pytest.param(
+            "http://localhost:8080/v1",
+            "model=aura-2-thalia-en",
+            "ws://localhost:8080/v1/speak?model=aura-2-thalia-en",
+            id="server-configured api base",
+        ),
+    ],
+)
+def test_deepgram_speak_websocket_target(api_base: str | None, query_string: str, expected: str):
+    assert deepgram_speak_websocket_target(api_base, query_string) == expected
+
+
+@pytest.mark.parametrize(
+    "query_string",
+    [
+        "",
+        "model=",
+        "model=&model=aura-2-thalia-en",
+        "model=aura-2-thalia-en",
+        "model=aura-asteria-en&model=aura-2-thalia-en",
+        "encoding=mulaw",
+    ],
+)
+def test_deepgram_speak_requested_voice_is_the_only_voice_the_upstream_target_carries(query_string: str):
+    """Authorization runs against the requested voice and the upstream URL is built separately, so they must agree or
+    a key could be authorized for one voice and reach another"""
+    target: Final = deepgram_speak_websocket_target(None, query_string)
+    assert parse_qs(urlparse(target).query)["model"] == [deepgram_speak_requested_model(query_string)]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "registry_key", "priced"),
+    [
+        ("aura-asteria-en", "deepgram/aura", True),
+        ("aura-2-thalia-en", "deepgram/aura-2", True),
+        ("aura-2-celeste-es", "deepgram/aura-2", True),
+        ("aura-99-x-en", "deepgram/aura-99", False),
+        ("aura-2", "deepgram/aura-2", True),
+        ("nova-3", "deepgram/nova-3", False),
+    ],
+)
+def test_deepgram_speak_prices_each_voice_at_its_generation_row_only(model: str, registry_key: str, priced: bool):
+    """A voice is never billed at another generation's rate, and a listen model's row is not a speak price"""
+    upstream_url: Final = f"wss://api.deepgram.com/v1/speak?model={model}"
+
+    assert deepgram_speak_registry_key(upstream_url) == registry_key
+    assert deepgram_speak_character_rate(upstream_url) == (
+        litellm.model_cost[registry_key]["input_cost_per_character"] if priced else None
+    )
+
+
+@pytest.mark.parametrize(
+    ("frame", "characters"),
+    [
+        ('{"type": "Speak", "text": "Hello world."}', 12),
+        ('{"type":"Speak","text":"¿qué tal?"}', 9),
+        ('{"type": "Flush"}', 0),
+        ('{"type": "Speak"}', 0),
+        ('{"type": "Speak", "text": 12}', 0),
+        ('["Speak", "Hello"]', 0),
+        ("Hello", 0),
+        ("[" * 100_000, 0),
+    ],
+)
+def test_deepgram_speak_meter_measures_only_speak_text_and_never_raises(frame: str, characters: int):
+    meter: Final = DeepgramSpeakMeter("wss://api.deepgram.com/v1/speak?model=aura-2-thalia-en", character_rate=1.0)
+
+    assert meter.measure(frame) == characters
+
+
+@pytest.mark.parametrize(
+    ("upstream_url", "model"),
+    [
+        ("wss://api.deepgram.com/v1/speak?model=aura-2-thalia-en", "aura-2-thalia-en"),
+        ("wss://api.deepgram.com/v1/speak?encoding=linear16&model=aura-asteria-en", "aura-asteria-en"),
+    ],
+)
+def test_deepgram_speak_meter_prices_the_total_at_the_rate_it_holds(upstream_url: str, model: str) -> None:
+    assert DeepgramSpeakMeter(upstream_url, character_rate=0.25).price(47) == WebSocketSessionUsage(
+        model=model, custom_llm_provider="deepgram", response_cost=47 * 0.25
+    )

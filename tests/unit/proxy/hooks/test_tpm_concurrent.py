@@ -29,6 +29,7 @@ from PIL import Image
 
 from litellm import token_counter
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError, estimate_image_tokens
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -46,7 +47,6 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
-from litellm.router_utils.ptu_shares import PTUTeamCeiling
 from litellm.types.llms.openai import (
     InputTokensDetails,
     ResponseAPIUsage,

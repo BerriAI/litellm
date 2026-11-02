@@ -1193,7 +1193,7 @@ class ProxyInitializationHelpers:
     "--reload",
     is_flag=True,
     default=False,
-    help="Enable uvicorn hot reload (dev only). Also reloads when the --config YAML file changes. Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
+    help="Enable uvicorn hot reload (dev only), including every --num_workers worker on uvicorn>=0.50.0 outside Windows. Also reloads when the --config YAML or .env changes. Incompatible with --run_gunicorn, --run_hypercorn, and --run_granian.",
 )
 @click.option(
     "--prometheus_metrics_port",
@@ -1785,9 +1785,28 @@ def run_server(
             if num_workers > 1:
                 start_query_engine_reaper()
             if num_workers > 1 or reload:
-                uvicorn_args.update(
-                    ProxyInitializationHelpers.child_process_uvicorn_overrides(uvicorn_args.get("log_config"))
+                worker_overrides: Final = ProxyInitializationHelpers.child_process_uvicorn_overrides(
+                    uvicorn_args.get("log_config")
                 )
+                if reload and num_workers > 1:
+                    from litellm.proxy.dev_reload import (
+                        RELOAD_OPTIONS,
+                        multi_worker_reload_supported,
+                        run_multi_worker_reload,
+                    )
+
+                    if multi_worker_reload_supported():
+                        run_multi_worker_reload(
+                            RELOAD_OPTIONS.validate_python(uvicorn_args),
+                            workers=TypeAdapter(int).validate_python(num_workers),
+                            worker_overrides=worker_overrides,
+                        )
+                        return
+                    print(
+                        "\033[1;33mLiteLLM Proxy: --reload with --num_workers>1 requires uvicorn>=0.50.0 "
+                        "and an OS other than Windows, so only a single worker reloads.\033[0m"
+                    )
+                uvicorn_args.update(worker_overrides)
             uvicorn.run(
                 **uvicorn_args,
                 workers=num_workers,

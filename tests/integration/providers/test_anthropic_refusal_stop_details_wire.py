@@ -18,6 +18,7 @@ from integration._support.anthropic_refusal import (
     DECLARED_PARTIAL_JSON,
     DOCS_PARTIAL_TEXT,
     DOCS_REFUSAL,
+    DOCS_REFUSAL_EXPLANATION,
     DOCS_STOP_DETAILS,
     ENVELOPED_PARTIAL_JSON,
     FIXTURES,
@@ -651,8 +652,7 @@ def test_family_messages_stream_refusal_keeps_frames_and_logs_the_stop_details(r
         model: Final = _deployment(scenario, provider, rig)
         key: Final = scenario.key()
         events: Final = _messages_stream(rig, key, model, refusal_prompt("refusal", _marker()))
-        native: Final = {"stop_reason": "refusal"} if provider == "snowflake" else REFUSAL_FIELDS
-        assert _native_deltas(events) == (native,), events
+        assert _native_deltas(events) == (REFUSAL_FIELDS,), events
         assert _relayed_in(events) == (), events
         assert _paths(rig.wire) == (_STREAM_TARGETS[provider][1],)
         logged: Final = _logged_response(rig, key)
@@ -783,10 +783,10 @@ def test_responses_cache_hit_logs_the_same_stop_details_as_the_miss(rig: Rig) ->
         served_from_cache: Final = tuple(event.get("cache_hit") is True for event in logged)
         assert (len(_paths(rig.wire)), served_from_cache.count(True)) == (1, 1), (served_from_cache, logged)
         assert relayed(first) == ((_RESPONSE_FIELDS, REFUSAL_FIELDS),), first
-        assert tuple(relayed(event["response"]) for event in logged) == (((_CHAT_FIELDS, REFUSAL_FIELDS),),) * 2, (
-            served_from_cache,
-            logged,
-        )
+        assert tuple(relayed(event["response"]) for event in logged) == (
+            ((_CHAT_FIELDS, REFUSAL_FIELDS),),
+            relayed(first),
+        ), (served_from_cache, logged)
 
 
 def test_passthrough_is_not_served_from_the_response_cache(rig: Rig) -> None:
@@ -1310,6 +1310,7 @@ def test_chat_refusal_body_serializes_the_stop_details_beside_the_existing_messa
             "message": {
                 "content": content,
                 "role": "assistant",
+                "refusal": DOCS_REFUSAL_EXPLANATION,
                 "provider_specific_fields": {**_ANTHROPIC_MESSAGE_FIELDS, **REFUSAL_FIELDS},
             },
         }

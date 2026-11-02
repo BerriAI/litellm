@@ -17,6 +17,7 @@ import respx
 from openai import AsyncOpenAI, OpenAI
 
 import litellm
+import litellm.router_python_core
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     KUBERNETES_POD_ROUTING_KEY,
@@ -281,7 +282,7 @@ def _patch_router_discovery(
     *discoveries: KubernetesPodDiscovery,
 ) -> None:
     discovery_iter: Final = iter(discoveries)
-    monkeypatch.setattr(litellm.router, "KubernetesPodDiscovery", lambda: next(discovery_iter))
+    monkeypatch.setattr(litellm.router_python_core, "KubernetesPodDiscovery", lambda: next(discovery_iter))
 
 
 def _stub_sync_dns(monkeypatch: pytest.MonkeyPatch, *ips: str) -> None:

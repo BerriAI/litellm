@@ -20,6 +20,22 @@ const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.pa
 );
 
 describe("provider_info_helpers", () => {
+  it("resolves Meta Model API separately from Meta Llama and isolates their bundled models", () => {
+    expect(resolveLitellmProviderSlug("META")).toBe("meta");
+    expect(getPlaceholder(Providers.META)).toBe("meta/muse-spark-1.1");
+    expect(getProviderLogoAndName("meta").displayName).toBe("Meta Model API");
+    const metaModels = Object.keys(BUNDLED_MODEL_MAP).filter(
+      (key) => BUNDLED_MODEL_MAP[key]?.litellm_provider === "meta",
+    );
+    const llamaModels = Object.keys(BUNDLED_MODEL_MAP).filter(
+      (key) => BUNDLED_MODEL_MAP[key]?.litellm_provider === "meta_llama",
+    );
+    expect(metaModels).toContain("meta/muse-spark-1.1");
+    expect(llamaModels.length).toBeGreaterThan(0);
+    expect(getProviderModels("META", BUNDLED_MODEL_MAP).sort()).toEqual(metaModels.sort());
+    expect(getProviderModels("LLAMA", BUNDLED_MODEL_MAP).sort()).toEqual(llamaModels.sort());
+  });
+
   it("resolves BigModel metadata, name, logo and model placeholder", () => {
     const metadata = PROVIDER_CREATE_FIELDS.find((provider) => provider.provider === "BIGMODEL");
     expect(provider_map.BIGMODEL).toBe(metadata?.litellm_provider);

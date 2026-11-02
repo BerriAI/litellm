@@ -1647,6 +1647,7 @@ def set_global_gitlab_config(config: Mapping[str, object]) -> None:
 # Lazy loading system for heavy modules to reduce initial import time and memory usage
 
 if TYPE_CHECKING:
+    from . import guardrails as guardrails
     from litellm.types.utils import ModelInfo as _ModelInfoType
     from litellm.types.utils import PriorityReservationSettings
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -2499,10 +2500,10 @@ def __getattr__(name: str) -> Any:
         handler_func: Final = registry[name]
         return handler_func(name)
 
-    if name == "proxy":
+    if name in ("proxy", "guardrails"):
         import importlib
 
-        return importlib.import_module("litellm.proxy")
+        return importlib.import_module(f"litellm.{name}")
 
     if name == "harness" or name in _AGENT_EXPORTS:
         import importlib

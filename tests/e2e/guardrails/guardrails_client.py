@@ -41,8 +41,6 @@ from pydantic import BaseModel, Field
 GUARDRAIL_BACKEND: Final = "gemini/gemini-2.5-flash"
 
 GuardrailMode = Literal["pre_call", "post_call", "during_call", "logging_only"]
-PiiEntity = Literal["EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON", "CREDIT_CARD", "US_SSN"]
-PiiAction = Literal["MASK", "BLOCK"]
 BlockedWordAction = Literal["BLOCK", "MASK"]
 
 
@@ -80,22 +78,6 @@ class BlockCodeExecutionParamsBody(GuardrailParamsBase):
     guardrail: Literal["block_code_execution"] = "block_code_execution"
 
 
-class PresidioParamsBody(GuardrailParamsBase):
-    """Presidio PII guardrail params. `presidio_filter_scope="input"` keeps the
-    registration to a single callback on the configured mode; the default
-    ("both") also registers a second post_call output-masking callback, which a
-    pre_call- or logging_only-scoped test must not drag in. `output_parse_pii`
-    stays unset/False: True would unmask the response back to the caller."""
-
-    guardrail: Literal["presidio"] = "presidio"
-    presidio_analyzer_api_base: str
-    presidio_anonymizer_api_base: str
-    presidio_filter_scope: Literal["input", "output", "both"] | None = None
-    presidio_language: str | None = None
-    output_parse_pii: bool | None = None
-    pii_entities_config: dict[PiiEntity, PiiAction] | None = None
-
-
 class ToolPermissionRuleBody(BaseModel):
     """One tool_permission rule: a decision for the tool named by `tool_name`."""
 
@@ -130,7 +112,6 @@ GuardrailParamsBody = (
     | BedrockGuardrailParamsBody
     | OpenAIModerationParamsBody
     | BlockCodeExecutionParamsBody
-    | PresidioParamsBody
     | ToolPermissionParamsBody
     | CustomCodeParamsBody
 )

@@ -1,14 +1,15 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime
 from functools import wraps
 from types import MappingProxyType
-from typing import Any, Final, Protocol
+from typing import Any, Final, ParamSpec, Protocol, TypeVar
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -687,6 +688,7 @@ async def _emit_management_endpoint_otel_span(
     end_time: datetime,
     result: Any = None,
     exception: Exception | None = None,
+    log_payload: bool = True,
 ) -> None:
     """Stamp + end the parent OTEL SERVER span for a management endpoint.
 
@@ -716,8 +718,8 @@ async def _emit_management_endpoint_otel_span(
         )
 
         route = get_request_route(http_request)
-        request_body: dict = await read_request_body(  # rebind-ok: pre-existing rebinding on a rename-only line
-            request=http_request
+        request_body: dict = (  # rebind-ok: pre-existing rebinding on a rename-only line
+            await read_request_body(request=http_request) if log_payload else {}
         )
     else:
         route = func.__name__
@@ -738,7 +740,7 @@ async def _emit_management_endpoint_otel_span(
     )
 
     _response: dict[str, object] | None = None
-    if exception is None and result is not None:
+    if log_payload and exception is None and result is not None:
         try:
             raw: Final[Mapping[str, object]] = dict(result)
             _response = {k: v for k, v in raw.items() if k not in _CREDENTIAL_FIELDS}
@@ -767,37 +769,60 @@ async def _emit_management_endpoint_otel_span(
         )
 
 
-def management_endpoint_wrapper(func):
+_P: Final = ParamSpec("_P")
+_R: Final = TypeVar("_R")
+
+
+def management_endpoint_wrapper(func: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
     """
     This wrapper does the following:
 
     1. Log I/O, Exceptions to OTEL
     2. Create an Audit log for success calls
     """
+    return _wrap_management_endpoint(func, log_payload=True)
 
-    @wraps(func)
-    async def wrapper(*args, **kwargs):
+
+def management_endpoint_span_wrapper(func: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+    return _wrap_management_endpoint(func, log_payload=False)
+
+
+def _caller_auth(endpoint_kwargs: Mapping[str, object]) -> UserAPIKeyAuth:
+    caller: Final = endpoint_kwargs.get("user_api_key_dict")
+    return caller if isinstance(caller, UserAPIKeyAuth) else UserAPIKeyAuth()
+
+
+def _proxy_exception_handler_ends_server_span(exception: Exception) -> bool:
+    return not isinstance(exception, StarletteHTTPException)
+
+
+def _wrap_management_endpoint(
+    endpoint: Callable[_P, Awaitable[_R]], *, log_payload: bool
+) -> Callable[_P, Awaitable[_R]]:
+    @wraps(endpoint)
+    async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         start_time: Final = datetime.now()
         try:
-            result: Final = await func(*args, **kwargs)
+            result: Final = await endpoint(*args, **kwargs)
             end_time = datetime.now()
             try:
-                user_api_key_dict: UserAPIKeyAuth = kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
+                user_api_key_dict: UserAPIKeyAuth = _caller_auth(kwargs)
 
                 await send_management_endpoint_alert(
                     request_kwargs=kwargs,
                     user_api_key_dict=user_api_key_dict,
-                    function_name=func.__name__,
+                    function_name=endpoint.__name__,
                 )
                 parent_otel_span: Span | None = getattr(user_api_key_dict, "parent_otel_span", None)
                 if parent_otel_span is not None:
                     await _emit_management_endpoint_otel_span(
-                        func=func,
+                        func=endpoint,
                         kwargs=kwargs,
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,
                         result=result,
+                        log_payload=log_payload,
                     )
 
                 # Delete updated/deleted info from cache
@@ -813,17 +838,18 @@ def management_endpoint_wrapper(func):
         except Exception as e:
             end_time = datetime.now()
 
-            user_api_key_dict: UserAPIKeyAuth = kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
+            user_api_key_dict: UserAPIKeyAuth = _caller_auth(kwargs)
             parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
-            if parent_otel_span is not None:
+            if parent_otel_span is not None and (log_payload or not _proxy_exception_handler_ends_server_span(e)):
                 try:
                     await _emit_management_endpoint_otel_span(
-                        func=func,
+                        func=endpoint,
                         kwargs=kwargs,
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,
                         exception=e,
+                        log_payload=log_payload,
                     )
                 except Exception as otel_exc:
                     # Non-Blocking Exception - never let OTEL failures swallow

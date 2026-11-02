@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 
 
+from litellm.router_api import RoutingContext
 from litellm.router_strategy.quality_router.config import (
     DEFAULT_COMPLEXITY_TO_QUALITY,
 )
@@ -74,7 +75,7 @@ def four_tier_model_list() -> List[Dict[str, Any]]:
 def mock_router(four_tier_model_list):
     """A MagicMock router preloaded with the four-tier model list."""
     router = MagicMock()
-    router.model_list = four_tier_model_list
+    router.registry.return_value.all.return_value = four_tier_model_list
     return router
 
 
@@ -87,7 +88,7 @@ def quality_router(mock_router) -> QualityRouter:
     }
     return QualityRouter(
         model_name="quality-router-test",
-        litellm_router_instance=mock_router,
+        ctx=RoutingContext(mock_router),
         default_model="haiku",
         quality_router_config=config,
     )
@@ -109,11 +110,11 @@ class TestTierIndex:
         # Add a model the config doesn't list — it should be ignored.
         extra = _make_model_list([{"model_name": "ghost", "quality_tier": 5}])
         router = MagicMock()
-        router.model_list = four_tier_model_list + extra
+        router.registry.return_value.all.return_value = four_tier_model_list + extra
 
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="haiku",
             quality_router_config={
                 "available_models": ["haiku", "sonnet", "opus", "opus-next"]
@@ -132,14 +133,14 @@ class TestTierIndex:
             ]
         )
         router = MagicMock()
-        router.model_list = ml
+        router.registry.return_value.all.return_value = ml
 
         # Construction succeeds (tier index is lazy); the error surfaces on
         # first use so the router entry doesn't have to appear after all of
         # its referenced models in config.yaml.
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="haiku",
             quality_router_config={"available_models": ["haiku", "sonnet"]},
         )
@@ -163,11 +164,11 @@ class TestResolveModelForQualityTier:
             {"model_name": "opus-next", "quality_tier": 4},
         ]
         router = MagicMock()
-        router.model_list = _make_model_list(spec)
+        router.registry.return_value.all.return_value = _make_model_list(spec)
 
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="haiku",
             quality_router_config={"available_models": ["haiku", "opus", "opus-next"]},
         )
@@ -179,11 +180,11 @@ class TestResolveModelForQualityTier:
         # rounds DOWN to the closest lower tier — tier 1.
         spec = [{"model_name": "haiku", "quality_tier": 1}]
         router = MagicMock()
-        router.model_list = _make_model_list(spec)
+        router.registry.return_value.all.return_value = _make_model_list(spec)
 
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="emergency-default",
             quality_router_config={"available_models": ["haiku"]},
         )
@@ -197,11 +198,11 @@ class TestResolveModelForQualityTier:
             {"model_name": "sonnet", "quality_tier": 2},
         ]
         router = MagicMock()
-        router.model_list = _make_model_list(spec)
+        router.registry.return_value.all.return_value = _make_model_list(spec)
 
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="emergency-default",
             quality_router_config={"available_models": ["haiku", "sonnet"]},
         )
@@ -215,11 +216,11 @@ class TestResolveModelForQualityTier:
             {"model_name": "opus", "quality_tier": 3},
         ]
         router = MagicMock()
-        router.model_list = _make_model_list(spec)
+        router.registry.return_value.all.return_value = _make_model_list(spec)
 
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="emergency-default",
             quality_router_config={"available_models": ["haiku", "opus"]},
         )
@@ -244,11 +245,11 @@ class TestRoutingPreferencesValidation:
             }
         ]
         router = MagicMock()
-        router.model_list = ml
+        router.registry.return_value.all.return_value = ml
 
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="haiku",
             quality_router_config={"available_models": ["haiku"]},
         )
@@ -266,18 +267,18 @@ class TestConfigOrderingIndependence:
         # appears before its target deployments). The tier index must not be
         # built eagerly — it's deferred until first use.
         router = MagicMock()
-        router.model_list = []  # <- targets haven't been added yet
+        router.registry.return_value.all.return_value = []  # <- targets haven't been added yet
 
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="haiku",
             quality_router_config={"available_models": ["haiku", "sonnet", "opus"]},
         )
 
         # Now the targets come online. This mirrors the incremental add by
         # `Router._create_deployment`.
-        router.model_list = _make_model_list(
+        router.registry.return_value.all.return_value = _make_model_list(
             [
                 {"model_name": "haiku", "quality_tier": 1},
                 {"model_name": "sonnet", "quality_tier": 2},
@@ -489,10 +490,10 @@ def keyword_router():
         },
     ]
     router = MagicMock()
-    router.model_list = _make_model_list(spec)
+    router.registry.return_value.all.return_value = _make_model_list(spec)
     return QualityRouter(
         model_name="qr",
-        litellm_router_instance=router,
+        ctx=RoutingContext(router),
         default_model="default-haiku",
         quality_router_config={
             "available_models": [
@@ -547,10 +548,10 @@ class TestKeywordOverride:
             },
         ]
         router = MagicMock()
-        router.model_list = _make_model_list(spec)
+        router.registry.return_value.all.return_value = _make_model_list(spec)
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="cheap",
             quality_router_config={"available_models": ["expensive", "cheap"]},
         )
@@ -574,10 +575,10 @@ class TestKeywordOverride:
             },
         ]
         router = MagicMock()
-        router.model_list = _make_model_list(spec)
+        router.registry.return_value.all.return_value = _make_model_list(spec)
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="no-price",
             quality_router_config={"available_models": ["no-price", "with-price"]},
         )
@@ -633,10 +634,10 @@ class TestKeywordOverride:
             },
         ]
         router = MagicMock()
-        router.model_list = _make_model_list(spec)
+        router.registry.return_value.all.return_value = _make_model_list(spec)
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="ordered-tier2",
             quality_router_config={
                 "available_models": ["ordered-tier2", "implicit-tier3"]
@@ -663,10 +664,10 @@ class TestKeywordOverride:
             },
         ]
         router = MagicMock()
-        router.model_list = _make_model_list(spec)
+        router.registry.return_value.all.return_value = _make_model_list(spec)
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="default-tier3",
             quality_router_config={"available_models": ["preferred", "default-tier3"]},
         )
@@ -691,10 +692,10 @@ class TestKeywordOverride:
             },
         ]
         router = MagicMock()
-        router.model_list = _make_model_list(spec)
+        router.registry.return_value.all.return_value = _make_model_list(spec)
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="cheap-default",
             quality_router_config={
                 "available_models": ["expensive-but-preferred", "cheap-default"]
@@ -719,10 +720,10 @@ class TestKeywordOverride:
             },
         ]
         router = MagicMock()
-        router.model_list = _make_model_list(spec)
+        router.registry.return_value.all.return_value = _make_model_list(spec)
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="first",
             quality_router_config={"available_models": ["first", "second"]},
         )
@@ -756,10 +757,10 @@ class TestKeywordOverride:
             },
         ]
         router = MagicMock()
-        router.model_list = _make_model_list(spec)
+        router.registry.return_value.all.return_value = _make_model_list(spec)
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="low-tier",
             quality_router_config={
                 "available_models": [
@@ -787,10 +788,10 @@ class TestKeywordOverride:
             },
         ]
         router = MagicMock()
-        router.model_list = _make_model_list(spec)
+        router.registry.return_value.all.return_value = _make_model_list(spec)
         qr = QualityRouter(
             model_name="qr",
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             default_model="default-pick",
             quality_router_config={
                 "available_models": ["default-pick", "preferred-pick"]

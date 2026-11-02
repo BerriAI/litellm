@@ -25,6 +25,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
+    drops_unsupported_params,
     filter_exceptions_from_params,
     filter_internal_params,
     map_finish_reason,
@@ -2129,6 +2130,24 @@ class AmazonConverseConfig(BaseConfig):
 
         return data
 
+    @staticmethod
+    def _claude_messages_within_cache_control_cap(
+        messages: Sequence[AllMessageValues],
+        capability_model: str,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+    ) -> Sequence[AllMessageValues]:
+        if not drops_unsupported_params(litellm_params.get("drop_params")) or "claude" not in capability_model.lower():
+            return messages
+        from litellm.integrations.anthropic_cache_control_hook import (
+            messages_within_cache_control_cap,
+            tool_message_with_single_cache_mark,
+        )
+
+        return messages_within_cache_control_cap(
+            tuple(map(tool_message_with_single_cache_mark, messages)), optional_params.get("tools")
+        )
+
     async def _async_transform_request(
         self,
         model: str,
@@ -2140,7 +2159,13 @@ class AmazonConverseConfig(BaseConfig):
         base_model: Final = litellm_params.get("base_model")
         capability_model: Final = bedrock_capability_model(model, base_model)
         messages, system_content_blocks = self._transform_system_message(
-            messages, model=capability_model, deployment_model=model
+            list(
+                self._claude_messages_within_cache_control_cap(
+                    messages, capability_model, _JSON_OBJECT.validate_python(optional_params), litellm_params
+                )
+            ),
+            model=capability_model,
+            deployment_model=model,
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
@@ -2221,7 +2246,13 @@ class AmazonConverseConfig(BaseConfig):
         base_model: Final = litellm_params.get("base_model")
         capability_model: Final = bedrock_capability_model(model, base_model)
         messages, system_content_blocks = self._transform_system_message(
-            messages, model=capability_model, deployment_model=model
+            list(
+                self._claude_messages_within_cache_control_cap(
+                    messages, capability_model, _JSON_OBJECT.validate_python(optional_params), litellm_params
+                )
+            ),
+            model=capability_model,
+            deployment_model=model,
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present

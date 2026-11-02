@@ -21,13 +21,14 @@ from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import BatchResult, active_request_redis_batches
+from litellm.router_deprecated import renamed_router_param
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
-    from litellm.router import Router
+    from litellm.router_api import RoutingContext
 
 
 ROUTER_COOLDOWNS_USAGE_TARGET: Final = "router_cooldowns_usage"
@@ -93,23 +94,24 @@ class RoutingPrefetch:
             raise
 
     @staticmethod
+    @renamed_router_param("litellm_router_instance")
     def arm(
-        litellm_router_instance: "Router",
+        ctx: "RoutingContext",
         usage_selector: LowestTPMLoggingHandler_v2 | None,
         deployments: list,
     ) -> None:
         request: Final = active_request_redis_batches()
-        redis_cache: Final = litellm_router_instance.cache.redis_cache
+        redis_cache: Final = ctx.health().store.redis_cache
         if request is None or redis_cache is None or _PREFETCH_SLOT in request.prefetched:
             return
         cooldown_keys: Final = tuple(
-            CooldownCache.get_cooldown_cache_key(model_id) for model_id in litellm_router_instance.get_model_ids()
+            CooldownCache.get_cooldown_cache_key(model_id) for model_id in ctx.registry().names(kind="ids")
         )
         usage_keys: Final = (
             () if usage_selector is None else tuple(itertools.chain(*usage_selector.usage_counter_keys(deployments)))
         )
         keys: Final = (*cooldown_keys, *usage_keys)
-        cooldown_store: Final = litellm_router_instance.cooldown_cache.cooldown_store
+        cooldown_store: Final = ctx.health().cooldowns.cooldown_store
         cooldown_due, cooldown_previous = cooldown_store.reserve_redis_batch_reads(cooldown_keys)
         usage_cache: Final = None if usage_selector is None else usage_selector.router_cache
         usage_reservation: Final = None if usage_cache is None else usage_cache.reserve_redis_batch_reads(usage_keys)
@@ -184,9 +186,10 @@ class RoutingReadBatch:
             return RoutingReadBatch(usage_selector=selector)
         return RoutingReadBatch(usage_selector=None) if RoutingPrefetch.armed() else None
 
+    @renamed_router_param("litellm_router_instance")
     async def async_get_cooldown_deployments(
         self,
-        litellm_router_instance: "Router",
+        ctx: "RoutingContext",
         healthy_deployments: list,
         parent_otel_span: "Span | None",
     ) -> list[str]:
@@ -194,14 +197,14 @@ class RoutingReadBatch:
         `_async_get_cooldown_deployments`, with the strategy's tpm/rpm counters for
         `healthy_deployments` fetched in the same MGET and kept as `prefetched_usage`.
         """
-        model_ids: Final = litellm_router_instance.get_model_ids()
+        model_ids: Final = ctx.registry().names(kind="ids")
         cooldown_keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
         selector: Final = self.usage_selector
         usage_keys: Final = (
             () if selector is None else tuple(itertools.chain(*selector.usage_counter_keys(healthy_deployments)))
         )
         reads: Final = (
-            (litellm_router_instance.cooldown_cache.cooldown_store, cooldown_keys),
+            (ctx.health().cooldowns.cooldown_store, cooldown_keys),
             *(() if selector is None else ((selector.router_cache, list(usage_keys)),)),
         )
         with service_target(_routing_read_target(cooldown_keys, usage_keys)):
@@ -216,9 +219,7 @@ class RoutingReadBatch:
                 values=None if usage_values is None else MappingProxyType(dict(zip(usage_keys, usage_values))),
             )
 
-        cooldown_models: Final = litellm_router_instance.cooldown_cache.active_cooldowns_from_results(
-            model_ids, cooldown_results
-        )
+        cooldown_models: Final = ctx.health().cooldowns.active_cooldowns_from_results(model_ids, cooldown_results)
         verbose_router_logger.debug("retrieve cooldown models: %s", cooldown_models)
         return [model_id for model_id, _ in cooldown_models]
 

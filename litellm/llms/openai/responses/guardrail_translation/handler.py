@@ -38,8 +38,13 @@ from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar, Union, cast
 
+from openai.types.responses.response_output_refusal import ResponseOutputRefusal
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import (
+    ReadOnly,
+    TypedDict,
+    TypeIs,  # noqa: TID251  # TypeIs reaches typing only on 3.13
+)
 
 from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -99,6 +104,7 @@ from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     OutputTextDoneEvent,
     ResponseAPIUsage,
+    ResponseCompactionItem,
     ResponseCompletedEvent,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
@@ -731,6 +737,15 @@ def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> i
     return next((n + 1 for n in sequence_numbers if isinstance(n, int)), 0)
 
 
+def _is_responses_input(
+    input_data: object,
+) -> TypeIs["str | ResponseInputParam"]:  # guard-ok: str, or a list of Mapping items
+    if isinstance(input_data, str):
+        return True
+    items: Final = cast(list[object], input_data)  # cast-ok: isinstance narrows to list[Unknown] only
+    return isinstance(input_data, list) and all(isinstance(item, (Mapping, ResponseCompactionItem)) for item in items)
+
+
 async def rewrite_buffered_responses_stream(
     stream: AsyncIterable[_StreamEventT],
     guardrail: "CustomGuardrail",
@@ -767,8 +782,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         Transforms `input` (string or ResponseInputParam) and optional
         `instructions` into chat completion messages.
         """
-        input_data: Final = data.get("input")
-        if input_data is None:
+        input_data: Final[object] = data.get("input")
+        if not _is_responses_input(input_data):
             return None
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=input_data,
@@ -1037,7 +1052,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             for content_idx, content_item in enumerate(content):
                 if isinstance(content_item, dict):
                     # Extract text
-                    text_str = content_item.get("text", None)
+                    text_str = content_item.get(_content_part_text_field(content_item), None)
                     if text_str is not None:
                         texts_to_check.append(text_str)
                         task_mappings.append((msg_idx, int(content_idx)))
@@ -1086,8 +1101,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
             elif isinstance(content, list):
                 # Replace specific text item in list content
-                if isinstance(messages[msg_idx][field][content_idx_optional], dict):
-                    messages[msg_idx][field][content_idx_optional]["text"] = guardrail_response
+                self._write_content_part_text(content[content_idx_optional], guardrail_response)
 
     async def process_output_response(
         self,
@@ -1907,7 +1921,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             return
 
         # Handle both GenericResponseOutputItem and dict
-        content: list[OutputText] | list[dict[str, object]] | None = None
+        content: list[OutputText | ResponseOutputRefusal] | list[dict[str, object]] | None = None
         if isinstance(output_item, BaseModel):
             try:
                 output_item_dump: Final = output_item.model_dump()
@@ -1930,7 +1944,6 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         verbose_proxy_logger.debug("OpenAI Responses API: Processing output item: %s", output_item)
 
-        # Iterate through content items (list of OutputText objects)
         for content_idx, content_item in enumerate(content):
             text_content = _content_part_text(content_item)
             if text_content:
@@ -2027,7 +2040,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             "annotations": (),
             "logprobs": None,
         }
-        return (
+        events: Final = (
             *_open_item_closing_events(responses_so_far),
             OutputItemAddedEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -2071,6 +2084,10 @@ class OpenAIResponsesHandler(BaseTranslation):
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                 response=_blocked_response(exc, response_id=response_id, model=model, output_item=item),
             ),
+        )
+        return tuple(
+            event.model_copy(update={"sequence_number": number})
+            for number, event in enumerate(events, start=_next_stream_sequence_number(responses_so_far))
         )
 
 

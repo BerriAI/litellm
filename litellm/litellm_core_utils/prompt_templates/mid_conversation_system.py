@@ -85,6 +85,11 @@ def message_field(message: object, key: str) -> object:
     return mapping.get(key) if mapping is not None else getattr(message, key, None)
 
 
+def string_field(message: object, key: str) -> str | None:
+    value: Final = message_field(message, key)
+    return value if isinstance(value, str) else None
+
+
 def is_system_message(message: object) -> bool:
     return message_field(message, "role") == "system"
 
@@ -284,6 +289,10 @@ def _assistant_part_renders(part: object) -> bool:
 
 def _separate_thinking_blocks_render(message: object) -> bool:
     return any(_thinking_block_renders(block) for block in parts_of(message_field(message, "thinking_blocks")))
+
+
+def is_anthropic_server_tool_use(tool_id: str) -> bool:
+    return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
 
 
 def is_anthropic_tool_search_use(tool_id: str, tool_name: str) -> bool:

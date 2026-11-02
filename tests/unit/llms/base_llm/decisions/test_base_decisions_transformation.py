@@ -6,14 +6,19 @@ import httpx
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
+from litellm.llms.azure_ai.decisions.transformation import AzureAIDecisionsConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
+    BaseDecisionsConfig,
+    DecisionsInputLimits,
     ir_to_systemone_request,
     ir_to_systemone_response,
     parse_systemone_response,
     systemone_request_to_ir,
 )
 from litellm.llms.openai.decisions.transformation import openai_request_to_ir
+from litellm.llms.typesafe.decisions.transformation import TypeSafeDecisionsConfig
 from litellm.types.decisions import (
     MAX_DECISION_QUESTIONS,
     DecisionsIRRefusal,
@@ -21,7 +26,6 @@ from litellm.types.decisions import (
     DecisionsIRScoreAnswer,
     DecisionsRequestBody,
     OpenAIDecisionRequestBody,
-    UnsupportedDecisionsRequest,
 )
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -47,6 +51,61 @@ _SYSTEMONE_REQUEST: Final[Mapping[str, object]] = {
         "severity": {"type": "score", "criteria": ["minor", {"label": "major"}]},
     },
 }
+
+
+@pytest.mark.parametrize("declared", (4096, 0, -1, True, None))
+def test_decision_input_limits_use_only_positive_catalog_limits(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, declared: int | None
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bespoke/test-input-limit",
+        {"litellm_provider": "bespoke", "mode": "evaluation", "max_input_tokens": declared},
+    )
+
+    limits: Final = BaseDecisionsConfig().get_input_limits("test-input-limit", "bespoke", {})
+
+    assert limits == DecisionsInputLimits(max_request_tokens=4096 if declared == 4096 else None)
+
+
+def test_unmapped_decision_model_limits_remain_unknown(local_model_cost_map: None) -> None:
+    assert BaseDecisionsConfig().get_input_limits("unmapped-input-limit", "databricks", {}) == DecisionsInputLimits()
+
+
+@pytest.mark.parametrize(
+    ("headers", "long_context"),
+    (
+        ({}, False),
+        ({"TypeSafe-Danger-Zone-Long-Context": "false"}, False),
+        ({"typesafe-danger-zone-long-context": " TRUE "}, True),
+        ({"TypeSafe-Danger-Zone-Long-Context": "true", "typesafe-danger-zone-long-context": "true"}, True),
+        ({"TypeSafe-Danger-Zone-Long-Context": "true", "typesafe-danger-zone-long-context": "false"}, False),
+        ({"typesafe-danger-zone-long-context": "true,false"}, False),
+    ),
+)
+def test_typesafe_limits_require_unambiguous_long_context_opt_in(
+    headers: Mapping[str, str], long_context: bool
+) -> None:
+    """Provider contract from https://docs.typesafe.ai/models, verified 2026-10-30"""
+    limits: Final = TypeSafeDecisionsConfig().get_input_limits("jev-latest", "typesafe", headers)
+
+    assert limits == (
+        DecisionsInputLimits(max_request_tokens=262144, max_question_tokens=262144)
+        if long_context
+        else DecisionsInputLimits(max_request_tokens=65536, max_question_tokens=32768)
+    )
+
+
+@pytest.mark.parametrize("model", ("Microsoft-Decision-1", "unmapped-decision-deployment"))
+def test_azure_decision_deployments_use_catalog_limits_without_typesafe_modes(
+    local_model_cost_map: None, model: str
+) -> None:
+    catalog_limit: Final = litellm.get_model_info("Microsoft-Decision-1", "azure_ai")["max_input_tokens"]
+    limits: Final = AzureAIDecisionsConfig().get_input_limits(
+        model, "azure_ai", {"TypeSafe-Danger-Zone-Long-Context": "true"}
+    )
+
+    assert limits == DecisionsInputLimits(max_request_tokens=catalog_limit)
 
 
 def _openai_ir(raw: Mapping[str, object]) -> DecisionsIRRequest:
@@ -219,7 +278,7 @@ def test_a_malformed_systemone_response_names_the_field_at_fault(
     assert [item["loc"] for item in error.value.errors()] == [field]
 
 
-def test_each_media_kind_is_gated_by_its_own_support_flag() -> None:
+def test_each_media_kind_is_sent_in_its_own_field() -> None:
     audio: Final = ["data:audio/wav;base64,YQ=="]
     videos: Final = ["data:video/mp4;base64,YQ=="]
     audio_only: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "audio": audio}))
@@ -227,22 +286,16 @@ def test_each_media_kind_is_gated_by_its_own_support_flag() -> None:
         _SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "videos": videos})
     )
 
-    assert ir_to_systemone_request("clef-omni", audio_only, supports_audio=True) == {
+    assert ir_to_systemone_request("clef-omni", audio_only) == {
         "model": "clef-omni",
         **_SYSTEMONE_REQUEST,
         "audio": audio,
     }
-    assert ir_to_systemone_request("clef-omni", video_only, supports_video=True) == {
+    assert ir_to_systemone_request("clef-omni", video_only) == {
         "model": "clef-omni",
         **_SYSTEMONE_REQUEST,
         "videos": videos,
     }
-    assert isinstance(
-        ir_to_systemone_request("clef-omni", audio_only, supports_video=True), UnsupportedDecisionsRequest
-    )
-    assert isinstance(
-        ir_to_systemone_request("clef-omni", video_only, supports_audio=True), UnsupportedDecisionsRequest
-    )
 
 
 _ASSET_REQUEST: Final[Mapping[str, object]] = {

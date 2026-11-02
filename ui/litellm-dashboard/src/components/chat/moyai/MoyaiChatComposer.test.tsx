@@ -9,7 +9,7 @@ function composerProps(overrides: Partial<ComponentProps<typeof MoyaiChatCompose
     onChange: vi.fn(),
     onSubmit: vi.fn(),
     onCancel: vi.fn(),
-    placeholder: "Describe a change, paste an error, or ask a question…",
+    placeholder: "Ask a question, attach a file, or paste something to work on…",
     isLoading: false,
     submitDisabled: false,
     submitLabel: "Send",

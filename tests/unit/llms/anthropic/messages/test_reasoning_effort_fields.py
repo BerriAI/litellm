@@ -14,11 +14,11 @@ from typing import Any, Dict
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    resolve_supported_reasoning_efforts,
+)
 from litellm.llms.anthropic.messages.utils import (
     normalize_reasoning_effort_value,
-)
-from litellm.router_utils.reasoning_effort_capability import (
-    resolve_supported_reasoning_efforts,
 )
 from litellm.utils import get_model_info
 

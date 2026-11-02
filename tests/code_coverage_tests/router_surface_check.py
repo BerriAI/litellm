@@ -38,11 +38,15 @@ ALLOWLIST = os.path.join(os.path.dirname(__file__), "router_surface_allowlist.js
 ROUTER_FILES = {
     "litellm/router.py",
     "litellm/router_api.py",
+    "litellm/router_config.py",
+    "litellm/router_core.py",
+    "litellm/router_python_core.py",
+    "litellm/router_python_host.py",
     "litellm/router_deprecated.py",
     "litellm/router_host.py",
 }
-ROUTER_CLASS_FILES = ["litellm/router.py", "litellm/router_deprecated.py"]
-ROUTER_CLASS_NAMES = {"Router", "DeprecatedRouterMembers"}
+ROUTER_CLASS_FILES = ["litellm/router.py", "litellm/router_python_core.py", "litellm/router_deprecated.py"]
+ROUTER_CLASS_NAMES = {"Router", "PythonCore", "DeprecatedRouterMembers"}
 
 SCAN_ROOTS = ["litellm", "enterprise"]
 SKIP_DIRS = {

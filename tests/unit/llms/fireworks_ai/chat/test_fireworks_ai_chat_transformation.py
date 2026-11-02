@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 from collections.abc import Callable
@@ -535,6 +536,26 @@ def test_tool_search_reply_sent_to_fireworks_drops_litellm_response_fields():
             }
         ],
     }
+
+
+def test_cache_control_is_stripped_from_the_request_but_kept_on_the_callers_messages():
+    hint: Final = {"type": "ephemeral"}
+    messages: Final = [
+        {"role": "system", "content": [{"type": "text", "text": "a long cached prompt", "cache_control": hint}]},
+        {"role": "user", "content": "hi", "cache_control": hint},
+    ]
+    caller_messages_before: Final = json.dumps(messages)
+
+    request: Final = FireworksAIConfig().transform_request(
+        model="accounts/fireworks/models/gpt-oss-120b",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "cache_control" not in json.dumps(request["messages"])
+    assert json.dumps(messages) == caller_messages_before
 
 
 # -----------------------------------------------------------------------------
@@ -2477,3 +2498,43 @@ def test_translate_developer_role_follows_the_deployment_model_info_over_the_cos
     )
 
     assert [message["role"] for message in messages] == expected_roles
+
+
+def test_fireworks_request_rewrites_tools_without_touching_the_callers_tool() -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "create_thing",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"thing": {"$ref": "#/definitions/Thing"}},
+                    "definitions": {"Thing": {"type": "object", "properties": {"id": {"type": "string"}}}},
+                },
+            },
+        }
+    ]
+    tools_before: Final = copy.deepcopy(tools)
+
+    request: Final = FireworksAIConfig().transform_request(
+        model="accounts/fireworks/models/gpt-oss-120b",
+        messages=[{"role": "user", "content": "Make a thing"}],
+        optional_params={"tools": tools},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "create_thing",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"thing": {"type": "object", "properties": {"id": {"type": "string"}}}},
+                },
+            },
+        }
+    ]
+    assert tools == tools_before

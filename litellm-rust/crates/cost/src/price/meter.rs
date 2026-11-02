@@ -1,5 +1,6 @@
 use std::num::NonZeroU64;
 
+/// What a price counts. A variation only one meter has, such as cache TTL or image size, lives inside its variant
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Meter {
     Input(InputUnit),
@@ -51,12 +52,14 @@ pub enum OutputUnit {
     VideoSecond,
 }
 
+/// `Explicit` is a cache the caller created ahead of time, spelled `explicit_cache_read_*`. `Implicit` is every other read
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CacheReadMode {
     Implicit,
     Explicit,
 }
 
+/// How long a cache write lives. `OneHour` and `TwelveHours` are spelled `_above_1hr` and `_above_12hr`
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CacheTtl {
     Default,

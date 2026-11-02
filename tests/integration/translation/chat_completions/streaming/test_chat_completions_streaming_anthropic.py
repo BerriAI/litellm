@@ -152,15 +152,14 @@ def _place_delta(partial_json: str) -> SSEFrame:
     )
 
 
-def _place_chunk(delta: dict[str, JsonValue], *, finish_reason: str | None = None) -> SSEFrame:
-    finish: Final = {} if finish_reason is None else {"finish_reason": finish_reason}
+def _place_chunk(delta: dict[str, JsonValue]) -> SSEFrame:
     return SSEFrame(
         data={
             "id": ANY,
             "object": "chat.completion.chunk",
             "created": ANY,
             "model": "anthropic/claude-haiku-5-5",
-            "choices": [{"index": 0, "delta": delta, **finish}],
+            "choices": [{"index": 0, "delta": delta}],
         }
     )
 
@@ -245,7 +244,19 @@ CLAUDE_HAIKU_5_5_JSON_SCHEMA_CUT_STREAM_TEST_CASE: Final = StreamingTranslationT
         _place_chunk({"content": 'try": "'}),
         _place_chunk({"content": 'France"'}),
         _place_chunk({"content": "}"}),
-        _place_chunk({}, finish_reason="stop"),
+        SSEFrame(
+            data={
+                "error": {
+                    "message": (
+                        "litellm.APIConnectionError: AnthropicException - "
+                        "Stream ended before a finish_reason was received"
+                    ),
+                    "type": "internal_server_error",
+                    "param": None,
+                    "code": "500",
+                }
+            }
+        ),
         SSEFrame(data="[DONE]"),
     ),
     expected_litellm_response={
@@ -257,7 +268,6 @@ CLAUDE_HAIKU_5_5_JSON_SCHEMA_CUT_STREAM_TEST_CASE: Final = StreamingTranslationT
             {
                 "index": 0,
                 "message": {"role": "assistant", "content": '{"city": "Paris", "country": "France"}'},
-                "finish_reason": "stop",
             }
         ],
     },

@@ -354,10 +354,10 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
     ) -> str | None:
         return resolve_openai_bearer_token(api_key=api_key, api_base=api_base, litellm_params=litellm_params)
 
-    def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
+    def supports_audio_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
         return False
 
-    def supports_video_input(self, model: str, custom_llm_provider: str) -> bool:
+    def supports_video_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
         return False
 
     def transform_decisions_request(

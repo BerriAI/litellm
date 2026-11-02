@@ -1,4 +1,5 @@
 import datetime
+import copy
 import logging
 from typing import Final
 import httpx
@@ -16,6 +17,8 @@ from litellm.llms.oci.chat.transformation import (
     OCIRequestWrapper,
     version,
 )
+from litellm.types.llms.oci import OCIChatRequestPayload, OCICompletionPayload
+from litellm.types.llms.openai import AllMessageValues
 
 TEST_MODEL_NAME = "xai.grok-4"
 TEST_MODEL = f"oci/{TEST_MODEL_NAME}"
@@ -2204,4 +2207,75 @@ def test_transform_request_sends_a_pdf_file_part_as_an_image_data_url() -> None:
                 {"type": "IMAGE", "imageUrl": {"url": pdf_data_url}},
             ],
         }
+    ]
+
+
+@pytest.mark.parametrize("model", ["google.gemini-2.5-flash", "oci/google.gemini-2.5-flash"])
+@pytest.mark.parametrize("multipart", [False, True])
+@pytest.mark.parametrize("interleaved", [False, True])
+def test_gemini_preserves_all_system_instructions(model: str, multipart: bool, interleaved: bool) -> None:
+    first: Final = "End every answer with PINEAPPLE."
+    second: Final = "Start every answer with BANANA."
+    conversation: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": "What is 2+2?"},
+        {"role": "assistant", "content": "Four."},
+    ]
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "system", "content": first},
+        *(conversation if interleaved else []),
+        {"role": "system", "content": [{"type": "text", "text": second}] if multipart else second},
+        *(conversation if not interleaved else []),
+        {"role": "user", "content": "Repeat it."},
+    ]
+    original: Final = copy.deepcopy(messages)
+    payload: Final = OCICompletionPayload.model_validate(
+        OCIChatConfig().transform_request(
+            model=model,
+            messages=messages,
+            optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
+            litellm_params={},
+            headers={},
+        )
+    )
+    chat: Final = payload.chatRequest
+    assert isinstance(chat, OCIChatRequestPayload)
+    assert [message.role for message in chat.messages] == ["SYSTEM", "USER", "ASSISTANT", "USER"]
+    assert chat.messages[0].model_dump(exclude_none=True) == {
+        "role": "SYSTEM",
+        "content": (
+            [{"type": "TEXT", "text": first}, {"type": "TEXT", "text": second}]
+            if multipart
+            else [{"type": "TEXT", "text": f"{first}\n\n{second}"}]
+        ),
+    }
+    assert [message.model_dump(exclude_none=True) for message in chat.messages[1:]] == [
+        {"role": "USER", "content": [{"type": "TEXT", "text": "What is 2+2?"}]},
+        {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "Four."}]},
+        {"role": "USER", "content": [{"type": "TEXT", "text": "Repeat it."}]},
+    ]
+    assert messages == original
+
+
+@pytest.mark.parametrize("model", ["xai.grok-4", "meta.llama-4-maverick"])
+def test_other_oci_models_preserve_system_message_positions(model: str) -> None:
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "system", "content": "Agent prompt."},
+        {"role": "user", "content": "Hello."},
+        {"role": "system", "content": "Conversation summary."},
+    ]
+    payload: Final = OCICompletionPayload.model_validate(
+        OCIChatConfig().transform_request(
+            model=model,
+            messages=messages,
+            optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
+            litellm_params={},
+            headers={},
+        )
+    )
+    chat: Final = payload.chatRequest
+    assert isinstance(chat, OCIChatRequestPayload)
+    assert [message.model_dump(exclude_none=True) for message in chat.messages] == [
+        {"role": "SYSTEM", "content": [{"type": "TEXT", "text": "Agent prompt."}]},
+        {"role": "USER", "content": [{"type": "TEXT", "text": "Hello."}]},
+        {"role": "SYSTEM", "content": [{"type": "TEXT", "text": "Conversation summary."}]},
     ]

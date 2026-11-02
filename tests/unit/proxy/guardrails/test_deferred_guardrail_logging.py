@@ -26,19 +26,18 @@ import httpx
 import pytest
 import respx
 
-
 import litellm
 from litellm.caching.caching import DualCache
-from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
-from litellm.types.utils import StandardLoggingPayload
-from litellm.utils import dispatch_success_logging
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import StandardLoggingPayload
+from litellm.utils import dispatch_success_logging
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1520,11 +1519,11 @@ class TestArmDeferredStreamDispatch:
         sniffing the wrapper instead of the inner iterator armed the 1-arg
         native closure against the CSW's 2-arg stored shape and leaked a
         TypeError 500 frame into the stream."""
+        from litellm.litellm_core_utils.add_retry_fallback_headers import (
+            HiddenParamsAsyncIteratorWrapper,
+        )
         from litellm.responses.litellm_completion_transformation.streaming_iterator import (
             LiteLLMCompletionStreamingIterator,
-        )
-        from litellm.router_utils.add_retry_fallback_headers import (
-            HiddenParamsAsyncIteratorWrapper,
         )
 
         logging_obj, recorded = self._dispatch_recording_logging_obj()

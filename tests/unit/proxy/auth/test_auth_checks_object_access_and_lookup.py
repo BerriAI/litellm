@@ -5884,7 +5884,7 @@ async def test_team_member_budget_check_reads_from_spend_counter():
 
 
 class TestGuardrailModificationCheck:
-    """Defense-in-depth: `_guardrail_modification_check` must 403 when the
+    """Defense-in-depth: `guardrail_modification_check` must 403 when the
     caller's metadata attempts to modify any guardrail-related key and the
     team lacks the `modify_guardrails` permission. Checks both the
     historically-covered `guardrails` list and the bypass toggles that
@@ -5892,11 +5892,11 @@ class TestGuardrailModificationCheck:
     """
 
     def _call(self, request_body):
-        from litellm.proxy.auth.auth_checks import _guardrail_modification_check
+        from litellm.proxy.auth.auth_checks import guardrail_modification_check
 
         team_object = MagicMock()
         team_object.metadata = {}  # no permission
-        return _guardrail_modification_check(request_body=request_body, team_object=team_object)
+        return guardrail_modification_check(request_body=request_body, team_object=team_object)
 
     def test_noop_when_no_guardrail_keys_present(self):
         # no-op — should return silently
@@ -11202,9 +11202,47 @@ def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
     assert route_skips_budget_checks(route="/v1/chat/completions") is False
 
 
-def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() -> None:
-    assert request_skips_budget_checks(route="/v1/models", model=None, llm_router=None) is True
-    assert request_skips_budget_checks(route="/v1/chat/completions", model=None, llm_router=None) is False
+@pytest.mark.parametrize(
+    "route, request_body, model, expected",
+    [
+        ("/v1/models", None, None, True),
+        ("/v1/models", None, "paid", True),
+        ("/v1/chat/completions", None, None, False),
+        ("/v1/chat/completions", None, "free", True),
+        ("/v1/chat/completions", None, "paid", False),
+        ("/mcp", {"method": "tools/list"}, "paid", True),
+        ("/mcp", {"method": "tools/call"}, "paid", False),
+        ("/mcp", None, "paid", False),
+        ("/mcp/tools/call", {"method": "initialize"}, "paid", False),
+        ("/health/services", None, "paid", False),
+    ],
+)
+def test_request_skips_budget_checks_for_non_spending_requests(
+    route: str, request_body: Mapping[str, object] | None, model: str | None, expected: bool
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "free",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                },
+            },
+            {
+                "model_name": "paid",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "input_cost_per_token": 1,
+                    "output_cost_per_token": 1,
+                },
+            },
+        ]
+    )
+    assert (
+        request_skips_budget_checks(route=route, model=model, llm_router=router, request_body=request_body) is expected
+    )
 
 
 def _agent_model_ceiling_resolver(

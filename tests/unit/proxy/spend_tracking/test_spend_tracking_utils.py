@@ -2396,6 +2396,65 @@ def test_get_logging_payload_includes_overhead_in_spend_logs_metadata():
 
 @patch("litellm.proxy.proxy_server.master_key", None)
 @patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_carries_upstream_provider_from_hidden_params_regression() -> None:
+    standard_logging_payload: Final = _make_standard_logging_payload_with_usage_object(usage_object={})
+    payload_with_provider: Final = {
+        **dict(standard_logging_payload),
+        "hidden_params": {
+            **dict(standard_logging_payload["hidden_params"]),
+            "upstream_provider": "serving-site-a",
+        },
+    }
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-5.6",
+            "call_type": "responses",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": payload_with_provider,
+        },
+        response_obj={
+            "id": "resp-test",
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 10,
+                "total_tokens": 1010,
+            },
+        },
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=timezone.utc),
+        end_time=datetime.datetime(2025, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+    )
+
+    assert json.loads(payload["metadata"]).get("upstream_provider") == "serving-site-a"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_omits_upstream_provider_when_hidden_param_absent_guard() -> None:
+    standard_logging_payload: Final = _make_standard_logging_payload_with_usage_object(usage_object={})
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-5.6",
+            "call_type": "responses",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": standard_logging_payload,
+        },
+        response_obj={
+            "id": "resp-test",
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 10,
+                "total_tokens": 1010,
+            },
+        },
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=timezone.utc),
+        end_time=datetime.datetime(2025, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+    )
+
+    assert "upstream_provider" not in json.loads(payload["metadata"])
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
 def test_get_logging_payload_strips_null_bytes_from_request_tags():
     """Regression for PostgreSQL 22P05: NUL bytes must be stripped from request_tags."""
     kwargs = {
@@ -6911,7 +6970,10 @@ def test_spend_logs_payload(model_id: str | None):
     )
 
     assert len(payload["request_id"]) > 0
-    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {"is_silent_experiment"}
+    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {
+        "is_silent_experiment",
+        "upstream_provider",
+    }
 
     assert "metadata" in payload
     assert isinstance(payload["metadata"], str)
@@ -7481,3 +7543,47 @@ def test_get_logging_payload_stores_end_user_only_while_end_user_cost_tracking_i
         end_time=datetime.datetime.now(timezone.utc),
     )
     assert payload["end_user"] == expected_end_user
+
+
+@pytest.mark.parametrize("tool_metadata", [{"name": "tool"}, {"name": "tool", "arguments": "invalid"}])
+def test_optional_mcp_metadata_does_not_change_legacy_spend_payload(tool_metadata: Mapping[str, object]) -> None:
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    kwargs: Final = {
+        "call_type": "call_mcp_tool",
+        "litellm_call_id": "tool-call",
+        "litellm_params": {},
+        "litellm_trace_id": "fixed-trace",
+        "response_cost": 0.5,
+    }
+    response: Final = {"id": "tool-call"}
+    expected: Final = spend_tracking_utils.get_logging_payload(kwargs, response, now, now)
+    actual: Final = spend_tracking_utils.get_logging_payload(
+        {**kwargs, "mcp_tool_call_metadata": tool_metadata}, response, now, now
+    )
+    assert actual == expected
+
+
+@pytest.mark.parametrize("capture_enabled", [False, True])
+@pytest.mark.parametrize("completion_start", [None, "absent", "reported"])
+def test_spend_payload_preserves_unknown_completion_start(capture_enabled: bool, completion_start: str | None) -> None:
+    start: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end: Final = start + datetime.timedelta(seconds=2)
+    reported: Final = start + datetime.timedelta(seconds=1)
+    observations: Final[list[object]] = []
+    kwargs: Final = {
+        "call_type": "acompletion",
+        "litellm_call_id": "timestamp-call",
+        "litellm_params": {},
+        **({} if completion_start == "absent" else {"completion_start_time": reported if completion_start else None}),
+    }
+    payload: Final = spend_tracking_utils.get_logging_payload(
+        kwargs,
+        {"id": "timestamp-response"},
+        start,
+        end,
+        capture_usage=(lambda row, usage: observations.append(row)) if capture_enabled else None,
+    )
+    assert payload["completionStartTime"] == (
+        end if completion_start == "absent" else reported if completion_start else None
+    )
+    assert observations == ([payload] if capture_enabled else [])

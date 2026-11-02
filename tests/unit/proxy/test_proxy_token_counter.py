@@ -180,6 +180,39 @@ async def test_token_counting_model_not_in_model_list():
 
 
 @pytest.mark.asyncio
+async def test_asking_the_provider_endpoint_leaves_an_openrouter_deployments_count_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "or-gpt",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o",
+                        "custom_llm_provider": "openrouter",
+                        "api_key": "sk-or-token-count",
+                    },
+                }
+            ]
+        ),
+    )
+    request: Final = TokenCountRequest(
+        model="or-gpt", messages=[{"role": "user", "content": "Count these tokens, ünïcödé 你好 🙂"}]
+    )
+
+    via_provider_endpoint: Final = await token_counter(request=request, call_endpoint=True)
+    counted_locally: Final = await token_counter(request=request, call_endpoint=False)
+
+    assert (via_provider_endpoint.total_tokens, via_provider_endpoint.model_used) == (
+        counted_locally.total_tokens,
+        counted_locally.model_used,
+    )
+
+
+@pytest.mark.asyncio
 async def test_gpt_token_counting():
     """
     Test Token counter

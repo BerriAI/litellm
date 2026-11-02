@@ -40,6 +40,7 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_event, phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias, resolve_served_model
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
@@ -79,7 +80,6 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     get_team_object,
     get_user_object,
     get_user_role,
-    is_mcp_discovery_request,
     is_model_cost_zero,
     is_user_proxy_admin,
     is_valid_fallback_model,
@@ -87,6 +87,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     key_access_group_grants_model,
     key_model_aliases_for_auth_check,
     model_max_budget_of,
+    request_skips_budget_checks,
     resolve_and_validate_end_user_id,
     resolve_default_end_user_budget,
     route_skips_budget_checks,
@@ -182,13 +183,7 @@ from litellm.proxy.utils import (
 from litellm.repositories.table_repositories import JWTKeyMappingRepository, TeamMembershipRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
-from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
-from litellm.router_utils.fallback_event_handlers import (
-    PROVIDER_SCOPED_RESOURCE_KEYS,
-    fallback_lookup_groups,
-    fallbacks_disabled_for_request,
-    get_fallback_model_group_for_lookup_groups,
-)
+from litellm.router_api import fallbacks_disabled, references_provider_scoped_resource, request_fallback_chain
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
@@ -811,11 +806,7 @@ async def _check_team_member_model_budget_for_model(
             model=model_name,
         )
     except litellm.BudgetExceededError:
-        if (
-            request_data.get("model") != model_name
-            or llm_router is None
-            or fallbacks_disabled_for_request(kwargs=request_data)
-        ):
+        if request_data.get("model") != model_name or llm_router is None or fallbacks_disabled(request_data):
             raise
         fallback_succeeded: Final = await _try_team_member_model_budget_fallback(
             user_id=user_id,
@@ -857,9 +848,9 @@ async def _try_team_member_model_budget_fallback(
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
 ) -> bool:
-    if request.headers.get("content-type", "").lower().startswith("multipart/form-data") or any(
-        request_data.get(key) for key in PROVIDER_SCOPED_RESOURCE_KEYS
-    ):
+    if request.headers.get("content-type", "").lower().startswith(
+        "multipart/form-data"
+    ) or references_provider_scoped_resource(request_data):
         return False
 
     from litellm.proxy import proxy_server
@@ -896,10 +887,7 @@ async def _try_team_member_model_budget_fallback(
     if router_fallbacks is None:
         return False
 
-    fallback_models, _ = get_fallback_model_group_for_lookup_groups(
-        fallbacks=list(router_fallbacks),
-        lookup_groups=fallback_lookup_groups(kwargs=request_data, model_group=model_name),
-    )
+    fallback_models, _ = request_fallback_chain(list(router_fallbacks), request_data, model_name)
     fallback_targets: Final[Sequence[object]] = fallback_models or ()
     fallback_candidates: Final[tuple[str, ...]] = tuple(
         model for target in fallback_targets if (model := _budget_fallback_target_model(target)) is not None
@@ -2509,15 +2497,9 @@ async def user_api_key_auth_builder(
                             llm_router=llm_router,
                             team_id=valid_token.team_id,
                         )
-                        skip_budget_checks = is_mcp_discovery_request(route=route, request_body=request_data)
-                        if not skip_budget_checks and model is not None and llm_router is not None:
-                            from litellm.proxy.auth.auth_checks import is_model_cost_zero
-
-                            skip_budget_checks = (  # rebind-ok: pre-existing rebinding on a rename-only line
-                                is_model_cost_zero(model=model, llm_router=llm_router)
-                            )
-                            if skip_budget_checks:
-                                verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
+                        skip_budget_checks = request_skips_budget_checks(
+                            route=route, model=model, llm_router=llm_router, request_body=request_data
+                        )
 
                         # Fetch project object for JWT path if project_id is set
                         _jwt_project_obj = None
@@ -3031,15 +3013,9 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             llm_router=llm_router,
             team_id=valid_token.team_id,
         )
-        skip_budget_checks = is_mcp_discovery_request(route=route, request_body=request_data)
-        if not skip_budget_checks and model is not None and llm_router is not None:
-            from litellm.proxy.auth.auth_checks import is_model_cost_zero
-
-            skip_budget_checks = is_model_cost_zero(  # rebind-ok: pre-existing rebinding on a rename-only line
-                model=model, llm_router=llm_router
-            )
-            if skip_budget_checks:
-                verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
+        skip_budget_checks: Final = request_skips_budget_checks(
+            route=route, model=model, llm_router=llm_router, request_body=request_data
+        )
 
         # Check 3. Check if user is in their team budget
         if not skip_budget_checks and valid_token.team_member_spend is not None:
@@ -4100,11 +4076,7 @@ def _should_skip_budget_checks(
         llm_router=llm_router,
         team_id=team_id,
     )
-    if is_mcp_discovery_request(route=route, request_body=request_data):
-        return True
-    if model is not None and llm_router is not None:
-        return is_model_cost_zero(model=model, llm_router=llm_router)
-    return False
+    return request_skips_budget_checks(route=route, model=model, llm_router=llm_router, request_body=request_data)
 
 
 def _resolve_request_principal(request: Request, valid_token: UserAPIKeyAuth) -> Principal:

@@ -1,5 +1,6 @@
+from dataclasses import dataclass
 from enum import Enum
-from typing import Final
+from typing import Final, Protocol
 
 from pydantic import Field
 from typing_extensions import TypedDict
@@ -73,6 +74,19 @@ class PassthroughStandardLoggingPayload(TypedDict, total=False):
 
     Optional field, we use this for cost tracking only if it's set.
     """
+
+
+@dataclass(frozen=True, slots=True)
+class WebSocketSessionUsage:
+    model: str
+    custom_llm_provider: str
+    response_cost: float | None
+
+
+class WebSocketSessionMeter(Protocol):
+    def measure(self, client_text: str) -> int: ...
+
+    def price(self, total: int) -> WebSocketSessionUsage: ...
 
 
 class PassThroughGuardrailSettings(LiteLLMPydanticObjectBase):

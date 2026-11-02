@@ -14,8 +14,7 @@ from litellm import verbose_logger
 from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
-
-HEALTH_CHECKS_TARGET: Final = "health_checks"
+from litellm.constants import HEALTH_CHECKS_TARGET
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span

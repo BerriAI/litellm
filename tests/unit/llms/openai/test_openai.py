@@ -24,6 +24,7 @@ from litellm.llms.openai.openai import (
     AsyncAssistantEventHandler,
     AsyncCursorPage,
     MessageData,
+    OpenAIBatchesAPI,
     OpenAIChatCompletion,
     OpenAIConfig,
     OpenAIMessage as Message,
@@ -2320,3 +2321,43 @@ def test_openai_config_hoists_a_later_developer_message_only_for_a_model_off_ope
         model_info=None,
     )
     assert [message["role"] for message in messages] == expected_roles
+
+
+@pytest.mark.asyncio
+async def test_sync_batch_list_given_an_async_client_returns_a_page_the_caller_can_await(
+    http_backend: ModuleType,
+):
+    def respond(request: _Request) -> httpx.Response | SDKResponse:
+        assert str(request.url).startswith("http://vllm-router.test/v1/batches")
+        return http_backend.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {
+                        "id": "batch_5f8dac",
+                        "status": "pending",
+                        "input_file_id": "file-b73f4c",
+                        "created_at": 1793239207,
+                        "endpoint": "/v1/chat/completions",
+                        "completion_window": "24h",
+                    }
+                ],
+                "first_id": "batch_5f8dac",
+                "last_id": "batch_5f8dac",
+                "has_more": False,
+            },
+        )
+
+    async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
+        page: Final = OpenAIBatchesAPI().list_batches(
+            _is_async=False,
+            api_key="sk-test",
+            api_base="http://vllm-router.test/v1",
+            timeout=5.0,
+            max_retries=0,
+            organization=None,
+            client=AsyncOpenAI(api_key="sk-test", base_url="http://vllm-router.test/v1", http_client=http_client),
+        )
+
+        assert [(batch.id, batch.status) for batch in (await page).data] == [("batch_5f8dac", "pending")]

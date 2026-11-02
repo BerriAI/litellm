@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { CircleAlert, Inbox } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { resolvePoliciesCall, teamListCall, keyListCall, modelAvailableCall } from "@/components/networking";
@@ -70,28 +71,32 @@ interface ContextComboboxProps {
   options: string[];
 }
 
-const ContextCombobox: React.FC<ContextComboboxProps> = ({ id, value, onChange, placeholder, options }) => (
-  <Combobox
-    items={options}
-    value={value ?? null}
-    onValueChange={(next: string | null) => onChange(next ?? undefined)}
-    filter={includesQuery}
-  >
-    <ComboboxInput id={id} placeholder={placeholder} className="w-full" showClear={Boolean(value)} />
-    <ComboboxContent>
-      <ComboboxEmpty>No options found</ComboboxEmpty>
-      <ComboboxList>
-        {(item: string) => (
-          <ComboboxItem key={item} value={item} title={item}>
-            {item}
-          </ComboboxItem>
-        )}
-      </ComboboxList>
-    </ComboboxContent>
-  </Combobox>
-);
+const ContextCombobox: React.FC<ContextComboboxProps> = ({ id, value, onChange, placeholder, options }) => {
+  const { t } = useTranslation();
+  return (
+    <Combobox
+      items={options}
+      value={value ?? null}
+      onValueChange={(next: string | null) => onChange(next ?? undefined)}
+      filter={includesQuery}
+    >
+      <ComboboxInput id={id} placeholder={placeholder} className="w-full" showClear={Boolean(value)} />
+      <ComboboxContent>
+        <ComboboxEmpty>{t("policies.testPanel.noOptions")}</ComboboxEmpty>
+        <ComboboxList>
+          {(item: string) => (
+            <ComboboxItem key={item} value={item} title={item}>
+              {item}
+            </ComboboxItem>
+          )}
+        </ComboboxList>
+      </ComboboxContent>
+    </Combobox>
+  );
+};
 
 const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
+  const { t } = useTranslation();
   const form = useForm<PolicyTestFormValues>({ defaultValues: EMPTY_VALUES });
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<ResolveResult | null>(null);
@@ -162,56 +167,53 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
     <div>
       <div className="bg-card border border-border rounded-lg p-6 mb-6">
         <div className="mb-5">
-          <h3 className="text-base font-semibold mb-1">Policy Simulator</h3>
-          <span className="text-muted-foreground">
-            Simulate a request to see which policies and guardrails would apply. Select a team, key, model, or tags
-            below and click &quot;Simulate&quot; to see the results.
-          </span>
+          <h3 className="text-base font-semibold mb-1">{t("policies.testPanel.title")}</h3>
+          <span className="text-muted-foreground">{t("policies.testPanel.description")}</span>
         </div>
 
         <form onSubmit={(event) => event.preventDefault()} noValidate>
           <FieldGroup className="grid grid-cols-2 gap-4">
-            <FormField control={form.control} name="team_alias" label="Team Alias">
+            <FormField control={form.control} name="team_alias" label={t("policies.testPanel.fields.team")}>
               {({ id, value, onChange }) => (
                 <ContextCombobox
                   id={id}
                   value={value}
                   onChange={onChange}
-                  placeholder="Select or type a team alias"
+                  placeholder={t("policies.testPanel.fields.teamPlaceholder")}
                   options={availableTeams}
                 />
               )}
             </FormField>
-            <FormField control={form.control} name="key_alias" label="Key Alias">
+            <FormField control={form.control} name="key_alias" label={t("policies.testPanel.fields.key")}>
               {({ id, value, onChange }) => (
                 <ContextCombobox
                   id={id}
                   value={value}
                   onChange={onChange}
-                  placeholder="Select or type a key alias"
+                  placeholder={t("policies.testPanel.fields.keyPlaceholder")}
                   options={availableKeys}
                 />
               )}
             </FormField>
-            <FormField control={form.control} name="model" label="Model">
+            <FormField control={form.control} name="model" label={t("policies.testPanel.fields.model")}>
               {({ id, value, onChange }) => (
                 <ContextCombobox
                   id={id}
                   value={value}
                   onChange={onChange}
-                  placeholder="Select or type a model"
+                  placeholder={t("policies.testPanel.fields.modelPlaceholder")}
                   options={availableModels}
                 />
               )}
             </FormField>
-            <FormField control={form.control} name="tags" label="Tags">
+            <FormField control={form.control} name="tags" label={t("policies.testPanel.fields.tags")}>
               {({ id, value, onChange, onBlur }) => (
                 <TokenSelect
                   id={id}
                   value={value}
                   onValueChange={onChange}
                   onBlur={onBlur}
-                  placeholder="Type a tag and press Enter"
+                  placeholder={t("policies.testPanel.fields.tagsPlaceholder")}
                   allowCustomValues
                   tokenSeparators={[",", " "]}
                 />
@@ -221,10 +223,10 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
           <div className="flex space-x-2 mt-4">
             <Button type="button" onClick={handleTest} disabled={isLoading || !accessToken} aria-busy={isLoading}>
               {isLoading && <UiLoadingSpinner className="size-4" />}
-              Simulate
+              {t("policies.testPanel.simulate")}
             </Button>
             <Button type="button" variant="secondary" onClick={handleReset}>
-              Reset
+              {t("policies.testPanel.reset")}
             </Button>
           </div>
         </form>
@@ -248,11 +250,8 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
               />
             </svg>
           </div>
-          <p className="text-sm font-medium text-foreground mb-1">No simulation run yet</p>
-          <p className="text-xs text-muted-foreground">
-            Fill in one or more fields above and click &quot;Simulate&quot; to see which policies and guardrails would
-            apply to that request.
-          </p>
+          <p className="text-sm font-medium text-foreground mb-1">{t("policies.testPanel.empty.title")}</p>
+          <p className="text-xs text-muted-foreground">{t("policies.testPanel.empty.description")}</p>
         </div>
       )}
 
@@ -261,12 +260,12 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
           {result.matched_policies.length === 0 ? (
             <div className="py-6 text-center">
               <Inbox className="mx-auto mb-2 size-8 text-muted-foreground" aria-hidden="true" />
-              <p className="text-sm text-muted-foreground">No policies matched this context</p>
+              <p className="text-sm text-muted-foreground">{t("policies.testPanel.noMatch")}</p>
             </div>
           ) : (
             <>
               <div className="mb-4">
-                <p className="text-sm font-semibold mb-2">Effective Guardrails</p>
+                <p className="text-sm font-semibold mb-2">{t("policies.testPanel.effectiveGuardrails")}</p>
                 <div className="flex flex-wrap gap-1">
                   {result.effective_guardrails.length > 0 ? (
                     result.effective_guardrails.map((g) => (
@@ -275,19 +274,19 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
                       </Badge>
                     ))
                   ) : (
-                    <span className="text-muted-foreground text-sm">None</span>
+                    <span className="text-muted-foreground text-sm">{t("policies.testPanel.none")}</span>
                   )}
                 </div>
               </div>
 
               <div>
-                <p className="text-sm font-semibold mb-2">Matched Policies</p>
+                <p className="text-sm font-semibold mb-2">{t("policies.testPanel.matchedPolicies")}</p>
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border">
-                      <th className="text-left py-2 pr-4">Policy</th>
-                      <th className="text-left py-2 pr-4">Matched Via</th>
-                      <th className="text-left py-2">Guardrails Added</th>
+                      <th className="text-left py-2 pr-4">{t("policies.testPanel.columns.policy")}</th>
+                      <th className="text-left py-2 pr-4">{t("policies.testPanel.columns.matchedVia")}</th>
+                      <th className="text-left py-2">{t("policies.testPanel.columns.guardrailsAdded")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -307,7 +306,7 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
                               ))}
                             </div>
                           ) : (
-                            <span className="text-muted-foreground">None</span>
+                            <span className="text-muted-foreground">{t("policies.testPanel.none")}</span>
                           )}
                         </td>
                       </tr>
@@ -323,8 +322,8 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
       {hasSearched && !result && !isLoading && (
         <Alert variant="error">
           <CircleAlert />
-          <AlertTitle>Error</AlertTitle>
-          <AlertDescription>Failed to resolve policies. Check the proxy logs.</AlertDescription>
+          <AlertTitle>{t("policies.testPanel.error.title")}</AlertTitle>
+          <AlertDescription>{t("policies.testPanel.error.description")}</AlertDescription>
         </Alert>
       )}
     </div>

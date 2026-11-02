@@ -21,7 +21,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import CLAUDE_CODE_CLIENT, CLAUDE_CODE_PICKER_PATTERN, GATEWAY_CLIENT_HEADER
-from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 
 if TYPE_CHECKING:
     from litellm.router import Router

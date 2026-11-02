@@ -265,6 +265,7 @@ class TestMapFinishReasonAnthropic:
             ("max_tokens", "length"),
             ("tool_use", "tool_calls"),
             ("compaction", "length"),
+            ("pause_turn", "length"),
             ("model_context_window_exceeded", "length"),
             ("content_filtered", "content_filter"),
         ],
@@ -317,6 +318,12 @@ class TestMapFinishReasonCohere:
 
     def test_error(self):
         assert map_finish_reason("ERROR") == "stop"
+
+    def test_tool_call(self):
+        assert map_finish_reason("TOOL_CALL") == "tool_calls"
+
+    def test_stop_sequence(self):
+        assert map_finish_reason("STOP_SEQUENCE") == "stop"
 
 
 class TestMapFinishReasonHuggingFace:

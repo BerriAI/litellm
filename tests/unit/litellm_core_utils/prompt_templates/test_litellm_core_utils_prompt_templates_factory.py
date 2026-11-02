@@ -5383,8 +5383,9 @@ def test_convert_gemini_tool_call_result_answers_tool_reference_only_result():
 def test_convert_to_anthropic_tool_invoke_degrades_unpaired_server_tool_use():
     """A replayed srvtoolu_ call whose server tool result is not available
     (e.g. the Responses bridge replays items without provider_specific_fields)
-    must become a plain client tool_use so the client's tool_result can pair
-    with it. A dangling server_tool_use makes Anthropic 400 the request with
+    and that the client answered with its own tool message must become a plain
+    client tool_use so the client's tool_result can pair with it. A dangling
+    server_tool_use makes Anthropic 400 the request with
     "unexpected `tool_use_id` found in `tool_result` blocks"."""
     from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_invoke
 
@@ -5398,6 +5399,7 @@ def test_convert_to_anthropic_tool_invoke_degrades_unpaired_server_tool_use():
         ],
         web_search_results=None,
         tool_results=None,
+        answered_tool_ids=frozenset({"srvtoolu_01Unpaired"}),
     )
 
     assert result == [
@@ -7435,17 +7437,11 @@ def test_convert_to_anthropic_tool_invoke_sanitizes_invalid_ids():
 
 def test_convert_to_anthropic_tool_invoke_server_tool():
     """
-    Test that a server tool call (srvtoolu_) with no stored result is replayed
-    as a regular tool_use block.
-
-    A server_tool_use block is only valid when paired with its result block, so
-    an unpaired one must degrade to tool_use for Anthropic to accept the replay.
-    A paired call still becomes server_tool_use, covered by
-    test_convert_to_anthropic_tool_invoke_with_web_search_results.
-
-    Context: https://github.com/BerriAI/litellm/issues/17737 (original
-    server_tool_use reconstruction) and LIT-6622 / PR #39144 (unpaired calls
-    degrade instead of 400ing at Anthropic).
+    A server tool call (srvtoolu_) with no stored result and no client answer is
+    the unrun call a pause_turn response ends on, so it is replayed as a
+    server_tool_use for Anthropic to run when the client resends the turn.
+    An answered one degrades to tool_use, covered by
+    test_convert_to_anthropic_tool_invoke_degrades_unpaired_server_tool_use.
     """
     tool_calls = [
         {
@@ -7460,11 +7456,14 @@ def test_convert_to_anthropic_tool_invoke_server_tool():
 
     result = convert_to_anthropic_tool_invoke(tool_calls)
 
-    assert len(result) == 1
-    assert result[0]["type"] == "tool_use"
-    assert result[0]["id"] == "srvtoolu_01ABC123"
-    assert result[0]["name"] == "web_search"
-    assert result[0]["input"] == {"query": "elephant weight"}
+    assert result == [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_01ABC123",
+            "name": "web_search",
+            "input": {"query": "elephant weight"},
+        }
+    ]
 
 
 def test_convert_to_anthropic_tool_invoke_with_web_search_results():
@@ -8229,6 +8228,170 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
         "thinking",
         "text",
     ], f"Expected order but got: {types}"
+
+
+
+def _paused_web_search_turn(
+    thinking_blocks: list[dict[str, str]] | None, content: str | list[dict[str, str]] = "Step 1 is Tokyo."
+) -> dict[str, object]:
+    assistant_message: Final[dict[str, object]] = {
+        "role": "assistant",
+        "content": content,
+        "tool_calls": [
+            {
+                "id": "srvtoolu_01Done",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "Tokyo sister cities"}'},
+            },
+            {
+                "id": "srvtoolu_02Done",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "Adana sister cities"}'},
+            },
+            {
+                "id": "srvtoolu_01Paused",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "Adelaide sister cities"}'},
+            },
+        ],
+        "provider_specific_fields": {
+            "stop_reason": "pause_turn",
+            "web_search_results": [
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": [
+                        {"type": "web_search_result", "url": "https://example.com", "title": "City", "snippet": "x"}
+                    ],
+                }
+                for tool_use_id in ("srvtoolu_01Done", "srvtoolu_02Done")
+            ],
+        },
+    }
+    if thinking_blocks is None:
+        return assistant_message
+    return {**assistant_message, "thinking_blocks": thinking_blocks}
+
+
+_PAUSED_TURN_THINKING_CASES = pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        None,
+        [{"type": "thinking", "thinking": "Search first", "signature": "sig_1"}],
+        [
+            {"type": "thinking", "thinking": "Search first", "signature": "sig_1"},
+            {"type": "thinking", "thinking": "Search again", "signature": "sig_2"},
+            {"type": "thinking", "thinking": "Search once more", "signature": "sig_3"},
+            {"type": "thinking", "thinking": "Wrap up later", "signature": "sig_4"},
+        ],
+    ],
+    ids=["without_thinking", "fewer_thinking_than_searches", "more_thinking_than_searches"],
+)
+
+_PAUSED_TURN_CONTENT_CASES = pytest.mark.parametrize(
+    "content",
+    [
+        "Step 1 is Tokyo.",
+        [{"type": "text", "text": "Step 1 is Tokyo."}],
+        [
+            {"type": "thinking", "thinking": "Search first", "signature": "sig_1"},
+            {"type": "text", "text": "Step 1 is Tokyo."},
+        ],
+    ],
+    ids=["string_content", "text_parts", "text_parts_with_inline_thinking"],
+)
+
+
+@_PAUSED_TURN_THINKING_CASES
+@_PAUSED_TURN_CONTENT_CASES
+def test_anthropic_messages_pt_paused_turn_ends_on_unrun_server_tool_use(thinking_blocks, content):
+    """A pause_turn response resent as-is must end on its unrun server_tool_use:
+    Anthropic reads a turn ending on text as prefill, which newer models reject,
+    and a tool_use without a tool_result is a 400. Its thinking blocks are dropped,
+    since chat cannot say where Claude wrote them and Anthropic rejects moved ones."""
+    result = anthropic_messages_pt(
+        [
+            {"role": "user", "content": "Play the sister city chain game."},
+            _paused_web_search_turn(thinking_blocks, content),
+        ],
+        model="claude-sonnet-4-5",
+        llm_provider="anthropic",
+    )
+
+    replayed = result[-1]["content"]
+    assert replayed[-1] == {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Paused",
+        "name": "web_search",
+        "input": {"query": "Adelaide sister cities"},
+    }
+    assert [block["id"] for block in replayed if block["type"] == "server_tool_use"] == [
+        "srvtoolu_01Done",
+        "srvtoolu_02Done",
+        "srvtoolu_01Paused",
+    ]
+    assert [block["type"] for block in replayed if block["type"] in ("tool_use", "thinking")] == []
+    assert [block.get("tool_use_id") for block in replayed if block["type"] == "web_search_tool_result"] == [
+        "srvtoolu_01Done",
+        "srvtoolu_02Done",
+    ]
+
+
+@_PAUSED_TURN_THINKING_CASES
+@_PAUSED_TURN_CONTENT_CASES
+def test_anthropic_messages_pt_paused_turn_before_new_user_message_drops_unrun_search(thinking_blocks, content):
+    """A client may answer a paused turn with a new user message instead of resending it.
+    Anthropic then rejects a server_tool_use without its result, so the unrun search is dropped."""
+    result = anthropic_messages_pt(
+        [
+            {"role": "user", "content": "Play the sister city chain game."},
+            _paused_web_search_turn(thinking_blocks, content),
+            {"role": "user", "content": "Please continue."},
+        ],
+        model="claude-sonnet-4-5",
+        llm_provider="anthropic",
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    replayed = result[1]["content"]
+    assert [block["id"] for block in replayed if block["type"] == "server_tool_use"] == [
+        "srvtoolu_01Done",
+        "srvtoolu_02Done",
+    ]
+    assert [block["type"] for block in replayed if block["type"] in ("tool_use", "thinking")] == []
+    assert [block.get("tool_use_id") for block in replayed if block["type"] == "web_search_tool_result"] == [
+        "srvtoolu_01Done",
+        "srvtoolu_02Done",
+    ]
+    assert {"type": "text", "text": "Step 1 is Tokyo."} in replayed
+
+
+@_PAUSED_TURN_THINKING_CASES
+@_PAUSED_TURN_CONTENT_CASES
+def test_anthropic_messages_pt_paused_turn_resent_without_search_results_runs_only_its_last_search(
+    thinking_blocks, content
+):
+    paused_turn = _paused_web_search_turn(thinking_blocks, content)
+    result = anthropic_messages_pt(
+        [
+            {"role": "user", "content": "Play the sister city chain game."},
+            {key: value for key, value in paused_turn.items() if key != "provider_specific_fields"},
+        ],
+        model="claude-sonnet-4-5",
+        llm_provider="anthropic",
+    )
+
+    replayed = result[-1]["content"]
+    assert [block["id"] for block in replayed if block["type"] in ("server_tool_use", "tool_use")] == [
+        "srvtoolu_01Paused"
+    ]
+    assert replayed[-1] == {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Paused",
+        "name": "web_search",
+        "input": {"query": "Adelaide sister cities"},
+    }
+    assert [block["type"] for block in replayed if block["type"] == "thinking"] == []
 
 
 def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():

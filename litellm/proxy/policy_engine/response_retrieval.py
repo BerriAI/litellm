@@ -7,6 +7,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
     add_policy_sources_to_metadata,
@@ -18,7 +19,6 @@ from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.proxy.policy_engine import PolicyMatchContext
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
 

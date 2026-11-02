@@ -25,15 +25,15 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_litellm_internal_message_fields,
     strip_none_values_from_message,
 )
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    declared_reasoning_efforts_for_model,
+    nearest_declared_reasoning_effort,
+)
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
-)
-from litellm.router_utils.reasoning_effort_capability import (
-    declared_reasoning_efforts_for_model,
-    nearest_declared_reasoning_effort,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import (
@@ -755,7 +755,8 @@ class MistralConfig(OpenAIGPTConfig):
         if _name is not None:
             # Remove name if not a tool message
             if message["role"] != "tool" or isinstance(_name, str) and len(_name.strip()) == 0:
-                message.pop("name", None)
+                message_without_name: Final = {k: v for k, v in message.items() if k != "name"}
+                return cast(AllMessageValues, message_without_name)  # cast-ok: the same message minus name
 
         return message
 

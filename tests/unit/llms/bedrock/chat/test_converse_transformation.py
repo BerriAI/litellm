@@ -11259,3 +11259,86 @@ def test_converse_sends_only_the_header_betas_when_header_and_body_both_carry_be
         "thinking-binding-controls-2026-08-01",
         "thinking-display-updates-2026-08-18",
     ]
+
+
+def _five_cache_hint_conversation() -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": [{"type": "text", "text": "system prompt", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "user", "content": [{"type": "text", "text": "turn 1", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "answer 1", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "user", "content": [{"type": "text", "text": "turn 2", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "assistant", "content": "answer 2"},
+        {"role": "user", "content": [{"type": "text", "text": "turn 3", "cache_control": {"type": "ephemeral"}}]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected_system_cache_points"),
+    [(True, 0), ("true", 0), (False, 1)],
+    ids=[
+        "drop_params_drops_the_oldest_hint",
+        "string_drop_params_drops_the_oldest_hint",
+        "without_drop_params_all_five_pass_through",
+    ],
+)
+def test_converse_claude_request_over_the_cache_control_cap_drops_the_oldest_hints_only_under_drop_params(
+    drop_params: bool | str, expected_system_cache_points: int, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = _five_cache_hint_conversation()
+    messages_before: Final = copy.deepcopy(messages)
+
+    request: Final = AmazonConverseConfig().transform_request(
+        model="anthropic.claude-haiku-5-5",
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
+
+    assert len(list(_cache_points(request["system"]))) == expected_system_cache_points
+    assert [len(list(_cache_points(message))) for message in request["messages"]] == [1, 1, 1, 0, 1]
+    assert messages == messages_before
+
+
+def test_converse_claude_tool_message_with_several_marked_blocks_counts_as_one_cache_point_against_the_cap(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "policy", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "question", "cache_control": {"type": "ephemeral"}},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [
+                {"type": "text", "text": "part 1", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "part 2", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "part 3", "cache_control": {"type": "ephemeral"}},
+            ],
+        },
+    ]
+    messages_before: Final = copy.deepcopy(messages)
+
+    request: Final = AmazonConverseConfig().transform_request(
+        model="anthropic.claude-haiku-5-5",
+        messages=messages,
+        optional_params={
+            "tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
+        },
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert len(list(_cache_points(request["messages"]))) == 3
+    assert messages == messages_before
