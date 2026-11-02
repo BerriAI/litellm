@@ -1,6 +1,10 @@
+import asyncio
+import signal
+import socket
 import sys
 from pathlib import Path
 from typing import Final
+from unittest.mock import MagicMock, Mock, call, patch
 
 import pytest
 from click.testing import CliRunner
@@ -13,6 +17,7 @@ from litellm.proxy.rust_gateway import (
     inherited_fd,
     metrics_host,
     startup_error,
+    supervise,
 )
 
 
@@ -80,3 +85,94 @@ def test_inherited_socket_reaches_uvicorn(fd: str | None, monkeypatch: pytest.Mo
     options: Final = ProxyInitializationHelpers.get_default_unvicorn_init_args("127.0.0.1", 45555)
     assert inherited_fd() == expected
     assert options.get("fd") == expected
+
+
+@pytest.mark.parametrize(
+    ("event", "python_exit", "rust_exit", "expected"),
+    [
+        ("signal", 0, 0, 0),
+        ("signal", 1, 0, 1),
+        ("signal", 0, 1, 1),
+        ("python-exit", 0, 0, 1),
+        ("rust-exit", 0, 0, 1),
+        ("python-during-drain", 1, 0, 1),
+        ("spawn-error", 0, 0, 1),
+    ],
+)
+def test_supervisor_drains_before_stopping_python_and_reaps_both_children(
+    event: str, python_exit: int, rust_exit: int, expected: int, capsys: pytest.CaptureFixture[str]
+) -> None:
+    loop: Final = asyncio.new_event_loop()
+    handlers: Final = Mock()
+    listener: Final = MagicMock(spec=socket.socket)
+    listener.__enter__.return_value = listener
+    listener.getsockname.return_value = ("127.0.0.1", 45555)
+    listener.fileno.return_value = 17
+    children: Final = {}
+    sent: Final = Mock()
+
+    def current_loop():
+        return Mock(wraps=loop, add_signal_handler=handlers)
+
+    async def spawn(*argv, **kwargs):
+        done: Final = asyncio.events.get_running_loop().create_future()
+        pid: Final = 101 if argv[0] == "python" else 102
+
+        async def wait() -> int:
+            return await done
+
+        def send_signal(signum: signal.Signals) -> None:
+            sent(pid, signum)
+            if pid == 102 and event == "python-during-drain":
+                children[101][1].set_result(python_exit)
+                return
+            if pid == 101:
+                assert children[102][1].done(), "Python must remain alive until Rust has drained"
+            done.set_result(python_exit if pid == 101 else rust_exit)
+
+        process: Final = Mock(spec=asyncio.subprocess.Process, pid=pid, wait=wait, send_signal=send_signal)
+        if pid == 102 and event == "spawn-error":
+            raise OSError("gateway cannot start")
+        children[pid] = (process, done)
+        if pid == 102:
+            if event == "python-exit":
+                children[101][1].set_result(python_exit)
+            elif event == "rust-exit":
+                done.set_result(rust_exit)
+            else:
+                _, stop, signum = handlers.call_args_list[0].args
+                stop(signum)
+                stop(signum)
+        return process
+
+    def kill_group(pid: int, signum: signal.Signals) -> None:
+        assert signum == signal.SIGTERM
+        _, done = children[pid]
+        if done.done():
+            raise ProcessLookupError
+        done.set_result(1)
+
+    with (
+        patch("asyncio.events.new_event_loop", return_value=loop),
+        patch("asyncio.get_running_loop", side_effect=current_loop),
+        patch("asyncio.create_subprocess_exec", side_effect=spawn) as launch,
+        patch("socket.socket", return_value=listener),
+        patch("os.killpg", side_effect=kill_group) as kill,
+    ):
+        assert supervise("gateway", ("python", "--rust_gateway"), "0.0.0.0", 4000) == expected
+
+    assert all(done.done() for _, done in children.values())
+    assert call(101, signal.SIGTERM) in kill.call_args_list
+    python_call, rust_call = launch.call_args_list
+    assert python_call.args == ("python", "--host", "127.0.0.1", "--port", "45555")
+    assert python_call.kwargs["pass_fds"] == (17,)
+    assert python_call.kwargs["env"]["LITELLM_RUST_GATEWAY"] == "false"
+    assert python_call.kwargs["env"]["FORWARDED_ALLOW_IPS"] == "127.0.0.1"
+    assert rust_call.kwargs["env"]["LITELLM_FORWARD_UPSTREAM"] == "http://127.0.0.1:45555"
+    assert rust_call.kwargs["env"]["PORT"] == "4000"
+    if event == "spawn-error":
+        assert "Rust gateway startup failed: gateway cannot start" in capsys.readouterr().err
+    elif event == "signal" and rust_exit == 0:
+        assert sent.call_args_list == [call(102, signal.SIGTERM), call(101, signal.SIGTERM)]
+    else:
+        assert call(101, signal.SIGTERM) not in sent.call_args_list
