@@ -1,6 +1,6 @@
-use litellm_secrets_types::{
-    AccessMode, KeyManagementSettings, KeyManagementSystem, Secret, SecretValue,
-};
+use litellm_secret_value::SecretValue;
+use litellm_secrets_types::{AccessMode, KeyManagementSettings, KeyManagementSystem, Secret};
+
 use rstest::{fixture, rstest};
 use serde_json::json;
 
