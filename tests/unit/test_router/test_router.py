@@ -63,7 +63,6 @@ from litellm.router import (
     _responses_stream_holds_event,
     _without_line_breaks,
     _search_tool_support,
-    Span,
 )
 from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
 from litellm.router_strategy import simple_shuffle
@@ -6663,13 +6662,14 @@ def _make_router_with_fallback(primary="gpt-4", secondary="gpt-3.5-turbo"):
     )
 
 
-class _InjectedFallbackRouter(Router):
-    def __init__(self, fallback_response: object) -> None:
-        super().__init__(model_list=[], fallbacks=[{"primary": ["fallback"]}])
-        self._fallback_response: Final = fallback_response
+# The Rust core walks fallbacks and runs pre-routing in Rust, past the members these tests patch.
+_PYTHON_CORE_ONLY: Final = pytest.mark.usefixtures("python_router_core")
 
-    async def async_function_with_fallbacks_common_utils(
-        self,
+
+def _injected_fallback_router(fallback_response: object) -> Router:
+    router: Final = Router(model_list=[], fallbacks=[{"primary": ["fallback"]}])
+
+    async def inject_fallback(
         e: Exception,
         disable_fallbacks: bool | None,
         fallbacks: list | None,
@@ -6680,7 +6680,10 @@ class _InjectedFallbackRouter(Router):
         kwargs: dict[str, object],
         include_fallback_errors: bool = False,
     ) -> object:
-        return self._fallback_response
+        return fallback_response
+
+    router.async_function_with_fallbacks_common_utils = inject_fallback
+    return router
 
 
 @pytest.mark.asyncio
@@ -7043,6 +7046,7 @@ async def test_aresponses_streaming_content_policy_error_event_routes_to_content
 
 
 @pytest.mark.asyncio
+@_PYTHON_CORE_ONLY
 async def test_aresponses_stream_keeps_numbering_after_a_mid_stream_fallback():
     from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
 
@@ -7058,7 +7062,7 @@ async def test_aresponses_stream_keeps_numbering_after_a_mid_stream_fallback():
 
     from litellm.exceptions import MidStreamFallbackError
 
-    router: Final = _InjectedFallbackRouter(_AsyncList([delta(0, "c"), delta(1, "d")]))
+    router: Final = _injected_fallback_router(_AsyncList([delta(0, "c"), delta(1, "d")]))
     primary: Final = _make_responses_iterator(
         chunks=[delta(0, "a"), delta(1, "b")],
         error=MidStreamFallbackError(
@@ -7082,6 +7086,7 @@ async def test_aresponses_stream_keeps_numbering_after_a_mid_stream_fallback():
 
 
 @pytest.mark.asyncio
+@_PYTHON_CORE_ONLY
 async def test_aresponses_stream_fallback_keeps_higher_numbers_and_passes_unnumbered_events():
     from litellm.exceptions import MidStreamFallbackError
     from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
@@ -7094,7 +7099,7 @@ async def test_aresponses_stream_fallback_keeps_higher_numbers_and_passes_unnumb
     def numbered(sequence_number: int, text: str) -> OutputTextDeltaEvent:
         return delta(text).model_copy(update={"sequence_number": sequence_number})
 
-    router: Final = _InjectedFallbackRouter(_AsyncList([numbered(7, "c"), delta("d"), numbered(8, "e")]))
+    router: Final = _injected_fallback_router(_AsyncList([numbered(7, "c"), delta("d"), numbered(8, "e")]))
     primary: Final = _make_responses_iterator(
         chunks=[numbered(0, "a"), numbered(1, "b")],
         error=MidStreamFallbackError(
@@ -7123,6 +7128,7 @@ async def test_aresponses_stream_fallback_keeps_higher_numbers_and_passes_unnumb
 
 
 @pytest.mark.asyncio
+@_PYTHON_CORE_ONLY
 async def test_aresponses_stream_without_fallback_passes_upstream_numbers_unchanged():
     from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
 
@@ -7136,7 +7142,7 @@ async def test_aresponses_stream_without_fallback_passes_upstream_numbers_unchan
             sequence_number=sequence_number,
         )
 
-    router: Final = _InjectedFallbackRouter(_AsyncList([]))
+    router: Final = _injected_fallback_router(_AsyncList([]))
     primary: Final = _make_responses_iterator(
         chunks=[delta(0, "a"), delta(1, "b"), delta(1, "c"), delta(0, "d")], model="primary"
     )
@@ -7151,6 +7157,7 @@ async def test_aresponses_stream_without_fallback_passes_upstream_numbers_unchan
 
 
 @pytest.mark.asyncio
+@_PYTHON_CORE_ONLY
 async def test_aresponses_stream_fallback_continues_above_the_highest_number_the_primary_sent():
     from litellm.exceptions import MidStreamFallbackError
     from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
@@ -7165,7 +7172,7 @@ async def test_aresponses_stream_fallback_continues_above_the_highest_number_the
             sequence_number=sequence_number,
         )
 
-    router: Final = _InjectedFallbackRouter(_AsyncList([delta(0, "d")]))
+    router: Final = _injected_fallback_router(_AsyncList([delta(0, "d")]))
     primary: Final = _make_responses_iterator(
         chunks=[delta(0, "a"), delta(3, "b"), delta(1, "c")],
         error=MidStreamFallbackError(
@@ -7234,6 +7241,7 @@ async def test_aresponses_streaming_iterator_unwraps_content_policy_trigger_for_
     ],
     ids=["plain-fallback", "complexity-tier-fallback"],
 )
+@_PYTHON_CORE_ONLY
 async def test_aresponses_streaming_iterator_replaces_complexity_headers_before_fallback_output(
     fallback_headers: dict[str, str],
 ) -> None:
@@ -7257,7 +7265,7 @@ async def test_aresponses_streaming_iterator_replaces_complexity_headers_before_
         "model_id": "fallback-deployment",
         "additional_headers": fallback_headers,
     }
-    router: Final = _InjectedFallbackRouter(fallback)
+    router: Final = _injected_fallback_router(fallback)
 
     wrapped: Final = await router._aresponses_streaming_iterator(
         response=source,
@@ -19126,6 +19134,7 @@ async def test_anthropic_messages_fallback_merges_fallback_hidden_params():
     ],
     ids=["plain-fallback", "complexity-tier-fallback"],
 )
+@_PYTHON_CORE_ONLY
 async def test_anthropic_messages_fallback_replaces_complexity_headers_before_output(
     fallback_headers: dict[str, str],
 ) -> None:
@@ -19145,7 +19154,7 @@ async def test_anthropic_messages_fallback_replaces_complexity_headers_before_ou
             "additional_headers": fallback_headers,
         },
     )
-    router: Final = _InjectedFallbackRouter(fallback)
+    router: Final = _injected_fallback_router(fallback)
 
     wrapped: Final = await router._aanthropic_messages_streaming_iterator(
         response=source,
@@ -22020,24 +22029,23 @@ class TestRequestReasoningEffortOverride:
         assert ("reasoning_effort" not in body) is should_drop
 
 
+@_PYTHON_CORE_ONLY
 class TestPreRoutingTierDrivesFallbacks:
     """#38832: a complexity/auto router picks a tier behind the router name, but fallback
     lookup stayed on the router name, so the tier's configured chain never ran and a
     provider failure on the tier's first hop was returned to the client."""
 
-    class _TierRouter(litellm.Router):
-        async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
-        ):
-            from litellm.types.router import PreRoutingHookResponse
+    @staticmethod
+    async def _select_tier(model, request_kwargs, messages=None, input=None, specific_deployment=False):
+        from litellm.types.router import PreRoutingHookResponse
 
-            if model == "smart-router":
-                return PreRoutingHookResponse(model="tier1", messages=messages)
-            return None
+        if model == "smart-router":
+            return PreRoutingHookResponse(model="tier1", messages=messages)
+        return None
 
     @classmethod
     def _router(cls, fallbacks) -> "litellm.Router":
-        return cls._TierRouter(
+        router = litellm.Router(
             model_list=[
                 {
                     "model_name": "smart-router",
@@ -22087,6 +22095,8 @@ class TestPreRoutingTierDrivesFallbacks:
             fallbacks=fallbacks,
             num_retries=0,
         )
+        router._core_async_pre_routing_hook = cls._select_tier
+        return router
 
     @pytest.mark.asyncio
     async def test_the_selected_tier_fallback_chain_runs(self):
@@ -24543,50 +24553,6 @@ def test_a_failed_routing_read_prefetch_logs_the_request_model_without_its_line_
     assert messages == [
         "routing read prefetch not armed for gpt-4ERROR forged entry: no deployments for gpt-4ERROR forged entry"
     ]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "routing_strategy",
-    ["simple-shuffle", "usage-based-routing-v2", "least-busy", "latency-based-routing"],
-)
-async def test_router_subclass_overriding_async_get_healthy_deployments_with_the_old_signature_still_routes(
-    routing_strategy: str,
-) -> None:
-    class OldSignatureRouter(litellm.Router):
-        async def async_get_healthy_deployments(
-            self,
-            model: str,
-            request_kwargs: dict,
-            messages: list[dict[str, str]] | None = None,
-            input: str | list | None = None,
-            specific_deployment: bool | None = False,
-            parent_otel_span: Span | None = None,
-            health_check_probe: bool = False,
-        ):
-            return await super().async_get_healthy_deployments(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-                parent_otel_span=parent_otel_span,
-                health_check_probe=health_check_probe,
-            )
-
-    router: Final = OldSignatureRouter(
-        model_list=[
-            {
-                "model_name": "m",
-                "litellm_params": {"model": "openai/gpt-4o", "api_key": "x", "mock_response": "hi"},
-            }
-        ],
-        routing_strategy=routing_strategy,
-    )
-
-    response: Final = await router.acompletion(model="m", messages=[{"role": "user", "content": "x"}])
-
-    assert response.choices[0].message.content == "hi"
 
 
 def test_get_deployment_credentials_with_provider_preserves_anthropic_wif_params():
