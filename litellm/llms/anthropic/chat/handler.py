@@ -733,6 +733,7 @@ class ModelResponseIterator:
         self._split_answer_blocks: tuple[str, ...] = ()
         self._withheld_answer_close: str = ""
         self._streamed_answer_keys: frozenset[str] | None = None
+        self._held_prose: str = ""
 
         # For handling partial JSON chunks from fragmentation
         # See: https://github.com/BerriAI/litellm/issues/17473
@@ -825,8 +826,13 @@ class ModelResponseIterator:
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
 
         if "text" in content_block["delta"]:
-            text = content_block["delta"]["text"]
-            return text, tool_use, thinking_blocks, provider_specific_fields, reasoning_content
+            return (
+                self._hold_prose(content_block["delta"]["text"]),
+                tool_use,
+                thinking_blocks,
+                provider_specific_fields,
+                reasoning_content,
+            )
         self.content_blocks.append(content_block)
         if "partial_json" in content_block["delta"]:
             # Only emit tool calls if we're in a tool_use or server_tool_use block
@@ -1024,7 +1030,7 @@ class ModelResponseIterator:
                 if self.current_content_block_type in _THINKING_BLOCK_TYPES:
                     self.thinking_block_index += 1
                 if content_block_start["content_block"]["type"] == "text":
-                    text = self._release_answer_close() + content_block_start["content_block"]["text"]
+                    text = self._release_answer_close() + self._hold_prose(content_block_start["content_block"]["text"])
                 elif (
                     content_block_start["content_block"]["type"] == "tool_use"
                     or content_block_start["content_block"]["type"] == "server_tool_use"
@@ -1160,7 +1166,7 @@ class ModelResponseIterator:
             elif type_chunk == "message_delta":
                 finish_reason, usage, container, stop_reason_fields = self._handle_message_delta(chunk)
                 provider_specific_fields.update(stop_reason_fields)
-                text = self._release_answer_close() + self._drain_split_answer_blocks()
+                text = self._release_answer_close() + self._drain_split_answer_blocks() + self._release_held_prose()
                 if container:
                     provider_specific_fields["container"] = container
                     # Store container_id and re-emit code_interpreter_results
@@ -1207,7 +1213,9 @@ class ModelResponseIterator:
                     status_code=500,  # it looks like Anthropic API does not return a status code in the chunk error - default to 500
                 )
 
-            text, tool_use = self._handle_json_mode_chunk(text=text, tool_use=tool_use)
+            text, tool_use = self._handle_json_mode_chunk(
+                text=text + self._settle_held_prose(tool_use), tool_use=tool_use
+            )
             refusal_fields: Final = refusal_params(provider_specific_fields)
 
             returned_chunk: Final = ModelResponseStream(
@@ -1305,6 +1313,24 @@ class ModelResponseIterator:
         self._response_format_verdict = _envelope_verdict(buffered, schema, RESPONSE_FORMAT_TOOL_NAME)
         return self._withhold_answer_close(buffered) if self._response_format_verdict == "pass_through" else ""
 
+    def _hold_prose(self, text: str) -> str:
+        if not self.json_mode or self.response_format_schema is None:
+            return text
+        self._held_prose += text
+        return ""
+
+    def _settle_held_prose(self, tool_use: ChatCompletionToolCallChunk | None) -> str:
+        if tool_use is None or tool_use.get("id") is None or self.current_content_block_type != "tool_use":
+            return ""
+        held: Final = self._held_prose
+        self._held_prose = ""
+        return "" if tool_use.get("function", {}).get("name") == RESPONSE_FORMAT_TOOL_NAME else held
+
+    def _release_held_prose(self) -> str:
+        held: Final = self._held_prose
+        self._held_prose = ""
+        return "" if self.converted_response_format_tool else held
+
     def _withhold_answer_close(self, text: str) -> str:
         pending: Final = self._withheld_answer_close + text
         body: Final = pending.rstrip()
@@ -1358,7 +1384,9 @@ class ModelResponseIterator:
 
     def cut_stream_chunk(self) -> ModelResponseStream | None:
         unsent: Final = self._flush_response_format_buffer() if self._response_format_buffer.getvalue() else ""
-        text: Final = unsent + self._release_answer_close() + self._drain_split_answer_blocks()
+        text: Final = (
+            unsent + self._release_answer_close() + self._drain_split_answer_blocks() + self._release_held_prose()
+        )
         if not text:
             return None
         return ModelResponseStream(

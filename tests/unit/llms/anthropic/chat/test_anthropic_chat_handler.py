@@ -2954,6 +2954,110 @@ def test_streamed_json_mode_truncated_output_is_passed_through_untouched():
     assert "".join(contents) == '{"name": "json_tool_call", "parameters": {"tier": 3'
 
 
+def _message_events(*blocks: tuple[dict[str, object], tuple[dict[str, object], ...]]) -> tuple[dict[str, object], ...]:
+    starts_and_deltas = tuple(
+        event
+        for index, (block, deltas) in enumerate(blocks)
+        for event in (
+            {"type": "content_block_start", "index": index, "content_block": block},
+            *({"type": "content_block_delta", "index": index, "delta": delta} for delta in deltas),
+            {"type": "content_block_stop", "index": index},
+        )
+    )
+    return (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        *starts_and_deltas,
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 40}},
+    )
+
+
+_THINKING_BLOCK: Final = (
+    {"type": "thinking", "thinking": "", "signature": ""},
+    ({"type": "thinking_delta", "thinking": "7 * 142 = 994"}, {"type": "signature_delta", "signature": "sig"}),
+)
+_PREAMBLE_BLOCK: Final = (
+    {"type": "text", "text": ""},
+    ({"type": "text_delta", "text": "**Working it out:** "}, {"type": "text_delta", "text": "the count is **120**"}),
+)
+
+
+def _json_tool_block(answer: dict[str, object]) -> tuple[dict[str, object], tuple[dict[str, object], ...]]:
+    encoded = json.dumps(answer)
+    return (
+        {"type": "tool_use", "id": "toolu_1", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {}},
+        tuple({"type": "input_json_delta", "partial_json": part} for part in (encoded[:5], encoded[5:])),
+    )
+
+
+def _parse_stream(
+    events: tuple[dict[str, object], ...], schema: dict[str, object] | None = _STREAMED_PERSON_SCHEMA
+) -> tuple[ModelResponseStream, ...]:
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        json_mode=True,
+        response_format_schema=None if schema is None else response_format_schema(schema),
+    )
+    return tuple(iterator.chunk_parser(event) for event in events)
+
+
+def _joined_content(chunks: tuple[ModelResponseStream, ...]) -> str:
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+def test_streamed_json_mode_drops_prose_written_before_the_json_tool():
+    chunks = _parse_stream(_message_events(_THINKING_BLOCK, _PREAMBLE_BLOCK, _json_tool_block(_STREAMED_PERSON)))
+
+    assert json.loads(_joined_content(chunks)) == _STREAMED_PERSON
+    assert "".join(getattr(chunk.choices[0].delta, "reasoning_content", None) or "" for chunk in chunks) == (
+        "7 * 142 = 994"
+    )
+    assert all(chunk.choices[0].delta.tool_calls is None for chunk in chunks)
+
+
+def test_streamed_json_mode_returns_prose_when_claude_skips_the_json_tool():
+    chunks = _parse_stream(_message_events(_THINKING_BLOCK, _PREAMBLE_BLOCK))
+
+    assert _joined_content(chunks) == "**Working it out:** the count is **120**"
+
+
+def test_streamed_json_mode_sends_prose_ahead_of_a_caller_tool_call():
+    caller_tool = (
+        {"type": "tool_use", "id": "toolu_2", "name": "get_weather", "input": {}},
+        ({"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},),
+    )
+
+    chunks = _parse_stream(_message_events(_PREAMBLE_BLOCK, caller_tool))
+    tool_chunk_index = next(i for i, chunk in enumerate(chunks) if chunk.choices[0].delta.tool_calls)
+
+    assert _joined_content(chunks[: tool_chunk_index + 1]) == "**Working it out:** the count is **120**"
+    assert chunks[tool_chunk_index].choices[0].delta.tool_calls[0].function.name == "get_weather"
+
+
+def test_streamed_native_output_text_is_not_held_back():
+    answer = json.dumps(_STREAMED_PERSON)
+    text_block = (
+        {"type": "text", "text": ""},
+        tuple({"type": "text_delta", "text": part} for part in (answer[:6], answer[6:])),
+    )
+
+    chunks = _parse_stream(_message_events(text_block), schema=None)
+
+    assert tuple(chunk.choices[0].delta.content for chunk in chunks[2:4]) == (answer[:6], answer[6:])
+
+
 def test_streamed_json_mode_tool_name_envelope_is_unwrapped_when_name_is_a_schema_property():
     envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_CONTACT})
 
@@ -3379,7 +3483,7 @@ def test_streamed_json_mode_partial_objects_that_repeat_a_field_keep_the_order_t
     assert "".join(contents) == "".join(blocks)
 
 
-def test_streamed_json_mode_text_after_the_answer_follows_the_whole_answer():
+def test_streamed_json_mode_text_after_the_answer_is_dropped_like_the_non_streamed_reply():
     answer = json.dumps(_STREAMED_RISK_OBJECT)
     message_start, *_, message_delta = _json_tool_events(())
     text_block = (
@@ -3390,7 +3494,7 @@ def test_streamed_json_mode_text_after_the_answer_follows_the_whole_answer():
 
     chunks = _json_mode_stream_chunks((message_start, *_json_tool_block_events(0, answer), *text_block, message_delta))
 
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == answer + " Done."
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == answer
 
 
 def test_streamed_json_mode_envelope_whose_label_is_a_property_name_is_still_unwrapped():
