@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import pytest_asyncio
+import respx
 from mcp.types import AudioContent, CallToolResult, ImageContent, TextContent
 from openai import AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
@@ -12587,6 +12588,26 @@ def test_get_model_cost_information():
     assert result["model_map_value"] == litellm_info_gpt_3_5_turbo_model_map_value
     # assert all fields in StandardLoggingModelInformation are present
     assert all(field in result for field in StandardLoggingModelInformation.__annotations__)
+
+
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+def test_ollama_cost_information_does_not_request_live_metadata(
+    local_model_cost_map: None, respx_mock: respx.MockRouter, provider: str
+) -> None:
+    metadata: Final = respx_mock.post("https://cost-information.example/api/show").respond(
+        json={"model_info": {"test.context_length": 32768}}
+    )
+    info: Final = StandardLoggingPayloadSetup.get_model_cost_information(
+        base_model="test-ollama-cost-information",
+        custom_pricing=False,
+        custom_llm_provider=provider,
+        init_response_obj=litellm.ModelResponse(model="test-ollama-cost-information"),
+        api_base="https://cost-information.example",
+    )
+    rates: Final = info["model_map_value"]
+    assert rates is not None
+    assert (rates["input_cost_per_token"], rates["output_cost_per_token"]) == (0.0, 0.0)
+    assert not metadata.called
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")

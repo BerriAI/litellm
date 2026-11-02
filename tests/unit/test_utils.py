@@ -28,6 +28,8 @@ import respx
 from jsonschema import Draft7Validator, validate
 
 import litellm
+
+
 from litellm.exceptions import MidStreamFallbackError
 from litellm._internal_context import is_internal_call
 from litellm._logging import (
@@ -11418,3 +11420,25 @@ async def test_success_enqueue_is_tracked_without_starting_callbacks_synchronous
     assert GLOBAL_LOGGING_WORKER.pending_count > 0, "Tracked enqueue must finish before worker draining starts"
     await GLOBAL_LOGGING_WORKER.flush()
     assert logging_obj.model_call_details["has_logged_async_success"] is True
+
+
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+def test_ollama_pricing_lookup_preserves_live_model_info_discovery(
+    local_model_cost_map: None, respx_mock: respx.MockRouter, provider: str
+) -> None:
+    from litellm.utils import get_model_info_for_pricing
+
+    metadata: Final = respx_mock.post("https://model-info.example/api/show").respond(
+        json={"model_info": {"test.context_length": 32768}}
+    )
+    pricing: Final = get_model_info_for_pricing(
+        model="test-live-discovery", custom_llm_provider=provider, api_base="https://model-info.example"
+    )
+    assert (pricing["input_cost_per_token"], pricing["output_cost_per_token"]) == (0.0, 0.0)
+    assert not metadata.called
+
+    discovered: Final = litellm.get_model_info(
+        model="test-live-discovery", custom_llm_provider=provider, api_base="https://model-info.example"
+    )
+    assert discovered["max_input_tokens"] == 32768
+    assert metadata.call_count == 1
