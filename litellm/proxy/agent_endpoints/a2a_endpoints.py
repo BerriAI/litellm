@@ -149,7 +149,7 @@ def _build_message_send_params(params: dict[str, Any]) -> "MessageSendParams":
     from a2a.compat.v0_3.types import MessageSendParams
 
     try:
-        return MessageSendParams(**params)
+        built = MessageSendParams(**params)
     except ValidationError:
         from a2a.compat.v0_3.conversions import pb2_v10, to_compat_send_message_request
         from google.protobuf.json_format import ParseDict, ParseError
@@ -159,7 +159,36 @@ def _build_message_send_params(params: dict[str, Any]) -> "MessageSendParams":
             ParseDict(params, pb, ignore_unknown_fields=True)
         except ParseError as e:
             raise ValueError(f"Invalid message/send params: {e}") from e
-        return to_compat_send_message_request(pb, "").params
+        built = to_compat_send_message_request(pb, "").params
+        # The 1.0->0.3 conversion drops pushNotificationConfig, so validate the
+        # raw wire config on this path.
+        _validate_inline_push_notification_url(params)
+        return built
+    # A push config registered inline via message/send or message/stream must
+    # clear the same SSRF guard the tasks/pushNotificationConfig/set method
+    # applies, otherwise message/send is a way around it (#49622).
+    push_config = built.configuration.push_notification_config if built.configuration else None
+    callback_url = push_config.url if push_config is not None else None
+    if callback_url:
+        _validate_push_notification_url(str(callback_url))
+    return built
+
+
+def _validate_inline_push_notification_url(params: Mapping[str, Any]) -> None:
+    """Reject an unsafe inline pushNotificationConfig carried in wire params.
+
+    Covers the A2A 1.0 shape (``configuration.pushNotificationConfig.url``) on the
+    proto-fallback path, where the built params no longer carry the config.
+    """
+    configuration = params.get("configuration")
+    if not isinstance(configuration, Mapping):
+        return
+    push_config = configuration.get("pushNotificationConfig") or configuration.get("push_notification_config")
+    if not isinstance(push_config, Mapping):
+        return
+    callback_url = push_config.get("url")
+    if isinstance(callback_url, str) and callback_url:
+        _validate_push_notification_url(callback_url)
 
 
 def _served_version(agent: "AgentResponse", request: Request, original_method: str | None = None) -> A2AVersion:
