@@ -4,16 +4,87 @@ import importlib
 import os
 import shutil
 import tempfile
-from collections.abc import Callable, Coroutine, Iterator
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 import boto3
 import httpx
 import pytest
 from pytest_socket import enable_socket, socket_allow_hosts
+
+if TYPE_CHECKING:
+    from litellm.caching.redis_cache import RedisCache
+
+RouterRedis: TypeAlias = tuple["RedisCache", asyncio.Queue[tuple[tuple[object, ...], str | None, str | None]]]
+RedisWriteGate: TypeAlias = tuple[asyncio.Event, asyncio.Event, asyncio.Event]
+
+
+@pytest.fixture
+def redis_write_gate() -> RedisWriteGate:
+    released: Final = asyncio.Event()
+    released.set()
+    return asyncio.Event(), released, asyncio.Event()
+
+
+@pytest.fixture
+async def router_redis(
+    redis_write_gate: RedisWriteGate,
+) -> AsyncIterator[RouterRedis]:
+    from unittest.mock import patch
+
+    from fakeredis import FakeRedis, FakeServer
+    from fakeredis.aioredis import FakeConnection
+    from opentelemetry import trace
+    from redis.asyncio import BlockingConnectionPool
+    from redis.exceptions import ConnectionError
+
+    from litellm._internal_context import current_service_target
+    from litellm.caching.redis_cache import RedisCache
+
+    commands: Final[asyncio.Queue[tuple[tuple[object, ...], str | None, str | None]]] = asyncio.Queue()
+    started, released, unavailable = redis_write_gate
+
+    class ObservedConnection(FakeConnection):
+        async def send_command(self, *args: object, **kwargs: object) -> None:  # kwargs-ok: Redis transport signature
+            commands.put_nowait((args, current_service_target(), getattr(trace.get_current_span(), "name", None)))
+            await super().send_command(*args, **kwargs)
+
+        async def send_packed_command(self, command: Iterable[bytes] | bytes | str, check_health: bool = True) -> None:
+            chunks: Final = (
+                (command.encode(),)
+                if isinstance(command, str)
+                else (command,)
+                if isinstance(command, bytes)
+                else command
+            )
+            wire: Final = b"".join(chunks)
+            if b"INCRBYFLOAT" in wire:
+                commands.put_nowait(
+                    ((wire,), current_service_target(), getattr(trace.get_current_span(), "name", None))
+                )
+                started.set()
+                await released.wait()
+                if unavailable.is_set():
+                    raise ConnectionError("scripted write outage")
+            await super().send_packed_command(command, check_health=check_health)
+
+    server: Final = FakeServer()
+    client: Final = FakeRedis(server=server)
+    pool: Final = BlockingConnectionPool(connection_class=ObservedConnection, server=server)
+    try:
+        with (
+            patch("redis.Redis.from_url", return_value=client),
+            patch("redis.asyncio.BlockingConnectionPool.from_url", return_value=pool),
+        ):
+            yield RedisCache(url="redis://router-unit.example:6379/0"), commands
+    finally:
+        released.set()
+        await pool.aclose()
+        client.close()
+
 
 HOST_ENVIRONMENT_ALLOWLIST: Final = frozenset(
     (
@@ -289,7 +360,9 @@ def isolate_litellm_globals() -> Iterator[None]:
     original_callback_holders: Final = frozenset(litellm_router_module._routers_holding_global_callbacks)
     original_reset: Final = {name: getattr(litellm, name) for name in RESET_TO_NONE_GLOBALS}
     original_restored: Final = {name: getattr(litellm, name) for name in RESTORED_GLOBALS if hasattr(litellm, name)}
-    original_clients: Final = {name: litellm.__dict__[name] for name in MODULE_LEVEL_CLIENTS if name in litellm.__dict__}
+    original_clients: Final = {
+        name: litellm.__dict__[name] for name in MODULE_LEVEL_CLIENTS if name in litellm.__dict__
+    }
     original_loggers: Final = {
         logger: (logger.level, logger.disabled, logger.propagate, list(logger.handlers), list(logger.filters))
         for logger in ALL_LOGGERS

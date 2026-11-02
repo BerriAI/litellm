@@ -1,29 +1,13 @@
-"""
-One Redis round trip for the reads a request needs before a deployment can be picked.
-
-The cooldown filter (`CooldownCache`, its own `DualCache`) and usage-based selection
-(`LowestTPMLoggingHandler_v2`, the router cache) each issue their own MGET because they live in
-different objects. `RoutingReadBatch` fetches both key sets in one
-`DualCache.async_batch_get_cache_shared` while the healthy deployments are being resolved and hands
-the usage slice to the strategy, so selection does not read again.
-"""
-
-import asyncio
-import itertools
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
-from litellm.caching.dual_cache import DualCache
-from litellm.caching.redis_batch import BatchResult, active_request_redis_batches
+from litellm.redis.stores import _routing_prefetch
+from litellm.redis.stores._routing_prefetch import TierRead, selector_read
 from litellm.router_deprecated import renamed_router_param
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
-from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -31,127 +15,29 @@ if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
 
 
-ROUTER_COOLDOWNS_USAGE_TARGET: Final = "router_cooldowns_usage"
 ROUTER_USAGE_TARGET: Final = "router_usage"
-_PREFETCH_SLOT: Final = "routing_read"
 
 
-def _routing_read_target(cooldown_keys: Sequence[str], usage_keys: Sequence[str]) -> str:
-    if not usage_keys:
-        return ROUTER_COOLDOWNS_TARGET
-    if not cooldown_keys:
-        return ROUTER_USAGE_TARGET
-    return ROUTER_COOLDOWNS_USAGE_TARGET
+def _selector_keys(selector: LowestTPMLoggingHandler_v2, deployments: list) -> list[str]:
+    tpm_keys, rpm_keys = selector.usage_counter_keys(deployments)
+    return tpm_keys + rpm_keys
 
 
-async def _backfill_prefetched_cache(
-    cache: DualCache,
-    due_keys: tuple[str, ...],
-    values: Mapping[str, object],
-) -> None:
-    cache_keys: Final = list(due_keys)
-    prepare_batch_get: Final = cache._prepare_batch_get  # pyright: ignore[reportPrivateUsage]  # memory backfill
-    pending: Final = await prepare_batch_get(cache_keys, local_only=True)
-    redis_values: Final = {
-        key: values[key]
-        for key, local in zip(due_keys, pending.result)
-        if local is None and values.get(key) is not None
-    }
-    apply_batch_get: Final = cache._apply_batch_get  # pyright: ignore[reportPrivateUsage]  # cache backfill
-    await apply_batch_get(pending, redis_values)
+def _selector_read(selector: LowestTPMLoggingHandler_v2 | None, deployments: list) -> TierRead | None:
+    return None if selector is None else selector_read(selector.router_cache, _selector_keys(selector, deployments))
 
 
-@dataclass(frozen=True, slots=True)
 class RoutingPrefetch:
-    """The cooldown and usage keys of a model group, declared on the request's Redis batch before admission
-    flushes it, so the routing read rides the same round trip as the rate limiter's Lua calls."""
-
-    keys: frozenset[str]
-    fetched: frozenset[str]
-    result: BatchResult[Mapping[str, object]]
-    reservations: tuple[tuple[DualCache, tuple[str, ...], dict[str, float | None]], ...]
-
-    def release(self) -> None:
-        for cache, _, previous_access_times in self.reservations:
-            cache._rollback_redis_batch_key_reservations(  # pyright: ignore[reportPrivateUsage]  # rollback
-                previous_access_times
-            )
-
-    async def _settle(self, future: asyncio.Future[Mapping[str, object]]) -> None:
-        if future.cancelled():
-            self.release()
-            return
-        if future.exception() is not None:
-            self.release()
-            return
-
-        values: Final = future.result()
-        try:
-            for cache, due_keys, _ in self.reservations:
-                await _backfill_prefetched_cache(cache, due_keys, values)
-        except Exception:
-            self.release()
-            raise
-
     @staticmethod
     @renamed_router_param("litellm_router_instance")
-    def arm(
-        ctx: "RoutingContext",
-        usage_selector: LowestTPMLoggingHandler_v2 | None,
-        deployments: list,
-    ) -> None:
-        request: Final = active_request_redis_batches()
-        redis_cache: Final = ctx.health().store.redis_cache
-        if request is None or redis_cache is None or _PREFETCH_SLOT in request.prefetched:
-            return
-        cooldown_keys: Final = tuple(
-            CooldownCache.get_cooldown_cache_key(model_id) for model_id in ctx.registry().names(kind="ids")
+    def arm(ctx: "RoutingContext", usage_selector: LowestTPMLoggingHandler_v2 | None, deployments: list) -> None:
+        ctx.health().cooldowns.cooldown_store.arm_routing_read(
+            ctx.registry().names(kind="ids"), _selector_read(usage_selector, deployments)
         )
-        usage_keys: Final = (
-            () if usage_selector is None else tuple(itertools.chain(*usage_selector.usage_counter_keys(deployments)))
-        )
-        keys: Final = (*cooldown_keys, *usage_keys)
-        cooldown_store: Final = ctx.health().cooldowns.cooldown_store
-        cooldown_due, cooldown_previous = cooldown_store.reserve_redis_batch_reads(cooldown_keys)
-        usage_cache: Final = None if usage_selector is None else usage_selector.router_cache
-        usage_reservation: Final = None if usage_cache is None else usage_cache.reserve_redis_batch_reads(usage_keys)
-        usage_due: Final = () if usage_reservation is None else tuple(usage_reservation[0])
-        due: Final = (*cooldown_due, *usage_due)
-        reservations: Final = (
-            (cooldown_store, tuple(cooldown_due), cooldown_previous),
-            *(
-                ()
-                if usage_cache is None or usage_reservation is None
-                else ((usage_cache, usage_due, usage_reservation[1]),)
-            ),
-        )
-        if not due:
-            return
-        with service_target(_routing_read_target(cooldown_due, usage_due)):
-            result: Final = request.batch(redis_cache).mget(due)
-        prefetch: Final = RoutingPrefetch(
-            keys=frozenset(keys), fetched=frozenset(due), result=result, reservations=reservations
-        )
-        result.on_settled(prefetch._settle)
-        request.prefetched[_PREFETCH_SLOT] = prefetch
 
     @staticmethod
     def armed() -> bool:
-        request: Final = active_request_redis_batches()
-        return request is not None and _PREFETCH_SLOT in request.prefetched
-
-    @staticmethod
-    def take(needed: Sequence[str]) -> "RoutingPrefetch | None":
-        """The armed prefetch when it covers every key this read needs; taken once, so a retry reads fresh."""
-        request: Final = active_request_redis_batches()
-        if request is None:
-            return None
-        armed: Final = request.prefetched.pop(_PREFETCH_SLOT, None)
-        if isinstance(armed, RoutingPrefetch) and armed.keys.issuperset(needed):
-            return armed
-        if isinstance(armed, RoutingPrefetch):
-            armed.release()
-        return None
+        return _routing_prefetch.armed()
 
 
 _active_routing_read_batch: Final[ContextVar["RoutingReadBatch | None"]] = ContextVar(
@@ -179,71 +65,22 @@ class RoutingReadBatch:
 
     @staticmethod
     def for_strategy(strategy: str | None, selector: object) -> "RoutingReadBatch | None":
-        """Usage-based routing reads its counters with the cooldown state; every other strategy reads only the
-        cooldown state, and only through this batch when the request armed a prefetch for it. Otherwise the
-        router's plain cooldown read stays in charge."""
         if strategy == "usage-based-routing-v2" and isinstance(selector, LowestTPMLoggingHandler_v2):
             return RoutingReadBatch(usage_selector=selector)
         return RoutingReadBatch(usage_selector=None) if RoutingPrefetch.armed() else None
 
     @renamed_router_param("litellm_router_instance")
     async def async_get_cooldown_deployments(
-        self,
-        ctx: "RoutingContext",
-        healthy_deployments: list,
-        parent_otel_span: "Span | None",
+        self, ctx: "RoutingContext", healthy_deployments: list, parent_otel_span: "Span | None"
     ) -> list[str]:
-        """
-        `_async_get_cooldown_deployments`, with the strategy's tpm/rpm counters for
-        `healthy_deployments` fetched in the same MGET and kept as `prefetched_usage`.
-        """
-        model_ids: Final = ctx.registry().names(kind="ids")
-        cooldown_keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
-        selector: Final = self.usage_selector
-        usage_keys: Final = (
-            () if selector is None else tuple(itertools.chain(*selector.usage_counter_keys(healthy_deployments)))
+        usage_read: Final = _selector_read(self.usage_selector, healthy_deployments)
+        read: Final = await ctx.health().cooldowns.cooldown_store.routing_read(
+            ctx.registry().names(kind="ids"), usage_read, parent_otel_span
         )
-        reads: Final = (
-            (ctx.health().cooldowns.cooldown_store, cooldown_keys),
-            *(() if selector is None else ((selector.router_cache, list(usage_keys)),)),
-        )
-        with service_target(_routing_read_target(cooldown_keys, usage_keys)):
-            results: Final = await self._read_prefetched(reads) or await DualCache.async_batch_get_cache_shared(
-                reads, parent_otel_span=parent_otel_span
-            )
-        cooldown_results: Final = results[0]
-        if selector is not None:
-            usage_values: Final = results[1]
+        if usage_read is not None:
             self.prefetched_usage = PrefetchedUsage(
-                keys=frozenset(usage_keys),
-                values=None if usage_values is None else MappingProxyType(dict(zip(usage_keys, usage_values))),
+                keys=frozenset(usage_read.keys),
+                values=None if read.selector_values is None else dict(zip(usage_read.keys, read.selector_values)),
             )
-
-        cooldown_models: Final = ctx.health().cooldowns.active_cooldowns_from_results(model_ids, cooldown_results)
-        verbose_router_logger.debug("retrieve cooldown models: %s", cooldown_models)
-        return [model_id for model_id, _ in cooldown_models]
-
-    @staticmethod
-    async def _read_prefetched(
-        reads: Sequence[tuple[DualCache, list[str]]],
-    ) -> list[list[object | None] | None] | None:
-        """Serve the reads from the request's armed `RoutingPrefetch`, backfilling each cache's memory tier as
-        its own batch read would. None when nothing usable was armed or the prefetch failed."""
-        prefetch: Final = RoutingPrefetch.take(tuple(itertools.chain.from_iterable(keys for _, keys in reads)))
-        if prefetch is None:
-            return None
-        try:
-            values: Final = await prefetch.result
-        except Exception as e:  # noqa: BLE001  # the shared read below applies the caches' own Redis fallback
-            verbose_router_logger.debug("routing prefetch failed, reading again: %s", e)
-            return None
-        results: Final[list[list[object | None] | None]] = []  # mutable-ok: filled per read below
-        for cache, keys in reads:
-            pending = await cache._prepare_batch_get(keys, local_only=True)  # pyright: ignore[reportPrivateUsage]  # same two-step read as async_batch_get_cache_shared
-            if any(
-                key not in prefetch.fetched for key, local_value in zip(keys, pending.result) if local_value is None
-            ):
-                return None
-            missed = {key: values.get(key) for key, local in zip(keys, pending.result) if local is None}
-            results.append(await cache._apply_batch_get(pending, missed))  # pyright: ignore[reportPrivateUsage]  # same two-step read as async_batch_get_cache_shared
-        return results
+        verbose_router_logger.debug("retrieve cooldown models: %s", read.cooldowns)
+        return [model_id for model_id, _ in read.cooldowns]

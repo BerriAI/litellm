@@ -167,6 +167,7 @@ jobs:
               tests/unit/google_genai
               tests/unit/router_strategy
               tests/unit/router_utils
+              tests/unit/redis
               tests/unit/proxy/common_utils/test_cache_aware_routing.py
               tests/unit/enterprise/enterprise_callbacks/send_emails
               tests/unit/enterprise/proxy/test_afile_retrieve_returns_unified_id.py

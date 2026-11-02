@@ -64,9 +64,7 @@ async def test_usage_based_routing_reads_cooldowns_and_counters_in_one_redis_rou
     redis = _redis_answering({})
     router = _router(redis, "usage-based-routing-v2")
 
-    deployment = await router.async_get_available_deployment(
-        model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES
-    )
+    deployment = await router.async_get_available_deployment(model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES)
 
     assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
     assert _redis_key_families(redis) == [
@@ -162,9 +160,7 @@ async def test_batched_read_still_excludes_a_cooled_down_deployment():
     )
     router = _router(redis, "usage-based-routing-v2")
 
-    deployment = await router.async_get_available_deployment(
-        model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES
-    )
+    deployment = await router.async_get_available_deployment(model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES)
 
     assert deployment["model_info"]["id"] == "dep-a", "dep-b has the lowest tpm but is cooling down"
     assert redis.async_batch_get_cache.await_count == 1
@@ -181,9 +177,7 @@ async def test_batched_read_ignores_an_expired_cooldown():
     )
     router = _router(redis, "usage-based-routing-v2")
 
-    deployment = await router.async_get_available_deployment(
-        model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES
-    )
+    deployment = await router.async_get_available_deployment(model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES)
 
     assert deployment["model_info"]["id"] == "dep-b"
 
@@ -204,7 +198,11 @@ async def test_a_failed_batched_read_degrades_like_the_two_failed_reads_did():
 
     assert str(routed_error.value) == str(alone_error.value)
     assert len(routed.cache.last_redis_batch_access_time) == 0, "a failed read must not throttle the next one"
-    assert len(routed.cooldown_cache.cooldown_store.last_redis_batch_access_time) == 0
+    before: Final = redis.async_batch_get_cache.await_count
+    redis.async_batch_get_cache.side_effect = None
+    redis.async_batch_get_cache.return_value = {}
+    assert await routed.cooldown_cache.async_get_active_cooldowns(["dep-a"], None) == []
+    assert redis.async_batch_get_cache.await_count == before + 1
 
 
 @pytest.mark.asyncio
@@ -213,8 +211,6 @@ async def test_a_failed_batched_read_leaves_simple_shuffle_routing():
     redis.async_batch_get_cache = AsyncMock(side_effect=ConnectionError("redis unavailable"))
     router = _router(redis, "simple-shuffle")
 
-    deployment = await router.async_get_available_deployment(
-        model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES
-    )
+    deployment = await router.async_get_available_deployment(model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES)
 
     assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}

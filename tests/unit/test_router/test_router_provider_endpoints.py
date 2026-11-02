@@ -5,27 +5,27 @@ import json
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 import litellm
 import pytest
 import respx
 from litellm import CustomLogger, Router
-from litellm.caching.dual_cache import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     get_deployment_successes_for_current_minute,
 )
-from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import RoutingStrategy
 from litellm.types.utils import ImageResponse, ModelResponse, RerankResponse
 from litellm.types.videos.utils import encode_video_id_with_provider
 from openai import AsyncAzureOpenAI, AsyncOpenAI
+
+if TYPE_CHECKING:
+    from tests.unit.conftest import RedisWriteGate, RouterRedis
 
 EVENT_TIMEOUT_SECONDS: Final = 5
 ROUTING_SELECTIONS: Final = 40
@@ -534,86 +534,30 @@ def test_router_track_deployment_metrics_updates_observable_usage() -> None:
     assert router.cache.get_cache(key="metrics-deployment", local_only=True) == 2
 
 
-class _GatedIncrementCache(DualCache):
-    def __init__(self) -> None:
-        super().__init__(in_memory_cache=InMemoryCache())
-        self.first_increment_started = asyncio.Event()
-        self.release_first_increment = asyncio.Event()
-        self.deployment_success_incremented = asyncio.Event()
-        self.increment_calls = 0
-
-    def increment_cache(self, key: str, value: int, local_only: bool = False, **kwargs: object) -> int:
-        result: Final = super().increment_cache(key=key, value=value, local_only=local_only, **kwargs)
-        if key.endswith(":successes"):
-            self.deployment_success_incremented.set()
-        return result
-
-    async def async_increment_cache_pipeline(
-        self,
-        increment_list: list[RedisPipelineIncrementOperation],
-        local_only: bool = False,
-        parent_otel_span: object = None,
-        **kwargs: object,
-    ) -> list[float] | None:
-        self.increment_calls += 1
-        if self.increment_calls == 1:
-            self.first_increment_started.set()
-            await self.release_first_increment.wait()
-        return await super().async_increment_cache_pipeline(
-            increment_list=increment_list,
-            local_only=local_only,
-            parent_otel_span=parent_otel_span,
-            **kwargs,
-        )
-
-
-class _UnavailableIncrementCache(DualCache):
-    def __init__(self) -> None:
-        super().__init__(in_memory_cache=InMemoryCache())
-        self.first_increment_started = asyncio.Event()
-        self.release_first_increment = asyncio.Event()
-        self.deployment_success_incremented = asyncio.Event()
-        self.increment_calls = 0
-
-    def increment_cache(self, key: str, value: int, local_only: bool = False, **kwargs: object) -> int:
-        result: Final = super().increment_cache(key=key, value=value, local_only=local_only, **kwargs)
-        if key.endswith(":successes"):
-            self.deployment_success_incremented.set()
-        return result
-
-    async def async_increment_cache_pipeline(
-        self,
-        increment_list: list[RedisPipelineIncrementOperation],
-        local_only: bool = False,
-        parent_otel_span: object = None,
-        **kwargs: object,
-    ) -> list[float] | None:
-        self.increment_calls += 1
-        if self.increment_calls == 1:
-            self.first_increment_started.set()
-            await self.release_first_increment.wait()
-        raise RuntimeError("cache unavailable")
-
-
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("router_minute_pinned")
-async def test_router_success_callback_during_pre_header_increment_does_not_double_count() -> None:
+async def test_router_success_callback_during_pre_header_increment_does_not_double_count(
+    router_redis: "RouterRedis", redis_write_gate: "RedisWriteGate"
+) -> None:
+    capture: Final = _RouterLoggingCapture("lit-3058-race")
     router: Final = _rpm_tpm_router("lit-3058-race")
-    cache: Final = _GatedIncrementCache()
-    router.cache = cache
+    redis, _ = router_redis
+    started, released, _ = redis_write_gate
+    router.update_redis_cache(redis)
+    released.clear()
     request: Final = asyncio.create_task(
         router.acompletion(
             model="gpt-5-mini",
             messages=[{"role": "user", "content": "hi"}],
             mock_response="pong",
+            success_callback=[capture.async_log_success_event],
         )
     )
 
-    await asyncio.wait_for(cache.first_increment_started.wait(), timeout=EVENT_TIMEOUT_SECONDS)
-    await asyncio.wait_for(cache.deployment_success_incremented.wait(), timeout=EVENT_TIMEOUT_SECONDS)
+    await asyncio.wait_for(started.wait(), timeout=EVENT_TIMEOUT_SECONDS)
+    await capture.next_event()
     assert get_deployment_successes_for_current_minute(router, "lit-3058-race") == 1
-    assert cache.increment_calls == 1
-    cache.release_first_increment.set()
+    released.set()
     response: Final = await request
 
     assert await router.get_model_group_usage("gpt-5-mini") == (response.usage.total_tokens, 1)
@@ -621,10 +565,16 @@ async def test_router_success_callback_during_pre_header_increment_does_not_doub
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("router_minute_pinned")
-async def test_router_failed_pre_header_increment_clears_counted_tokens_stamp() -> None:
+async def test_router_failed_redis_increment_keeps_local_usage_without_double_counting(
+    router_redis: "RouterRedis", redis_write_gate: "RedisWriteGate"
+) -> None:
+    capture: Final = _RouterLoggingCapture("lit-3058-fail")
     router: Final = _rpm_tpm_router("lit-3058-fail")
-    cache: Final = _UnavailableIncrementCache()
-    router.cache = cache
+    redis, _ = router_redis
+    started, released, unavailable = redis_write_gate
+    router.update_redis_cache(redis)
+    released.clear()
+    unavailable.set()
     metadata: Final[dict[str, object]] = {}
     request: Final = asyncio.create_task(
         router.acompletion(
@@ -632,21 +582,21 @@ async def test_router_failed_pre_header_increment_clears_counted_tokens_stamp() 
             messages=[{"role": "user", "content": "hi"}],
             mock_response="pong",
             metadata=metadata,
+            success_callback=[capture.async_log_success_event],
         )
     )
 
-    await asyncio.wait_for(cache.first_increment_started.wait(), timeout=EVENT_TIMEOUT_SECONDS)
-    await asyncio.wait_for(cache.deployment_success_incremented.wait(), timeout=EVENT_TIMEOUT_SECONDS)
+    await asyncio.wait_for(started.wait(), timeout=EVENT_TIMEOUT_SECONDS)
+    await capture.next_event()
     assert metadata[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] == 30
     assert get_deployment_successes_for_current_minute(router, "lit-3058-fail") == 1
-    assert cache.increment_calls == 1
-    cache.release_first_increment.set()
+    released.set()
     response: Final = await request
 
     assert response.usage.total_tokens == 30
-    assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in metadata
-    assert _ratelimit_headers(response)["x-ratelimit-remaining-requests"] == 100
-    assert await router.get_model_group_usage("gpt-5-mini") == (None, None)
+    assert metadata[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] == response.usage.total_tokens
+    assert _ratelimit_headers(response)["x-ratelimit-remaining-requests"] == 99
+    assert await router.get_model_group_usage("gpt-5-mini") == (response.usage.total_tokens, 1)
 
 
 ASSISTANT_RESPONSE: Final = {
