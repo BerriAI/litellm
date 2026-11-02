@@ -16,6 +16,18 @@ impl SecretValue {
     }
 }
 
+impl From<String> for SecretValue {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<&str> for SecretValue {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
 impl PartialEq for SecretValue {
     fn eq(&self, other: &Self) -> bool {
         subtle::ConstantTimeEq::ct_eq(self.0.as_bytes(), other.0.as_bytes()).into()

@@ -8,7 +8,7 @@ use litellm_cache::{
 use litellm_http::Client;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_encode};
 
-use crate::{GcpTokenSource, TokenSource};
+use crate::{GcsTokenSource, TokenSource};
 
 pub const DEFAULT_ENDPOINT: &str = "https://storage.googleapis.com";
 
@@ -62,7 +62,7 @@ pub struct GcsCache<S: CacheCodec> {
 
 impl<S: CacheCodec> GcsCache<S> {
     pub fn new(config: GcsConfig, client: Client, codec: S) -> Self {
-        let token = Arc::new(GcpTokenSource::new(config.path_service_account.clone()));
+        let token = Arc::new(GcsTokenSource::new(config.path_service_account.clone()));
         Self::with_token_source(config, client, codec, token)
     }
 
