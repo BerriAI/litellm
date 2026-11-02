@@ -5,8 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, Type
 
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
-from typing_extensions import TypedDict as ExtraItemsTypedDict
-from typing_extensions import Unpack
+from typing_extensions import NotRequired, TypedDict as ExtraItemsTypedDict, Unpack
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
@@ -58,7 +57,7 @@ ToolParam: TypeAlias = Mapping[str, object]
 SplitTools: TypeAlias = tuple[list[ToolParam], list[Any]]
 
 
-class MCPToolResult(TypedDict, total=False):
+class MCPToolResult(TypedDict):
     tool_call_id: str | None
     result: str
     name: str | None
@@ -66,7 +65,8 @@ class MCPToolResult(TypedDict, total=False):
     # raised (guardrail block, HTTP failure, unexpected exception). Anthropic
     # native MCP consumers pass is_error=True on the tool_result block so the
     # model can react to the failure instead of reading it as a success (#49359).
-    is_error: bool
+    # Optional via NotRequired (PEP 655) so the three original keys stay required.
+    is_error: NotRequired[bool]
 
 
 class _AresponsesOptions(ExtraItemsTypedDict, total=False, extra_items=object):
