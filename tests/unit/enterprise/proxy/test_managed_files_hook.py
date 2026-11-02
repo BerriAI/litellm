@@ -2301,7 +2301,6 @@ class _FakeFilesRouter:
         file: tuple[str, bytes, str],
         purpose: str,
         litellm_metadata: Mapping[str, object],
-        litellm_call_id: str,
     ) -> OpenAIFileObject:
         deployment_ids: Final = self.deployments_by_model[model]
         provider_file_ids: Final = tuple(
@@ -2313,6 +2312,7 @@ class _FakeFilesRouter:
             "model_id": deployment_ids[0],
             "custom_llm_provider": self.provider,
             "model_file_id_mapping": dict(zip(deployment_ids, provider_file_ids)),
+            "litellm_call_id": f"call-of-{provider_file_ids[0]}",
         }
         return response
 
@@ -2329,7 +2329,7 @@ class _FakeFilesRouter:
         file_id: str,
         litellm_metadata: Mapping[str, object],
         _litellm_internal_model_credentials: Mapping[str, str],
-        litellm_call_id: str,
+        litellm_call_id: str | None = None,
     ) -> None:
         if self.delete_gate is not None:
             await self.delete_gate.wait()
@@ -2367,7 +2367,6 @@ async def _upload(
             "file": ("notes.txt", b"the launch code is ORCHID-42\n", content_type),
             "purpose": "user_data",
             "litellm_metadata": litellm_metadata,
-            "litellm_call_id": "upload-call",
         },
         llm_router=router,
         target_model_names_list=target_model_names,
@@ -2478,14 +2477,19 @@ async def test_shutdown_drain_waits_for_the_repeat_upload_delete():
 
 
 @pytest.mark.asyncio
-async def test_repeat_upload_delete_runs_as_an_internal_call_of_the_upload_request():
-    router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)})
+async def test_each_repeat_upload_delete_runs_as_an_internal_call_of_the_upload_that_made_the_copy():
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",), "gpt-c": ("wildcard-dep",)}
+    )
 
-    await _create_managed_file(router, ["gpt-a", "gpt-b"])
+    await _create_managed_file(router, ["gpt-a", "gpt-b", "gpt-c"])
     await drain_logging_tasks(timeout=1)
 
-    assert router.deletes_marked_internal == (True,)
-    assert router.delete_parent_request_ids == ("upload-call",)
+    assert router.deletes_marked_internal == (True, True)
+    assert sorted(zip((delete[1] for delete in router.deletes), router.delete_parent_request_ids)) == [
+        ("file-upload-2", "call-of-file-upload-2"),
+        ("file-upload-3", "call-of-file-upload-3"),
+    ]
     assert is_internal_call.get() is False
     assert internal_parent_request_id.get() is None
 

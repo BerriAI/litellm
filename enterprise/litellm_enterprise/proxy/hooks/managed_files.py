@@ -407,6 +407,7 @@ _FILE_DELETE_RESERVED_FIELDS: Final = frozenset({"model", "file_id", "_litellm_i
 class _ProviderUpload:
     model_id: str
     provider_file_id: str
+    upload_call_id: str | None = None
 
 
 def _provider_uploads(file_object: OpenAIFileObject) -> tuple[_ProviderUpload, ...]:
@@ -416,8 +417,13 @@ def _provider_uploads(file_object: OpenAIFileObject) -> tuple[_ProviderUpload, .
     model_file_id_mapping: Final = _MODEL_FILE_ID_MAPPING.validate_python(
         file_hidden_params.get("model_file_id_mapping") or {}
     )
+    upload_call_id: Final = file_hidden_params.get("litellm_call_id")
     return tuple(
-        _ProviderUpload(model_id=model_id, provider_file_id=provider_file_id)
+        _ProviderUpload(
+            model_id=model_id,
+            provider_file_id=provider_file_id,
+            upload_call_id=upload_call_id if isinstance(upload_call_id, str) else None,
+        )
         for model_id, provider_file_id in model_file_id_mapping.items()
     )
 
@@ -477,11 +483,13 @@ async def _delete_redundant_upload(
     llm_router: Router,
     upload: _ProviderUpload,
     delete_request: Mapping[str, object],
+    parent_call_id: str | None,
 ) -> None:
     try:
-        await _delete_provider_file(
-            llm_router, upload.model_id, upload.provider_file_id, _with_own_nested_dicts(delete_request)
-        )
+        with internal_sub_call(parent_call_id):
+            await _delete_provider_file(
+                llm_router, upload.model_id, upload.provider_file_id, _with_own_nested_dicts(delete_request)
+            )
     except Exception as error:
         verbose_logger.warning(
             f"Could not delete the redundant upload provider_file_id={sanitize_for_log(upload.provider_file_id)} "
@@ -495,9 +503,9 @@ async def _delete_redundant_uploads(
     uploads: Sequence[_ProviderUpload],
     delete_request: Mapping[str, object],
 ) -> None:
-    parent_call_id: Final = delete_request.get("litellm_call_id")
-    with internal_sub_call(parent_call_id if isinstance(parent_call_id, str) else None):
-        await asyncio.gather(*(_delete_redundant_upload(llm_router, upload, delete_request) for upload in uploads))
+    await asyncio.gather(
+        *(_delete_redundant_upload(llm_router, upload, delete_request, upload.upload_call_id) for upload in uploads)
+    )
 
 
 def _start_deleting_redundant_uploads(
@@ -2827,8 +2835,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         for model_id, model_file_id in specific_model_file_id_mapping.items():
             await _delete_provider_file(llm_router, model_id, model_file_id, data)
         unrecorded_upload: Final = _carried_upload_missing_from(file_id, specific_model_file_id_mapping)
+        delete_call_id: Final = data.get("litellm_call_id")
         if unrecorded_upload is not None:
-            await _delete_redundant_uploads(llm_router, (unrecorded_upload,), data)
+            await _delete_redundant_upload(
+                llm_router, unrecorded_upload, data, delete_call_id if isinstance(delete_call_id, str) else None
+            )
 
     async def afile_content(
         self,
