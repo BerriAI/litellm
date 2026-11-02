@@ -1799,13 +1799,28 @@ class TestGeminiContents:
                     "role": "user",
                     "parts": [{"text": "hi"}, {field: {"name": "lookup", "response": {"card": "4111"}}}],
                 },
-                {"role": "model", "parts": [{"functionCall": {"name": "lookup", "args": {"card": "5555"}}}]},
             ]
         }
 
         assert _build_lakera_inspection_messages(data, call_type="pass_through_endpoint") == [
             {"role": "user", "content": "hi"},
             {"role": "tool", "content": '{"card": "4111"}'},
+        ]
+
+    @pytest.mark.parametrize(
+        ("part", "expected"),
+        [
+            ({"functionCall": {"name": "lookup", "args": {"card": "4111"}}}, '{"card": "4111"}'),
+            ({"function_call": {"name": "lookup", "args": {"card": "4111"}}}, '{"card": "4111"}'),
+            ({"executableCode": {"language": "PYTHON", "code": "print(4111)"}}, "print(4111)"),
+            ({"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "4111"}}, "4111"),
+        ],
+    )
+    def test_gemini_tool_part_is_read_as_a_tool_turn(self, part: dict[str, object], expected: str):
+        data: Final = {"contents": [{"role": "model", "parts": [part]}]}
+
+        assert _build_lakera_inspection_messages(data, call_type="pass_through_endpoint") == [
+            {"role": "tool", "content": expected},
         ]
 
     def test_reads_a_single_contents_object_with_a_single_parts_object(self):
