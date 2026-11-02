@@ -537,3 +537,43 @@ async def test_batch_charge_is_shared_across_workers_and_requires_redis_confirma
     await second._push_in_memory_increments_to_redis()
     assert float(await client.get("provider_spend:openai:1d")) == 0.5
     await client.aclose()
+
+
+def test_limiter_built_outside_a_loop_starts_its_background_work_on_the_first_async_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    started: Final[list[str]] = []
+
+    async def sync_loop(self: RouterBudgetLimiting) -> None:
+        started.append("sync")
+
+    monkeypatch.setattr(RouterBudgetLimiting, "periodic_sync_in_memory_spend_with_redis", sync_loop)
+    cache: Final = DualCache()
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=cache, provider_budget_config={"openai": {"budget_limit": 1, "time_period": "1d"}}
+    )
+    assert limiter._sync_task is None  # pyright: ignore[reportPrivateUsage]  # the background task under test
+
+    async def first_hook() -> None:
+        await limiter.async_filter_deployments(model="g", healthy_deployments=[], messages=None)  # pyright: ignore[reportUnknownMemberType]  # an untyped deployment list
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+    asyncio.run(first_hook())
+    assert started == ["sync"]
+    assert cache.get_cache("provider_spend:openai:1d") == 0.0  # pyright: ignore[reportUnknownMemberType]  # DualCache reads are untyped
+    assert cache.get_cache("provider_budget_start_time:openai") is not None  # pyright: ignore[reportUnknownMemberType]  # see above
+
+
+@pytest.mark.asyncio
+async def test_limiter_built_inside_a_loop_starts_one_sync_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    limiter: Final = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config=None)
+    task: Final = limiter._sync_task  # pyright: ignore[reportPrivateUsage]  # the background task under test
+    assert task is not None and not task.done()
+
+    await limiter.async_filter_deployments(model="g", healthy_deployments=[], messages=None)  # pyright: ignore[reportUnknownMemberType]  # an untyped deployment list
+
+    assert limiter._sync_task is task  # pyright: ignore[reportPrivateUsage]  # the background task under test
+    limiter.retire()
