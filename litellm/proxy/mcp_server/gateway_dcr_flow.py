@@ -438,7 +438,9 @@ def is_gateway_dcr_client_id(client_id: str | None) -> bool:
 
 def _oauth_error(status_code: int, error: str, description: str) -> JSONResponse:
     """RFC 6749 section 5.2 / RFC 7591 section 3.2.2 error body. Descriptions carry no
-    token, code, or URL material so they are safe to relay to any client."""
+    token, code, or URL material so they are safe to relay to any client, and to log: without
+    the log line an operator cannot tell why a client's token or registration request failed."""
+    verbose_logger.warning("MCP OAuth error response: %s %s: %s", status_code, error, description)
     return JSONResponse(
         status_code=status_code,
         content={"error": error, "error_description": description},
