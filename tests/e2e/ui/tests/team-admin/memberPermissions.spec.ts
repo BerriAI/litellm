@@ -130,7 +130,7 @@ test.describe("Team Admin - Member permissions", () => {
       await memberPage.getByRole("button", { name: "Create Key", exact: true }).click();
       const saveDialog = memberPage.getByRole("dialog", { name: "Save your Key" });
       await expect(saveDialog).toBeVisible({ timeout: 15_000 });
-      const apiKey = (await saveDialog.locator("pre").innerText()).trim();
+      const apiKey = (await saveDialog.locator("pre").filter({ hasText: /^sk-/ }).innerText()).trim();
       expect(apiKey).toMatch(/^sk-/);
       createdKeys.push(apiKey);
       await memberPage.keyboard.press("Escape");

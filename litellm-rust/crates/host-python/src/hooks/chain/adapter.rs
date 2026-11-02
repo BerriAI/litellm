@@ -6,7 +6,7 @@ use pyo3::{
     types::PyDict,
 };
 
-use crate::{HookResume, HookStep, PythonCallEvent, PythonCallHooks, PythonOwned, missing_state};
+use crate::{Error, HookResume, HookStep, PythonCallEvent, PythonCallHooks, PythonOwned};
 
 pub(super) enum ChainStep<T> {
     Ready(T),
@@ -110,7 +110,7 @@ impl<H: PythonCallHooks> ChainHooks for HookAdapter<H> {
         result: PyResult<Py<PyAny>>,
     ) -> PyResult<ChainStep<Py<PyDict>>> {
         let Some(Continuation::Arguments(resume)) = self.continuation.take() else {
-            return Err(missing_state());
+            return Err(Error::MissingState.into());
         };
         let step = resume(&mut self.hooks, py, result)?;
         Ok(self.step(step, Continuation::Arguments))
@@ -132,7 +132,7 @@ impl<H: PythonCallHooks> ChainHooks for HookAdapter<H> {
         result: PyResult<Py<PyAny>>,
     ) -> PyResult<ChainStep<Box<WireRequest>>> {
         let Some(Continuation::Wire(resume)) = self.continuation.take() else {
-            return Err(missing_state());
+            return Err(Error::MissingState.into());
         };
         let step = resume(&mut self.hooks, py, result)?;
         Ok(self.step(step, Continuation::Wire))
@@ -154,7 +154,7 @@ impl<H: PythonCallHooks> ChainHooks for HookAdapter<H> {
         result: PyResult<Py<PyAny>>,
     ) -> PyResult<ChainStep<Py<PyAny>>> {
         let Some(Continuation::Response(resume)) = self.continuation.take() else {
-            return Err(missing_state());
+            return Err(Error::MissingState.into());
         };
         let step = resume(&mut self.hooks, py, result)?;
         Ok(self.step(step, Continuation::Response))
@@ -171,7 +171,7 @@ impl<H: PythonCallHooks> ChainHooks for HookAdapter<H> {
         result: PyResult<Py<PyAny>>,
     ) -> PyResult<ChainStep<()>> {
         let Some(Continuation::Event(resume)) = self.continuation.take() else {
-            return Err(missing_state());
+            return Err(Error::MissingState.into());
         };
         let step = resume(&mut self.hooks, py, result)?;
         Ok(self.step(step, Continuation::Event))

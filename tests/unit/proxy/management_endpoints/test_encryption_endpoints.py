@@ -3,7 +3,7 @@
 The endpoint bodies are exercised directly with the migration engine mocked, so
 the admin guard, db-not-connected guard, and success path are all covered
 without touching a live DB. The live ASGI/auth contract is covered separately in
-``tests/proxy_behavior/management/test_credential_migration_endpoint.py``.
+``tests/integration/management/test_credential_migration_endpoint.py``.
 """
 
 from types import SimpleNamespace

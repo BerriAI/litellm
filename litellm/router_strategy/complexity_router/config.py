@@ -7,12 +7,12 @@ All values are configurable via proxy config.yaml.
 
 import math
 import re
-import warnings
+import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, NamedTuple
+from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple
 
 from pydantic import (
     ConfigDict,
@@ -27,8 +27,13 @@ from pydantic import (
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", DeprecationWarning)
+if TYPE_CHECKING:
+    import sre_constants
+    import sre_parse
+elif sys.version_info >= (3, 11):
+    from re import _constants as sre_constants
+    from re import _parser as sre_parse
+else:
     import sre_constants
     import sre_parse
 
@@ -705,10 +710,19 @@ def normalize_classifier_config_aliases(config: Mapping[str, object]) -> Mapping
     return normalized
 
 
+_ENVIRONMENT_KEY_SCOPE: Final = MappingProxyType(
+    {
+        "jev": "TYPESAFE_API_KEY is only sent to TYPESAFE_API_BASE or https://api.typesafe.ai",
+        "databricks": "DATABRICKS_API_KEY or DATABRICKS_TOKEN is only sent to DATABRICKS_API_BASE",
+    }
+)
+
+
 class OpenSourceClassifierConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: Literal["jev", "laya", "bespoke"] = "jev"
+    deployment_name: str | None = Field(default=None, min_length=1)
+    provider: Literal["jev", "laya", "bespoke", "databricks"] = "jev"
     model: str = "jev-latest"
     api_key: str | None = Field(default=None, description="Provider API key; optional for self-hosted providers")
     api_base: str | None = Field(
@@ -746,6 +760,12 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
 
     @model_validator(mode="after")
     def _keep_the_environment_key_on_the_environment_base(self) -> "OpenSourceClassifierConfig":
+        if self.deployment_name is not None:
+            if not self.deployment_name.strip():
+                raise ValueError("deployment_name must name a configured decision model")
+            if self.api_key is not None or self.api_base is not None:
+                raise ValueError("deployment_name uses the deployment connection; omit api_key and api_base")
+            return self
         if self.provider in ("laya", "bespoke"):
             from litellm.llms.oss_decision import validate_oss_api_base, validate_oss_model
 
@@ -753,10 +773,22 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
             if self.api_base is not None:
                 _ = validate_oss_api_base(self.provider, self.api_base)
             return self
+        if self.provider == "databricks":
+            from litellm.llms.databricks.decisions.transformation import (
+                DATABRICKS_AI_DECIDE_MODEL,
+                validate_databricks_decisions_model,
+            )
+
+            if "model" not in self.model_fields_set:
+                raise ValueError(
+                    "opensource_classifier_config.model is required for provider 'databricks': "
+                    f"{DATABRICKS_AI_DECIDE_MODEL!r} or a serving endpoint name, e.g. databricks-openjev-qwen35-4b"
+                )
+            _ = validate_databricks_decisions_model(self.model)
         if self.api_base is not None and self.api_key is None:
             raise ValueError(
-                "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: TYPESAFE_API_KEY is only sent "
-                "to TYPESAFE_API_BASE or https://api.typesafe.ai"
+                "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: "
+                f"{_ENVIRONMENT_KEY_SCOPE[self.provider]}"
             )
         return self
 
@@ -816,7 +848,10 @@ def _resolve_normalized_complexity_router_config_write(
         {
             key: value
             for key, value in existing.items()
-            if same_provider and key in ("api_key", "api_base") and (key != "api_key" or same_base)
+            if same_provider
+            and not classifier.get("deployment_name")
+            and key in ("api_key", "api_base")
+            and (key != "api_key" or same_base)
         }
     )
     return ComplexityRouterConfigWrite(
@@ -1427,7 +1462,7 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "wording the built-ins don't cover, or after a client release changes its strings."
         ),
     )
-    max_tokens_from_tier_model: bool = Field(
+    max_tokens_from_tier_model: bool | Literal["clamp"] = Field(
         default=True,
         description=(
             "Set max_tokens on every routed request to the output ceiling of the tier model it "
@@ -1438,7 +1473,8 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "from each deployment's model_info and then the model cost map; a tier model with a "
             "deployment whose ceiling is unknown keeps the caller's value. A max_tokens, "
             "max_completion_tokens or max_output_tokens in the tier's own litellm_params still "
-            "wins. Set false to forward the caller's value unchanged."
+            'wins. Set "clamp" to keep a smaller positive caller value and cap a larger one at '
+            "the ceiling. Set false to forward the caller's value unchanged."
         ),
     )
     route_housekeeping_to_cheapest_tier: bool = Field(
@@ -2004,8 +2040,10 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
 
     @property
     def has_custom_tiers(self) -> bool:
-        """True when the operator replaced the built-in tier set via tier_definitions."""
-        return self.tier_definitions is not None
+        """Whether routing uses names outside the built-in complexity ladder."""
+        return self.tier_definitions is not None or (
+            self.classifier_type == "custom" and any(name not in ComplexityTier.__members__ for name in self.tiers)
+        )
 
     @property
     def uses_llm_classifier(self) -> bool:
@@ -2023,6 +2061,8 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
         """The active tier names: the defined names, or the built-in set in severity order."""
         if self.tier_definitions is not None:
             return tuple(definition.name for definition in self.tier_definitions)
+        if self.has_custom_tiers:
+            return tuple(self.tiers)
         return tuple(tier.value for tier in self.active_tier_severity_order())
 
     def classifier_wire_labels(self) -> tuple[str, ...]:
@@ -2033,7 +2073,7 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
 
     def resolve_classified_tier(self, label: str) -> ComplexityTier | str | None:
         """Resolve a classifier reply to the active tier it names, or None when it names none."""
-        if self.tier_definitions is None:
+        if not self.has_custom_tiers:
             return self.tier_for_label(label)
         folded: Final = label.strip().casefold()
         return next((name for name in self.tier_names() if name.casefold() == folded), None)
@@ -2102,7 +2142,7 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
                     "set replaces",
                 ),
                 (
-                    self.classifier_fallback == "default_model",
+                    self.classifier_fallback == "default_model" and self.classifier_type != "custom",
                     "classifier_fallback 'default_model' cannot be combined with tier_definitions: fallback_tier "
                     "is where a custom-tier router routes when the classifier fails",
                 ),
@@ -2147,17 +2187,19 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
 
     @model_validator(mode="after")
     def _validate_tier_definitions(self) -> "ComplexityRouterConfig":
-        if self.tier_definitions is None:
+        if self.tier_definitions is None and not self.has_custom_tiers:
             if self.fallback_tier is not None:
                 raise ValueError("fallback_tier requires tier_definitions")
             for message in self._built_in_opening_conflicts():
                 raise ValueError(message)
             return self
-        names: Final = tuple(definition.name for definition in self.tier_definitions)
-        if not 2 <= len(names) <= MAX_TIER_DEFINITIONS:
+        names: Final = self.tier_names()
+        if self.tier_definitions is not None and not 2 <= len(names) <= MAX_TIER_DEFINITIONS:
             raise ValueError(
                 f"tier_definitions must define between 2 and {MAX_TIER_DEFINITIONS} tiers, got {len(names)}"
             )
+        if any(not name.strip() or name != name.strip() or "\n" in name or "\r" in name for name in names):
+            raise ValueError("tier names must be non-empty and contain no surrounding whitespace or newlines")
         folded: Final = tuple(name.casefold() for name in names)
         duplicated: Final = tuple(
             sorted(frozenset(name for name, fold in zip(names, folded) if folded.count(fold) > 1))
@@ -2185,9 +2227,11 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
                 f"tiers must map every defined tier to at least one model; empty: {', '.join(empty_pools)}"
             )
         if self.fallback_tier is None:
+            if self.classifier_type == "custom" and self.classifier_fallback == "default_model":
+                return self
             raise ValueError(
                 "fallback_tier is required with tier_definitions: it is where requests route when the "
-                "LLM classifier fails"
+                "LLM classifier fails. Custom classifiers can instead use classifier_fallback='default_model'"
             )
         if self.fallback_tier not in defined:
             raise ValueError(

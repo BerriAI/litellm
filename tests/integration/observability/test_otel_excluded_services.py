@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass, replace
+from itertools import accumulate
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -16,20 +18,56 @@ from integration._support.client import (
     gateway_from_environment,
 )
 from integration._support.otlp_sink import (
+    AuditConfigWriter,
+    ConnectSink,
     Span,
     SpanSinks,
+    audit_configuration_writer,
+    langfuse_callback_variables,
+    owned_connect_sink,
+    owned_sinks,
     recorded_spans,
     spans_for_trace,
 )
 from integration._support.process import owned_proxy, owned_proxy_process
+from integration._support.redis_process import owned_redis
 from pydantic import JsonValue
 
-AuditConfigWriter = Callable[[Path, Mapping[str, JsonValue]], Path]
-
 DB_SYSTEM_KEYS: Final = frozenset({"db.system.name", "db.system"})
+TENANT_EXPORT_INTERVAL_MILLISECONDS: Final = 1000
+TAIL_QUIET_SECONDS: Final = 5 * TENANT_EXPORT_INTERVAL_MILLISECONDS / 1000
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(autouse=True)
+def tenant_export_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OTEL_BSP_SCHEDULE_DELAY", str(TENANT_EXPORT_INTERVAL_MILLISECONDS))
+
+
+@pytest.fixture(autouse=True)
+def private_redis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    with owned_redis(tmp_path / "redis") as cache:
+        monkeypatch.setenv("REDIS_HOST", cache.host)
+        monkeypatch.setenv("REDIS_PORT", str(cache.port))
+        yield
+
+
+@pytest.fixture
+def audit_sinks(tmp_path: Path) -> Iterator[SpanSinks]:
+    with owned_sinks(tmp_path / "sinks") as sinks:
+        yield sinks
+
+
+@pytest.fixture
+def otel_audit_config(audit_sinks: SpanSinks) -> AuditConfigWriter:
+    return audit_configuration_writer(audit_sinks)
+
+
+@pytest.fixture
+def langfuse_vars(audit_sinks: SpanSinks) -> dict[str, JsonValue]:
+    return langfuse_callback_variables(audit_sinks)
+
+
+@pytest.fixture
 def gateway(audit_sinks: SpanSinks) -> Iterator[Gateway]:
     with gateway_from_environment() as base:
         yield base
@@ -61,19 +99,43 @@ def _operator_langfuse(audit_sinks: SpanSinks) -> dict[str, str]:
     }
 
 
-def _add_callback(gateway: Gateway, team_id: str, callback_vars: Mapping[str, JsonValue]) -> httpx.Response:
+def _newrelic_environment(audit_sinks: SpanSinks, newrelic_sink: ConnectSink) -> dict[str, str]:
+    return {
+        "LITELLM_OTEL_V2": "1",
+        **_operator_langfuse(audit_sinks),
+        "HTTPS_PROXY": newrelic_sink.proxy_url,
+        "NO_PROXY": "127.0.0.1,localhost",
+        "REQUESTS_CA_BUNDLE": newrelic_sink.ca_pem,
+    }
+
+
+def _newrelic_vars(excluded_services: str | None = None) -> dict[str, JsonValue]:
+    variables: Final[dict[str, JsonValue]] = {"newrelic_api_key": "nr-team-excluded-services"}
+    return variables if excluded_services is None else {**variables, "excluded_services": excluded_services}
+
+
+def _add_callback(
+    gateway: Gateway,
+    team_id: str,
+    callback_vars: Mapping[str, JsonValue],
+    callback_name: str = "langfuse_otel",
+) -> httpx.Response:
     return gateway.request(
         "POST",
         f"/team/{team_id}/callback",
-        {"callback_name": "langfuse_otel", "callback_vars": dict(callback_vars)},
+        {"callback_name": callback_name, "callback_vars": dict(callback_vars)},
     )
 
 
-def _drive(candidate: Gateway, langfuse_vars: Mapping[str, JsonValue]) -> httpx.Response:
+def _drive(
+    candidate: Gateway,
+    callback_vars: Mapping[str, JsonValue],
+    callback_name: str = "langfuse_otel",
+) -> httpx.Response:
     with candidate.scenario() as scenario:
         model: Final = scenario.model(model="openai/audit-chat", api_base=f"{candidate.upstream_url}/v1")
         team_id: Final = scenario.team()
-        callback: Final = _add_callback(candidate, team_id, langfuse_vars)
+        callback: Final = _add_callback(candidate, team_id, callback_vars, callback_name)
         assert callback.status_code == 200, callback.text
         key: Final = scenario.key(team_id=team_id)
         response: Final = candidate.request(
@@ -107,21 +169,33 @@ def _trace_id(sink_url: str, response: httpx.Response, seconds: float = 40) -> s
     return found
 
 
-def _trace_spans(sink_url: str, trace_id: str, seconds: float = 30) -> tuple[Span, ...]:
-    """The trace's spans once the post-call tail has landed.
+@dataclass(frozen=True, slots=True)
+class _TraceSample:
+    at: float
+    changed_at: float
+    spans: tuple[Span, ...]
 
-    The spend-writer and other post-response spans flush after the request
-    answers, so absence assertions poll for the whole window instead of
-    settling at the first glimpse of the root span.
-    """
-    deadline: Final = time.monotonic() + seconds
-    group: tuple[Span, ...] = ()  # rebind-ok: drains samples until the post-call tail lands
-    while time.monotonic() < deadline:
-        _, spans = recorded_spans(sink_url)
-        group = spans_for_trace(spans, trace_id)
+
+def _trace_samples(sink_url: str, trace_id: str) -> Iterator[_TraceSample]:
+    while True:
+        now: Final = time.monotonic()
+        yield _TraceSample(now, now, spans_for_trace(recorded_spans(sink_url)[1], trace_id))
         time.sleep(0.5)
-    assert group, f"trace {trace_id} never reached {sink_url}"
-    return group
+
+
+def _keep_unchanged_since(previous: _TraceSample, current: _TraceSample) -> _TraceSample:
+    return current if len(current.spans) != len(previous.spans) else replace(current, changed_at=previous.changed_at)
+
+
+def _trace_spans(sink_url: str, trace_id: str, seconds: float = 30) -> tuple[Span, ...]:
+    deadline: Final = time.monotonic() + seconds
+    settled: Final = next(
+        sample
+        for sample in accumulate(_trace_samples(sink_url, trace_id), _keep_unchanged_since)
+        if (sample.spans and sample.at - sample.changed_at >= TAIL_QUIET_SECONDS) or sample.at >= deadline
+    )
+    assert settled.spans, f"trace {trace_id} never reached {sink_url}"
+    return settled.spans
 
 
 def _trace_spans_when(
@@ -213,7 +287,7 @@ def test_excluded_services_drops_db_spans_at_tenant_only(
     config: Final = _config_with(
         tmp_path, otel_audit_config, otel={"excluded_services": ["redis", "postgres"]}, extra=_guardrail_block
     )
-    with owned_proxy(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config, workers=2) as candidate:
+    with owned_proxy(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config) as candidate:
         ten_start, _ = recorded_spans(audit_sinks.tenant)
         op_start, _ = recorded_spans(audit_sinks.operator)
         traffic: Final = _drive(candidate, langfuse_vars)
@@ -248,7 +322,7 @@ def test_without_excluded_services_the_tenant_still_gets_redis_and_postgres_span
     tmp_path: Path,
 ) -> None:
     config: Final = _config_with(tmp_path, otel_audit_config, extra=_guardrail_block)
-    with owned_proxy(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config, workers=2) as candidate:
+    with owned_proxy(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config) as candidate:
         tenant_start, _ = recorded_spans(audit_sinks.tenant)
         traffic: Final = _drive(candidate, langfuse_vars)
         tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
@@ -258,6 +332,85 @@ def test_without_excluded_services_the_tenant_still_gets_redis_and_postgres_span
         _, all_tenant = recorded_spans(audit_sinks.tenant, tenant_start)
         systems: Final = _db_systems(all_tenant)
         assert {"redis", "postgresql"} <= systems, f"datastore spans missing at tenant: {systems}"
+
+
+@pytest.mark.timeout(180)
+def test_team_excluded_services_replaces_global_and_keeps_operator_db_spans(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    tmp_path: Path,
+) -> None:
+    config: Final = _config_with(tmp_path, otel_audit_config, extra=_guardrail_block)
+    with owned_connect_sink(tmp_path / "newrelic") as newrelic_sink:
+        overrides: Final = _newrelic_environment(audit_sinks, newrelic_sink)
+        with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+            operator_start, _ = recorded_spans(audit_sinks.operator)
+            tenant_start, _ = recorded_spans(newrelic_sink.control_url)
+            traffic: Final = _drive(candidate, _newrelic_vars("redis,postgres"), callback_name="newrelic")
+            _await_db_span(
+                audit_sinks.operator,
+                None,
+                "postgres.update LiteLLM_VerificationToken",
+                seconds=60,
+                since=operator_start,
+            )
+            operator_trace: Final = _trace_id(audit_sinks.operator, traffic)
+            tenant_trace: Final = _trace_id(newrelic_sink.control_url, traffic)
+            assert operator_trace == tenant_trace
+            operator_trace_spans: Final = _trace_spans(audit_sinks.operator, operator_trace, seconds=15)
+            assert "redis" in _db_systems(operator_trace_spans), _db_systems(operator_trace_spans)
+            _, operator_spans = recorded_spans(audit_sinks.operator, operator_start)
+            assert "postgresql" in _db_systems(operator_spans), _db_systems(operator_spans)
+            tenant_trace_spans: Final = _trace_spans(newrelic_sink.control_url, tenant_trace, seconds=15)
+            _, tenant_spans = recorded_spans(newrelic_sink.control_url, tenant_start)
+            assert _db_systems(tenant_trace_spans) == set(), _db_systems(tenant_trace_spans)
+            assert _db_systems(tenant_spans) == set(), _db_systems(tenant_spans)
+
+
+@pytest.mark.timeout(180)
+def test_team_excluded_services_none_overrides_global(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    tmp_path: Path,
+) -> None:
+    config: Final = _config_with(
+        tmp_path, otel_audit_config, otel={"excluded_services": ["redis", "postgres"]}, extra=_guardrail_block
+    )
+    with owned_connect_sink(tmp_path / "newrelic") as newrelic_sink:
+        overrides: Final = _newrelic_environment(audit_sinks, newrelic_sink)
+        with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+            tenant_start, _ = recorded_spans(newrelic_sink.control_url)
+            traffic: Final = _drive(candidate, _newrelic_vars("none"), callback_name="newrelic")
+            tenant_trace: Final = _trace_id(newrelic_sink.control_url, traffic)
+            _await_db_span(newrelic_sink.control_url, tenant_trace, "redis", seconds=60)
+            _await_db_span(newrelic_sink.control_url, None, "postgresql", seconds=60, since=tenant_start)
+            tenant_trace_spans: Final = _trace_spans(newrelic_sink.control_url, tenant_trace, seconds=15)
+            _, tenant_spans = recorded_spans(newrelic_sink.control_url, tenant_start)
+            assert {"redis", "postgresql"} <= _db_systems(tenant_spans), _db_systems(tenant_spans)
+            assert {"redis", "postgresql"} <= _db_systems(tenant_trace_spans), _db_systems(tenant_trace_spans)
+
+
+@pytest.mark.timeout(180)
+def test_team_excluded_services_unset_inherits_global(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    tmp_path: Path,
+) -> None:
+    config: Final = _config_with(
+        tmp_path, otel_audit_config, otel={"excluded_services": ["redis", "postgres"]}, extra=_guardrail_block
+    )
+    with owned_connect_sink(tmp_path / "newrelic") as newrelic_sink:
+        overrides: Final = _newrelic_environment(audit_sinks, newrelic_sink)
+        with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+            tenant_start, _ = recorded_spans(newrelic_sink.control_url)
+            traffic: Final = _drive(candidate, _newrelic_vars(), callback_name="newrelic")
+            tenant_trace: Final = _trace_id(newrelic_sink.control_url, traffic)
+            _trace_spans(newrelic_sink.control_url, tenant_trace, seconds=15)
+            _, tenant_spans = recorded_spans(newrelic_sink.control_url, tenant_start)
+            assert _db_systems(tenant_spans) == set(), _db_systems(tenant_spans)
 
 
 @pytest.mark.parametrize("otel", [None, True, "on", "", []], ids=["null", "true", "on", "empty_string", "empty_list"])
@@ -276,7 +429,7 @@ def test_a_non_mapping_otel_block_still_publishes_the_tenant_fan_out(
 
     config: Final = _config_with(tmp_path, otel_audit_config, extra=with_callback_settings)
     overrides: Final = {"LITELLM_OTEL_V2": "1", **_operator_langfuse(audit_sinks)}
-    with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+    with owned_proxy(gateway, tmp_path, overrides, config=config) as candidate:
         traffic: Final = _drive(candidate, langfuse_vars)
         tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
         _await_db_span(audit_sinks.tenant, tenant_trace, "redis")
@@ -310,7 +463,7 @@ def test_a_bare_excluded_services_env_var_is_ignored(
 ) -> None:
     config: Final = _config_with(tmp_path, otel_audit_config)
     overrides: Final = {"LITELLM_OTEL_V2": "1", name: "redis,postgres"}
-    with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+    with owned_proxy(gateway, tmp_path, overrides, config=config) as candidate:
         tenant_start, _ = recorded_spans(audit_sinks.tenant)
         traffic: Final = _drive(candidate, langfuse_vars)
         tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
@@ -342,7 +495,7 @@ def test_the_documented_env_var_wins_over_a_bare_excluded_services(
         "LITELLM_OTEL_EXCLUDED_SERVICES": "redis",
         "EXCLUDED_SERVICES": "postgres",
     }
-    with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+    with owned_proxy(gateway, tmp_path, overrides, config=config) as candidate:
         tenant_start, _ = recorded_spans(audit_sinks.tenant)
         traffic: Final = _drive(candidate, langfuse_vars)
         tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
@@ -379,7 +532,6 @@ def test_case_sensitive_otel_settings_read_only_the_exact_env_name(
         overrides,
         config=config,
         remove_environment=("LITELLM_OTEL_EXCLUDED_SERVICES", "litellm_otel_excluded_services"),
-        workers=2,
     ) as candidate:
         tenant_start, _ = recorded_spans(audit_sinks.tenant)
         traffic: Final = _drive(candidate, langfuse_vars)
@@ -413,7 +565,7 @@ def test_env_ignore_empty_keeps_the_default_service_name(
 ) -> None:
     config: Final = _config_with(tmp_path, otel_audit_config, otel={"_env_ignore_empty": True})
     overrides: Final = {"LITELLM_OTEL_V2": "1", "OTEL_SERVICE_NAME": ""}
-    with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+    with owned_proxy(gateway, tmp_path, overrides, config=config) as candidate:
         traffic: Final = _drive(candidate, langfuse_vars)
         operator_trace: Final = _trace_id(audit_sinks.operator, traffic)
         operator_spans: Final = _trace_spans_when(
@@ -438,7 +590,7 @@ def test_env_parse_none_str_reads_a_null_traces_endpoint_as_unset(
 ) -> None:
     config: Final = _config_with(tmp_path, otel_audit_config, otel={"_env_parse_none_str": "null"})
     overrides: Final = {"LITELLM_OTEL_V2": "1", "OTEL_TRACES_ENDPOINT": "null"}
-    with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+    with owned_proxy(gateway, tmp_path, overrides, config=config) as candidate:
         traffic: Final = _drive(candidate, langfuse_vars)
         operator_trace: Final = _trace_id(audit_sinks.operator, traffic)
         operator_spans: Final = _trace_spans_when(
@@ -459,7 +611,7 @@ def test_env_excluded_services_drops_only_redis(
 ) -> None:
     config: Final = _config_with(tmp_path, otel_audit_config)
     with owned_proxy(
-        gateway, tmp_path, {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "redis"}, config=config, workers=2
+        gateway, tmp_path, {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "redis"}, config=config
     ) as candidate:
         start, _ = recorded_spans(audit_sinks.tenant)
         _drive(candidate, langfuse_vars)
@@ -485,7 +637,7 @@ def test_config_excluded_services_wins_over_env(
         tmp_path, otel_audit_config, otel={"excluded_services": ["postgres"]}, extra=with_langfuse_otel
     )
     with owned_proxy(
-        gateway, tmp_path, {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "redis"}, config=config, workers=2
+        gateway, tmp_path, {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "redis"}, config=config
     ) as candidate:
         _assert_tenant_keeps_redis_without_postgres(candidate, audit_sinks, langfuse_vars)
 
@@ -505,7 +657,7 @@ def test_excluded_services_applies_with_preset_ordered_first(
         tmp_path, otel_audit_config, otel={"excluded_services": ["postgres"]}, extra=preset_first
     )
     overrides: Final = {"LITELLM_OTEL_V2": "1", **_operator_langfuse(audit_sinks)}
-    with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+    with owned_proxy(gateway, tmp_path, overrides, config=config) as candidate:
         _assert_tenant_keeps_redis_without_postgres(candidate, audit_sinks, langfuse_vars)
 
 
@@ -518,7 +670,7 @@ def test_bogus_excluded_service_logs_error_and_drops_at_proxy_start(
     tmp_path: Path,
 ) -> None:
     config: Final = _config_with(tmp_path, otel_audit_config, otel={"excluded_services": ["auth", "postgres"]})
-    with owned_proxy_process(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config, workers=2) as owned:
+    with owned_proxy_process(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config) as owned:
         assert "'auth' is not a datastore service; ignored" in owned.log.read_text(), owned.log.read_text()[-3000:]
         _assert_tenant_keeps_redis_without_postgres(owned.gateway, audit_sinks, langfuse_vars)
 
@@ -533,7 +685,7 @@ def test_valid_config_excluded_services_tolerates_bogus_env(
 ) -> None:
     config: Final = _config_with(tmp_path, otel_audit_config, otel={"excluded_services": ["postgres"]})
     with owned_proxy(
-        gateway, tmp_path, {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "auth"}, config=config, workers=2
+        gateway, tmp_path, {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "auth"}, config=config
     ) as candidate:
         _assert_tenant_keeps_redis_without_postgres(candidate, audit_sinks, langfuse_vars)
 
@@ -551,7 +703,7 @@ def test_bogus_excluded_services_env_logs_and_drops_with_preset_alongside_otel(
 
     config: Final = _config_with(tmp_path, otel_audit_config, extra=with_langfuse_otel)
     overrides: Final = {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "auth,postgres"}
-    with owned_proxy_process(gateway, tmp_path, overrides, config=config, workers=2) as owned:
+    with owned_proxy_process(gateway, tmp_path, overrides, config=config) as owned:
         assert "'auth' is not a datastore service; ignored" in owned.log.read_text(), owned.log.read_text()[-3000:]
         _assert_tenant_keeps_redis_without_postgres(owned.gateway, audit_sinks, langfuse_vars)
 
@@ -573,7 +725,7 @@ def test_bogus_excluded_services_env_logs_and_drops_without_otel_callback(
         "LITELLM_OTEL_EXCLUDED_SERVICES": "auth,postgres",
         **_operator_langfuse(audit_sinks),
     }
-    with owned_proxy_process(gateway, tmp_path, overrides, config=config, workers=2) as owned:
+    with owned_proxy_process(gateway, tmp_path, overrides, config=config) as owned:
         assert "'auth' is not a datastore service; ignored" in owned.log.read_text(), owned.log.read_text()[-3000:]
         _assert_tenant_keeps_redis_without_postgres(owned.gateway, audit_sinks, langfuse_vars)
 
@@ -586,7 +738,7 @@ def test_postgres_exclusion_covers_spend_flush(
     tmp_path: Path,
 ) -> None:
     config: Final = _config_with(tmp_path, otel_audit_config, otel={"excluded_services": ["postgres"]})
-    with owned_proxy(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config, workers=2) as candidate:
+    with owned_proxy(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config) as candidate:
         op_start, _ = recorded_spans(audit_sinks.operator)
         ten_start, _ = recorded_spans(audit_sinks.tenant)
         traffic: Final = _drive(candidate, langfuse_vars)

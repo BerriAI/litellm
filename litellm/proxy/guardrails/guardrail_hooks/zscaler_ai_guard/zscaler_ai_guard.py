@@ -4,6 +4,7 @@
 #
 # +-------------------------------------------------------------+
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
@@ -104,6 +105,11 @@ class ZscalerAIGuard(CustomGuardrail):
     def update_in_memory_litellm_params(self, litellm_params: "LitellmParams") -> None:
         super().update_in_memory_litellm_params(litellm_params)
         self.timeout = self._resolve_timeout(litellm_params.timeout)
+
+    @staticmethod
+    def _resolve_request_user(request_data: Mapping[str, object]) -> str | None:
+        request_user: Final = request_data.get("user")
+        return request_user if isinstance(request_user, str) and request_user else None
 
     @staticmethod
     def _resolve_metadata_value(request_data: dict | None, key: str) -> str | None:
@@ -207,6 +213,8 @@ class ZscalerAIGuard(CustomGuardrail):
                 )
             verbose_proxy_logger.debug("inside apply_guardrail kwargs: %s", kwargs)
 
+            user_for_payload: Final = self._resolve_request_user(request_data)
+
             zscaler_ai_guard_result = None
             direction: Final = "OUT" if input_type == "response" else "IN"
             verbose_proxy_logger.debug("direction: %s", direction)
@@ -219,6 +227,7 @@ class ZscalerAIGuard(CustomGuardrail):
                     policy_id=policy_id,
                     direction=direction,
                     content=concatenated_text,
+                    user=user_for_payload,
                     **kwargs,
                 )
                 verbose_proxy_logger.debug("response from zscaler ai guards: %s", zscaler_ai_guard_result)
@@ -357,7 +366,14 @@ class ZscalerAIGuard(CustomGuardrail):
             raise HTTPException(status_code=response.status_code, detail=user_facing_error)
 
     async def make_zscaler_ai_guard_api_call(
-        self, zscaler_ai_guard_url, api_key, policy_id, direction, content, **kwargs
+        self,
+        zscaler_ai_guard_url: str,
+        api_key: str | None,
+        policy_id,
+        direction: str,
+        content: str,
+        user: str | None = None,
+        **kwargs,
     ):
         """
         Makes an API call to the Zscaler AI Guard service and handles retries, errors, and response parsing.
@@ -374,6 +390,8 @@ class ZscalerAIGuard(CustomGuardrail):
         # the policy from headers (e.g., user-api-key-alias)
         if policy_id is not None and policy_id >= 1:
             data["policyId"] = policy_id
+        if user:
+            data["user"] = user
         try:
             response: Final = await self._send_request(zscaler_ai_guard_url, extra_headers, data)
             return self._handle_response(response, direction)

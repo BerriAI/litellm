@@ -2,13 +2,32 @@
 Shared utility functions for rate limiter hooks.
 """
 
+from collections.abc import Mapping
 from typing import Final
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK
+from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.types.router import ModelGroupInfo
-from litellm.types.utils import PriorityReservationDict
+from litellm.types.utils import CallTypes, PriorityReservationDict, Usage
+
+_SOCKET_SESSION_EVENTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def socket_session_usage(kwargs: Mapping[str, object], response_obj: object) -> Usage | None:
+    if not isinstance(response_obj, list):
+        return None
+    match kwargs.get("call_type"):
+        case CallTypes.aresponses_websocket.value:
+            return ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(
+                _SOCKET_SESSION_EVENTS.validate_python(response_obj)
+            )
+        case _:
+            return None
 
 
 def resolve_llm_provider_for_rate_limit(
@@ -85,10 +104,10 @@ def _resolve_provider_from_router_alias(
     if llm_router is None:
         return None
     try:
-        model_list: Final = getattr(llm_router, "model_list", None)
+        model_list: Final[object] = llm_router.registry().all()
         if not model_list:
             return None
-        for deployment in model_list:
+        for deployment in iter_items(model_list):
             if not isinstance(deployment, dict):
                 continue
             if deployment.get("model_name") != model:

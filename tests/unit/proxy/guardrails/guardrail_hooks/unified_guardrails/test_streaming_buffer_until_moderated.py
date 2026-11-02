@@ -15,6 +15,7 @@ from typing import Any, AsyncGenerator, List, Literal, Optional
 
 import pytest
 
+import litellm
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
@@ -25,6 +26,8 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
     UnifiedLLMGuardrails,
     _is_redundant_scan,
 )
+from litellm.proxy.utils import _pipelines_stream_live
+from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     Delta,
@@ -571,3 +574,34 @@ async def test_buffered_mode_disabled_for_content_rewriting_guardrail():
     assert guardrail.streaming_buffer_until_moderated is True  # request asked for buffering
     assert ORIGINAL_MARKER in raw
     assert BLOCK_MESSAGE not in raw
+
+
+def _detect_only_pipeline(guardrail: CustomGuardrail) -> tuple[tuple[str, GuardrailPipeline], ...]:
+    step = PipelineStep(guardrail=guardrail.guardrail_name, on_pass="allow", on_fail="next")
+    return (("live-policy", GuardrailPipeline(mode="post_call", steps=[step])),)
+
+
+@pytest.mark.parametrize(
+    ("attribute", "guardrail_config", "streams_live"),
+    (
+        pytest.param(False, None, True, id="attribute-false-streams-live"),
+        pytest.param(None, None, False, id="unset-keeps-buffering"),
+        pytest.param(True, None, False, id="attribute-true-keeps-buffering"),
+        pytest.param(False, {"streaming_buffer_until_moderated": True}, False, id="config-true-wins"),
+        pytest.param(True, {"streaming_buffer_until_moderated": False}, True, id="config-false-wins"),
+    ),
+)
+def test_pipeline_live_streaming_resolves_the_flag_like_the_flat_streaming_path(
+    monkeypatch: pytest.MonkeyPatch,
+    attribute: bool | None,
+    guardrail_config: dict | None,
+    streams_live: bool,
+) -> None:
+    guardrail = _PassingGuardrail(guardrail_name="pipeline-scanner", event_hook="post_call")
+    if attribute is not None:
+        guardrail.streaming_buffer_until_moderated = attribute
+    if guardrail_config is not None:
+        guardrail.guardrail_config = guardrail_config
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    assert _pipelines_stream_live(_detect_only_pipeline(guardrail)) is streams_live

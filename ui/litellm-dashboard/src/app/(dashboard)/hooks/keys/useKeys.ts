@@ -110,13 +110,14 @@ export const useKeys = (
   page: number,
   pageSize: number,
   options: KeyListCallOptions = {},
+  queryOptions: { enabled?: boolean } = {},
 ): UseQueryResult<KeysResponse> => {
   const { accessToken } = useAuthorized();
 
   return useQuery<KeysResponse>({
     queryKey: keyKeys.list({ page, limit: pageSize, ...options }),
     queryFn: async () => await keyListCall(accessToken!, page, pageSize, options),
-    enabled: Boolean(accessToken),
+    enabled: Boolean(accessToken) && (queryOptions.enabled ?? true),
     staleTime: 30000, // 30 seconds
     placeholderData: keepPreviousData,
   });

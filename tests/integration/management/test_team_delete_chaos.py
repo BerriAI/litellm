@@ -382,21 +382,21 @@ def test_worker_killed_mid_burst_leaves_every_team_fully_deleted_after_retry(
         fleet: Final = _fleet(owned.gateway, scenario)
         pinned: Final = fleet[0]
         burst: Final = Burst(owned.gateway)
-        with _holding_team_lock(pinned.team_id) as holder_pid:
-            burst.start(pool, fleet)
-            _await_pinned_delete_blocked(burst, pinned, holder_pid, record_property)
-            before: Final = _workers(root)
-            assert len(before) == WORKERS, [process.pid for process in before]
-            victim: Final = before[0]
-            victim.kill()  # SIGKILL with the pinned delete blocked: the worker cannot finish its in-flight deletes
-            victim.wait(timeout=10)
-            with httpx.Client(base_url=str(owned.gateway.client.base_url), timeout=15, trust_env=False) as fresh:
-                readiness: Final = fresh.get("/health/readiness")
-            assert readiness.status_code == 200, (
-                f"/health/readiness with worker {victim.pid} dead: {readiness.status_code} {readiness.text}"
-            )
-        # The lock is released: the pinned delete finishes on the survivor, or was dropped with the victim.
-        outcomes: Final = burst.outcomes()
+        before: Final = _workers(root)
+        assert len(before) == WORKERS, [process.pid for process in before]
+        victim: Final = before[0]
+        with owned.replacing_worker(victim.pid) as kill:
+            with _holding_team_lock(pinned.team_id) as holder_pid:
+                burst.start(pool, fleet)
+                _await_pinned_delete_blocked(burst, pinned, holder_pid, record_property)
+                kill()  # SIGKILL with the pinned delete blocked: the worker cannot finish its in-flight deletes
+                with httpx.Client(base_url=str(owned.gateway.client.base_url), timeout=15, trust_env=False) as fresh:
+                    readiness: Final = fresh.get("/health/readiness")
+                assert readiness.status_code == 200, (
+                    f"/health/readiness with worker {victim.pid} dead: {readiness.status_code} {readiness.text}"
+                )
+            # The lock is released: the pinned delete finishes on the survivor, or was dropped with the victim.
+            outcomes: Final = burst.outcomes()
         respawned: Final = eventually(
             lambda: tuple(process.pid for process in _workers(root)),
             lambda pids: len(pids) == WORKERS and victim.pid not in pids,
@@ -480,7 +480,7 @@ def test_proxy_terminated_mid_burst_then_restarted_leaves_every_team_fully_delet
             with _holding_team_lock(pinned.team_id) as holder_pid:
                 burst.start(pool, fleet)
                 _await_pinned_delete_blocked(burst, pinned, holder_pid, record_property)
-                doomed.process.terminate()  # SIGTERM with the pinned delete blocked: uvicorn stops accepting and drains
+                doomed.begin_shutdown()  # SIGTERM with the pinned delete blocked: uvicorn stops accepting and drains
                 assert burst.pending(pinned.team_id), f"{pinned.team_id}: delete answered while its team lock was held"
             # The lock is released: the drain lets the pinned delete finish before the proxy exits.
             doomed.process.wait(timeout=120)

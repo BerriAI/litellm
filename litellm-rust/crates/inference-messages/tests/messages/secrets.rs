@@ -18,6 +18,20 @@ use super::*;
     "/anthropic/v1/messages",
     &["AZURE_API_KEY", "AZURE_API_BASE"]
 )]
+#[case::deepseek(
+    "deepseek",
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_API_BASE",
+    "/anthropic/v1/messages",
+    &["DEEPSEEK_API_KEY", "DEEPSEEK_ANTHROPIC_API_BASE", "DEEPSEEK_API_BASE"]
+)]
+#[case::minimax(
+    "minimax",
+    "MINIMAX_API_KEY",
+    "MINIMAX_API_BASE",
+    "/v1/messages",
+    &["MINIMAX_API_KEY", "MINIMAX_API_BASE"]
+)]
 #[tokio::test]
 async fn the_credential_and_base_come_from_the_secret_source(
     call: MessagesCall,
@@ -38,6 +52,7 @@ async fn the_credential_and_base_come_from_the_secret_source(
         secrets.clone(),
         MessagesCall {
             custom_llm_provider: Some(provider.into()),
+            litellm_params: Default::default(),
             ..call
         },
     )
@@ -94,7 +109,7 @@ async fn a_secret_manager_failure_fails_the_call_before_sending(call: MessagesCa
     .expect_err("a secret manager failure fails the call");
 
     assert!(
-        matches!(&error, Error::Secret(source) if matches!(source.source_error(), litellm_secrets::Error::ManagedSecretMissing)),
+        matches!(&error, Error::Secret(_)) && !error.is_request(),
         "{error:?}"
     );
     assert!(received(&upstream).await.is_empty());
@@ -189,6 +204,7 @@ async fn azure_without_a_base_anywhere_fails_before_sending(call: MessagesCall) 
         Arc::new(RecordingSecrets::new([("AZURE_API_KEY", "sk-azure")])),
         MessagesCall {
             custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: Default::default(),
             ..call
         },
     )

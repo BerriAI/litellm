@@ -19,6 +19,7 @@ else:
     LiteLLMLoggingObj = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class FalAIIdeogramV3Config(FalAIBaseConfig):
@@ -57,7 +58,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -93,7 +94,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
 
         return optional_params
 
-    def _map_image_size(self, size: Any) -> object:
+    def _map_image_size(self, size: object) -> object:
         if isinstance(size, dict):
             width = size.get("width")
             height = size.get("height")
@@ -163,7 +164,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         """
 
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",

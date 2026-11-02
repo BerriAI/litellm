@@ -20,9 +20,13 @@ import {
  * traffic, so each assertion is scoped to a key this test minted and to the requests it sent.
  */
 
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /** Each breakdown renders one expandable card per entity, named "<entity> $x.xx N requests". */
 const entityCard = (page: PlaywrightPage, tab: string, name: string): Locator =>
-  page.getByRole("tabpanel", { name: tab }).getByRole("button", { name: new RegExp(`^${name}\\s`) });
+  page
+    .getByRole("tabpanel", { name: tab })
+    .getByRole("button", { name: new RegExp(`(?:^|\\s)${escapeRegExp(name)}\\s`) });
 
 async function openUsageTab(page: PlaywrightPage, tab: string): Promise<Locator> {
   await navigateToPage(page, Page.NewUsage);

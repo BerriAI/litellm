@@ -44,8 +44,8 @@ pub fn consumed_optional_param_names(
     model: &str,
     custom_llm_provider: Option<&str>,
 ) -> Result<Vec<&'static str>, Error> {
-    let (model, config) = resolve_provider_config(model, custom_llm_provider)?;
-    let provider_fields = config.get_supported_ocr_params(&model);
+    let (provider, config) = resolve_provider_config(model, custom_llm_provider)?;
+    let provider_fields = config.get_supported_ocr_params(provider.model);
     let auth_fields: &[&str] = match config {
         OcrConfigKind::AwsTextract | OcrConfigKind::AwsTextractAnalyze => AWS_AUTH_OPTION_FIELDS,
         OcrConfigKind::AzureAi

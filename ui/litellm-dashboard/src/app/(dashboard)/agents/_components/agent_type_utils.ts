@@ -12,6 +12,7 @@ export const detectAgentType = (agent: Agent): string => {
 
   // Check by custom_llm_provider first
   if (customProvider === "langflow") return "langflow";
+  if (customProvider === "databricks_agent") return "databricks_agent";
   if (customProvider === "langgraph") return "langgraph";
   if (customProvider === "azure_ai") return "azure_ai_foundry";
   if (customProvider === "bedrock") return "bedrock_agentcore";

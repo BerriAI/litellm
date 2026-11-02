@@ -231,5 +231,5 @@ def test_ui_category_fails_open_when_the_api_fails(tmp_path: Path) -> None:
 def test_ui_category_runs_when_the_ui_workflows_themselves_change(tmp_path: Path) -> None:
     """Without this the dashboard jobs would skip on the pull request that edits
     them, shipping a workflow change nothing ever exercised."""
-    decision, _ = _run(tmp_path, files=[".github/workflows/test-litellm-ui-unit.yml"], category="ui")
+    decision, _ = _run(tmp_path, files=[".github/workflows/test-unit.yml"], category="ui")
     assert decision == "decision=run"

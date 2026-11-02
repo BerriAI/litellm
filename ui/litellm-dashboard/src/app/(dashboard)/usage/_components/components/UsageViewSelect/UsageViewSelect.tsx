@@ -1,3 +1,4 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { BarChart3, Bot, Building2, Globe, LineChart, ShoppingCart, Tags, User, Users } from "lucide-react";
 import React from "react";
 import { Badge } from "@/components/ui/badge";
@@ -104,30 +105,41 @@ const OPTIONS: OptionConfig[] = [
     adminOnly: true,
   },
 ];
+const visibleOptions = (userRole: string | null, canViewTagUsage: boolean, isOrgAdmin: boolean): OptionConfig[] => {
+  const isAdmin = all_admin_roles.includes(userRole ?? "");
+  return OPTIONS.filter((option) => {
+    if (option.capability) {
+      return hasCapability(userRole, option.capability, isOrgAdmin);
+    }
+    if (option.value === "tag" && canViewTagUsage) {
+      return true;
+    }
+    return !(option.adminOnly && !isAdmin);
+  });
+};
+
+export const USAGE_OPTIONS: readonly UsageOption[] = OPTIONS.map((option) => option.value);
+
+export const allowedUsageOptions = (
+  userRole: string | null,
+  canViewTagUsage: boolean,
+  isOrgAdmin: boolean,
+): readonly UsageOption[] => visibleOptions(userRole, canViewTagUsage, isOrgAdmin).map((option) => option.value);
+
 export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   value,
   onChange,
   userRole,
   canViewTagUsage = false,
   isOrgAdmin = false,
-  title = "Usage View",
+  title = "Usage",
   description = "Select the usage data you want to view",
   "data-id": dataId,
 }) => {
+  const term = useTerminology();
   const isAdmin = all_admin_roles.includes(userRole ?? "");
   const getFilteredOptions = () => {
-    return OPTIONS.filter((option) => {
-      if (option.capability) {
-        return hasCapability(userRole, option.capability, isOrgAdmin);
-      }
-      if (option.value === "tag" && canViewTagUsage) {
-        return true;
-      }
-      if (option.adminOnly && !isAdmin) {
-        return false;
-      }
-      return true;
-    }).map((option) => {
+    return visibleOptions(userRole, canViewTagUsage, isOrgAdmin).map((option) => {
       let label = option.label;
       let desc = option.description;
       if (option.showForAdmin && option.showForNonAdmin) {
@@ -139,7 +151,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
       return {
         value: option.value,
         label,
-        description: desc,
+        description: term(desc),
         icon: option.icon,
         badgeText: option.badgeText,
       };
@@ -148,51 +160,43 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   const filteredOptions = getFilteredOptions();
   const selectedOption = filteredOptions.find((option) => option.value === value);
   return (
-    <div className="w-full" data-id={dataId}>
-      <div className="flex flex-wrap items-center justify-start gap-4">
-        <div className="flex items-stretch gap-2 min-w-0">
-          <div className="shrink-0 flex items-center">
-            <BarChart3 className="size-8" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-foreground mb-0.5 leading-tight">{title}</h3>
-            <p className="text-xs text-muted-foreground leading-tight">{description}</p>
-          </div>
-        </div>
-        <div className="shrink-0">
-          <Select
-            value={value}
-            onValueChange={(next: UsageOption | null) => {
-              if (next) onChange(next);
-            }}
-          >
-            <SelectTrigger className="w-54 sm:w-64 md:w-72">
-              <SelectValue>
-                {selectedOption && (
-                  <span className="flex items-center gap-2">
-                    {selectedOption.icon}
-                    <span className="text-sm">{selectedOption.label}</span>
-                  </span>
-                )}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {filteredOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  <span className="flex items-center gap-2 py-1">
-                    <span className="shrink-0 mt-0.5">{option.icon}</span>
-                    <span className="flex-1 min-w-0">
-                      <span className="block text-sm font-medium text-foreground">{option.label}</span>
-                      <span className="block text-xs text-muted-foreground mt-0.5">{option.description}</span>
-                    </span>
-                    {option.badgeText && <Badge>{option.badgeText}</Badge>}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
+    <div className="flex items-center gap-3" data-id={dataId}>
+      <h1 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+        <BarChart3 aria-hidden="true" className="size-4" strokeWidth={2} />
+        {title}
+      </h1>
+      <Select
+        value={value}
+        onValueChange={(next: UsageOption | null) => {
+          if (next) onChange(next);
+        }}
+      >
+        <SelectTrigger aria-label={description} className="h-8 w-52">
+          <SelectValue>
+            {selectedOption && (
+              <span className="flex items-center gap-2">
+                {selectedOption.icon}
+                <span className="text-sm">{selectedOption.label}</span>
+              </span>
+            )}
+          </SelectValue>
+        </SelectTrigger>
+        {/* Sized to its content rather than the narrow trigger, so descriptions never clip. */}
+        <SelectContent align="start" className="w-auto min-w-72 p-1">
+          {filteredOptions.map((option) => (
+            <SelectItem key={option.value} value={option.value} className="rounded-md py-2 pr-8 pl-2">
+              <span className="flex items-start gap-2.5">
+                <span className="mt-0.5 shrink-0 text-muted-foreground">{option.icon}</span>
+                <span className="min-w-0">
+                  <span className="block text-sm leading-5 text-foreground">{option.label}</span>
+                  <span className="block text-xs leading-4 text-muted-foreground">{option.description}</span>
+                </span>
+                {option.badgeText && <Badge>{option.badgeText}</Badge>}
+              </span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 };

@@ -12,15 +12,118 @@ import asyncio
 import hashlib
 import json
 import logging
+from collections.abc import Mapping
+from contextlib import AbstractAsyncContextManager
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from litellm._service_logger import ServiceTypes
+from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.db.log_db_metrics import record_db_io
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.user_repository import free_sso_user_creation
+
+
+class _SSOAdmissionUsers:
+    def __init__(self, count: int) -> None:
+        self.rows: Mapping[str, LiteLLM_UserTable] = {
+            f"user-{index}": LiteLLM_UserTable(user_id=f"user-{index}")
+            for index in range(count)
+        }
+
+    async def find_unique(
+        self, where: Mapping[str, object]
+    ) -> LiteLLM_UserTable | None:
+        return self.rows.get(str(where["user_id"]))
+
+    async def count(self, where: Mapping[str, object] | None = None) -> int:
+        if where is None:
+            return len(self.rows)
+        return sum((row.metadata or {}).get("scim_active") is False for row in self.rows.values())
+
+    async def upsert(
+        self, where: Mapping[str, object], data: Mapping[str, object]
+    ) -> LiteLLM_UserTable:
+        existing: Final = await self.find_unique(where)
+        if existing is not None:
+            return existing
+        created: Final = LiteLLM_UserTable.model_validate(data["create"])
+        self.rows = {**self.rows, created.user_id: created}
+        return created
+
+
+class _SSOAdmissionTransaction(AbstractAsyncContextManager["_SSOAdmissionTransaction"]):
+    def __init__(self, users: _SSOAdmissionUsers) -> None:
+        self.litellm_usertable: Final = users
+
+    async def __aenter__(self) -> _SSOAdmissionTransaction:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+    async def execute_raw(self, query: str) -> int:
+        return 0
+
+    async def query_raw(self, query: str) -> object:
+        return ({"locked": 1},)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("existing_count", "scope_id", "user_id", "enabled", "child_task", "refused"),
+    [
+        (4, "new-user", "new-user", True, False, False),
+        (5, "new-user", "new-user", True, False, True),
+        (6, "user-0", "user-0", True, False, False),
+        (5, "sso-user", "new-user", True, False, False),
+        (5, "new-user", "new-user", True, True, False),
+        (5, None, "new-user", True, False, True),
+        (5, None, "new-user", False, False, False),
+    ],
+)
+async def test_user_insert_enforces_free_sso_admission_only_for_its_owner(
+    prisma_client: PrismaClient,
+    monkeypatch: pytest.MonkeyPatch,
+    existing_count: int,
+    scope_id: str | None,
+    user_id: str,
+    enabled: bool,
+    child_task: bool,
+    refused: bool,
+) -> None:
+    users: Final = _SSOAdmissionUsers(existing_count)
+    prisma_client.db.litellm_usertable = users
+    prisma_client.db.tx.return_value = _SSOAdmissionTransaction(users)
+    monkeypatch.setattr("asyncio.sleep", AsyncMock(return_value=None))
+    original: Final = users.rows.get(user_id)
+
+    async def attempt() -> None:
+        if refused:
+            with pytest.raises(HTTPException) as error:
+                await prisma_client.insert_data(data={"user_id": user_id}, table_name="user")
+            assert error.value.status_code == 403
+            assert user_id not in users.rows
+        elif child_task:
+            result: Final = await asyncio.create_task(
+                prisma_client.insert_data(data={"user_id": user_id}, table_name="user")
+            )
+            assert result is users.rows[user_id]
+        else:
+            inserted: Final = await prisma_client.insert_data(data={"user_id": user_id}, table_name="user")
+            assert inserted is users.rows[user_id]
+
+    with free_sso_user_creation(scope_id, enabled=enabled):
+        for _ in range(2):
+            await attempt()
+
+    assert len(users.rows) == existing_count + int(not refused and original is None)
+    if original is not None:
+        assert users.rows[user_id] is original
 
 
 @pytest.mark.asyncio

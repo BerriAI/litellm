@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 from litellm import Router
@@ -71,26 +73,27 @@ async def test_enforced_check_authorizes_the_key_carried_in_request_metadata(met
     router = _router()
     request_kwargs = _request_with_key(metadata_field)
 
-    assert await ENFORCED(model="open-model", request_kwargs=request_kwargs, llm_router=router)
-    assert not await ENFORCED(model="secret-model", request_kwargs=request_kwargs, llm_router=router)
+    assert await ENFORCED(model="open-model", request_kwargs=request_kwargs, ctx=router._core_ctx)
+    assert not await ENFORCED(model="secret-model", request_kwargs=request_kwargs, ctx=router._core_ctx)
 
 
 @pytest.mark.asyncio
 async def test_enforced_check_does_not_restrict_requests_without_a_key():
-    assert await ENFORCED(model="secret-model", request_kwargs={"metadata": {}}, llm_router=_router())
+    assert await ENFORCED(model="secret-model", request_kwargs={"metadata": {}}, ctx=_router()._core_ctx)
 
 
 @pytest.mark.asyncio
 async def test_check_allows_every_fallback_while_not_enforced():
-    assert await NOT_ENFORCED(model="secret-model", request_kwargs=_request_with_key(), llm_router=_router())
+    assert await NOT_ENFORCED(model="secret-model", request_kwargs=_request_with_key(), ctx=_router()._core_ctx)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("general_settings", "expected"),
     [
-        ({}, True),
+        ({}, False),
         ({"enforce_fallback_model_access": False}, True),
+        ({"enforce_fallback_model_access": "false"}, True),
         ({"enforce_fallback_model_access": True}, False),
         ({"enforce_fallback_model_access": "true"}, False),
     ],
@@ -100,9 +103,12 @@ async def test_proxy_check_reads_enforce_fallback_model_access_from_general_sett
 ):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
+    assert await router_fallback_access_check(
+        model="open-model", request_kwargs=_request_with_key(), ctx=_router()._core_ctx
+    )
     assert (
         await router_fallback_access_check(
-            model="secret-model", request_kwargs=_request_with_key(), llm_router=_router()
+            model="secret-model", request_kwargs=_request_with_key(), ctx=_router()._core_ctx
         )
         is expected
     )
@@ -134,8 +140,8 @@ async def test_search_tool_fallback_target_follows_the_key_search_tool_grant(
         },
     }
 
-    assert await check(model="search-a", request_kwargs=request_kwargs, llm_router=router)
-    assert not await check(model="search-b", request_kwargs=request_kwargs, llm_router=router)
+    assert await check(model="search-a", request_kwargs=request_kwargs, ctx=router._core_ctx)
+    assert not await check(model="search-b", request_kwargs=request_kwargs, ctx=router._core_ctx)
 
 
 @pytest.mark.asyncio
@@ -168,7 +174,21 @@ async def test_fallback_named_like_both_a_model_and_a_search_tool_follows_the_re
     allowed = await ENFORCED(
         model="shared-name",
         request_kwargs={**request_kwargs, "metadata": {"user_api_key_auth": key}},
-        llm_router=router,
+        ctx=router._core_ctx,
     )
 
     assert allowed is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+async def test_default_check_enforces_team_models_for_a_key_without_model_restrictions(
+    monkeypatch: pytest.MonkeyPatch, metadata_field: str
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    router: Final = _router()
+    token: Final = UserAPIKeyAuth(api_key="hashed", models=[], team_id="qa-team", team_models=["open-model"])
+    request_kwargs: Final = {metadata_field: {"user_api_key_auth": token}}
+
+    assert await router_fallback_access_check(model="open-model", request_kwargs=request_kwargs, ctx=router._core_ctx)
+    assert not await router_fallback_access_check(model="secret-model", request_kwargs=request_kwargs, ctx=router._core_ctx)

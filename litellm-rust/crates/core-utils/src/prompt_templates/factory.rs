@@ -17,16 +17,11 @@ pub const EMPTY_TEXT_PLACEHOLDER: &str =
     "[System: Empty message content sanitised to satisfy protocol]";
 
 #[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq)]
-#[strum(serialize_all = "snake_case")]
 pub enum TurnRole {
+    #[strum(serialize = "user")]
     User,
+    #[strum(serialize = "assistant")]
     Assistant,
-}
-
-impl TurnRole {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

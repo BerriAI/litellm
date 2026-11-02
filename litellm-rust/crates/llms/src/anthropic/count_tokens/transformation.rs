@@ -1,10 +1,14 @@
-use litellm_llms_types::formats::messages::{Message, SystemPrompt};
+use litellm_llms_types::{
+    formats::messages::{Message, SystemPrompt},
+    providers::anthropic::{
+        API_BASE, API_KEY_HEADER, API_VERSION, BETA_HEADER, COUNT_TOKENS_PATH, VERSION_HEADER,
+    },
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{Error, anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX};
 
-const COUNT_TOKENS_ENDPOINT: &str = "https://api.anthropic.com/v1/messages/count_tokens";
 const TOKEN_COUNTING_BETA: &str = "token-counting-2024-11-01";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -23,7 +27,7 @@ pub struct AnthropicCountTokensResponse {
 }
 
 pub trait AnthropicCountTokensConfig {
-    fn endpoint(&self) -> &'static str;
+    fn endpoint(&self) -> String;
 
     fn validate_request(&self, model: &str, messages: &[Message]) -> Result<(), Error>;
 
@@ -44,8 +48,8 @@ pub const ANTHROPIC_COUNT_TOKENS_TRANSFORMATION: AnthropicCountTokensTransformat
     AnthropicCountTokensTransformation;
 
 impl AnthropicCountTokensConfig for AnthropicCountTokensTransformation {
-    fn endpoint(&self) -> &'static str {
-        COUNT_TOKENS_ENDPOINT
+    fn endpoint(&self) -> String {
+        format!("{API_BASE}{COUNT_TOKENS_PATH}")
     }
 
     fn transform_request(
@@ -79,13 +83,13 @@ impl AnthropicCountTokensConfig for AnthropicCountTokensTransformation {
         let auth = if api_key.starts_with(ANTHROPIC_OAUTH_TOKEN_PREFIX) {
             ("authorization", format!("Bearer {api_key}"))
         } else {
-            ("x-api-key", api_key.to_string())
+            (API_KEY_HEADER, api_key.to_string())
         };
         vec![
             ("content-type", "application/json".to_string()),
             auth,
-            ("anthropic-version", "2023-06-01".to_string()),
-            ("anthropic-beta", TOKEN_COUNTING_BETA.to_string()),
+            (VERSION_HEADER, API_VERSION.to_string()),
+            (BETA_HEADER, TOKEN_COUNTING_BETA.to_string()),
         ]
     }
 }
@@ -127,7 +131,7 @@ mod tests {
         );
         assert_eq!(
             ANTHROPIC_COUNT_TOKENS_TRANSFORMATION.endpoint(),
-            COUNT_TOKENS_ENDPOINT
+            "https://api.anthropic.com/v1/messages/count_tokens"
         );
     }
 

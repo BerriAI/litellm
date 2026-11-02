@@ -18,7 +18,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    user_api_key_has_admin_view,
+)
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.vantage_endpoints import (
@@ -119,7 +122,9 @@ async def _get_vantage_settings():
 
     encrypted_api_key: Final = settings.get("api_key")
     if encrypted_api_key:
-        decrypted_api_key = decrypt_value_helper(encrypted_api_key, key="vantage_api_key", exception_type="error")
+        decrypted_api_key: Final = decrypt_value_helper(
+            encrypted_api_key, key="vantage_api_key", exception_type="error"
+        )
         if decrypted_api_key is None:
             raise HTTPException(
                 status_code=500,
@@ -160,7 +165,7 @@ async def get_vantage_settings(
     Only admin users (Proxy Admin or Admin Viewer) can view Vantage settings.
     """
     # Admin Viewer follows the read-parity rule.
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail={"error": CommonProxyErrors.not_allowed_access.value},

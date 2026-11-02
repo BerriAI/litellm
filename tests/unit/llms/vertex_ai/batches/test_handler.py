@@ -30,18 +30,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
+
+import litellm
 from litellm.llms.vertex_ai.batches.handler import (  # noqa: E402
     VertexAIBatchPrediction,
 )
 from litellm.llms.vertex_ai.common_utils import VertexAIError  # noqa: E402
+from litellm.proxy.utils import handle_exception_on_proxy  # noqa: E402
 from litellm.types.utils import LiteLLMBatch  # noqa: E402
 
 HMOD = "litellm.llms.vertex_ai.batches.handler"
+_CLIENT_ERROR_429: Final = "Client error '429 Too Many Requests' for url 'https://x/batchPredictionJobs'"
 TOKEN = "ya29.fake-access-token"
 PROJECT = "my-project"
 LOCATION = "us-central1"
@@ -368,19 +373,19 @@ def test_create_batch_sync_endpoint_without_deployed_model_raises_400():
     client.post.assert_not_called()
 
 
-def test_create_batch_sync_httpstatuserror_propagates():
-    """``HTTPHandler.post`` raises for non-2xx via ``raise_for_status``; the
-    sync create path must surface that error, not swallow it."""
+def test_create_batch_sync_httpstatuserror_carries_vertex_status_body_and_headers():
     h = _make_handler()
     client = MagicMock()
     request = httpx.Request("POST", "https://x/batchPredictionJobs")
-    err_response = httpx.Response(status_code=500, request=request, text="boom")
+    err_response: Final = httpx.Response(
+        status_code=429, request=request, text="boom", headers={"retry-after": "30"}
+    )
     client.post.side_effect = httpx.HTTPStatusError(
-        "boom", request=request, response=err_response
+        _CLIENT_ERROR_429, request=request, response=err_response
     )
 
     with patch(f"{HMOD}.get_httpx_client", return_value=client):
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
             h.create_batch(
                 _is_async=False,
                 create_batch_data=CREATE_DATA,
@@ -391,6 +396,11 @@ def test_create_batch_sync_httpstatuserror_propagates():
                 timeout=600.0,
                 max_retries=None,
             )
+    assert exc_info.value.response.status_code == 429
+    assert exc_info.value.response.headers["retry-after"] == "30"
+    assert handle_exception_on_proxy(exc_info.value).code == "429"
+    assert (getattr(exc_info.value, "message", None), getattr(exc_info.value, "text", None)) == ("boom", "boom")
+    assert str(exc_info.value).splitlines() == [_CLIENT_ERROR_429, "boom"]
 
 
 def test_create_batch_input_file_id_without_model_raises_400_before_post():
@@ -798,14 +808,16 @@ def test_cancel_batch_sync_httpstatuserror_logged_and_reraised():
     client.get.assert_not_called()
 
 
-def test_create_batch_async_httpstatuserror_logged_and_reraised():
+def test_create_batch_async_httpstatuserror_carries_vertex_status_body_and_headers():
     h = _make_handler()
     async_client = MagicMock()
     request = httpx.Request("POST", "https://x/batchPredictionJobs")
-    err_response = httpx.Response(status_code=500, request=request, text="boom")
+    err_response: Final = httpx.Response(
+        status_code=429, request=request, text="boom", headers={"retry-after": "30"}
+    )
     async_client.post = AsyncMock(
         side_effect=httpx.HTTPStatusError(
-            "boom", request=request, response=err_response
+            _CLIENT_ERROR_429, request=request, response=err_response
         )
     )
 
@@ -823,8 +835,13 @@ def test_create_batch_async_httpstatuserror_logged_and_reraised():
             timeout=600.0,
             max_retries=None,
         )
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
             _run(coro)
+    assert exc_info.value.response.status_code == 429
+    assert exc_info.value.response.headers["retry-after"] == "30"
+    assert handle_exception_on_proxy(exc_info.value).code == "429"
+    assert (getattr(exc_info.value, "message", None), getattr(exc_info.value, "text", None)) == ("boom", "boom")
+    assert str(exc_info.value).splitlines() == [_CLIENT_ERROR_429, "boom"]
 
 
 def test_async_retrieve_batch_non_200_raises():
@@ -956,3 +973,119 @@ def test_async_cancel_batch_httpstatuserror_and_retrieve_non_200():
         )
         with pytest.raises(VertexAIError, match="Error: 404"):
             _run(coro)
+
+
+mock_vertex_batch_response = {
+    "name": "projects/123456789/locations/us-central1/batchPredictionJobs/test-batch-id-456",
+    "displayName": "litellm_batch_job",
+    "model": "projects/123456789/locations/us-central1/models/gemini-1.5-flash-001",
+    "modelVersionId": "v1",
+    "inputConfig": {
+        "gcsSource": {
+            "uris": [
+                "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb"
+            ]
+        }
+    },
+    "outputConfig": {
+        "gcsDestination": {"outputUriPrefix": "gs://litellm-local/batch-outputs/"}
+    },
+    "dedicatedResources": {
+        "machineSpec": {
+            "machineType": "n1-standard-4",
+            "acceleratorType": "NVIDIA_TESLA_T4",
+            "acceleratorCount": 1,
+        },
+        "startingReplicaCount": 1,
+        "maxReplicaCount": 1,
+    },
+    "state": "JOB_STATE_RUNNING",
+    "createTime": "2025-02-15T05:51:06.741Z",
+    "startTime": "2025-02-15T05:51:07.741Z",
+    "updateTime": "2025-02-15T05:51:08.741Z",
+    "labels": {"key1": "value1", "key2": "value2"},
+    "completionStats": {"successfulCount": 0, "failedCount": 0, "remainingCount": 100},
+}
+
+
+mock_vertex_list_response = {
+    "batchPredictionJobs": [
+        mock_vertex_batch_response,
+        {
+            **mock_vertex_batch_response,
+            "name": "projects/123456789/locations/us-central1/batchPredictionJobs/test-batch-id-789",
+            "state": "JOB_STATE_SUCCEEDED",
+        },
+    ],
+    "nextPageToken": "",
+}
+
+
+@pytest.mark.asyncio
+async def test_vertex_list_batches(monkeypatch):
+    monkeypatch.setenv("GCS_BUCKET_NAME", "litellm-local")
+    monkeypatch.setenv("VERTEXAI_PROJECT", "litellm-test-project")
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-central1")
+
+    monkeypatch.setattr(
+        "litellm.llms.vertex_ai.batches.handler.VertexAIBatchPrediction._ensure_access_token",
+        lambda self, credentials, project_id, custom_llm_provider: (
+            "mock-token",
+            "litellm-test-project",
+        ),
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
+    ) as mock_get:
+        mock_get_response = MagicMock()
+        mock_get_response.json.return_value = mock_vertex_list_response
+        mock_get_response.status_code = 200
+        mock_get_response.raise_for_status.return_value = None
+        mock_get_response.is_redirect = False
+        mock_get.return_value = mock_get_response
+
+        list_response = await litellm.alist_batches(
+            custom_llm_provider="vertex_ai",
+            limit=2,
+        )
+
+        assert list_response["object"] == "list"
+        assert list_response["has_more"] is False
+        assert len(list_response["data"]) == 2
+        assert list_response["data"][0].id == "test-batch-id-456"
+        assert list_response["data"][1].id == "test-batch-id-789"
+
+
+@pytest.mark.asyncio
+async def test_vertex_async_create_batch_httpstatuserror_carries_vertex_error_body():
+    from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
+
+    handler = VertexAIBatchPrediction(gcs_bucket_name="test-bucket")
+
+    error_body = '{"error": {"code": 400, "message": "Do not support publisher model gemini-2.0-flash"}}'
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 400
+    mock_response.text = error_body
+    mock_response.headers = {}
+
+    http_error = httpx.HTTPStatusError(
+        message="Bad Request",
+        request=httpx.Request("POST", "https://fake-vertex-url"),
+        response=mock_response,
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        side_effect=http_error,
+    ):
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await handler._async_create_batch(
+                vertex_batch_request={},
+                api_base="https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/batchPredictionJobs",
+                headers={"Authorization": "Bearer fake-token"},
+            )
+
+        assert exc_info.value.response.status_code == 400
+        assert "Do not support publisher model gemini-2.0-flash" in str(exc_info.value)

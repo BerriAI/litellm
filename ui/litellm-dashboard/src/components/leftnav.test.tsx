@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
+import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
 
 vi.mock("../utils/roles", async (importOriginal) => {
@@ -64,10 +65,12 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: mockUseTeams,
 }));
 
+const uiConfig = vi.hoisted(() => ({ data: { admin_ui_disabled: false, use_si_terminology: false } }));
+
 vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => {
   return {
     useUIConfig: () => ({
-      data: { admin_ui_disabled: false },
+      data: uiConfig.data,
       isLoading: false,
     }),
   };
@@ -149,6 +152,20 @@ describe("Sidebar (leftnav)", () => {
     });
     mockUseThemeImpl = unbrandedTheme;
     navState.pathname = "/ui/api-keys";
+    uiConfig.data = { admin_ui_disabled: false, use_si_terminology: false };
+  });
+
+  it("uses SI terminology in section and page labels when the proxy asks for it", () => {
+    uiConfig.data = { admin_ui_disabled: false, use_si_terminology: true };
+    renderWithProviders(
+      <TerminologyProvider>
+        <Sidebar {...defaultProps} />
+      </TerminologyProvider>,
+    );
+
+    expect(screen.getByText("SI GATEWAY")).toBeInTheDocument();
+    expect(screen.getByText("SI Hub")).toBeInTheDocument();
+    expect(screen.queryByText("AI Hub")).not.toBeInTheDocument();
   });
 
   it("should link the logo to the UI home route rather than the proxy origin", () => {
@@ -247,6 +264,7 @@ describe("Sidebar (leftnav)", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
     const topLevelLabels = [
+      "Home",
       "Virtual Keys",
       "Playground",
       "Models + Endpoints",
@@ -425,30 +443,6 @@ describe("Sidebar (leftnav)", () => {
         expect(screen.getByText("API Playground")).toBeInTheDocument();
       });
       expect(screen.queryByText("Prompts")).not.toBeInTheDocument();
-    });
-
-    it("should hide Old Usage from internal users while keeping other Experimental children", async () => {
-      mockUseAuthorized.mockReturnValue(internalAuth);
-      renderWithProviders(<Sidebar {...defaultProps} />);
-
-      act(() => {
-        fireEvent.click(screen.getByText("Experimental"));
-      });
-      await waitFor(() => {
-        expect(screen.getByText("API Playground")).toBeInTheDocument();
-      });
-      expect(screen.queryByText("Old Usage")).not.toBeInTheDocument();
-    });
-
-    it("should show Old Usage to admins", async () => {
-      renderWithProviders(<Sidebar {...defaultProps} />);
-
-      act(() => {
-        fireEvent.click(screen.getByText("Experimental"));
-      });
-      await waitFor(() => {
-        expect(screen.getByText("Old Usage")).toBeInTheDocument();
-      });
     });
   });
 
@@ -660,10 +654,10 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByRole("link", { name: "Virtual Keys" })).not.toHaveAttribute("data-active");
   });
 
-  it("marks Virtual Keys active at the dashboard root", () => {
+  it("marks Home active at the dashboard root", () => {
     navState.pathname = "/ui/";
     renderWithProviders(<Sidebar {...defaultProps} />);
-    expect(screen.getByRole("link", { name: "Virtual Keys" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("data-active", "true");
   });
 
   it("expands the parent group of the current nested route and marks the child active", () => {
@@ -686,7 +680,6 @@ describe("Sidebar (leftnav)", () => {
     expectHref("Models + Endpoints", "/ui/models-and-endpoints");
     expectHref("Usage", "/ui/usage");
     expectHref("API Reference", "/ui/api-reference");
-    expectHref("Old Usage", "/ui/old-usage");
   });
 
   it("never links a leaf to the legacy ?page= switch", () => {
@@ -742,11 +735,10 @@ describe("getBreadcrumb", () => {
   it("resolves routes whose segment differs from the sidebar page id", () => {
     expect(getBreadcrumb("/ui/models-and-endpoints")).toEqual({ section: "AI Gateway", title: "Models + Endpoints" });
     expect(getBreadcrumb("/ui/usage")).toEqual({ section: "Observability", title: "Usage" });
-    expect(getBreadcrumb("/ui/old-usage")).toEqual({ section: "Developer Tools", title: "Old Usage" });
   });
 
-  it("titles the dashboard root as Virtual Keys", () => {
-    expect(getBreadcrumb("/ui/")).toEqual({ section: "AI Gateway", title: "Virtual Keys" });
+  it("titles the dashboard root as Home", () => {
+    expect(getBreadcrumb("/ui/")).toEqual({ section: "AI Gateway", title: "Home" });
   });
 
   it("resolves a nested child route to its parent section", () => {

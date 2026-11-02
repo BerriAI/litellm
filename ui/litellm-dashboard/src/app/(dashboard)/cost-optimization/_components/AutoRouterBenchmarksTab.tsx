@@ -25,12 +25,14 @@ import {
   groupLabel,
   pctLabel,
   viewFor,
+  viewGroup,
   type AutoRouterBenchmarksResponse,
   type AutoRouterCacheStats,
   type BenchmarkView,
   type BucketRow,
 } from "./autoRouterBenchmarks";
 import { classificationRatePer1kTurns, formatRangeLabel, usd } from "./costOptimizationUtils";
+import AutoRouterSummaryTable from "./AutoRouterSummaryTable";
 import ShadowEvalSection from "./ShadowEvalSection";
 import TierTurnsChart from "./TierTurnsChart";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
@@ -79,7 +81,7 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
   const classifierCost = stats.baseline_spend == null ? null : stats.savings_estimated_classifier_cost ?? null;
   const comparedAll = stats.savings_estimated_turns === stats.turns;
   return (
-    <Card className="overflow-hidden py-0">
+    <Card className="overflow-hidden py-0" role="region" aria-label="Auto-router savings">
       <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="flex flex-col items-center justify-center gap-2 p-6">
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -331,6 +333,8 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
           }
         />
       </div>
+
+      <AutoRouterSummaryTable groups={data.groups} selectedGroup={viewGroup(view)} />
 
       <div className="space-y-4">
         <div className="flex flex-wrap items-baseline gap-2">

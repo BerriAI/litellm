@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Protocol
@@ -261,6 +262,9 @@ class HiddenlayerGuardrail(CustomGuardrail):
         self._http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         super().__init__(**kwargs)
 
+    def supports_structured_messages(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -402,7 +406,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                 verbose_proxy_logger.debug(
                     "Unable to authenticate to Hiddenlayer, JWT token is invalid or expired, trying to refresh the token."
                 )
-                self.jwt_token = self.refresh_jwt_func()
+                self.jwt_token = await asyncio.to_thread(self.refresh_jwt_func)
                 headers["Authorization"] = f"Bearer {self.jwt_token}"
                 response = await self._http_client.post(
                     f"{self.api_base}/detection/v1/interactions",
@@ -470,6 +474,9 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
 
         self._http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         super().__init__(**kwargs)
+
+    def supports_structured_messages(self) -> bool:
+        return False
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -609,7 +616,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 verbose_proxy_logger.debug(
                     "Unable to authenticate to Hiddenlayer, JWT token is invalid or expired, trying to refresh the token."
                 )
-                self.jwt_token = self.refresh_jwt_func()
+                self.jwt_token = await asyncio.to_thread(self.refresh_jwt_func)
                 headers["Authorization"] = f"Bearer {self.jwt_token}"
                 response = await self._http_client.post(
                     f"{self.api_base}/{path}",

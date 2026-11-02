@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import app
 from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, CommonProxyErrors
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
 
 
@@ -103,6 +105,25 @@ async def test_update_budget_rejects_a_duration_that_never_advances(client_and_m
 
 
 @pytest.mark.asyncio
+async def test_update_budget_evicts_local_cache_when_redis_delete_fails(
+    client_and_mocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _, _ = client_and_mocks
+    cache_key = "team_member_default_budget:budget_456"
+    cache = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    cache.set_cache(cache_key, {"budget_id": "budget_456"}, local_only=True)
+    redis_cache = MagicMock()
+    redis_cache.async_delete_cache = AsyncMock(side_effect=RuntimeError("redis unavailable"))
+    cache.redis_cache = redis_cache
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    response = client.post("/budget/update", json={"budget_id": "budget_456", "max_budget": 10.0})
+
+    assert response.status_code == 200, response.text
+    assert cache.get_cache(cache_key, local_only=True) is None
+
+
+@pytest.mark.asyncio
 async def test_new_budget_db_not_connected(client_and_mocks, monkeypatch):
     client, mock_prisma, mock_table = client_and_mocks
 
@@ -134,6 +155,26 @@ async def test_update_budget_success(client_and_mocks, monkeypatch):
     assert body["max_budget"] == payload["max_budget"]
     assert body["soft_budget"] == payload["soft_budget"]
     assert body["updated_by"] == "test_user"
+
+
+@pytest.mark.asyncio
+async def test_update_budget_evicts_team_member_default_budget_cache(client_and_mocks, monkeypatch):
+    client, _, _ = client_and_mocks
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    cache_key: Final = "team_member_default_budget:budget_456"
+    await cache.async_set_cache(key=cache_key, value={"budget_id": "budget_456"})
+    assert await cache.async_get_cache(key=cache_key) == {"budget_id": "budget_456"}
+
+    try:
+        response: Final = client.post(
+            "/budget/update",
+            json={"budget_id": "budget_456", "max_budget": 10.0},
+        )
+        assert response.status_code == 200, response.text
+        assert await cache.async_get_cache(key=cache_key) is None
+    finally:
+        await cache.async_delete_cache(key=cache_key)
 
 
 @pytest.mark.asyncio

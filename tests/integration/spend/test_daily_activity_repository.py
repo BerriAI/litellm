@@ -2,7 +2,7 @@ import os
 import uuid
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import isclose
 from pathlib import Path
 from types import MappingProxyType
@@ -17,6 +17,7 @@ from integration.spend._daily_activity_fixtures import (
     seed_daily_tag_float_tie_fixture,
     seed_daily_team_exclusion_fixture,
     seed_daily_team_unassigned_fixture,
+    seed_daily_user_page_fixture,
 )
 from prisma import Prisma
 from psycopg import sql
@@ -93,6 +94,7 @@ async def _daily_activity_database(
     include_tag_float_tie_activity: bool = False,
     include_team_unassigned_activity: bool = False,
     include_team_exclusion_activity: bool = False,
+    include_user_page_activity: bool = False,
 ) -> AsyncIterator[Prisma]:
     schema: Final = f"integration_{uuid.uuid4().hex}"
     url: Final = os.environ["DATABASE_URL"]
@@ -115,6 +117,8 @@ async def _daily_activity_database(
                     )
                 if include_team_exclusion_activity:
                     seed_daily_team_exclusion_fixture(connection, schema=schema)
+                if include_user_page_activity:
+                    seed_daily_user_page_fixture(connection, schema=schema)
             database: Final = Prisma(datasource={"url": _scoped_url(url, schema)})
             await database.connect()
             try:
@@ -661,3 +665,38 @@ async def test_team_exclusion_keeps_null_and_empty_entity_rows() -> None:
         daily: Final = await repository.daily_rows(scope, page=1, page_size=10)
         assert daily.total_count == 3
         assert {row.api_key for row in daily.rows} == {"key-excluded-null", "key-excluded-empty", "key-excluded-normal"}
+
+
+@pytest.mark.asyncio
+async def test_user_page_ranks_users_and_folds_null_ids() -> None:
+    async with _daily_activity_database(include_user_page_activity=True) as database:
+        scope: Final = DailyActivityScope(
+            table=DailyActivityTable.USER,
+            entity_id_field="user_id",
+            entity_ids=None,
+            exclude_entity_ids=(),
+            api_keys=None,
+            start_date="2026-06-01",
+            end_date="2026-06-02",
+            model=None,
+            timezone_offset_minutes=None,
+        )
+        repository: Final = _repository(database)
+        full_page: Final = await repository.user_page(scope, offset=0, limit=50)
+        empty_page: Final = await repository.user_page(scope, offset=full_page.total_users + 1, limit=50)
+        scoped_page: Final = await repository.user_page(
+            replace(scope, entity_ids=("user-alpha",)), offset=0, limit=50
+        )
+
+        assert tuple((row.user_id, row.spend) for row in full_page.rows) == (
+            (None, 45.0),
+            ("user-zeta", 30.0),
+            ("user-alpha", 20.0),
+            ("user-beta", 20.0),
+            ("user-other", 10.0),
+        )
+        assert full_page.total_users == 5
+        assert empty_page.rows == ()
+        assert empty_page.total_users == 5
+        assert tuple(row.user_id for row in scoped_page.rows) == ("user-alpha",)
+        assert scoped_page.total_users == 1

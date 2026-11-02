@@ -1,7 +1,9 @@
+import asyncio
 import inspect
+import logging
 import os
 import sys
-from typing import cast
+from typing import Final, cast
 
 import pytest
 from pydantic import BaseModel
@@ -16,13 +18,15 @@ from litellm.llms.ollama.chat.transformation import (
 )
 
 from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import get_optional_params
+from litellm.utils import get_llm_provider, get_optional_params
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock, patch
 
 import litellm
-from litellm.types.utils import Choices, Message, ModelResponse, ModelResponseStream
+from litellm._logging import verbose_logger
+from litellm.types.utils import Choices, EmbeddingResponse, Message, ModelResponse, ModelResponseStream
+from unittest import mock
 
 
 class TestEvent(BaseModel):
@@ -852,6 +856,99 @@ class TestOllamaReasoningContentStreaming:
 
 
 class TestOllamaToolCallTransformation:
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_transform_request_keeps_parallel_call_ids_paired_with_results(self, stream: bool):
+        config: Final = OllamaChatConfig()
+        messages: Final = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_first",
+                            "type": "function",
+                            "function": {
+                                "name": "read_fixture",
+                                "arguments": '{"path": "first.txt"}',
+                            },
+                        },
+                        {
+                            "id": "call_second",
+                            "type": "function",
+                            "function": {
+                                "name": "read_fixture",
+                                "arguments": '{"path": "second.txt"}',
+                            },
+                        },
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_second",
+                    "content": "second result",
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_first",
+                    "content": "first result",
+                },
+            ],
+        )
+
+        result: Final = config.transform_request(
+            model="ollama_chat/test-model",
+            messages=messages,
+            optional_params={"stream": stream},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][0]["tool_calls"] == [
+            {
+                "id": "call_first",
+                "function": {"name": "read_fixture", "arguments": {"path": "first.txt"}},
+            },
+            {
+                "id": "call_second",
+                "function": {"name": "read_fixture", "arguments": {"path": "second.txt"}},
+            },
+        ]
+        assert [message.get("tool_call_id") for message in result["messages"][1:]] == [
+            "call_second",
+            "call_first",
+        ]
+
+    def test_transform_request_does_not_invent_an_id_for_an_unidentified_call(self):
+        config: Final = OllamaChatConfig()
+        messages: Final = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": None,
+                            "type": "function",
+                            "function": {"name": "read_fixture", "arguments": "{}"},
+                        }
+                    ],
+                }
+            ],
+        )
+
+        result: Final = config.transform_request(
+            model="ollama_chat/test-model",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][0]["tool_calls"] == [{"function": {"name": "read_fixture", "arguments": {}}}]
+
     def test_transform_request_preserves_tool_calls(self):
         """
         tool_calls on assistant messages must survive transform_request.
@@ -989,3 +1086,159 @@ class TestOllamaStreamingUsage:
         )
 
         assert result.usage is None
+
+
+def test_get_ollama_params():
+    try:
+        converted_params = get_optional_params(
+            custom_llm_provider="ollama",
+            model="llama2",
+            max_tokens=20,
+            temperature=0.5,
+            stream=True,
+        )
+        expected_params = {
+            "num_predict": 20,
+            "stream": True,
+            "temperature": 0.5,
+        }
+        print("Converted params", converted_params)
+        for key in expected_params.keys():
+            assert (
+                expected_params[key] == converted_params[key]
+            ), f"{converted_params} != {expected_params}"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_get_ollama_model():
+    try:
+        model, custom_llm_provider, _, _ = get_llm_provider("ollama/code-llama-22")
+        print("Model", "custom_llm_provider", model, custom_llm_provider)
+        assert custom_llm_provider == "ollama", f"{custom_llm_provider} != ollama"
+        assert model == "code-llama-22", f"{model} != code-llama-22"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_ollama_json_mode():
+    # assert that format: json gets passed as is to ollama
+    try:
+        converted_params = get_optional_params(
+            custom_llm_provider="ollama", model="llama2", format="json", temperature=0.5
+        )
+        print("Converted params", converted_params)
+        assert converted_params == {
+            "temperature": 0.5,
+            "format": "json",
+            "stream": False,
+        }, f"{converted_params} != {'temperature': 0.5, 'format': 'json', 'stream': False}"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+mock_ollama_embedding_response = EmbeddingResponse(model="ollama/nomic-embed-text")
+
+
+@mock.patch(
+    "litellm.llms.ollama.completion.handler.ollama_embeddings",
+    return_value=mock_ollama_embedding_response,
+)
+def test_ollama_embeddings(mock_embeddings):
+    # assert that ollama_embeddings is called with the right parameters
+    try:
+        embeddings = litellm.embedding(
+            model="ollama/nomic-embed-text", input=["hello world"]
+        )
+        print(embeddings)
+        mock_embeddings.assert_called_once_with(
+            api_base="http://localhost:11434",
+            model="nomic-embed-text",
+            prompts=["hello world"],
+            optional_params=mock.ANY,
+            logging_obj=mock.ANY,
+            model_response=mock.ANY,
+            encoding=mock.ANY,
+            api_key=None,
+            headers={},
+            timeout=600,
+        )
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@mock.patch(
+    "litellm.llms.ollama.completion.handler.ollama_aembeddings",
+    return_value=mock_ollama_embedding_response,
+)
+def test_ollama_aembeddings(mock_aembeddings):
+    # assert that ollama_aembeddings is called with the right parameters
+    try:
+        embeddings = asyncio.run(
+            litellm.aembedding(model="ollama/nomic-embed-text", input=["hello world"])
+        )
+        print(embeddings)
+        mock_aembeddings.assert_called_once_with(
+            api_base="http://localhost:11434",
+            model="nomic-embed-text",
+            prompts=["hello world"],
+            optional_params=mock.ANY,
+            logging_obj=mock.ANY,
+            model_response=mock.ANY,
+            encoding=mock.ANY,
+            api_key=None,
+            headers={},
+            timeout=600,
+        )
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "http://gateway.example.com/ollama",
+        "http://gateway.example.com/ollama/",
+        "http://gateway.example.com/ollama/api/chat/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        OllamaChatConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="llama3", optional_params={}, litellm_params={}
+        )
+        == "http://gateway.example.com/ollama/api/chat"
+    )
+
+
+def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize("effort", ("minimal", "xhigh"))
+def test_reasoning_effort_mapped_to_think_off_warns_once(effort: str, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model="qwen3", drop_params=False
+        )
+
+    warnings: Final = _warnings_naming(caplog, "reasoning_effort")
+    assert result["think"] is False
+    assert len(warnings) == 1
+    assert f"reasoning_effort={effort!r}" in warnings[0]
+    assert "qwen3" in warnings[0]
+
+
+@pytest.mark.parametrize("effort, think", (("none", False), ("low", True), ("high", True)))
+def test_reasoning_effort_with_a_matching_think_value_does_not_warn(
+    effort: str, think: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model="qwen3", drop_params=False
+        )
+
+    assert result["think"] is think
+    assert _warnings_naming(caplog, "reasoning_effort") == ()

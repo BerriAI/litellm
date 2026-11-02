@@ -16,7 +16,6 @@ from typing import (
     NamedTuple,
     Protocol,
     TypeAlias,
-    TypedDict,
     TypeVar,
     cast,  # noqa: TID251  # custom-logger and cold-storage payloads are untyped JSON
 )
@@ -24,7 +23,7 @@ from typing import (
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, assert_never
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -35,6 +34,7 @@ from litellm.constants import (
     SPEND_CAPTURE_RATE_MAX_RANGE_DAYS,
 )
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, classifier_input_snapshot
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.authorization import (
@@ -50,6 +50,7 @@ from litellm.proxy.auth.authorization_dependencies import (
     LogTeamLookupDependency,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.openai_error_payload import error_status_code, openai_error_param, openai_error_type
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     ProviderBillingCredentialMissing,
@@ -84,6 +85,7 @@ else:
 router: Final = APIRouter()
 
 SPEND_LOGS_PAGINATION_COUNT_CAP: Final = 10000
+_DECODED_JSON: Final = TypeAdapter(object)
 
 _SESSION_KEY_EXPR: Final = "COALESCE(NULLIF(session_id, ''), request_id)"
 _SESSION_GROUP_KEY_SQL: Final = f"{_SESSION_KEY_EXPR}, api_key"
@@ -449,7 +451,7 @@ async def spend_key_fn(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        if _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+        if is_admin_view_safe(user_api_key_dict=user_api_key_dict):
             return await prisma_client.get_data(table_name="key", query_type="find_all")
 
         caller_user_id: Final = user_api_key_dict.user_id
@@ -522,7 +524,7 @@ async def spend_user_fn(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        if not _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+        if not is_admin_view_safe(user_api_key_dict=user_api_key_dict):
             caller_user_id: Final = user_api_key_dict.user_id
             if not caller_user_id:
                 return []
@@ -552,6 +554,20 @@ async def spend_user_fn(
         )
 
 
+def _parse_utc_day(value: str | None, param_name: str) -> datetime | None:
+    """Parse an optional YYYY-MM-DD query param to a UTC datetime, so the SQL
+    day window never depends on the database session timezone."""
+    if value is None:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": f"{param_name} must be a YYYY-MM-DD date, got {value!r}"},
+        )
+
+
 @router.get(
     "/spend/tags",
     tags=["Budget & Spend Tracking"],
@@ -561,6 +577,8 @@ async def spend_user_fn(
     },
 )
 async def view_spend_tags(
+    log_team_lookup: LogTeamLookupDependency,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing key spend",
@@ -572,6 +590,11 @@ async def view_spend_tags(
 ):
     """
     LiteLLM Enterprise - View Spend Per Request Tag
+
+    - Admin callers (PROXY_ADMIN / PROXY_ADMIN_VIEW_ONLY) see tag aggregates
+      across every spend log.
+    - All other callers see aggregates over their own spend logs and those of
+      teams they may view, exactly like ``/spend/logs/ui``.
 
     Example Request:
     ```
@@ -594,16 +617,19 @@ async def view_spend_tags(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        # run the following SQL query on prisma
-        """
-        SELECT
-        jsonb_array_elements_text(request_tags) AS individual_request_tag,
-        COUNT(*) AS log_count,
-        SUM(spend) AS total_spend
-        FROM "LiteLLM_SpendLogs"
-        GROUP BY individual_request_tag;
-        """
-        response: Final = await get_spend_by_tags(start_date=start_date, end_date=end_date, prisma_client=prisma_client)
+        read_scope: Final = (
+            AllRows()
+            if is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+            else await _spend_log_read_scope(user_api_key_dict, log_team_lookup)
+            if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
+            else OwnedRows(user_api_key_dict.user_id)
+        )
+        response: Final = await get_spend_by_tags(
+            prisma_client=prisma_client,
+            read_scope=read_scope,
+            start_date=_parse_utc_day(start_date, "start_date"),
+            end_date=_parse_utc_day(end_date, "end_date"),
+        )
 
         return response
     except Exception as e:
@@ -611,7 +637,7 @@ async def view_spend_tags(
             raise ProxyException(
                 message=getattr(e, "detail", f"/spend/tags Error({e})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -619,7 +645,7 @@ async def view_spend_tags(
         raise ProxyException(
             message="/spend/tags Error" + str(e),
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -1244,7 +1270,7 @@ async def get_spend_capture_rate(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    if not _is_admin_view_safe(user_api_key_dict):
+    if not is_admin_view_safe(user_api_key_dict):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only proxy admins can read the capture rate")
     if prisma_client is None:
         raise HTTPException(
@@ -1385,7 +1411,7 @@ async def get_global_spend_provider(
             _model_id = row["model_id"]
             _provider = "Unknown"
             if llm_router is not None:
-                _deployment = llm_router.get_deployment(model_id=_model_id)
+                _deployment = llm_router.registry().deployment(_model_id)
                 if _deployment is not None:
                     try:
                         _, _provider, _, _ = litellm.get_llm_provider(
@@ -1863,7 +1889,7 @@ def _resolve_spend_report_scope(
     viewers) may request any scope.
     """
     if requested:
-        if requested != caller_value and not _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+        if requested != caller_value and not is_admin_view_safe(user_api_key_dict=user_api_key_dict):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Not authorized to view spend for a {scope_name} other than your own",
@@ -1887,7 +1913,7 @@ async def _resolve_org_spend_report_scope(
     Callable by proxy admins (any organization) and org admins of the target
     organization; every other caller is a 403 from ``_verify_org_access``.
     """
-    from litellm.proxy.management_endpoints.organization_endpoints import _verify_org_access
+    from litellm.proxy.management_endpoints.organization_endpoints import verify_org_access
 
     target_org = organization_id or user_api_key_dict.org_id
     if target_org is None:
@@ -1895,7 +1921,7 @@ async def _resolve_org_spend_report_scope(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No organization_id associated with this API key; pass an organization_id query param",
         )
-    await _verify_org_access(
+    await verify_org_access(
         organization_id=target_org,
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
@@ -2117,7 +2143,7 @@ async def global_get_all_tag_names():
             raise ProxyException(
                 message=getattr(e, "detail", f"/spend/all_tag_names Error({e})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -2125,7 +2151,7 @@ async def global_get_all_tag_names():
         raise ProxyException(
             message="/spend/all_tag_names Error" + str(e),
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -2199,7 +2225,7 @@ async def global_view_spend_tags(
             raise ProxyException(
                 message=getattr(e, "detail", f"/spend/tags Error({error_str})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -2207,15 +2233,15 @@ async def global_view_spend_tags(
         raise ProxyException(
             message="/spend/tags Error" + error_str,
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
-async def _get_spend_report_for_time_range(
+async def get_spend_report_for_time_range(
     start_date: str,
     end_date: str,
-):
+) -> tuple[Sequence[_TeamSpendRow] | None, Sequence[_TagSpendRow] | None] | None:
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -2272,6 +2298,9 @@ async def _get_spend_report_for_time_range(
         return response, spend_per_tag
     except Exception as e:
         verbose_proxy_logger.error("Exception in _get_daily_spend_reports %s", e)
+
+
+_get_spend_report_for_time_range: Final = get_spend_report_for_time_range
 
 
 @router.post(
@@ -2364,17 +2393,19 @@ async def calculate_spend(request: SpendCalculateRequest):
             _model_in_llm_router = None
             cost_per_token: CostPerToken | None = None
             if llm_router is not None:
-                if llm_router.model_group_alias is not None and request.model in llm_router.model_group_alias:
+                router_registry: Final = llm_router.registry()
+                model_group_alias: Final = router_registry.aliases()
+                if model_group_alias is not None and request.model in model_group_alias:
                     # lookup alias in llm_router
-                    _model_group_name: Final = llm_router.model_group_alias[request.model]
-                    for model in llm_router.model_list:
+                    _model_group_name: Final = model_group_alias[request.model]
+                    for model in router_registry.all():
                         if model.get("model_name") == _model_group_name:
                             _model_in_llm_router = model
 
                 else:
                     # no model_group aliases set -> try finding model in llm_router
                     # find model in llm_router
-                    for model in llm_router.model_list:
+                    for model in router_registry.all():
                         if model.get("model_name") == request.model:
                             _model_in_llm_router = model
 
@@ -2417,9 +2448,9 @@ async def calculate_spend(request: SpendCalculateRequest):
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", str(e)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         if isinstance(e, litellm.exceptions.ModelNotMappedError):
             raise ProxyException(
@@ -2431,9 +2462,9 @@ async def calculate_spend(request: SpendCalculateRequest):
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+            type=openai_error_type(e, error_status_code(e, 500)),
+            param=openai_error_param(e),
+            code=error_status_code(e, 500),
         )
 
 
@@ -2467,7 +2498,7 @@ def _build_spend_log_search_condition(
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
-        200: {"model": dict[str, Any]},
+        200: {"model": dict[str, object]},
     },
 )
 @router.get(
@@ -2603,7 +2634,7 @@ async def ui_view_spend_logs(
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
@@ -2652,7 +2683,7 @@ async def ui_view_spend_logs(
         )
 
     try:
-        is_admin_view: Final = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        is_admin_view: Final = is_admin_view_safe(user_api_key_dict=user_api_key_dict)
         is_request_id_lookup: Final = request_id is not None and not is_v2
         is_search_lookup: Final = search is not None
         search_owns_window: Final = is_search_lookup and not is_v2
@@ -2670,7 +2701,7 @@ async def ui_view_spend_logs(
                 raise ProxyException(
                     message="Start date and end date are required",
                     type="bad_request",
-                    param="None",
+                    param=None,
                     code=status.HTTP_400_BAD_REQUEST,
                 )
             formats: Final = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
@@ -2692,7 +2723,7 @@ async def ui_view_spend_logs(
             end_date_obj = parse_date(end_date)
 
         # Build where conditions
-        where_conditions: Final[dict[str, Any]] = {}
+        where_conditions: Final[dict[str, object]] = {}
         if start_date_obj is not None and end_date_obj is not None:
             where_conditions["startTime"] = {
                 "gte": start_date_obj.isoformat(),  # Already in UTC, no need to add Z
@@ -2754,18 +2785,14 @@ async def ui_view_spend_logs(
             if len(metadata_filters) == 1:
                 where_conditions["metadata"] = metadata_filters[0]
             else:
-                where_conditions["AND"] = where_conditions.get("AND", []) + [
-                    {"metadata": filter_cond} for filter_cond in metadata_filters
-                ]
+                where_conditions["AND"] = [{"metadata": filter_cond} for filter_cond in metadata_filters]
         if end_user is not None:
             where_conditions["end_user"] = end_user
 
         if min_spend is not None or max_spend is not None:
-            where_conditions["spend"] = {}
-            if min_spend is not None:
-                where_conditions["spend"]["gte"] = min_spend
-            if max_spend is not None:
-                where_conditions["spend"]["lte"] = max_spend
+            where_conditions["spend"] = {
+                key: value for key, value in (("gte", min_spend), ("lte", max_spend)) if value is not None
+            }
         # A request_id lookup drops the date window, so a non-admin could otherwise
         # reach any single row by id; require they own one of the matches, mirroring
         # the detail endpoint, and keep the general scoping below so a colliding
@@ -3021,7 +3048,7 @@ async def ui_view_spend_logs(
         )
         sql_params.extend([page_size, skip])
 
-        data: Final = await prisma_client.db.query_raw(sql_query, *sql_params)
+        data: Final[Sequence[Mapping[str, object]]] = await _query_raw(prisma_client, sql_query, *sql_params)
 
         if request_id is not None and not is_v2 and not is_admin_view:
             await _assert_user_owns_fetched_spend_rows(
@@ -3040,7 +3067,7 @@ async def ui_view_spend_logs(
 
         return await _build_ui_spend_logs_response(
             prisma_client,
-            data,
+            list(data),
             total_records,
             page,
             page_size,
@@ -3283,14 +3310,17 @@ def _hydrate_spend_log_metadata(rows: Sequence[Mapping[str, object]]) -> None:
 def _cold_storage_object_key_from_metadata(
     metadata: str | Mapping[str, object] | None,
 ) -> str | None:
-    if isinstance(metadata, str):
-        try:
-            metadata = json.loads(metadata)
-        except (json.JSONDecodeError, TypeError):
-            return None
-    if not isinstance(metadata, dict):
+    if not isinstance(metadata, str):
+        return _cold_storage_object_key(metadata if isinstance(metadata, dict) else None)
+    try:
+        decoded: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(metadata)))
+    except (json.JSONDecodeError, TypeError):
         return None
-    object_key: Final = metadata.get("cold_storage_object_key")
+    return _cold_storage_object_key(decoded)
+
+
+def _cold_storage_object_key(metadata: Mapping[str, object] | None) -> str | None:
+    object_key: Final = metadata.get("cold_storage_object_key") if metadata is not None else None
     return object_key if isinstance(object_key, str) and object_key else None
 
 
@@ -3387,7 +3417,7 @@ async def ui_view_request_response_for_request_id(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    caller_is_admin: Final = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+    caller_is_admin: Final = is_admin_view_safe(user_api_key_dict=user_api_key_dict)
     if not caller_is_admin:
         if prisma_client is None:
             raise HTTPException(
@@ -3652,7 +3682,7 @@ async def view_spend_logs(
             raise ProxyException(
                 message=getattr(e, "detail", f"/spend/logs Error({e})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -3660,7 +3690,7 @@ async def view_spend_logs(
         raise ProxyException(
             message="/spend/logs Error" + str(e),
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -3687,7 +3717,7 @@ async def global_spend_reset():
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
@@ -3718,7 +3748,7 @@ async def global_spend_refresh():
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
@@ -3764,7 +3794,7 @@ async def global_spend_refresh():
                 },
             )
             await new_client.db.connect()
-            await _query_raw(new_client, sql_query)
+            await new_client.db.execute_raw(sql_query)
             verbose_proxy_logger.info("MonthlyGlobalSpend view refreshed")
             return {
                 "message": "MonthlyGlobalSpend view refreshed",
@@ -3789,7 +3819,7 @@ async def global_spend_for_internal_user(
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     try:
@@ -3850,7 +3880,7 @@ async def global_spend_logs(
             raise ProxyException(
                 message="Prisma Client is not initialized",
                 type="internal_error",
-                param="None",
+                param=None,
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -3894,7 +3924,7 @@ async def global_spend_logs(
             raise ProxyException(
                 message=getattr(e, "detail", f"/global/spend/logs Error({error_str})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -3902,7 +3932,7 @@ async def global_spend_logs(
         raise ProxyException(
             message="/global/spend/logs Error" + error_str,
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -3942,7 +3972,7 @@ async def global_spend():
             raise ProxyException(
                 message=getattr(e, "detail", f"/global/spend Error({error_str})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -3950,7 +3980,7 @@ async def global_spend():
         raise ProxyException(
             message="/global/spend Error" + error_str,
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -4347,13 +4377,13 @@ async def provider_budgets() -> ProviderBudgetResponse:
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": "No llm_router found"})
 
-        provider_budget_config: Final = llm_router.provider_budget_config
+        provider_budget_config: Final = llm_router.settings().provider_budget_config
         if provider_budget_config is None:
             raise ValueError(
                 "No provider budget config found. Please set a provider budget config in the router settings. https://docs.litellm.ai/docs/proxy/provider_budget_routing"
             )
 
-        router_budget_logger: Final = llm_router.get_router_deployment_budget_limiter()
+        router_budget_logger: Final = llm_router.registry().plugins("budget_limiter")
         if router_budget_logger is None:
             raise ValueError("No router budget logger found")
 
@@ -4374,17 +4404,41 @@ async def provider_budgets() -> ProviderBudgetResponse:
         raise handle_exception_on_proxy(e)
 
 
-async def get_spend_by_tags(prisma_client: PrismaClient, start_date=None, end_date=None):
+async def get_spend_by_tags(
+    prisma_client: PrismaClient,
+    read_scope: ReadScope,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+):
+    scope_clause, scope_params = read_scope_sql(read_scope, 1)
+    start_clause: Final = (
+        (f"\"startTime\" >= (${len(scope_params) + 1}::timestamptz AT TIME ZONE 'UTC')",) if start_date else ()
+    )
+    end_clause: Final = (
+        (
+            f"\"startTime\" < ((${len(scope_params) + len(start_clause) + 1}::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')",
+        )
+        if end_date
+        else ()
+    )
+    clauses: Final = tuple(clause for clause in (scope_clause, *start_clause, *end_clause) if clause)
+    where_sql: Final = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    params: Final = (
+        *scope_params,
+        *((start_date,) if start_date else ()),
+        *((end_date,) if end_date else ()),
+    )
     response: Final[Sequence[Mapping[str, object]]] = await _query_raw(
         prisma_client,
-        """
+        f"""
         SELECT
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         COUNT(*) AS log_count,
         SUM(spend) AS total_spend
-        FROM "LiteLLM_SpendLogs"
+        FROM "LiteLLM_SpendLogs"{where_sql}
         GROUP BY individual_request_tag;
         """,
+        *params,
     )
 
     return response
@@ -4532,7 +4586,7 @@ async def ui_view_session_spend_logs(
 
         read_scope: Final = (
             AllRows()
-            if _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+            if is_admin_view_safe(user_api_key_dict=user_api_key_dict)
             else await _spend_log_read_scope(user_api_key_dict, log_team_lookup)
             if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
             else OwnedRows(user_api_key_dict.user_id)
@@ -4793,7 +4847,7 @@ def _span_type_sql_condition(span_type: str | None) -> str | None:
     return _SPAN_TYPE_SQL_CONDITIONS.get(span_type)
 
 
-def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
+def is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
     """
     Safely determine if the current user has admin view permissions.
     Defaults to False on any exception.
@@ -4808,6 +4862,9 @@ def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
         )
     except Exception:
         return False
+
+
+_is_admin_view_safe: Final = is_admin_view_safe
 
 
 async def _can_team_member_view_log(

@@ -1,14 +1,20 @@
+import asyncio
 import json
+from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Final
 from urllib.parse import urlparse
 
+import anyio
 import httpx
 
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER
+from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import PassThroughEndpointLoggingResultValues
+from litellm.proxy._types import PassThroughEndpointLoggingResultValues, PassThroughEndpointLoggingTypedDict
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
@@ -22,6 +28,7 @@ from .llm_provider_handlers.assembly_passthrough_logging_handler import (
 )
 from .llm_provider_handlers.cohere_passthrough_logging_handler import (
     CoherePassthroughLoggingHandler,
+    is_cohere_embed_route,
 )
 from .llm_provider_handlers.cursor_passthrough_logging_handler import (
     CursorPassthroughLoggingHandler,
@@ -64,6 +71,14 @@ def _safe_response_text(httpx_response: httpx.Response) -> str:
         return ""
 
 
+def _websocket_frames(
+    response_body: Mapping[str, object] | Sequence[Mapping[str, object]] | None,
+) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        message for message in (response_body if isinstance(response_body, list) else ()) if isinstance(message, dict)
+    )
+
+
 class PassThroughEndpointLogging:
     def __init__(
         self,
@@ -91,7 +106,7 @@ class PassThroughEndpointLogging:
         self.TRACKED_ANTHROPIC_ROUTES = ["/messages", "/v1/messages/batches"]
 
         # Cohere
-        self.TRACKED_COHERE_ROUTES = ["/v2/chat", "/v1/embed"]
+        self.TRACKED_COHERE_ROUTES = ["/v2/chat"]
         self.assemblyai_passthrough_logging_handler = AssemblyAIPassthroughLoggingHandler()
 
         # Langfuse
@@ -114,23 +129,23 @@ class PassThroughEndpointLogging:
 
         # Vertex AI Live API WebSocket
         self.TRACKED_VERTEX_AI_LIVE_ROUTES = ["/vertex_ai/live"]
+        self.TRACKED_OPENAI_WEBSOCKET_ROUTES: Final = ("/openai/", "/openai_passthrough/")
 
     @property
     def _log_dispatch(self) -> PassThroughLogDispatch:
-        return self._injected_log_dispatch if self._injected_log_dispatch is not None else self._handle_logging
+        return self._injected_log_dispatch if self._injected_log_dispatch is not None else self.handle_logging
 
-    async def _handle_logging(
+    async def handle_logging(
         self,
         logging_obj: LiteLLMLoggingObj,
-        standard_logging_response_object: StandardPassThroughResponseObject
-        | PassThroughEndpointLoggingResultValues
-        | dict,
+        standard_logging_response_object: object,
         result: str,
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
-        **kwargs,
-    ):
+        finalize_before_dispatch: bool = False,
+        **kwargs: object,  # kwargs-ok: forwards the existing pass-through logging contract
+    ) -> None:
         """Log pass-through success via the shared async dispatch path."""
         # Always reached from pass_through_async_success_handler, which runs in
         # an async context. call_type is "pass_through_endpoint" here, so the
@@ -139,6 +154,38 @@ class PassThroughEndpointLogging:
         # the streaming sibling (_route_streaming_logging_to_handler) and keep
         # async-only loggers (e.g. the proxy spend logger) firing regardless of
         # how the call-type classification evolves.
+        if finalize_before_dispatch:
+            from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+            from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost
+
+            async def finalize_and_enqueue() -> None:
+                await finalize_proxy_response_cost(logging_obj, standard_logging_response_object)
+                GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                    async_coroutine=self.handle_logging(
+                        logging_obj=logging_obj,
+                        standard_logging_response_object=standard_logging_response_object,
+                        result=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        cache_hit=cache_hit,
+                        finalize_before_dispatch=False,
+                        **kwargs,
+                    )
+                )
+                bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
+
+            pending: Final = asyncio.create_task(finalize_and_enqueue())
+            try:
+                await asyncio.shield(pending)
+            except asyncio.CancelledError:
+                with anyio.CancelScope(shield=True):
+                    while not pending.done():
+                        with suppress(asyncio.CancelledError):
+                            await asyncio.shield(pending)
+                    pending.result()
+                raise
+            return
+
         await logging_obj.dispatch_success_handlers(
             result=(json.dumps(result) if isinstance(result, dict) else standard_logging_response_object),
             start_time=start_time,
@@ -147,6 +194,8 @@ class PassThroughEndpointLogging:
             prefer_async_handlers=True,
             **kwargs,
         )
+
+    _handle_logging = handle_logging
 
     def normalize_llm_passthrough_logging_payload(
         self,
@@ -336,7 +385,7 @@ class PassThroughEndpointLogging:
             kwargs = transcribe_handler_result["kwargs"]  # rebind-ok: elif-chain contract
         elif (
             self.is_typesafe_route(custom_llm_provider)
-            or custom_llm_provider in ("laya", "bespoke")
+            or custom_llm_provider in ("eu_jev", "laya", "bespoke")
             or self.is_openrouter_decisions_route(url_route, custom_llm_provider)
         ):
             from .llm_provider_handlers.typesafe_passthrough_logging_handler import (
@@ -383,21 +432,18 @@ class PassThroughEndpointLogging:
 
             standard_logging_response_object = vertex_ai_live_handler_result["result"]
             kwargs = vertex_ai_live_handler_result["kwargs"]
-        elif DeepgramListenPassthroughLoggingHandler.is_deepgram_listen_route(url_route):
-            deepgram_handler_result: Final = (
-                DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
-                    websocket_messages=tuple(
-                        message
-                        for message in (response_body if isinstance(response_body, list) else ())
-                        if isinstance(message, dict)
-                    ),
-                    logging_obj=logging_obj,
-                    upstream_url=str(httpx_response.request.url),
-                    kwargs=kwargs,
-                )
+        elif (
+            websocket_relay_result := self._websocket_relay_logging_result(
+                url_route=url_route,
+                websocket_frames=_websocket_frames(response_body),
+                logging_obj=logging_obj,
+                httpx_response=httpx_response,
+                start_time=start_time,
+                kwargs=kwargs,
             )
-            standard_logging_response_object = deepgram_handler_result["result"]  # rebind-ok: elif-chain
-            kwargs = deepgram_handler_result["kwargs"]  # rebind-ok: elif-chain contract
+        ) is not None:
+            standard_logging_response_object = websocket_relay_result["result"]  # rebind-ok: elif-chain
+            kwargs = websocket_relay_result["kwargs"]  # rebind-ok: elif-chain contract
         elif FalAIPassthroughLoggingHandler.is_fal_ai_route(url_route, custom_llm_provider):
             fal_ai_handler_result: Final = FalAIPassthroughLoggingHandler().fal_ai_passthrough_handler(
                 response_body=response_body if isinstance(response_body, dict) else MappingProxyType({}),
@@ -413,6 +459,36 @@ class PassThroughEndpointLogging:
         return_dict["kwargs"] = kwargs
         return return_dict
 
+    def _websocket_relay_logging_result(
+        self,
+        url_route: str,
+        websocket_frames: tuple[Mapping[str, object], ...],
+        logging_obj: LiteLLMLoggingObj,
+        httpx_response: httpx.Response,
+        start_time: datetime,
+        kwargs: Mapping[str, object],
+    ) -> PassThroughEndpointLoggingTypedDict | None:
+        if self.is_openai_websocket_route(url_route):
+            from .llm_provider_handlers.openai_websocket_passthrough_logging_handler import (
+                OpenAIWebsocketPassthroughLoggingHandler,
+            )
+
+            return OpenAIWebsocketPassthroughLoggingHandler().openai_websocket_passthrough_handler(
+                websocket_messages=websocket_frames,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                start_time=start_time,
+                kwargs=kwargs,
+            )
+        if DeepgramListenPassthroughLoggingHandler.is_deepgram_listen_route(url_route):
+            return DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
+                websocket_messages=websocket_frames,
+                logging_obj=logging_obj,
+                upstream_url=str(httpx_response.request.url),
+                kwargs=kwargs,
+            )
+        return None
+
     async def pass_through_async_success_handler(
         self,
         httpx_response: httpx.Response,
@@ -426,6 +502,7 @@ class PassThroughEndpointLogging:
         request_body: dict,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
         custom_llm_provider: str | None = None,
+        finalize_before_dispatch: bool = False,
         **kwargs,
     ):
         standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
@@ -445,7 +522,7 @@ class PassThroughEndpointLogging:
                 )
                 return
         if self.is_assemblyai_route(url_route) and not self.is_azure_speech_route(custom_llm_provider):
-            if AssemblyAIPassthroughLoggingHandler._should_log_request(httpx_response.request.method) is not True:
+            if AssemblyAIPassthroughLoggingHandler.should_log_request(httpx_response.request.method) is not True:
                 return
             self.assemblyai_passthrough_logging_handler.assemblyai_passthrough_logging_handler(
                 httpx_response=httpx_response,
@@ -481,23 +558,31 @@ class PassThroughEndpointLogging:
             )
             return
         else:
-            normalized_llm_passthrough_logging_payload: Final = self.normalize_llm_passthrough_logging_payload(
-                httpx_response=httpx_response,
-                response_body=response_body,
-                request_body=request_body,
-                logging_obj=logging_obj,
-                url_route=url_route,
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                cache_hit=cache_hit,
-                custom_llm_provider=custom_llm_provider,
-                **kwargs,
-            )
-            standard_logging_response_object = normalized_llm_passthrough_logging_payload[
-                "standard_logging_response_object"
-            ]
-            kwargs = normalized_llm_passthrough_logging_payload["kwargs"]
+            try:
+                normalized_llm_passthrough_logging_payload: Final = self.normalize_llm_passthrough_logging_payload(
+                    httpx_response=httpx_response,
+                    response_body=response_body,
+                    request_body=request_body,
+                    logging_obj=logging_obj,
+                    url_route=url_route,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=cache_hit,
+                    custom_llm_provider=custom_llm_provider,
+                    **kwargs,
+                )
+                standard_logging_response_object = normalized_llm_passthrough_logging_payload[
+                    "standard_logging_response_object"
+                ]
+                kwargs = (  # rebind-ok: provider normalization replaces the forwarded logging kwargs
+                    normalized_llm_passthrough_logging_payload["kwargs"] or {}
+                )
+            except Exception:
+                if not finalize_before_dispatch:
+                    raise
+                verbose_proxy_logger.exception("Unable to prepare pass-through success logging")
+                return
         if standard_logging_response_object is None:
             standard_logging_response_object = StandardPassThroughResponseObject(
                 response=_safe_response_text(httpx_response)
@@ -511,6 +596,7 @@ class PassThroughEndpointLogging:
 
         await self._log_dispatch(
             logging_obj=logging_obj,
+            finalize_before_dispatch=finalize_before_dispatch,
             standard_logging_response_object=standard_logging_response_object,
             result=result,
             start_time=start_time,
@@ -534,13 +620,7 @@ class PassThroughEndpointLogging:
         return False
 
     def is_cohere_route(self, url_route: str) -> bool:
-        for route in self.TRACKED_COHERE_ROUTES:
-            if route not in url_route:
-                continue
-            if route == "/v1/embed" and "/v1/embeddings" in url_route:
-                continue
-            return True
-        return False
+        return is_cohere_embed_route(url_route) or any(route in url_route for route in self.TRACKED_COHERE_ROUTES)
 
     def is_assemblyai_route(self, url_route: str):
         parsed_url: Final = urlparse(url_route)
@@ -582,6 +662,9 @@ class PassThroughEndpointLogging:
                 return True
         return False
 
+    def is_openai_websocket_route(self, url_route: str) -> bool:
+        return url_route.startswith(self.TRACKED_OPENAI_WEBSOCKET_ROUTES)
+
     def is_cursor_route(self, url_route: str, custom_llm_provider: str | None = None):
         """Check if the URL route is a Cursor Cloud Agents API route."""
         if custom_llm_provider == "cursor":
@@ -606,10 +689,10 @@ class PassThroughEndpointLogging:
         if not url_route:
             return False
         from .llm_provider_handlers.openai_passthrough_logging_handler import (
-            _is_openai_compatible_url,
+            is_openai_compatible_url,
         )
 
-        return _is_openai_compatible_url(url_route)
+        return is_openai_compatible_url(url_route)
 
     def is_gemini_route(self, url_route: str, custom_llm_provider: str | None = None):
         """Check if the URL route is a Gemini API route."""
@@ -623,27 +706,11 @@ class PassThroughEndpointLogging:
         return False
 
     def _is_supported_openai_endpoint(self, url_route: str) -> bool:
-        """Check if the OpenAI endpoint is supported by the passthrough logging handler.
-
-        The Responses API route is included because
-        `openai_passthrough_handler` has a dedicated `elif is_responses:`
-        branch that knows how to extract usage + cost from the
-        Responses-API on-the-wire shape. Without including it here, the
-        outer dispatch filters Responses calls out before reaching the
-        handler — the inner branch is then unreachable and Responses
-        calls land in `LiteLLM_SpendLogs` with zero tokens / zero spend.
-        """
         from .llm_provider_handlers.openai_passthrough_logging_handler import (
             OpenAIPassthroughLoggingHandler,
         )
 
-        return (
-            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_embeddings_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
-        )
+        return OpenAIPassthroughLoggingHandler.handles_route(url_route)
 
     def _set_cost_per_request(
         self,

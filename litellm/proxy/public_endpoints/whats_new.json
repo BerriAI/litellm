@@ -1,0 +1,25 @@
+{
+  "launches": [
+    {
+      "icon": "box",
+      "title": "Claude Haiku 5.5",
+      "description": "Anthropic's newest small model, with day 0 pricing on Anthropic, Bedrock and Vertex AI.",
+      "href": "https://docs.litellm.ai/blog/claude-haiku-5-5",
+      "published_on": "2026-10-07"
+    },
+    {
+      "icon": "scale",
+      "title": "Decision Models",
+      "description": "Call decision models at /v1/decisions and try them in the Decisions playground.",
+      "href": "https://docs.litellm.ai/docs/decisions",
+      "published_on": "2026-10-07"
+    },
+    {
+      "icon": "zap",
+      "title": "OpenAI Ultrafast",
+      "description": "service_tier: ultrafast on GPT-6 Astra and GPT-6.1 Sol, including /ultrafast in Codex.",
+      "href": "https://docs.litellm.ai/docs/providers/openai/ultrafast",
+      "published_on": "2026-10-06"
+    }
+  ]
+}

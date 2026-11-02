@@ -11,9 +11,10 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
-from litellm.secret_managers.main import get_secret_str
+from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
 from litellm.types.rerank import (
     RerankBilledUnits,
     RerankResponse,
@@ -28,9 +29,20 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _OPTIONAL_INT: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
 _STR: Final = TypeAdapter(str)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class VoyageRerankConfig(BaseRerankConfig):
+    """
+    ``validate_environment`` stores the credential it authenticates with so ``get_complete_url``
+    can select the host that issued it. ``ProviderConfigManager.get_provider_rerank_config``
+    builds this config per request, so that key never reaches another one.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._api_key: str | None = None
+
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return ["query", "documents", "top_n", "return_documents"]
 
@@ -66,13 +78,13 @@ class VoyageRerankConfig(BaseRerankConfig):
         optional_params: dict | None = None,
     ) -> str:
         if api_base is None:
-            return "https://api.voyageai.com/v1/rerank"
+            return f"{get_default_base_url(self._api_key)}/rerank"
         api_base = api_base.rstrip("/")
         if not api_base.endswith("/v1/rerank"):
             if api_base.endswith("/v1"):
-                api_base = f"{api_base}/rerank"
+                api_base = join_api_base(api_base, "rerank")
             else:
-                api_base = f"{api_base}/v1/rerank"
+                api_base = join_api_base(api_base, "v1/rerank")
         return api_base
 
     def transform_rerank_request(
@@ -101,7 +113,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         try:
-            _json_response: Final = raw_response.json()
+            _json_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise VoyageError(
                 message=f"Failed to parse response: {raw_response.text}",
@@ -148,12 +160,12 @@ class VoyageRerankConfig(BaseRerankConfig):
         optional_params: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
-        if api_key is None:
-            api_key = get_secret_str("VOYAGE_API_KEY") or get_secret_str("VOYAGE_AI_API_KEY")
-        if api_key is None:
+        resolved_api_key: Final = get_voyage_api_key(api_key)
+        if resolved_api_key is None:
             raise ValueError("Voyage AI API key is required. Set via `api_key` parameter or `VOYAGE_API_KEY` env var.")
+        self._api_key = resolved_api_key
         return {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {resolved_api_key}",
             "content-type": "application/json",
         }
 

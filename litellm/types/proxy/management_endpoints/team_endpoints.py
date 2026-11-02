@@ -1,24 +1,34 @@
-from typing import Any, Final, Literal
+from collections.abc import Mapping
+from datetime import datetime
+from typing import Final, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from litellm.proxy._types import (
-    KeyManagementRoutes,
-    LiteLLM_DeletedTeamTable,
-    LiteLLM_TeamMembership,
-    LiteLLM_TeamTable,
-    Member,
-    MemberDeleteRequest,
-)
+from litellm.models.team import LiteLLM_DeletedTeamTable, LiteLLM_TeamTable, Member
+from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.proxy.auth.user_roles import KeyManagementRoutes
 from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
+from litellm.types.utils import LiteLLMPydanticObjectBase
 
 TeamIdSearchMatch = Literal["exact", "prefix"]
 
 MAX_BULK_TEAM_MEMBER_DELETES: Final = 500
 
 MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES: Final = 500
+
+
+class MemberDeleteRequest(LiteLLMPydanticObjectBase):
+    user_id: str | None = None
+    user_email: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def check_user_info(cls, values: Mapping[str, object]) -> Mapping[str, object]:
+        if values.get("user_id") is None and values.get("user_email") is None:
+            raise ValueError("Either user id or user email must be provided")
+        return values
 
 
 class GetTeamMemberPermissionsRequest(LiteLLMBaseModel):
@@ -74,15 +84,27 @@ class BulkUpdateTeamMemberPermissionsResponse(LiteLLMBaseModel):
     permissions_appended: list[str] | None = None
 
 
+class TeamListCallerMembership(LiteLLMBaseModel):
+    """The calling user's own spend and effective member budget in a team."""
+
+    spend: float = 0.0
+    max_budget: float | None = None
+    budget_reset_at: datetime | None = None
+
+    model_config = ConfigDict(frozen=True)
+
+
 class TeamListItem(LiteLLM_TeamTable):
     """A team item in the paginated list response, enriched with computed fields."""
 
     members_count: int = 0
     keys_count: int = 0
+    caller_membership: TeamListCallerMembership | None = None
     # Resources inherited from access groups (separate from direct assignments)
     access_group_models: list[str] | None = None
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
+    access_group_skill_names: tuple[str, ...] | None = None
 
 
 class TeamListResponse(LiteLLMBaseModel):
@@ -111,8 +133,8 @@ class TeamMemberAddResult(LiteLLMBaseModel):
     user_email: str | None = None
     success: bool
     error: str | None = None
-    updated_user: dict[str, Any] | None = None
-    updated_team_membership: dict[str, Any] | None = None
+    updated_user: dict[str, object] | None = None
+    updated_team_membership: dict[str, object] | None = None
 
 
 class BulkTeamMemberAddResponse(LiteLLMBaseModel):
@@ -123,7 +145,7 @@ class BulkTeamMemberAddResponse(LiteLLMBaseModel):
     total_requested: int
     successful_additions: int
     failed_additions: int
-    updated_team: dict[str, Any] | None = None
+    updated_team: dict[str, object] | None = None
 
 
 class TeamMemberRef(MemberDeleteRequest):

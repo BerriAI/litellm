@@ -1,12 +1,12 @@
 use serde::Serialize;
 
-use crate::Error;
 use crate::python_json;
 use crate::tools::format_function_definitions;
 use crate::types::{
     ContentItem, CountableContentBlock, CountableRequest, Message, MessageContent, TextValue,
     ToolChoice, ToolDefinition,
 };
+use crate::{Error, Unsupported};
 
 const TOKENS_PER_MESSAGE: usize = 3;
 const TOKENS_PER_NAME: usize = 1;
@@ -53,7 +53,7 @@ impl TokenCounter {
             self.count_optional_text_value(request.query.as_ref())?
                 + self.count_optional_text_value(request.documents.as_ref())?
         } else {
-            return Err(Error::MissingInput);
+            return Err(Unsupported::MissingInput.into());
         };
         Ok(InputTokenCount {
             model: request.model.clone(),
@@ -96,7 +96,7 @@ impl TokenCounter {
             TextValue::Number(number) => match (number.as_i64(), number.as_u64()) {
                 (Some(number), _) => self.count_text(itoa::Buffer::new().format(number)),
                 (_, Some(number)) => self.count_text(itoa::Buffer::new().format(number)),
-                _ => Err(Error::FloatText),
+                _ => Err(Unsupported::FloatText.into()),
             },
             TextValue::Text(text) => self.count_text(text),
             TextValue::List(items) => items
@@ -143,7 +143,9 @@ impl TokenCounter {
                     None => Ok(0),
                 }
             }
-            ContentItem::Block(CountableContentBlock::Unsupported) => Err(Error::ContentBlock),
+            ContentItem::Block(CountableContentBlock::Unsupported) => {
+                Err(Unsupported::ContentBlock.into())
+            }
         }
     }
 

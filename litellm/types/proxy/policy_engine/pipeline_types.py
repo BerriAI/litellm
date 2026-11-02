@@ -13,6 +13,7 @@ from pydantic import ConfigDict, Field, field_validator
 from litellm.types.llms.base import LiteLLMBaseModel
 
 VALID_PIPELINE_ACTIONS: Final = {"allow", "block", "next", "modify_response"}
+DETECT_ONLY_PIPELINE_ACTIONS: Final = frozenset({"allow", "next"})
 VALID_PIPELINE_MODES: Final = {"pre_call", "post_call"}
 
 
@@ -87,7 +88,7 @@ class PipelineStepResult(LiteLLMBaseModel):
     """Result of executing a single pipeline step."""
 
     guardrail_name: str
-    outcome: Literal["pass", "fail", "error"]
+    outcome: Literal["pass", "fail", "error", "skip"]
     action_taken: str
     modified_data: dict[str, Any] | None = None
     error_detail: str | None = None

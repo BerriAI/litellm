@@ -4,19 +4,13 @@ from collections.abc import Awaitable
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
 from litellm.rust_bridge.bindings import NativeBinding
+from litellm.rust_bridge.public_call import NativeCall
 
 
 class RustTranscription(Protocol):
     def __call__(
         self,
-        model: str,
-        audio: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        call: NativeCall,
     ) -> dict[str, object]:
         raise NotImplementedError
 
@@ -24,14 +18,7 @@ class RustTranscription(Protocol):
 class RustAtranscription(Protocol):
     def __call__(
         self,
-        model: str,
-        audio: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        call: NativeCall,
     ) -> Awaitable[dict[str, object]]:
         raise NotImplementedError
 

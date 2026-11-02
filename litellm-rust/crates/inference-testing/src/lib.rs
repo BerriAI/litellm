@@ -5,9 +5,12 @@ use litellm_http::{
     ClientVariant, HttpClientConfig, HttpClientPool, HttpSettings, Resolution,
     media::PublicDnsResolver,
 };
-use litellm_secrets::{SecretValue, source::SecretSource};
+use litellm_secret_value::SecretValue;
+use litellm_secrets::source::SecretSource;
 
 use litellm_inference::resources::CoreResources;
+
+pub mod live;
 
 pub fn http_pool() -> HttpClientPool {
     HttpClientPool::new(Arc::new(PublicDnsResolver))

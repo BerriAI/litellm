@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 _REPO_ROOT: Final = Path(__file__).resolve().parents[2]
-_BASE_WORKFLOW: Final = _REPO_ROOT / ".github" / "workflows" / "_test-unit-base.yml"
+_UNIT_WORKFLOW: Final = _REPO_ROOT / ".github" / "workflows" / "test-unit.yml"
 _SHARD_ENV: Final = MappingProxyType({"WORKERS": "2", "RERUNS": "2", "DIST": "loadscope", "TEST_TIMEOUT_SECONDS": "1"})
 _HANG_GUARD_FLAGS: Final = frozenset(("-n", "--dist", "--reruns", "--reruns-delay", "--timeout", "--rerun-except"))
 _HUNG_TEST_MODULE: Final = """
@@ -39,8 +39,8 @@ def test_passes():
 
 
 def _run_tests_script() -> str:
-    workflow: Final = yaml.safe_load(_BASE_WORKFLOW.read_text())
-    return next(step["run"] for step in workflow["jobs"]["run"]["steps"] if step.get("name") == "Run tests")
+    workflow: Final = yaml.safe_load(_UNIT_WORKFLOW.read_text())
+    return next(step["run"] for step in workflow["jobs"]["unit"]["steps"] if step.get("name") == "Run tests")
 
 
 def _pytest_invocations(script: str) -> tuple[tuple[str, ...], ...]:

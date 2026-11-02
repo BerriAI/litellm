@@ -3,7 +3,9 @@
 #    On success + failure, log events to Prometheus for litellm / adjacent services (litellm, redis, postgres, llm api providers)
 
 
-from typing import Final
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -16,6 +18,42 @@ from litellm.types.services import (
 )
 
 FAILED_REQUESTS_LABELS: Final = ["error_class", "function_name"]
+
+if TYPE_CHECKING:
+    from prometheus_client import Counter as PrometheusCounter
+    from prometheus_client import Gauge
+
+
+@dataclass(frozen=True, slots=True)
+class _RedisBreakerCollectors:
+    state: "Gauge"
+    transitions: "PrometheusCounter"
+    failures: "PrometheusCounter"
+
+
+@lru_cache(maxsize=1)
+def _redis_breaker_collectors() -> _RedisBreakerCollectors:
+    from prometheus_client import Counter as PrometheusCounter
+    from prometheus_client import Gauge
+
+    return _RedisBreakerCollectors(
+        state=Gauge(
+            "litellm_redis_circuit_breaker_state",
+            "Number of Redis circuit breakers currently in each state",
+            labelnames=("state",),
+            multiprocess_mode="livesum",
+        ),
+        transitions=PrometheusCounter(
+            "litellm_redis_circuit_breaker_transitions",
+            "Redis circuit breaker state transitions",
+            labelnames=("state",),
+        ),
+        failures=PrometheusCounter(
+            "litellm_redis_circuit_breaker_failures",
+            "Redis health failures counted by the circuit breaker",
+            labelnames=("failure_class",),
+        ),
+    )
 
 
 class PrometheusServicesLogger:
@@ -41,6 +79,11 @@ class PrometheusServicesLogger:
             self.Counter = Counter
             self.Gauge = Gauge
             self.REGISTRY = REGISTRY
+            breaker_collectors: Final = _redis_breaker_collectors()
+            self.redis_breaker_state = breaker_collectors.state
+            self.redis_breaker_transitions = breaker_collectors.transitions
+            self.redis_breaker_failures = breaker_collectors.failures
+            self._refresh_redis_breaker_gauge()
 
             verbose_logger.debug("in init prometheus services metrics")
 
@@ -97,6 +140,20 @@ class PrometheusServicesLogger:
             verbose_logger.debug("No metrics found for service %s", service)
             return DEFAULT_METRICS
         return metrics
+
+    def _refresh_redis_breaker_gauge(self) -> None:
+        from litellm.caching.redis_cache import RedisCircuitBreaker, redis_breaker_state_counts
+
+        counts: Final = redis_breaker_state_counts()
+        for state in (RedisCircuitBreaker.CLOSED, RedisCircuitBreaker.OPEN, RedisCircuitBreaker.HALF_OPEN):
+            self.redis_breaker_state.labels(state).set(counts.get(state, 0))
+
+    def redis_breaker_hook(self, transitions_to: str | None, failure_class: str | None) -> None:
+        self._refresh_redis_breaker_gauge()
+        if transitions_to is not None:
+            self.redis_breaker_transitions.labels(transitions_to).inc()
+        if failure_class is not None:
+            self.redis_breaker_failures.labels(failure_class).inc()
 
     def is_metric_registered(self, metric_name) -> bool:
         # Use _names_to_collectors (O(1)) instead of REGISTRY.collect() (O(n)) to avoid

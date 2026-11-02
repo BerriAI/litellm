@@ -8,15 +8,19 @@ This is important for debugging and observability - headers like x-request-id,
 x-ms-region, rate limit headers, etc. should be available even when errors occur.
 """
 
+from typing import Final
+
 import httpx
 import pytest
 
+import litellm
 from litellm.exceptions import (
     BadRequestError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
     ImageFetchError,
     MidStreamFallbackError,
+    PaymentRequiredError,
     RateLimitError,
     ServiceUnavailableError,
 )
@@ -25,10 +29,11 @@ from litellm.exceptions import (
 class TestExceptionHeaderPreservation:
     """Test that exception classes preserve headers from provider responses."""
 
-    @pytest.fixture
-    def mock_response_with_headers(self) -> httpx.Response:
+    @pytest.fixture(params=("httpx", "httpx2"))
+    def mock_response_with_headers(self, request: pytest.FixtureRequest) -> httpx.Response:
         """Create a mock response with typical provider headers."""
-        return httpx.Response(
+        transport: Final = pytest.importorskip(request.param)
+        return transport.Response(
             status_code=400,
             headers={
                 "x-request-id": "req-abc123",
@@ -36,7 +41,7 @@ class TestExceptionHeaderPreservation:
                 "x-ratelimit-remaining-requests": "99",
                 "x-ratelimit-remaining-tokens": "9999",
             },
-            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+            request=transport.Request("POST", "https://api.openai.com/v1/chat/completions"),
         )
 
     def test_bad_request_error_preserves_headers(
@@ -50,10 +55,29 @@ class TestExceptionHeaderPreservation:
             response=mock_response_with_headers,
         )
 
-        assert error.response is not None
+        assert error.response is mock_response_with_headers
+        assert error.request is mock_response_with_headers.request
+        assert error.request_id == mock_response_with_headers.headers["x-request-id"]
         assert error.response.headers.get("x-request-id") == "req-abc123"
         assert error.response.headers.get("x-ms-region") == "eastus"
         assert error.response.headers.get("x-ratelimit-remaining-requests") == "99"
+
+    def test_payment_required_error_preserves_headers(
+        self, mock_response_with_headers: httpx.Response
+    ):
+        """PaymentRequiredError should keep the provider response like its BadRequestError parent."""
+        error = PaymentRequiredError(
+            message="Insufficient credit",
+            model="gpt-4",
+            llm_provider="openrouter",
+            response=mock_response_with_headers,
+        )
+
+        assert error.status_code == 402
+        assert error.response is mock_response_with_headers
+        assert error.request is mock_response_with_headers.request
+        assert error.request_id == mock_response_with_headers.headers["x-request-id"]
+        assert error.response.headers.get("x-ms-region") == "eastus"
 
     def test_content_policy_violation_error_preserves_headers(
         self, mock_response_with_headers: httpx.Response
@@ -395,3 +419,21 @@ class TestBedrockErrorHeaders:
                     headers = get_response_headers(dict(_response_headers))
 
         assert headers.get("llm_provider-x-amzn-requestid") == "req-proxy-500"
+
+
+@pytest.mark.parametrize(
+    "error_class",
+    (RateLimitError, ServiceUnavailableError, litellm.BadGatewayError, litellm.InternalServerError),
+)
+def test_error_built_from_an_unread_streaming_response_keeps_its_headers(error_class: type[Exception]) -> None:
+    unread: Final = httpx.Response(
+        500,
+        headers={"x-request-id": "req-unread"},
+        stream=httpx.ByteStream(b'{"error":"never read"}'),
+    )
+
+    error: Final = error_class(message="upstream failed", llm_provider="openai", model="gpt-5.6", response=unread)
+
+    error_response: Final = getattr(error, "response")
+    assert error_response.text == ""
+    assert dict(error_response.headers) == {"x-request-id": "req-unread"}

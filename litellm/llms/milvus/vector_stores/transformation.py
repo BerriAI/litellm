@@ -4,11 +4,14 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
     VectorStoreEmbeddingExecutor,
 )
+from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
@@ -28,6 +31,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 MILVUS_OPTIONAL_PARAMS: Final = {
     "annsField",
@@ -185,7 +190,7 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         }
         litellm_logging_obj.model_call_details["input"] = query_text
         litellm_logging_obj.model_call_details["embedding_model"] = litellm_params.get("litellm_embedding_model")
-        return f"{api_base}/v2/vectordb/entities/search", {
+        return join_api_base(api_base, "v2/vectordb/entities/search"), {
             "collectionName": vector_store_id,
             "data": [query_vector],
             "annsField": "book_intro_vector",
@@ -217,15 +222,17 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
             results: Final = response_json.get("data", [])
 
             # Try to get text_field from optional_params first, then litellm_params
-            optional_params: Final = litellm_logging_obj.model_call_details.get("optional_params", {})
+            optional_params: Final = decoded_json_object(
+                _DECODED_JSON.validate_python(litellm_logging_obj.model_call_details.get("optional_params", {}))
+            )
             text_field = optional_params.get("milvus_text_field", "")
 
             # Fallback to litellm_params if not in optional_params
 
             if not text_field:
-                text_field = litellm_logging_obj.model_call_details.get("litellm_params", {}).get(
-                    "milvus_text_field", ""
-                )
+                text_field = decoded_json_object(
+                    _DECODED_JSON.validate_python(litellm_logging_obj.model_call_details.get("litellm_params", {}))
+                ).get("milvus_text_field", "")
 
             # Transform results to standard format
             search_results: Final[list[VectorStoreSearchResult]] = []

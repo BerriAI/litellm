@@ -2,7 +2,8 @@ use std::path::Path;
 
 use axum::{
     Router,
-    extract::{Query, Request},
+    extract::{FromRequestParts, Query, Request},
+    http::request::Parts,
     routing::get,
 };
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,17 @@ struct LogoQuery {
     variant: Option<Variant>,
 }
 
+impl<S: Send + Sync> FromRequestParts<S> for LogoQuery {
+    type Rejection = crate::Error;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        Query::<Self>::from_request_parts(parts, state)
+            .await
+            .map(|Query(query)| query)
+            .map_err(crate::Error::Query)
+    }
+}
+
 fn logo_file(query: &LogoQuery) -> &'static str {
     match (query.variant, query.theme) {
         (Some(Variant::Monogram), Some(Theme::Dark)) => "assets/logos/litellm_monogram_dark.svg",
@@ -59,7 +71,7 @@ pub fn dashboard_assets(directory: impl AsRef<Path>) -> Router {
         )
         .route(
             "/get_image",
-            get(move |Query(query): Query<LogoQuery>, request: Request| {
+            get(move |query: LogoQuery, request: Request| {
                 ServeFile::new(logos.join(logo_file(&query))).oneshot(request)
             }),
         )

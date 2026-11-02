@@ -2,9 +2,10 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -31,6 +32,8 @@ class FalImageProviderSpecificFields(TypedDict, total=False):
 
 
 _FAL_IMAGE_DATA: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def fal_images_to_image_objects(images: object) -> tuple[ImageObject, ...]:
@@ -83,12 +86,10 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
 
         Some providers need `model` in `api_base`
         """
-        complete_url: str = api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL
-
-        complete_url = complete_url.rstrip("/")
-        if self.IMAGE_GENERATION_ENDPOINT:
-            complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
-        return complete_url
+        base_url: Final = api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL
+        if not self.IMAGE_GENERATION_ENDPOINT:
+            return base_url.rstrip("/")
+        return join_api_base(base_url, self.IMAGE_GENERATION_ENDPOINT)
 
     def validate_environment(
         self,
@@ -124,7 +125,7 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         Transform the image generation response to the litellm image response
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _JSON_VALUE.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -134,7 +135,9 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         if not model_response.data:
             model_response.data = []
 
-        model_response.data.extend(fal_images_to_image_objects(response_data.get("images", ())))
+        model_response.data.extend(
+            fal_images_to_image_objects(_JSON_OBJECT.validate_python(response_data).get("images", ()))
+        )
         return model_response
 
 

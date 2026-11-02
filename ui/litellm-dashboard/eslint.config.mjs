@@ -69,6 +69,7 @@ const eslintConfig = [
   },
   {
     files: ["src/**/*.tsx"],
+    ignores: ["src/components/ui/**"],
     rules: {
       "local/filename-pascal-case": "error",
     },

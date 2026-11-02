@@ -212,8 +212,10 @@ async def test_logger_distinguishes_missing_usage_from_reported_zero(
     now: Final = datetime.datetime.now()
     monkeypatch.setattr(litellm, FLAG, True)
     logger: Final = PrometheusLogger()
+    response_obj: Final = response.model_dump() if isinstance(response, litellm.ModelResponse) else response
     usage: Final = StandardLoggingPayloadSetup.get_usage_as_dict(
-        response_obj=response if isinstance(response, dict) else None
+        response_obj=response_obj if isinstance(response_obj, dict) else None,
+        combined_usage_object=combined_usage if isinstance(combined_usage, litellm.Usage) else None,
     )
 
     payload: Final = _standard_logging_payload(now, usage.get("prompt_tokens", 0))

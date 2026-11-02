@@ -194,7 +194,7 @@ The following arguments are supported:
 * `vector_store_description` - (Optional) Description of the vector store.
 * `vector_store_metadata` - (Optional) Map of metadata associated with the vector store.
 * `litellm_credential_name` - (Optional) Name of the LiteLLM credential to use for authentication.
-* `litellm_params` - (Optional, Sensitive) Map of additional parameters specific to the vector store provider. Do not put API keys or other secrets here; this map is stored unencrypted in state. Store secrets in a `litellm_credential` and reference it via `litellm_credential_name`.
+* `litellm_params` - (Optional, Sensitive) Map of additional parameters specific to the vector store provider. Do not put API keys or other secrets here; this map is stored unencrypted in state, and `terraform plan` warns when it sees a secret-looking key such as `api_key` or `aws_secret_access_key`. Store secrets in a `litellm_credential` (`credential_values_wo`) and reference it via `litellm_credential_name`.
 
 ## Attributes Reference
 

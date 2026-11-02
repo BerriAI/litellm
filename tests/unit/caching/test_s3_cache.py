@@ -2,10 +2,14 @@ from unittest.mock import MagicMock, patch
 import json
 import datetime
 import asyncio
+from typing import Final
 
 import pytest
 
 
+import litellm
+from litellm import completion
+from litellm.caching.caching import Cache
 from litellm.caching.s3_cache import S3Cache
 
 
@@ -341,3 +345,44 @@ async def test_s3_cache_async_disconnect(mock_s3_dependencies):
 
     # Should not raise any exceptions
     await cache.disconnect()
+
+
+def test_s3_cache_stream_azure(
+    mock_s3_dependencies: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import botocore.exceptions
+
+    s3_client: Final = mock_s3_dependencies["s3_client"]
+    s3_client.get_object.side_effect = botocore.exceptions.ClientError(
+        {"Error": {"Code": "NoSuchKey"}}, "GetObject"
+    )
+    monkeypatch.setattr(
+        litellm,
+        "cache",
+        Cache(type="s3", s3_bucket_name="test-bucket", s3_region_name="us-west-2"),
+    )
+    messages: Final = [{"role": "user", "content": "cache the completed stream"}]
+    first_chunks: Final = tuple(
+        completion(
+            model="azure/gpt-4.1-mini",
+            messages=messages,
+            stream=True,
+            mock_response="stream cached in s3",
+        )
+    )
+    stored_body: Final = s3_client.put_object.call_args.kwargs["Body"]
+    body_stream: Final = MagicMock()
+    body_stream.read.return_value = stored_body.encode()
+    s3_client.get_object.side_effect = None
+    s3_client.get_object.return_value = {"Body": body_stream}
+    second_chunks: Final = tuple(
+        completion(
+            model="azure/gpt-4.1-mini",
+            messages=messages,
+            stream=True,
+            mock_response="different upstream response",
+        )
+    )
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in first_chunks) == "stream cached in s3"
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in second_chunks) == "stream cached in s3"

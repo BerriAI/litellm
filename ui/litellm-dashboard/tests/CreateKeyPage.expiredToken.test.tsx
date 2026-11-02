@@ -76,6 +76,8 @@ vi.mock("@/components/networking", () => {
     getUiSettings: vi.fn().mockResolvedValue({ values: {}, field_schema: {} }),
     // Used to build the redirect URL
     proxyBaseUrl: "https://example.com",
+    getRuntimeBackendBaseUrl: vi.fn(() => null),
+    getUiPageUrl: (url: string) => url,
     // Called when decoding a valid token
     setGlobalLitellmHeaderName: vi.fn(),
     Organization: {},
@@ -105,7 +107,7 @@ vi.mock("@/utils/returnUrlUtils", async (importOriginal) => {
 
 // Super-light stubs for all heavy components so rendering doesn't explode
 vi.mock("@/components/navbar", () => ({ default: stub("navbar") }));
-vi.mock("@/app/(dashboard)/api-keys/ApiKeysDashboard", () => ({ default: stub("api-keys-dashboard") }));
+vi.mock("@/app/(dashboard)/home/_components/HomePage", () => ({ default: stub("home-page") }));
 vi.mock("@/components/templates/model_dashboard", () => ({ default: stub("model-dashboard") }));
 vi.mock("@/components/teams", () => ({ default: stub("teams") }));
 vi.mock("@/app/(dashboard)/organizations/_components/organizations", () => ({
@@ -125,7 +127,6 @@ vi.mock("@/components/new_usage", () => ({ default: stub("new-usage") }));
 vi.mock("@/components/api_ref", () => ({ default: stub("api-ref") }));
 vi.mock("@/components/chat_ui/ChatUI", () => ({ default: stub("chat-ui") }));
 vi.mock("@/components/leftnav", () => ({ default: stub("sidebar") }));
-vi.mock("@/app/(dashboard)/old-usage/_components/usage", () => ({ default: stub("usage") }));
 vi.mock("@/components/cache_dashboard", () => ({ default: stub("cache-dashboard") }));
 vi.mock("@/app/(dashboard)/guardrails/_components", () => ({ default: stub("guardrails") }));
 vi.mock("@/components/prompts", () => ({ default: stub("prompts") }));
@@ -271,7 +272,7 @@ describe("CreateKeyPage auth behavior", () => {
 
     // And the default page content appears (ApiKeysDashboard stub; chrome now lives in the layout)
     await waitFor(() => {
-      expect(screen.getByTestId("api-keys-dashboard")).toBeInTheDocument();
+      expect(screen.getByTestId("home-page")).toBeInTheDocument();
     });
   });
 

@@ -216,22 +216,19 @@ MESSAGE_STREAM_WITHOUT_CONTENT_BLOCKS: Final = SseResponse(
 
 
 class Upstream:
-    """The owned upstream's observations, drained once per read and kept, filtered per deployment."""
+    """The owned upstream's observations, filtered per deployment."""
 
     def __init__(self, url: str = CONTROL_URL) -> None:
         self._url: Final = url.rstrip("/")
-        self._seen: tuple[dict[str, JsonValue], ...] = ()
 
     def received(self, identity: str) -> tuple[dict[str, JsonValue], ...]:
         with httpx.Client(timeout=10, trust_env=False) as client:
             payload: Final = JSON_OBJECT.validate_json(client.get(f"{self._url}/__observations").content)
         requests: Final = payload["requests"]
         assert isinstance(requests, list)
-        self._seen = (
-            *self._seen,
-            *(object_value(item) for item in requests),
-        )  # rebind-ok: drained observations accumulate
-        return tuple(item for item in self._seen if f"/{identity}/" in string_value(item.get("path", "")))
+        return tuple(
+            item for item in map(object_value, requests) if f"/{identity}/" in string_value(item.get("path", ""))
+        )
 
     def calls(self, identity: str) -> int:
         """The LLM calls the deployment took; the proxy's boot-time ``GET /v1/models`` discovery of a config
@@ -278,23 +275,26 @@ def prompt() -> str:
     return f"cache probe {uuid.uuid4().hex}"
 
 
-def redis_store() -> Redis:
+def redis_store() -> Redis[bytes]:
     return Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]))
 
 
-def entry_key(store: Redis, needle: str) -> str | None:
-    """The response cache key (a bare sha256) whose stored value names ``needle``, or ``None``."""
+def entry_keys(store: Redis[bytes], needle: str) -> Iterator[str]:
     for raw_key in store.scan_iter(count=1000):
         key: Final = raw_key.decode()
         if not CACHE_KEY.match(key) or store.type(key) != b"string":
             continue
         value: Final = store.get(key)
         if value is not None and needle.encode() in value:
-            return key
-    return None
+            yield key
 
 
-def await_entry(store: Redis, needle: str) -> str:
+def entry_key(store: Redis[bytes], needle: str) -> str | None:
+    """The response cache key (a bare sha256) whose stored value names ``needle``, or ``None``."""
+    return next(entry_keys(store, needle), None)
+
+
+def await_entry(store: Redis[bytes], needle: str) -> str:
     key: Final = eventually(lambda: entry_key(store, needle), lambda found: found is not None)
     assert key is not None
     return key
@@ -331,6 +331,29 @@ def flip_entry_to_empty(store: Redis, key: str, field: str) -> str:
     rewritten: Final[dict[str, JsonValue]] = {
         **entry,
         "response": json.dumps(flipped) if isinstance(response, str) else flipped,
+    }
+    store.set(key, json.dumps(rewritten) if is_json else str(rewritten), ex=STALE_ENTRY_TTL_SECONDS)
+    return stale_id
+
+
+def rewrite_usage_details(store: Redis, key: str, details: JsonValue) -> str:
+    """Rewrite the stored usage's ``completion_tokens_details`` to ``details`` and stamp the id ``-stale``, keeping the
+    encoding, and return the stale id."""
+    raw: Final = store.get(key)
+    assert raw is not None, key
+    entry, is_json = _decode_entry(raw)
+    response: Final = entry["response"]
+    stored: Final = object_value(json.loads(response) if isinstance(response, str) else response)
+    stale_id: Final = f"{string_value(stored['id'])}{STALE_ID_SUFFIX}"
+    usage: Final = object_value(stored["usage"])
+    rewritten_response: Final[dict[str, JsonValue]] = {
+        **stored,
+        "usage": {**usage, "completion_tokens_details": details},
+        "id": stale_id,
+    }
+    rewritten: Final[dict[str, JsonValue]] = {
+        **entry,
+        "response": json.dumps(rewritten_response) if isinstance(response, str) else rewritten_response,
     }
     store.set(key, json.dumps(rewritten) if is_json else str(rewritten), ex=STALE_ENTRY_TTL_SECONDS)
     return stale_id

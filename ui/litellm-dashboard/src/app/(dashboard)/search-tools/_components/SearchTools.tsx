@@ -37,6 +37,7 @@ const editSearchToolShape = {
   search_provider: z.string().min(1, "Please select a search provider"),
   api_key: z.string().nullish(),
   description: z.string().nullish(),
+  input_cost_per_query: z.number().nonnegative("Cost per query cannot be negative").nullish(),
 };
 
 const editSearchToolSchema = z.object(editSearchToolShape);
@@ -94,6 +95,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
       search_provider: tool.litellm_params.search_provider,
       api_key: tool.litellm_params.api_key,
       description: tool.search_tool_info?.description,
+      input_cost_per_query: tool.litellm_params.input_cost_per_query,
     };
     form.reset(editFormValues);
     setSelectedToolId(toolId);
@@ -201,6 +203,25 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         <FormField control={form.control} name="api_key" label="API Key" description="API key for the search provider">
           {({ ref, value, ...field }) => (
             <PasswordInput {...field} ref={ref} value={value ?? ""} placeholder="Enter API key" />
+          )}
+        </FormField>
+
+        <FormField
+          control={form.control}
+          name="input_cost_per_query"
+          label="Cost per Query (USD)"
+          description="Overrides the cost map price for this tool. Leave blank to use the provider's default price"
+        >
+          {({ ref, value, onChange, ...field }) => (
+            <Input
+              {...field}
+              ref={ref}
+              type="number"
+              step="any"
+              value={value ?? ""}
+              onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
+              placeholder="e.g., 0.007"
+            />
           )}
         </FormField>
 

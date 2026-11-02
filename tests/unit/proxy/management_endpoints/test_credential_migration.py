@@ -17,7 +17,7 @@ import pytest
 from litellm._service_logger import ServiceTypes
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    _V2_GCM_PREFIX,
+    V2_GCM_PREFIX,
     encrypt_value_helper,
 )
 from litellm.proxy.management_endpoints import credential_migration as cm
@@ -82,7 +82,7 @@ def test_reencrypt_value_legacy_to_v2(salt_key, monkeypatch):
 
     out = cm.reencrypt_value(legacy)
     assert out != legacy
-    assert out.startswith(_V2_GCM_PREFIX)
+    assert out.startswith(V2_GCM_PREFIX)
 
 
 def test_reencrypt_value_is_idempotent(salt_key, monkeypatch):
@@ -113,7 +113,7 @@ def test_reencrypt_selective_dict(salt_key, monkeypatch):
     data = {"api_key": legacy_key, "base_url": "https://x", "integration_token": None}
     out = cm.reencrypt_selective_dict(data, ["api_key", "integration_token"])
 
-    assert out["api_key"].startswith(_V2_GCM_PREFIX)
+    assert out["api_key"].startswith(V2_GCM_PREFIX)
     assert out["base_url"] == "https://x"  # untouched non-sensitive
     assert out["integration_token"] is None  # null skipped
 
@@ -164,7 +164,7 @@ async def test_vantage_walker_migrates_legacy_field(salt_key, monkeypatch):
     written = json.loads(
         client.db.litellm_config.update.call_args.kwargs["data"]["param_value"]
     )
-    assert written["api_key"].startswith(_V2_GCM_PREFIX)
+    assert written["api_key"].startswith(V2_GCM_PREFIX)
     assert written["base_url"] == "https://api.vantage.sh"  # non-sensitive untouched
 
 
@@ -584,11 +584,11 @@ async def test_migrate_covered_tables_reports_real_counts(salt_key, monkeypatch)
     client.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
     async def fake_rotate(**kwargs):
-        # Stand in for _rotate_master_key: re-encrypt the model api_key in place.
+        # Stand in for rotate_master_key: re-encrypt the model api_key in place.
         row.litellm_params["api_key"] = v2
 
     monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints._rotate_master_key",
+        "litellm.proxy.management_endpoints.key_management_endpoints.rotate_master_key",
         fake_rotate,
     )
 

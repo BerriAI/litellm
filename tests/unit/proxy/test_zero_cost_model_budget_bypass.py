@@ -23,8 +23,8 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     _check_team_member_budget,
-    _is_model_cost_zero,
-    _team_max_budget_check,
+    is_model_cost_zero,
+    team_max_budget_check,
     common_checks,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -103,7 +103,7 @@ class TestIsModelCostZero:
 
     def test_zero_cost_model_in_router(self, mock_router_with_zero_cost_model):
         """Test that a zero-cost model in router is correctly identified."""
-        result = _is_model_cost_zero(
+        result = is_model_cost_zero(
             model="on-prem-model", llm_router=mock_router_with_zero_cost_model
         )
         assert result is True
@@ -116,26 +116,26 @@ class TestIsModelCostZero:
                 "input_cost_per_token": 0.0000015,
                 "output_cost_per_token": 0.000002,
             }
-            result = _is_model_cost_zero(
+            result = is_model_cost_zero(
                 model="cloud-model", llm_router=mock_router_with_zero_cost_model
             )
             assert result is False
 
     def test_none_model(self, mock_router_with_zero_cost_model):
         """Test that None model returns False."""
-        result = _is_model_cost_zero(
+        result = is_model_cost_zero(
             model=None, llm_router=mock_router_with_zero_cost_model
         )
         assert result is False
 
     def test_none_router(self):
         """Test that None router returns False."""
-        result = _is_model_cost_zero(model="some-model", llm_router=None)
+        result = is_model_cost_zero(model="some-model", llm_router=None)
         assert result is False
 
     def test_list_of_zero_cost_models(self, mock_router_with_zero_cost_model):
         """Test that a list of zero-cost models returns True."""
-        result = _is_model_cost_zero(
+        result = is_model_cost_zero(
             model=["on-prem-model"], llm_router=mock_router_with_zero_cost_model
         )
         assert result is True
@@ -147,7 +147,7 @@ class TestIsModelCostZero:
                 "input_cost_per_token": 0.0000015,
                 "output_cost_per_token": 0.000002,
             }
-            result = _is_model_cost_zero(
+            result = is_model_cost_zero(
                 model=["on-prem-model", "cloud-model"],
                 llm_router=mock_router_with_zero_cost_model,
             )
@@ -514,7 +514,7 @@ class TestEdgeCases:
         with patch("litellm.get_model_info") as mock_get_model_info:
             # Simulate model not found
             mock_get_model_info.side_effect = Exception("Model not found")
-            result = _is_model_cost_zero(
+            result = is_model_cost_zero(
                 model="nonexistent-model", llm_router=mock_router_with_zero_cost_model
             )
             # Should return False (conservative approach)

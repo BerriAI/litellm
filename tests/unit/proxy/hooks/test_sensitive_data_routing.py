@@ -24,7 +24,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.sensitive_data_routing import (
     DEFAULT_SENSITIVE_ROUTING_TTL,
     SENSITIVE_ROUTING_CACHE_PREFIX,
-    _PROXY_SensitiveDataRoutingHandler,
+    PROXY_SensitiveDataRoutingHandler,
 )
 from litellm.proxy.utils import InternalUsageCache
 
@@ -48,7 +48,7 @@ class TestSensitiveDataRoutingHandler:
     @pytest.fixture
     def handler(self):
         cache = MockInternalUsageCache()
-        return _PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
+        return PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
 
     @pytest.fixture
     def user_api_key_dict(self):
@@ -87,7 +87,7 @@ class TestSensitiveDataRoutingHandler:
                 await super().async_set_cache(key, value, ttl=ttl, **kwargs)
 
         cache = TargetRecordingCache()
-        handler = _PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
+        handler = PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
         await handler.set_session_routing(
             session_id="s-1", model="on-premise-model", user_api_key_dict=user_api_key_dict, guardrail_name="g"
         )
@@ -320,7 +320,7 @@ class TestStickySessionRouting:
     @pytest.fixture
     def handler(self):
         cache = MockInternalUsageCache()
-        return _PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
+        return PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
 
     @pytest.fixture
     def user_api_key_dict(self):
@@ -436,37 +436,37 @@ class TestCacheKeyAndTTL:
 
     def test_make_cache_key_format(self):
         cache = MockInternalUsageCache()
-        handler = _PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
+        handler = PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
         key = handler._make_cache_key("test-session-123", "hashed-key")
         assert key == "{sensitive_route:hashed-key:test-session-123}:model"
 
     def test_make_cache_key_is_tenant_scoped(self):
         cache = MockInternalUsageCache()
-        handler = _PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
+        handler = PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
         key_a = handler._make_cache_key("shared-session", "key-a")
         key_b = handler._make_cache_key("shared-session", "key-b")
         assert key_a != key_b
 
     def test_resolve_tenant_prefers_api_key(self):
-        tenant = _PROXY_SensitiveDataRoutingHandler._resolve_tenant(
+        tenant = PROXY_SensitiveDataRoutingHandler._resolve_tenant(
             UserAPIKeyAuth(api_key="hashed-key", user_id="alice")
         )
         assert tenant == "hashed-key"
 
     def test_resolve_tenant_falls_back_to_jwt_principal(self):
-        tenant = _PROXY_SensitiveDataRoutingHandler._resolve_tenant(
+        tenant = PROXY_SensitiveDataRoutingHandler._resolve_tenant(
             UserAPIKeyAuth(api_key=None, user_id="alice", team_id="t1", org_id="o1")
         )
         assert tenant == "user:alice|team:t1|org:o1"
 
     def test_resolve_tenant_distinguishes_keyless_principals(self):
-        tenant_a = _PROXY_SensitiveDataRoutingHandler._resolve_tenant(UserAPIKeyAuth(api_key=None, user_id="alice"))
-        tenant_b = _PROXY_SensitiveDataRoutingHandler._resolve_tenant(UserAPIKeyAuth(api_key=None, user_id="bob"))
+        tenant_a = PROXY_SensitiveDataRoutingHandler._resolve_tenant(UserAPIKeyAuth(api_key=None, user_id="alice"))
+        tenant_b = PROXY_SensitiveDataRoutingHandler._resolve_tenant(UserAPIKeyAuth(api_key=None, user_id="bob"))
         assert tenant_a != tenant_b
 
     def test_resolve_tenant_defaults_when_anonymous(self):
-        assert _PROXY_SensitiveDataRoutingHandler._resolve_tenant(None) == "default"
-        assert _PROXY_SensitiveDataRoutingHandler._resolve_tenant(UserAPIKeyAuth(api_key=None)) == "default"
+        assert PROXY_SensitiveDataRoutingHandler._resolve_tenant(None) == "default"
+        assert PROXY_SensitiveDataRoutingHandler._resolve_tenant(UserAPIKeyAuth(api_key=None)) == "default"
 
 
 class TestCustomGuardrailSessionIdExtraction:
@@ -557,7 +557,7 @@ class TestRedisCache:
         cache = MockInternalUsageCache()
         mock_redis = AsyncMock()
         cache.dual_cache.redis_cache = mock_redis
-        return _PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
+        return PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
 
     @pytest.mark.asyncio
     async def test_get_routed_model_from_redis(self, handler_with_redis):
@@ -652,7 +652,7 @@ class TestPreCallHookEdgeCases:
     @pytest.fixture
     def handler(self):
         cache = MockInternalUsageCache()
-        return _PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
+        return PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
 
     @pytest.fixture
     def user_api_key_dict(self):
@@ -715,7 +715,7 @@ class TestProxyHandleSensitiveDataRouteException:
     @pytest.fixture
     def routing_hook(self):
         cache = MockInternalUsageCache()
-        return _PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
+        return PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
 
     @pytest.mark.asyncio
     async def test_sticky_routing_persists_override(self, proxy_logging, routing_hook):
@@ -1022,7 +1022,7 @@ class _OpenBreakerRedis:
 @pytest.mark.asyncio
 async def test_an_open_circuit_breaker_keeps_session_routing_in_memory_without_a_warning(caplog):
     cache = DualCache(redis_cache=_OpenBreakerRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
-    handler = _PROXY_SensitiveDataRoutingHandler(internal_usage_cache=InternalUsageCache(cache))
+    handler = PROXY_SensitiveDataRoutingHandler(internal_usage_cache=InternalUsageCache(cache))
     caplog.clear()
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):

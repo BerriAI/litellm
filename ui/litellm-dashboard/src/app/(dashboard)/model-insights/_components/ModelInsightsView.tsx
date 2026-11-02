@@ -2,8 +2,8 @@
 
 import { Page } from "@/components/shared/Page";
 import React from "react";
-import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { ArrowDownRight, ArrowUpRight, BarChart3, Minus } from "lucide-react";
+import { StackedUsageChart } from "@/components/shared/charts";
 
 import { apiClient } from "@/components/networking";
 import { extractErrorMessage } from "@/utils/errorUtils";
@@ -11,7 +11,6 @@ import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { PageHeader, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -26,18 +25,6 @@ import {
   RankedModel,
 } from "./modelInsightsData";
 
-const PALETTE = [
-  "#ec4899",
-  "#a855f7",
-  "#f59e0b",
-  "#3b82f6",
-  "#10b981",
-  "#ef4444",
-  "#14b8a6",
-  "#84cc16",
-  "#6366f1",
-  "#f97316",
-];
 const SCALES = ["linear", "log"] as const;
 const GRANULARITIES = ["day", "week"] as const;
 const GRANULARITY_LABELS: Record<Granularity, string> = { day: "Daily", week: "Weekly" };
@@ -143,10 +130,6 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
     );
   }
 
-  const chartConfig = Object.fromEntries(
-    models.map((model, index) => [model, { label: model, color: PALETTE[index % PALETTE.length] }]),
-  ) satisfies ChartConfig;
-
   return (
     <Page>
       <PageHeader>
@@ -198,38 +181,15 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
           </div>
         </CardHeader>
         <CardContent>
-          <ChartContainer config={chartConfig} className="h-[380px] w-full aspect-auto">
-            <BarChart data={series} margin={{ left: 8, right: 8 }} barCategoryGap="15%" maxBarSize={64}>
-              <CartesianGrid vertical={false} />
-              <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={48} />
-              <YAxis
-                scale={scale}
-                domain={scale === "log" ? [1, "auto"] : [0, "auto"]}
-                allowDataOverflow
-                tickLine={false}
-                axisLine={false}
-                tickFormatter={(value) => formatMetric(Number(value), shown)}
-              />
-              <ChartTooltip
-                content={
-                  <ChartTooltipContent
-                    labelFormatter={(label) =>
-                      `${label} · Gateway total ${formatMetric(bucketTotals.get(String(label)) ?? 0, shown)}`
-                    }
-                  />
-                }
-              />
-              {models.map((model, index) => (
-                <Bar
-                  key={model}
-                  dataKey={model}
-                  stackId="usage"
-                  fill={PALETTE[index % PALETTE.length]}
-                  isAnimationActive={false}
-                />
-              ))}
-            </BarChart>
-          </ChartContainer>
+          <StackedUsageChart
+            data={series}
+            series={models}
+            xKey="date"
+            scale={scale}
+            format={(value) => formatMetric(value, shown)}
+            totalLabel="Gateway total"
+            totalFor={(label) => bucketTotals.get(label) ?? 0}
+          />
         </CardContent>
       </Card>
 

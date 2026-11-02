@@ -7,12 +7,16 @@ repository.workspace = true
 
 [dependencies]
 litellm-auth-types.workspace = true
+litellm-error.workspace = true
 litellm-http.workspace = true
+reqwest.workspace = true
 
 moka = { workspace = true, features = ["sync"] }
-serde_json.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
 sha2.workspace = true
 thiserror.workspace = true
+veil.workspace = true
 
 aws-config = { version = "1.9.0", default-features = false, features = ["rustls", "rt-tokio"] }
 aws-credential-types = { version = "1.3.0", features = ["hardcoded-credentials"] }
@@ -24,5 +28,6 @@ aws-smithy-runtime-api = "1.13.0"
 [dev-dependencies]
 rstest.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
-reqwest.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
 tokio.workspace = true

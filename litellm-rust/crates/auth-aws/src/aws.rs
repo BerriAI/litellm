@@ -1,9 +1,7 @@
-use std::collections::BTreeMap;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use moka::sync::Cache;
-use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use aws_credential_types::Credentials;
@@ -13,14 +11,17 @@ use aws_sigv4::http_request::{
 };
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
-use super::Error;
+use litellm_auth_types::AwsParams;
+
 use super::constants::{
-    AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION, AWS_REGION_NAME,
-    AWS_ROLE_ARN, AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN,
+    AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION_NAME, AWS_ROLE_ARN,
+    AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN,
     AWS_SIGNED_HEADER_NAMES, AWS_STS_ENDPOINT, AWS_WEB_IDENTITY_TOKEN, AWS_WEB_IDENTITY_TOKEN_FILE,
     DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX, SIGV4_COMPUTED_HEADER_NAMES,
 };
+use crate::error::{CredentialFlow, Error, SigningStage};
 
 const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
 const AMBIENT_CREDENTIALS_TTL: Duration = Duration::from_secs(600);
@@ -270,7 +271,7 @@ impl AwsAuthService {
                 provider
                     .provide_credentials()
                     .await
-                    .map_err(|error| Error::AwsProfile(error.to_string()))
+                    .map_err(Error::credentials(CredentialFlow::Profile))
             }
             AwsAuthFlow::AssumeRole { role, session_name } => {
                 if is_already_running_as_role(&role, &resolved).await? {
@@ -286,7 +287,7 @@ impl AwsAuthService {
                     let credentials = provider
                         .provide_credentials()
                         .await
-                        .map_err(|error| Error::AwsDefaultChain(error.to_string()))?;
+                        .map_err(Error::credentials(CredentialFlow::DefaultChain))?;
                     self.set_cached_credentials(
                         key,
                         credentials.clone(),
@@ -326,7 +327,7 @@ impl AwsAuthService {
                 provider
                     .provide_credentials()
                     .await
-                    .map_err(|error| Error::AwsAssumeRole(error.to_string()))
+                    .map_err(Error::credentials(CredentialFlow::AssumeRole))
             }
             AwsAuthFlow::WebIdentity {
                 token,
@@ -349,12 +350,14 @@ impl AwsAuthService {
                     .web_identity_token(token)
                     .send()
                     .await
-                    .map_err(|error| Error::AwsWebIdentity(error.to_string()))?;
+                    .map_err(Error::credentials(CredentialFlow::WebIdentity))?;
                 let credentials = response
                     .credentials()
-                    .ok_or(Error::AwsMissingWebIdentityCredentials)?;
-                let expiration = SystemTime::try_from(*credentials.expiration())
-                    .map_err(|error| Error::AwsWebIdentityExpiration(error.to_string()))?;
+                    .ok_or(Error::MissingWebIdentityCredentials)?;
+                let expiration =
+                    SystemTime::try_from(*credentials.expiration()).map_err(|source| {
+                        Error::WebIdentityExpiration(litellm_error::Source::new(source))
+                    })?;
                 Ok(Credentials::new(
                     credentials.access_key_id(),
                     credentials.secret_access_key(),
@@ -375,7 +378,7 @@ impl AwsAuthService {
                 let credentials = provider
                     .provide_credentials()
                     .await
-                    .map_err(|error| Error::AwsDefaultChain(error.to_string()))?;
+                    .map_err(Error::credentials(CredentialFlow::DefaultChain))?;
                 self.set_cached_credentials(
                     key,
                     credentials.clone(),
@@ -434,12 +437,12 @@ fn default_session_name() -> String {
 /// client header cannot change the canonical request and invalidate the
 /// signature. Signing everything instead makes the request 403 on a header the
 /// caller supplied, on a deployment that works on the Python path.
-pub fn aws_signature_headers(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+pub fn aws_signature_headers(headers: &HeaderMap) -> HeaderMap {
     headers
         .iter()
         .filter(|(name, _)| {
-            let name = name.to_ascii_lowercase();
-            AWS_SIGNED_HEADER_NAMES.contains(&name.as_str())
+            let name = name.as_str();
+            AWS_SIGNED_HEADER_NAMES.contains(&name)
                 || name.starts_with("x-amz-")
                 || name.starts_with("x-amzn-")
         })
@@ -455,45 +458,62 @@ pub fn is_sigv4_computed_header(name: &str) -> bool {
     SIGV4_COMPUTED_HEADER_NAMES.contains(&name.to_ascii_lowercase().as_str())
 }
 
-pub fn sign_post(
+#[derive(Clone, Copy, Debug)]
+pub struct SigningScope<'a> {
+    pub region: &'a str,
+    pub service: &'a str,
+    pub credentials: &'a Credentials,
+    pub time: SystemTime,
+}
+
+pub fn sign_headers(
+    method: &str,
     url: &str,
     body: &[u8],
-    headers: &BTreeMap<String, String>,
-    region: &str,
-    service: &str,
-    credentials: &Credentials,
-    signing_time: SystemTime,
-) -> Result<BTreeMap<String, String>, Error> {
-    let identity: Identity = credentials.clone().into();
+    headers: &HeaderMap,
+    scope: SigningScope<'_>,
+) -> Result<HeaderMap, Error> {
+    let identity: Identity = scope.credentials.clone().into();
     let params = v4::SigningParams::builder()
         .identity(&identity)
-        .region(region)
-        .name(service)
-        .time(signing_time)
+        .region(scope.region)
+        .name(scope.service)
+        .time(scope.time)
         .settings(SigningSettings::default())
         .build()
         .map(SigningParams::from)
-        .map_err(|error| Error::AwsSigningParameters(error.to_string()))?;
+        .map_err(Error::signing(SigningStage::Parameters))?;
     let header_refs = headers
         .iter()
-        .map(|(name, value)| (name.as_str(), value.as_str()));
-    let request = SignableRequest::new("POST", url, header_refs, SignableBody::Bytes(body))
-        .map_err(|error| Error::AwsSignableRequest(error.to_string()))?;
+        .map(|(name, value)| {
+            value
+                .to_str()
+                .map(|value| (name.as_str(), value))
+                .map_err(|_| Error::NonAsciiHeader {
+                    name: name.to_string(),
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let request = SignableRequest::new(
+        method,
+        url,
+        header_refs.into_iter(),
+        SignableBody::Bytes(body),
+    )
+    .map_err(Error::signing(SigningStage::Request))?;
     let (instructions, _) = sign(request, &params)
-        .map_err(|error| Error::AwsSigning(error.to_string()))?
+        .map_err(Error::signing(SigningStage::Signature))?
         .into_parts();
-    Ok(instructions
+    instructions
         .headers()
         .map(|(name, value)| {
-            let normalized_name = match name {
-                "authorization" => "Authorization",
-                "x-amz-date" => "X-Amz-Date",
-                "x-amz-security-token" => "X-Amz-Security-Token",
-                _ => name,
-            };
-            (normalized_name.to_string(), value.to_string())
+            let name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(Error::signing(SigningStage::Output))?;
+            let value =
+                HeaderValue::from_str(value).map_err(Error::signing(SigningStage::Output))?;
+            Ok((name, value))
         })
-        .collect())
+        .collect()
 }
 
 /// Model-id and region parsing shared by every Bedrock route.
@@ -543,50 +563,39 @@ fn is_bedrock_region(value: &str) -> bool {
 /// region, then the environment. Each service decides what a missing one means.
 pub fn resolve_aws_region(
     model_region: Option<&str>,
-    optional_params: &Map<String, Value>,
+    params: &AwsParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    optional_params
-        .get("aws_region_name")
-        .and_then(Value::as_str)
-        .or(model_region)
-        .map(str::to_string)
-        .or_else(|| env_lookup(AWS_REGION_NAME))
-        .or_else(|| env_lookup(AWS_REGION))
+    params
+        .resolve(&AwsParams::REGION, &|_| None)
+        .or_else(|| model_region.map(str::to_string))
+        .or_else(|| AwsParams::REGION.resolve(&|_| None, env_lookup))
 }
 
 pub fn resolve_bedrock_region(
     model_region: Option<&str>,
-    optional_params: &Map<String, Value>,
+    params: &AwsParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> String {
-    resolve_aws_region(model_region, optional_params, env_lookup)
+    resolve_aws_region(model_region, params, env_lookup)
         .unwrap_or_else(|| DEFAULT_BEDROCK_REGION.to_string())
 }
 
 pub fn aws_auth_config(
-    optional_params: &Map<String, Value>,
+    params: &AwsParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> AwsAuthConfig {
-    let value = |key: &str| {
-        optional_params
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    };
-    let env = |key: &str| env_lookup(key);
     AwsAuthConfig {
-        access_key_id: value("aws_access_key_id").or_else(|| env("AWS_ACCESS_KEY_ID")),
-        secret_access_key: value("aws_secret_access_key").or_else(|| env("AWS_SECRET_ACCESS_KEY")),
-        session_token: value("aws_session_token").or_else(|| env("AWS_SESSION_TOKEN")),
-        region_name: value("aws_region_name").or_else(|| env(AWS_REGION_NAME)),
-        session_name: value("aws_session_name").or_else(|| env("AWS_SESSION_NAME")),
-        profile_name: value("aws_profile_name").or_else(|| env("AWS_PROFILE_NAME")),
-        role_name: value("aws_role_name").or_else(|| env("AWS_ROLE_NAME")),
-        web_identity_token: value("aws_web_identity_token")
-            .or_else(|| env("AWS_WEB_IDENTITY_TOKEN")),
-        sts_endpoint: value("aws_sts_endpoint").or_else(|| env("AWS_STS_ENDPOINT")),
-        external_id: value("aws_external_id").or_else(|| env("AWS_EXTERNAL_ID")),
+        access_key_id: params.resolve(&AwsParams::ACCESS_KEY_ID, env_lookup),
+        secret_access_key: params.resolve(&AwsParams::SECRET_ACCESS_KEY, env_lookup),
+        session_token: params.resolve(&AwsParams::SESSION_TOKEN, env_lookup),
+        region_name: params.resolve(&AwsParams::REGION, env_lookup),
+        session_name: params.resolve(&AwsParams::SESSION_NAME, env_lookup),
+        profile_name: params.resolve(&AwsParams::PROFILE_NAME, env_lookup),
+        role_name: params.resolve(&AwsParams::ROLE_NAME, env_lookup),
+        web_identity_token: params.resolve(&AwsParams::WEB_IDENTITY_TOKEN, env_lookup),
+        sts_endpoint: params.resolve(&AwsParams::STS_ENDPOINT, env_lookup),
+        external_id: params.resolve(&AwsParams::EXTERNAL_ID, env_lookup),
     }
 }
 
@@ -599,13 +608,10 @@ pub enum AwsCredentialSource {
 }
 
 impl AwsCredentialSource {
-    pub fn from_params(
-        optional_params: &Map<String, Value>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Self {
-        match host_supplied_credentials(optional_params) {
+    pub fn from_params(params: &AwsParams, env_lookup: &dyn Fn(&str) -> Option<String>) -> Self {
+        match host_supplied_credentials(params) {
             Some(credentials) => Self::HostSupplied(credentials),
-            None => Self::Chain(aws_auth_config(optional_params, env_lookup)),
+            None => Self::Chain(aws_auth_config(params, env_lookup)),
         }
     }
 
@@ -629,20 +635,20 @@ impl AwsCredentialSource {
 /// state, where an unrelated `AWS_ROLE_NAME` or `AWS_PROFILE_NAME` in the
 /// environment outranks explicit keys in [`classify_auth`] and the two sides
 /// would sign as different principals.
-pub fn host_supplied_credentials(optional_params: &Map<String, Value>) -> Option<Credentials> {
-    let value = |key: &str| {
-        optional_params
-            .get(key)
-            .and_then(Value::as_str)
+pub fn host_supplied_credentials(params: &AwsParams) -> Option<Credentials> {
+    let value = |value: &Option<String>| {
+        value
+            .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
+            .map(str::to_string)
     };
-    let access_key_id = value("aws_access_key_id")?;
-    let secret_access_key = value("aws_secret_access_key")?;
+    let access_key_id = value(&params.aws_access_key_id)?;
+    let secret_access_key = value(&params.aws_secret_access_key)?;
     Some(Credentials::new(
         access_key_id,
         secret_access_key,
-        value("aws_session_token").map(str::to_string),
+        value(&params.aws_session_token),
         None,
         "litellm-host-supplied",
     ))
@@ -651,7 +657,8 @@ pub fn host_supplied_credentials(optional_params: &Map<String, Value>) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::BEDROCK_SERVICE;
+    use crate::constants::{AWS_REGION, BEDROCK_SERVICE};
+    use reqwest::header::CONTENT_TYPE;
 
     fn no_env(_: &str) -> Option<String> {
         None
@@ -667,46 +674,89 @@ mod tests {
             recorded.lock().unwrap().insert(name.to_string());
             None
         };
-        resolve_aws_region(None, &Map::new(), &env);
-        aws_auth_config(&Map::new(), &env);
+        resolve_aws_region(None, &AwsParams::default(), &env);
+        aws_auth_config(&AwsParams::default(), &env);
         assert!(
             seen.lock()
                 .unwrap()
                 .iter()
-                .all(|name| crate::constants::SECRET_NAMES.contains(&name.as_str()))
+                .all(|name| AwsParams::secret_names().contains(&name.as_str()))
         );
     }
 
-    #[test]
-    fn a_region_comes_from_the_call_then_the_model_then_the_environment() {
-        let params = Map::from_iter([("aws_region_name".to_string(), Value::from("eu-west-1"))]);
-        let region_name = |key: &str| (key == AWS_REGION_NAME).then(|| "ap-south-1".to_string());
-        let region = |key: &str| (key == AWS_REGION).then(|| "sa-east-1".to_string());
-
-        let resolved = [
-            resolve_aws_region(Some("us-east-2"), &params, &region_name),
-            resolve_aws_region(Some("us-east-2"), &Map::new(), &region_name),
-            resolve_aws_region(None, &Map::new(), &region_name),
-            resolve_aws_region(None, &Map::new(), &region),
-            resolve_aws_region(None, &Map::new(), &no_env),
-        ];
+    #[rstest::rstest]
+    #[case::param_wins(Some("from-params"), &[(AWS_SECRET_ACCESS_KEY, "from-env")], Some("from-params"))]
+    #[case::blank_param_falls_to_environment(Some("  "), &[(AWS_SECRET_ACCESS_KEY, "from-env")], Some("from-env"))]
+    #[case::absent_param_falls_to_environment(None, &[(AWS_SECRET_ACCESS_KEY, "from-env")], Some("from-env"))]
+    #[case::nothing(None, &[], None)]
+    fn auth_config_reads_each_spec_from_params_then_the_environment(
+        #[case] aws_secret_access_key: Option<&str>,
+        #[case] environment: &[(&str, &str)],
+        #[case] expected: Option<&str>,
+    ) {
+        let params = AwsParams {
+            aws_secret_access_key: aws_secret_access_key.map(str::to_string),
+            ..AwsParams::default()
+        };
+        let env = |key: &str| {
+            environment
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| value.to_string())
+        };
 
         assert_eq!(
-            resolved.map(|region| region.unwrap_or_else(|| "none".into())),
-            ["eu-west-1", "us-east-2", "ap-south-1", "sa-east-1", "none"]
+            aws_auth_config(&params, &env).secret_access_key.as_deref(),
+            expected
         );
         assert_eq!(
-            resolve_bedrock_region(None, &Map::new(), &no_env),
-            DEFAULT_BEDROCK_REGION
+            aws_auth_config(&AwsParams::default(), &|key: &str| (key == AWS_REGION)
+                .then(|| "sa-east-1".to_string()))
+            .region_name
+            .as_deref(),
+            Some("sa-east-1")
         );
     }
 
-    fn parity_inputs() -> (String, Vec<u8>, BTreeMap<String, String>) {
+    #[rstest::rstest]
+    #[case::call_params(Some("us-east-2"), Some("eu-west-1"), &[(AWS_REGION_NAME, "ap-south-1")], Some("eu-west-1"))]
+    #[case::model_region(Some("us-east-2"), None, &[(AWS_REGION_NAME, "ap-south-1")], Some("us-east-2"))]
+    #[case::aws_region_name(None, None, &[(AWS_REGION_NAME, "ap-south-1")], Some("ap-south-1"))]
+    #[case::aws_region(None, None, &[(AWS_REGION, "sa-east-1")], Some("sa-east-1"))]
+    #[case::nothing(None, None, &[], None)]
+    fn a_region_comes_from_the_call_then_the_model_then_the_environment(
+        #[case] model_region: Option<&str>,
+        #[case] aws_region_name: Option<&str>,
+        #[case] environment: &[(&str, &str)],
+        #[case] expected: Option<&str>,
+    ) {
+        let params = AwsParams {
+            aws_region_name: aws_region_name.map(str::to_string),
+            ..AwsParams::default()
+        };
+        let env = |key: &str| {
+            environment
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| value.to_string())
+        };
+
+        assert_eq!(
+            resolve_aws_region(model_region, &params, &env).as_deref(),
+            expected
+        );
+        assert_eq!(
+            resolve_bedrock_region(model_region, &params, &env),
+            expected.unwrap_or(DEFAULT_BEDROCK_REGION)
+        );
+    }
+
+    fn parity_inputs() -> (String, Vec<u8>, HeaderMap) {
         (
             "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-text-express-v1/invoke"
                 .to_string(),
             br#"{"input":"hello"}"#.to_vec(),
-            BTreeMap::from([("Content-Type".to_string(), "application/json".to_string())]),
+            HeaderMap::from_iter([(CONTENT_TYPE, HeaderValue::from_static("application/json"))]),
         )
     }
 
@@ -931,9 +981,9 @@ mod tests {
         // cannot change the canonical request. Signing it instead makes the
         // request 403 the moment anything on the wire rewrites or drops it.
         let (url, body, mut headers) = parity_inputs();
-        headers.insert("x-request-id".to_string(), "abc-123".to_string());
-        headers.insert("Accept-Encoding".to_string(), "gzip".to_string());
-        headers.insert("x-amzn-trace-id".to_string(), "Root=1-abc".to_string());
+        headers.insert("x-request-id", HeaderValue::from_static("abc-123"));
+        headers.insert("Accept-Encoding", HeaderValue::from_static("gzip"));
+        headers.insert("x-amzn-trace-id", HeaderValue::from_static("Root=1-abc"));
         let signable = aws_signature_headers(&headers);
 
         assert!(!signable.contains_key("x-request-id"));
@@ -949,18 +999,21 @@ mod tests {
             None,
             "test",
         );
-        let signed = sign_post(
+        let signed = sign_headers(
+            "POST",
             &url,
             &body,
             &signable,
-            "us-east-1",
-            BEDROCK_SERVICE,
-            &credentials,
-            SystemTime::UNIX_EPOCH,
+            SigningScope {
+                region: "us-east-1",
+                service: BEDROCK_SERVICE,
+                credentials: &credentials,
+                time: SystemTime::UNIX_EPOCH,
+            },
         )
         .expect("signs");
-        let authorization = signed
-            .get("Authorization")
+        let authorization = signed["Authorization"]
+            .to_str()
             .expect("carries an authorization header");
         assert!(
             !authorization.contains("x-request-id"),
@@ -982,29 +1035,24 @@ mod tests {
             None,
             "test",
         );
-        let signed = sign_post(
+        let signed = sign_headers(
+            "POST",
             &url,
             &body,
             &headers,
-            "us-east-1",
-            BEDROCK_SERVICE,
-            &credentials,
-            UNIX_EPOCH + std::time::Duration::from_secs(1_704_164_645),
+            SigningScope {
+                region: "us-east-1",
+                service: BEDROCK_SERVICE,
+                credentials: &credentials,
+                time: UNIX_EPOCH + std::time::Duration::from_secs(1_704_164_645),
+            },
         )
         .expect("golden signature");
+        assert_eq!(signed["X-Amz-Date"], "20240102T030405Z");
+        assert_eq!(signed["X-Amz-Security-Token"], "session-token");
         assert_eq!(
-            signed.get("X-Amz-Date").map(String::as_str),
-            Some("20240102T030405Z")
-        );
-        assert_eq!(
-            signed.get("X-Amz-Security-Token").map(String::as_str),
-            Some("session-token")
-        );
-        assert_eq!(
-            signed.get("Authorization").map(String::as_str),
-            Some(
-                "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20240102/us-east-1/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token, Signature=55c027ef47527d3ad63f1735f9d099efdbc99f296ff914bd94e727e24ec0e464"
-            )
+            signed["Authorization"],
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20240102/us-east-1/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token, Signature=55c027ef47527d3ad63f1735f9d099efdbc99f296ff914bd94e727e24ec0e464"
         );
     }
 
@@ -1018,17 +1066,69 @@ mod tests {
             None,
             "test",
         );
-        let signed = sign_post(
+        let signed = sign_headers(
+            "POST",
             &url,
             &body,
             &headers,
-            "us-east-1",
-            BEDROCK_SERVICE,
-            &credentials,
-            UNIX_EPOCH + std::time::Duration::from_secs(1_704_164_645),
+            SigningScope {
+                region: "us-east-1",
+                service: BEDROCK_SERVICE,
+                credentials: &credentials,
+                time: UNIX_EPOCH + std::time::Duration::from_secs(1_704_164_645),
+            },
         )
         .expect("signature");
         assert!(!signed.contains_key("X-Amz-Security-Token"));
+    }
+
+    #[test]
+    fn a_header_value_outside_visible_ascii_is_named_instead_of_signed() {
+        let (url, body, mut headers) = parity_inputs();
+        headers.insert("x-amz-meta-note", HeaderValue::from_str("café").unwrap());
+        let credentials = Credentials::new("AKIDEXAMPLE", "secret", None, None, "test");
+
+        let error = sign_headers(
+            "POST",
+            &url,
+            &body,
+            &headers,
+            SigningScope {
+                region: "us-east-1",
+                service: BEDROCK_SERVICE,
+                credentials: &credentials,
+                time: UNIX_EPOCH,
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            Error::NonAsciiHeader {
+                name: "x-amz-meta-note".into()
+            }
+        );
+    }
+
+    #[test]
+    fn the_shared_auth_error_nests_the_aws_failure_and_its_cause() {
+        let cause = std::io::Error::new(std::io::ErrorKind::NotFound, "profile not found");
+        let error =
+            litellm_auth_types::Error::from(Error::credentials(CredentialFlow::Profile)(cause));
+
+        assert!(matches!(
+            litellm_error::find::<Error>(&error),
+            Some(Error::Credentials {
+                flow: CredentialFlow::Profile,
+                ..
+            })
+        ));
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(
+            report.contains("could not load AWS profile credentials"),
+            "{report}"
+        );
+        assert_eq!(report.matches("profile not found").count(), 1, "{report}");
     }
 
     #[ignore]
@@ -1038,7 +1138,7 @@ mod tests {
         let secret_access_key = std::env::var("AWS_BEDROCK_TEST_SECRET_ACCESS_KEY")?;
         let body = br#"{"anthropic_version":"bedrock-2023-05-31","max_tokens":1,"messages":[{"role":"user","content":[{"type":"text","text":"ping"}]}]}"#.to_vec();
         let headers =
-            BTreeMap::from([("Content-Type".to_string(), "application/json".to_string())]);
+            HeaderMap::from_iter([(CONTENT_TYPE, HeaderValue::from_static("application/json"))]);
         let credentials = AwsAuthService::default()
             .resolve_credentials(
                 AwsAuthConfig {
@@ -1050,30 +1150,32 @@ mod tests {
                 &no_env,
             )
             .await?;
-        let client = litellm_http::Client::plain_for_test();
+        let client = litellm_http::Client::for_test();
         let mut failures = Vec::new();
 
         for region in ["us-west-2", "us-east-1"] {
             let url = format!(
                 "https://bedrock-runtime.{region}.amazonaws.com/model/us.anthropic.claude-opus-4-8/invoke"
             );
-            let signed_headers = sign_post(
+            let signed_headers = sign_headers(
+                "POST",
                 &url,
                 &body,
                 &headers,
-                region,
-                BEDROCK_SERVICE,
-                &credentials,
-                SystemTime::now(),
+                SigningScope {
+                    region,
+                    service: BEDROCK_SERVICE,
+                    credentials: &credentials,
+                    time: SystemTime::now(),
+                },
             )?;
-            let mut request = client.post(&url).body(body.clone());
-            for (name, value) in &headers {
-                request = request.header(name, value);
-            }
-            for (name, value) in signed_headers {
-                request = request.header(name, value);
-            }
-            let response = request.send().await?;
+            let response = client
+                .post(&url)
+                .headers(headers.clone())
+                .headers(signed_headers)
+                .body(body.clone())
+                .send()
+                .await?;
             let status = response.status();
             let response_body = response.text().await?;
             let snippet: String = response_body.chars().take(240).collect();
