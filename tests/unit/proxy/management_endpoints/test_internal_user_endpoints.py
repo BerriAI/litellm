@@ -299,7 +299,7 @@ async def test_ui_view_users_non_org_admin_returns_403(mocker):
 @pytest.mark.asyncio
 async def test_ui_view_users_flag_off_internal_user_can_search(mocker):
     """
-    Flag OFF (default): any authenticated user can search all users without org filtering.
+    Flag explicitly OFF: authenticated users can search without org filtering.
     """
     mock_prisma_client = mocker.MagicMock()
 
@@ -313,7 +313,7 @@ async def test_ui_view_users_flag_off_internal_user_can_search(mocker):
     # Flag OFF
     mocker.patch(
         "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={},
+        return_value={"scope_user_search_to_org": False},
     )
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -327,6 +327,117 @@ async def test_ui_view_users_flag_off_internal_user_can_search(mocker):
     )
 
     assert response == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", [None, True, False], ids=["missing", "scoped", "opt-out"])
+@pytest.mark.parametrize(
+    ("principal", "expected_scope"),
+    [
+        ("org-member", "org-a"), ("no-org", "denied"), ("admin", "all"), ("admin-viewer", "all"),
+        ("team-query", "org-b"), ("team-key", "org-b"), ("team-no-org", "all"), ("team-no-org-key", "all"),
+        ("member-team-query", "org-b"), ("member-team-no-org", "all"), ("member-team-key", "org-a"),
+        ("org-admin-team", "org-a"), ("org-member-target", "denied"), ("team-member", "denied"),
+        ("forged-team", "denied"), ("missing-team", "denied"), ("missing-user", "denied"),
+        ("revoked-admin", "denied"), ("changed-org", "org-b"),
+    ],
+)
+async def test_ui_view_users_scope_defaults_and_explicit_opt_out(
+    monkeypatch: pytest.MonkeyPatch, setting: bool | None, principal: str, expected_scope: str,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_OrganizationMembershipTable, LiteLLM_TeamTableCachedObj
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UI_SETTINGS_CACHE_KEY
+
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=UI_SETTINGS_CACHE_KEY,
+        value={} if setting is None else {"scope_user_search_to_org": setting},
+    )
+    membership: Final = LiteLLM_OrganizationMembershipTable(
+        user_id="search-caller", organization_id="org-a",
+        user_role="org_admin" if principal == "org-admin-team" else "internal_user",
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    caller_has_org: Final = principal.startswith("member-") or principal in {
+        "org-member", "org-admin-team", "org-member-target",
+    }
+    caller: Final = LiteLLM_UserTable(
+        user_id="search-caller", user_email="caller@example.test",
+        organization_memberships=[membership] if caller_has_org else [],
+    )
+    await cache.async_set_cache(key=caller.user_id, value=caller, model_type=LiteLLM_UserTable)
+    target_org: Final = "org-a" if principal in {"org-admin-team", "org-member-target"} else "org-b"
+    current_team: Final = LiteLLM_TeamTableCachedObj(
+        team_id="search-team", organization_id=None if "no-org" in principal else target_org,
+        members_with_roles=[{
+            "user_id": "other-admin" if principal in {"forged-team", "org-admin-team"} else caller.user_id,
+            "role": "user" if principal in {
+                "team-member", "org-member-target", "revoked-admin", "member-team-key",
+            } else "admin",
+        }],
+    )
+    cached_team: Final = LiteLLM_TeamTableCachedObj.model_validate({
+        **current_team.model_dump(),
+        "organization_id": "org-a" if principal == "changed-org" else current_team.organization_id,
+        "members_with_roles": [{"user_id": caller.user_id, "role": "admin"}],
+    }) if principal in {"changed-org", "revoked-admin", "missing-team"} else current_team
+    await cache.async_set_cache(
+        key=f"team_id:{current_team.team_id}", value=cached_team, model_type=LiteLLM_TeamTableCachedObj,
+    )
+    directory: Final = {
+        "org-a": LiteLLM_UserTableFiltered(user_id="member-a", user_email="a@example.test"),
+        "org-b": LiteLLM_UserTableFiltered(user_id="member-b", user_email="b@example.test"),
+        "unassigned": LiteLLM_UserTableFiltered(user_id="unassigned", user_email="unassigned@example.test"),
+    }
+
+    async def find_many(*, where: Mapping[str, object], **_: object) -> list[LiteLLM_UserTableFiltered]:
+        scope: Final = where.get("organization_memberships")
+        return [
+            row for organization_id, row in directory.items()
+            if scope is None or scope == {"some": {"organization_id": {"in": [organization_id]}}}
+        ]
+
+    async def find_team(*, where: Mapping[str, object], **_: object) -> LiteLLM_TeamTableCachedObj | None:
+        return current_team if where == {"team_id": current_team.team_id} and principal != "missing-team" else None
+
+    read_users: Final = AsyncMock(side_effect=find_many)
+    database: Final = SimpleNamespace(litellm_usertable=SimpleNamespace(find_many=read_users))
+    writer: Final = SimpleNamespace(litellm_teamtable=SimpleNamespace(find_unique=find_team))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=database, writer_db=writer))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", None)
+    role: Final = {
+        "admin": LitellmUserRoles.PROXY_ADMIN,
+        "admin-viewer": LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    }.get(principal, LitellmUserRoles.INTERNAL_USER)
+    key_team: Final = current_team.team_id if principal.endswith("-key") else None
+    actor: Final = UserAPIKeyAuth(
+        user_id=None if principal == "missing-user" else caller.user_id, user_role=role,
+        team_id="other-team" if principal == "forged-team" else key_team,
+    )
+    query_team: Final = (
+        None if principal in {"org-member", "no-org", "admin", "admin-viewer"} or key_team else current_team.team_id
+    )
+    if setting is not False and expected_scope == "denied":
+        with pytest.raises(HTTPException) as raised:
+            await ui_view_users(
+                user_api_key_dict=actor, user_id=None, user_email=None, search=None,
+                team_id=query_team, page=1, page_size=50,
+            )
+        assert raised.value.status_code == 403
+        read_users.assert_not_awaited()
+        return
+
+    result: Final = await ui_view_users(
+        user_api_key_dict=actor, user_id=None, user_email=None, search=None,
+        team_id=query_team, page=1, page_size=50,
+    )
+    expected: Final = (
+        list(directory.values()) if setting is False or expected_scope == "all" else [directory[expected_scope]]
+    )
+    assert result == expected
 
 
 @pytest.mark.asyncio
@@ -396,70 +507,6 @@ async def test_ui_view_users_flag_on_team_admin_org_team(mocker):
     )
 
     assert response == []
-
-
-@pytest.mark.asyncio
-async def test_ui_view_users_flag_on_team_admin_non_org_team_403(mocker):
-    """
-    Flag ON, team admin for non-org team: returns 403.
-    """
-    from fastapi import HTTPException
-
-    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
-
-    mock_prisma_client = mocker.MagicMock()
-    tid = "team-no-org"
-
-    # Flag ON
-    mocker.patch(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={"scope_user_search_to_org": True},
-    )
-
-    # Mock get_team_object — team has no organization_id
-    team_obj = LiteLLM_TeamTableCachedObj(
-        team_id=tid,
-        team_alias="no-org-team",
-        organization_id=None,
-        members_with_roles=[{"user_id": "team-admin-user", "role": "admin"}],
-    )
-
-    async def mock_get_team_object(*args, **kwargs):
-        return team_obj
-
-    mocker.patch(
-        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
-        side_effect=mock_get_team_object,
-    )
-
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
-    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mocker.MagicMock())
-
-    # Caller is not org admin
-    caller_user = mocker.MagicMock()
-    caller_user.organization_memberships = []
-
-    async def mock_get_user_object(*args, **kwargs):
-        return caller_user
-
-    mocker.patch(
-        "litellm.proxy.management_endpoints.internal_user_endpoints.get_user_object",
-        side_effect=mock_get_user_object,
-    )
-
-    with pytest.raises(HTTPException) as exc_info:
-        await ui_view_users(
-            user_api_key_dict=UserAPIKeyAuth(user_id="team-admin-user", user_role=None),
-            user_id=None,
-            user_email="u",
-            team_id=tid,
-            page=1,
-            page_size=50,
-        )
-
-    assert exc_info.value.status_code == 403
-    assert "not part of an organization" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

@@ -68,12 +68,12 @@ describe("UserSearchModal", () => {
     expect(userFilterUICall).not.toHaveBeenCalled();
   });
 
-  it("tells the user that only existing accounts can be selected", () => {
+  it("explains scoped search and exact-email enrollment", () => {
     renderModal();
 
     const notice = screen.getByRole("alert");
-    expect(notice).toHaveTextContent(/users that already exist/i);
-    expect(notice).toHaveTextContent(/ask a proxy admin to create their account first/i);
+    expect(notice).toHaveTextContent(/search for users you can access/i);
+    expect(notice).toHaveTextContent(/enter a complete email address/i);
     // info, not warning: a warning here would read as an error state on an empty form
     expect(notice).toHaveAttribute("data-variant", "info");
   });
@@ -116,6 +116,59 @@ describe("UserSearchModal submit payload", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it.each(["empty", "forbidden"])("submits an exact email when directory search is %s", async (result) => {
+    vi.mocked(userFilterUICall).mockReset();
+    if (result === "forbidden") {
+      vi.mocked(userFilterUICall).mockRejectedValue(new Error("403 Forbidden"));
+    } else {
+      vi.mocked(userFilterUICall).mockResolvedValue([]);
+    }
+    const { user, onSubmit } = setup();
+    const input = getEmailSearchInput();
+    await user.click(input);
+    await user.type(input, "invite@example.com");
+    await user.click(await screen.findByRole("option", { name: "Use email invite@example.com" }));
+    await user.click(save());
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledExactlyOnceWith({
+        user_email: "invite@example.com",
+        user_id: null,
+        role: "user",
+      }),
+    );
+  });
+
+  it("clears the previous user ID when selecting an email outside search results", async () => {
+    const { user, onSubmit } = setup();
+    await searchByEmail(user, "pick");
+    vi.mocked(userFilterUICall).mockResolvedValue([]);
+    await user.click(getEmailSearchInput());
+    await user.type(getEmailSearchInput(), "invite@example.com");
+    await user.click(await screen.findByRole("option", { name: "Use email invite@example.com" }));
+    await user.click(save());
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledExactlyOnceWith({
+        user_email: "invite@example.com",
+        user_id: null,
+        role: "user",
+      }),
+    );
+  });
+
+  it.each(["partial", "invalid@"])("does not offer an invitation for %s", async (email) => {
+    vi.mocked(userFilterUICall).mockResolvedValue([]);
+    const { user } = setup();
+    await user.click(getEmailSearchInput());
+    await user.type(getEmailSearchInput(), email);
+    await screen.findByText("No results");
+
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(save()).toBeDisabled();
+  });
+
   it("carries the picked user's email and id into the payload", async () => {
     const { user, onSubmit } = setup();
 
@@ -128,6 +181,24 @@ describe("UserSearchModal submit payload", () => {
       user_id: "u-1",
       role: "user",
     });
+  });
+
+  it("preserves a missing email when selecting an existing user by ID", async () => {
+    vi.mocked(userFilterUICall).mockResolvedValue([{ user_id: "id-only-user", user_email: null }]);
+    const { user, onSubmit } = setup();
+    const input = screen.getByLabelText("User ID");
+    await user.click(input);
+    await user.type(input, "id-only");
+    await user.click(await screen.findByRole("option", { name: "id-only-user" }));
+    await user.click(save());
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledExactlyOnceWith({
+        user_email: null,
+        user_id: "id-only-user",
+        role: "user",
+      }),
+    );
   });
 
   it("carries a role changed off its default into the payload", async () => {
@@ -333,15 +404,15 @@ describe("UserSearchModal out-of-order search results", () => {
     await user.type(input, "ali");
     await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
 
-    await user.type(input, "ce.smith@example.com");
-    await waitFor(() => expect(answers.has("alice.smith@example.com")).toBe(true), { timeout: 3000 });
+    await user.type(input, "ce.smith");
+    await waitFor(() => expect(answers.has("alice.smith")).toBe(true), { timeout: 3000 });
 
     await answerFor("ali", []);
 
     expect(screen.getByText("Loading...")).toBeInTheDocument();
     expect(screen.queryByText("No results")).not.toBeInTheDocument();
 
-    await answerFor("alice.smith@example.com", [{ user_id: "u-smith", user_email: "alice.smith@example.com" }]);
+    await answerFor("alice.smith", [{ user_id: "u-smith", user_email: "alice.smith@example.com" }]);
     await screen.findByRole("option", { name: "alice.smith@example.com" });
   });
 });

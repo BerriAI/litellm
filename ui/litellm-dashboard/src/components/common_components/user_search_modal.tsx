@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { z } from "zod";
 import { Info, UserPlus } from "lucide-react";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { useForm } from "react-hook-form";
@@ -14,7 +15,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 
 interface User {
   user_id: string;
-  user_email: string;
+  user_email: string | null;
   role?: string;
 }
 
@@ -85,6 +86,12 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
       return;
     }
 
+    const email = searchText.trim();
+    const emailOptions: UserOption[] =
+      fieldName === "user_email" && z.email({ pattern: z.regexes.html5Email }).safeParse(email).success
+        ? [{ label: `Use email ${email}`, value: email, user: null }]
+        : [];
+    setUserOptions(emailOptions);
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -99,12 +106,14 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
       if (!isLatestSearch()) return;
 
       const data: User[] = response;
-      const options: UserOption[] = data.map((user) => ({
-        label: fieldName === "user_email" ? `${user.user_email}` : `${user.user_id}`,
-        value: fieldName === "user_email" ? user.user_email : user.user_id,
-        user,
-      }));
-      setUserOptions(options);
+      const options: UserOption[] = data.map((user) => {
+        const value = fieldName === "user_email" ? user.user_email ?? user.user_id : user.user_id;
+        return { label: value, value, user };
+      });
+      setUserOptions([
+        ...options,
+        ...emailOptions.filter((option) => !options.some((user) => user.value === option.value)),
+      ]);
     } catch (error) {
       console.error("Error fetching users:", error);
     } finally {
@@ -118,9 +127,9 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   };
 
   const handleSelect = (option: UserOption | null): void => {
-    if (option?.user == null) return;
-    form.setValue("user_email", option.user.user_email);
-    form.setValue("user_id", option.user.user_id);
+    if (option == null) return;
+    form.setValue("user_email", option.user === null ? option.value : option.user.user_email);
+    form.setValue("user_id", option.user?.user_id ?? null);
   };
 
   const handleSubmit = async (values: FormValues): Promise<void> => {
@@ -191,8 +200,8 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
             <Alert variant="info" className="mb-4" data-testid="member-existing-users-notice">
               <Info />
               <AlertTitle>
-                Search selects from users that already exist. To add someone new, ask a proxy admin to create their
-                account first.
+                Search for users you can access, or enter a complete email address to add a member without searching the
+                directory.
               </AlertTitle>
             </Alert>
 
