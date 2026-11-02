@@ -5,7 +5,8 @@ use testcontainers_modules::testcontainers::{
 };
 
 use crate::{
-    Error,
+    ClientConnection, Error,
+    deployment::parse_client_list,
     ports::{HOST, start_on_free_ports, wait_for_pong},
     standalone::REDIS_TAG,
 };
@@ -68,6 +69,28 @@ impl RedisCluster {
 
     pub fn nodes(&self) -> impl Iterator<Item = (&'static str, u16)> + '_ {
         self.ports.iter().map(|&port| (HOST, port))
+    }
+
+    pub async fn cli_on_every_node(&self, args: &[&str]) -> Result<(), Error> {
+        for port in self.ports {
+            crate::exec::run(&self.container, crate::exec::cli(port, args)).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn cli_on_node(&self, port: u16, args: &[&str]) -> Result<String, Error> {
+        crate::exec::run(&self.container, crate::exec::cli(port, args)).await
+    }
+
+    pub async fn clients(&self) -> Result<Vec<ClientConnection>, Error> {
+        let mut clients = Vec::new();
+        for port in self.ports {
+            let reply =
+                crate::exec::run(&self.container, crate::exec::cli(port, &["CLIENT", "LIST"]))
+                    .await?;
+            clients.extend(parse_client_list(port, &reply));
+        }
+        Ok(clients)
     }
 
     pub async fn restart(&self) -> Result<(), Error> {

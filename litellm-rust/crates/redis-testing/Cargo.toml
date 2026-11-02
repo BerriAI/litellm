@@ -8,4 +8,4 @@ repository.workspace = true
 [dependencies]
 testcontainers-modules = { workspace = true, features = ["redis"] }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util"] }
+tokio = { workspace = true, features = ["io-util", "time"] }
