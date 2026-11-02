@@ -1300,6 +1300,24 @@ class TestStreamedReadAnswersWithTheIdTheClientHolds:
         )
 
 
+    @pytest.mark.asyncio
+    async def test_a_frame_naming_the_held_response_under_another_wrapping_still_gets_the_id_sent(
+        self, mock_cache, salt_key_env
+    ):
+        hook = _hook()
+        owner = _auth()
+        issued_id = _issue_managed_id(hook, owner, provider_response_id=_routed_response_id(_LOGGED_MANAGED_ID))
+        data = await hook.async_pre_call_hook(
+            user_api_key_dict=owner, cache=mock_cache, data={"response_id": issued_id}, call_type="aget_responses"
+        )
+
+        client_id, _ = await _stream_logged_mid_stream(
+            hook, f"/v1/responses/{issued_id}", _native_logged_result(), caller=owner, request_data=data
+        )
+
+        assert client_id == issued_id
+
+
 async def _read_logged_by_callbacks(
     hook: ResponsesIDSecurity,
     caller: UserAPIKeyAuth,
@@ -1420,3 +1438,23 @@ class TestDeleteAnswersWithTheIdTheClientHolds:
             reader.user_id,
             reader.team_id,
         )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "sent_id",
+        [_routed_response_id(_RAW_UPSTREAM_RESPONSE_ID), _RAW_UPSTREAM_RESPONSE_ID],
+        ids=["routed-deployment", "plain-id"],
+    )
+    async def test_an_admin_delete_by_a_raw_provider_id_gets_the_provider_id_back_and_logs_an_id_of_its_own(
+        self, mock_cache, salt_key_env, sent_id
+    ):
+        hook = _hook()
+
+        client_id, recorder = await _read_logged_by_callbacks(
+            hook, _admin(), sent_id, "adelete_responses", mock_cache, answer=_deletion_of
+        )
+
+        assert client_id == _RAW_UPSTREAM_RESPONSE_ID
+        assert [hook._decrypt_response_id(logged_id) for logged_id in recorder.callback_response_ids] == [
+            (_RAW_UPSTREAM_RESPONSE_ID, "admin-user", "admin-team")
+        ]

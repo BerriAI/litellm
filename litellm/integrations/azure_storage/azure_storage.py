@@ -55,11 +55,12 @@ class AzureStorageLogQueueItem:
 
 
 def _queued_log(kwargs: Mapping[str, object], payload: StandardLoggingPayload) -> AzureStorageLogQueueItem:
-    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logged_event_spend_logs_id
+    from litellm.proxy.spend_tracking.spend_tracking_utils import logged_event_storage_name
 
+    payload_id: Final = payload.get("id")
     return AzureStorageLogQueueItem(
         payload=payload,
-        file_name=adls_safe_file_name(get_logged_event_spend_logs_id(kwargs, payload.get("id"))),
+        file_name=adls_safe_file_name(payload_id and logged_event_storage_name(kwargs, payload_id)),
     )
 
 

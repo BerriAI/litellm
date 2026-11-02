@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
@@ -90,9 +90,13 @@ def _stored_response(spend_log: "SpendLogsPayload") -> object:
     return spend_log.get("response")
 
 
-def _output_item_ids(spend_log: "SpendLogsPayload") -> frozenset[str]:
+def _identified_output_items(spend_log: "SpendLogsPayload") -> Iterator[tuple[str, object]]:
     output: Final = _stored_responses_api_output(_stored_response(spend_log)) or []
-    return frozenset(item_id for item_id in map(_output_item_id, output) if item_id is not None)
+    return ((item_id, item) for item_id, item in zip(map(_output_item_id, output), output) if item_id is not None)
+
+
+def _output_item_ids(spend_log: "SpendLogsPayload") -> frozenset[str]:
+    return frozenset(item_id for item_id, _ in _identified_output_items(spend_log))
 
 
 def _first_index_holding_each_item(indexed_turns: Iterable[tuple[int, "SpendLogsPayload"]]) -> Mapping[str, int]:
@@ -114,21 +118,20 @@ def _turn_replaying_each_item(turns: Sequence["SpendLogsPayload"]) -> Mapping[st
     return MappingProxyType({**first_read_holding, **first_other_turn_holding})
 
 
-def _replayed_by(item: object, index: int, turn_replaying: Mapping[str, int]) -> bool:
-    item_id: Final = _output_item_id(item)
-    return item_id is not None and turn_replaying.get(item_id) == index
+def _latest_read_copy_of_each_item(turns: Sequence["SpendLogsPayload"]) -> Mapping[str, object]:
+    return MappingProxyType(
+        dict(chain.from_iterable(_identified_output_items(turn) for turn in turns if _is_a_response_read(turn)))
+    )
 
 
 def _with_only_new_output(
-    index: int, turn: "SpendLogsPayload", turn_replaying: Mapping[str, int]
+    index: int, turn: "SpendLogsPayload", turn_replaying: Mapping[str, int], latest_copy: Mapping[str, object]
 ) -> "SpendLogsPayload | None":
     if not _is_a_response_read(turn):
         return turn
     stored_response: Final = as_str_mapping(_stored_response(turn))
     new_output: Final = [
-        item
-        for item in _stored_responses_api_output(stored_response) or []
-        if _replayed_by(item, index, turn_replaying)
+        latest_copy[item_id] for item_id, _ in _identified_output_items(turn) if turn_replaying.get(item_id) == index
     ]
     if stored_response is None or not new_output:
         return None
@@ -139,7 +142,10 @@ def _with_only_new_output(
 def _conversation_turns(spend_logs: Sequence["SpendLogsPayload"]) -> tuple["SpendLogsPayload", ...]:
     turns: Final = tuple(filter(_is_a_conversation_turn, spend_logs))
     turn_replaying: Final = _turn_replaying_each_item(turns)
-    replayed: Final = (_with_only_new_output(index, turn, turn_replaying) for index, turn in enumerate(turns))
+    latest_copy: Final = _latest_read_copy_of_each_item(turns)
+    replayed: Final = (
+        _with_only_new_output(index, turn, turn_replaying, latest_copy) for index, turn in enumerate(turns)
+    )
     return tuple(turn for turn in replayed if turn is not None)
 
 

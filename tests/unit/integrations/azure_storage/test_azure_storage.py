@@ -673,7 +673,7 @@ PASSTHROUGH_SETTLEMENT_KWARGS: Final = {
 }
 
 
-def _background_create_cost_and_ordinary_events(
+def _background_create_cost_and_other_events(
     cost_kwargs: dict[str, object],
 ) -> tuple[tuple[dict[str, object], StandardLoggingPayload], ...]:
     create: Final = StandardLoggingPayload(
@@ -683,6 +683,7 @@ def _background_create_cost_and_ordinary_events(
     )
     cost: Final = StandardLoggingPayload(id=BACKGROUND_RESPONSE_ID, call_type="aget_responses", response_cost=0.42)
     ordinary: Final = StandardLoggingPayload(id="chatcmpl-ordinary", call_type="acompletion")
+    batch_retrieve: Final = StandardLoggingPayload(id="batch_abc123", call_type="aretrieve_batch", response_cost=0.07)
     return (
         ({"call_type": "aresponses", "litellm_params": {"metadata": {}}, "standard_logging_object": create}, create),
         ({**cost_kwargs, "standard_logging_object": cost}, cost),
@@ -690,17 +691,26 @@ def _background_create_cost_and_ordinary_events(
             {"call_type": "acompletion", "litellm_params": {"metadata": {}}, "standard_logging_object": ordinary},
             ordinary,
         ),
+        (
+            {
+                "call_type": "aretrieve_batch",
+                "litellm_params": {"metadata": {}},
+                "standard_logging_object": batch_retrieve,
+            },
+            batch_retrieve,
+        ),
     )
 
 
 def _expected_files(
     events: tuple[tuple[dict[str, object], StandardLoggingPayload], ...],
 ) -> dict[str, StandardLoggingPayload]:
-    create, cost, ordinary = (payload for _, payload in events)
+    create, cost, ordinary, batch_retrieve = (payload for _, payload in events)
     return {
         "resp_YWJjZA.json": create,
         "resp_YWJjZA_background_cost.json": cost,
         "chatcmpl-ordinary.json": ordinary,
+        "batch_abc123.json": batch_retrieve,
     }
 
 
@@ -724,7 +734,7 @@ async def test_background_cost_event_keeps_its_own_file_beside_the_create_on_the
     mock_env_vars, monkeypatch, cost_kwargs
 ):
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
-    events: Final = _background_create_cost_and_ordinary_events(cost_kwargs)
+    events: Final = _background_create_cost_and_other_events(cost_kwargs)
     with patch(  # test-quality-ok: REST client is created inside the method; assert emitted requests
         "litellm.integrations.azure_storage.azure_storage.get_async_httpx_client"
     ) as mock_get_client:
@@ -744,7 +754,7 @@ async def test_background_cost_event_keeps_its_own_file_beside_the_create_on_the
         call.args[0].removeprefix(base_url).split("?")[0]: json.loads(call.kwargs["data"]) for call in appends
     }
     assert uploaded == _expected_files(events), (
-        "the create, its background cost event and an ordinary event must each keep their own file"
+        "the create, its background cost event and every other event must each keep their own file"
     )
 
 
@@ -784,7 +794,8 @@ async def test_background_cost_event_keeps_its_own_file_beside_the_create_with_a
 ):
     monkeypatch.setenv("AZURE_STORAGE_ACCOUNT_KEY", "dGVzdC1rZXk=")
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
-    events: Final = _background_create_cost_and_ordinary_events(BACKGROUND_COST_POLL_KWARGS)
+    monkeypatch.setattr(azure_storage_module, "datetime", _FrozenDatetime)
+    events: Final = _background_create_cost_and_other_events(BACKGROUND_COST_POLL_KWARGS)
 
     uploaded: Final[dict[str, StandardLoggingPayload]] = {}
 
@@ -810,7 +821,7 @@ async def test_background_cost_event_keeps_its_own_file_beside_the_create_with_a
         logger = AzureBlobStorageLogger()
         await _log_and_flush(logger, events)
 
-    today: Final = datetime.now().strftime("%Y-%m-%d")
+    today: Final = _FrozenDatetime.now().strftime("%Y-%m-%d")
     assert uploaded == {f"{today}/{name}": payload for name, payload in _expected_files(events).items()}, (
-        "the create, its background cost event and an ordinary event must each keep their own file"
+        "the create, its background cost event and every other event must each keep their own file"
     )

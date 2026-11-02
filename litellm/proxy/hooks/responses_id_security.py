@@ -132,6 +132,24 @@ def _names_the_same_response(response_id: str | None, original_response_id: str)
     return response_id is not None and _upstream_response_id(response_id) == _upstream_response_id(original_response_id)
 
 
+def _held_id_naming(response_id: str | None, held_ids: Mapping[str, str]) -> str | None:
+    return next(
+        (
+            held_id
+            for original_response_id, held_id in held_ids.items()
+            if _names_the_same_response(response_id, original_response_id)
+        ),
+        None,
+    )
+
+
+def _id_sent_back(response: ResponsesAPIResponse | DeleteResponseResult, held_ids: Mapping[str, str]) -> str | None:
+    held_id: Final = _held_id_naming(response.id, held_ids)
+    if held_id is not None:
+        return held_id
+    return response.id if isinstance(response, DeleteResponseResult) else None
+
+
 class ResponsesIDSecurity(CustomLogger):
     def __init__(
         self,
@@ -349,7 +367,7 @@ class ResponsesIDSecurity(CustomLogger):
             logged_id: Final = encrypt(original_id)
             if isinstance(logging_obj, LiteLLMLoggingObj):
                 logging_obj.client_facing_response_id = logged_id
-            return held_ids.get(original_id, logged_id)
+            return _held_id_naming(original_id, held_ids) or logged_id
 
         return advertise
 
@@ -359,25 +377,17 @@ class ResponsesIDSecurity(CustomLogger):
         original_response_id, _, _ = self._decrypt_response_id(addressed_id)
         return MappingProxyType({original_response_id: addressed_id})
 
-    def _id_the_caller_holds(self, response_id: str | None, addressed_id: object) -> str | None:
-        return next(
-            (
-                held_id
-                for original_response_id, held_id in self._ids_the_caller_holds(addressed_id).items()
-                if _names_the_same_response(response_id, original_response_id)
-            ),
-            None,
-        )
-
     def _advertised_response(
         self,
         response: _AddressedResultT,
         user_api_key_dict: "UserAPIKeyAuth",
         request_data: Mapping[str, object],
     ) -> _AddressedResultT:
-        held_id: Final = self._id_the_caller_holds(response.id, request_data.get(ADDRESSED_RESPONSE_ID_FIELD))
+        sent_back_id: Final = _id_sent_back(
+            response, self._ids_the_caller_holds(request_data.get(ADDRESSED_RESPONSE_ID_FIELD))
+        )
         logged_response: Final = self._encrypt_response_id(response, user_api_key_dict, request_cache=None)
-        return logged_response if held_id is None else logged_response.model_copy(update={"id": held_id})
+        return logged_response if sent_back_id is None else logged_response.model_copy(update={"id": sent_back_id})
 
     async def async_post_call_success_hook(
         self,

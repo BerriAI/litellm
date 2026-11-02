@@ -1150,6 +1150,30 @@ async def test_a_background_response_that_grows_between_polls_replays_each_outpu
 
 
 @pytest.mark.asyncio
+async def test_an_item_a_poll_caught_half_written_replays_its_finished_text_once():
+    spend_logs: Final = (
+        _stored_response_turn("resp_queued", "aresponses", "queued", [], prompt="Count to three"),
+        _stored_response_turn(
+            "resp_poll_partial", "aget_responses", "in_progress", [_identified_output_message("msg_answer", "One, t")]
+        ),
+        _stored_response_turn(
+            "resp_poll_done",
+            "aget_responses",
+            "completed",
+            [_identified_output_message("msg_answer", "One, two, three"), _identified_output_message("msg_more", "Done")],
+        ),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_queued")
+
+    assert _replayed_roles_and_texts(session) == [
+        ("user", "Count to three"),
+        ("assistant", "One, two, three"),
+        ("assistant", "Done"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_a_read_that_ends_before_its_streamed_create_replays_the_answer_once_after_the_prompt():
     answer: Final = [_identified_output_message("msg_answer", "OK")]
     spend_logs: Final = (

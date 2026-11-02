@@ -332,15 +332,17 @@ BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX: Final = "_background_cost"
 
 
-def _cost_row_request_id_suffix(
-    call_type: str, metadata: Mapping[str, object], settles_background_response: bool
-) -> str:
-    if call_type == CallTypes.aretrieve_batch.value:
-        return BATCH_COST_REQUEST_ID_SUFFIX
-    if settles_background_response or (
+def _settles_background_response(call_type: str, metadata: Mapping[str, object], kwargs: Mapping[str, object]) -> bool:
+    return kwargs.get(SETTLES_BACKGROUND_RESPONSE_KWARG) is BackgroundResponseSettlement.SETTLES or (
         call_type in NON_INFERENCE_CALL_TYPES
         and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
-    ):
+    )
+
+
+def _cost_row_request_id_suffix(call_type: str, metadata: Mapping[str, object], kwargs: Mapping[str, object]) -> str:
+    if call_type == CallTypes.aretrieve_batch.value:
+        return BATCH_COST_REQUEST_ID_SUFFIX
+    if _settles_background_response(call_type, metadata, kwargs):
         return BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
     return ""
 
@@ -362,21 +364,20 @@ def get_spend_logs_id(
     )
     if resolved_id is None:
         return None
-    settles_background_response: Final = (
-        kwargs.get(SETTLES_BACKGROUND_RESPONSE_KWARG) is BackgroundResponseSettlement.SETTLES
-    )
-    return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, settles_background_response)}"
+    return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, kwargs)}"
 
 
-def get_logged_event_spend_logs_id(kwargs: Mapping[str, object], event_id: str | None) -> str | None:
+def logged_event_storage_name(kwargs: Mapping[str, object], event_id: str) -> str:
     call_type: Final = kwargs.get("call_type")
     litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
-    return get_spend_logs_id(
-        call_type if isinstance(call_type, str) and call_type else "acompletion",
-        {"id": event_id} if event_id else {},
-        kwargs,
-        as_str_mapping(litellm_params.get("litellm_metadata")) or as_str_mapping(litellm_params.get("metadata")) or {},
+    metadata: Final = (
+        as_str_mapping(litellm_params.get("litellm_metadata")) or as_str_mapping(litellm_params.get("metadata")) or {}
     )
+    if not event_id or not _settles_background_response(
+        call_type if isinstance(call_type, str) else "", metadata, kwargs
+    ):
+        return event_id
+    return f"{event_id}{BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX}"
 
 
 _MISSING_ATTRIBUTE: Final = object()

@@ -10613,8 +10613,11 @@ def test_get_assembled_streaming_response_bills_a_provider_reported_usage_cost()
     assert logging_obj.response_cost_calculator(result=assembled) == 0.0042
 
 
+@pytest.mark.parametrize("continued_response_id", ["resp_continuedafteracutstream", None])
 @pytest.mark.parametrize("client_facing_response_id", ["resp_encryptedidtheclientsaw", None])
-def test_sync_success_handler_logs_a_stream_under_the_id_the_client_saw(client_facing_response_id):
+def test_sync_success_handler_logs_a_stream_under_the_id_the_client_saw(
+    client_facing_response_id, continued_response_id
+):
     class Recorder(CustomLogger):
         def __init__(self):
             super().__init__()
@@ -10627,6 +10630,10 @@ def test_sync_success_handler_logs_a_stream_under_the_id_the_client_saw(client_f
     logging_obj: Final = _responses_stream_logging_obj()
     logging_obj.dynamic_success_callbacks = [recorder]
     logging_obj.client_facing_response_id = client_facing_response_id
+    if continued_response_id is not None:
+        logging_obj.record_continued_partial(
+            Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2), 0.0, continued_response_id
+        )
     now: Final = datetime.datetime.now()
 
     logging_obj.success_handler(
@@ -10636,7 +10643,7 @@ def test_sync_success_handler_logs_a_stream_under_the_id_the_client_saw(client_f
         cache_hit=False,
     )
 
-    expected_id: Final = client_facing_response_id or "resp-1"
+    expected_id: Final = client_facing_response_id or continued_response_id or "resp-1"
     assert recorder.logged == [(expected_id, expected_id)]
 
 

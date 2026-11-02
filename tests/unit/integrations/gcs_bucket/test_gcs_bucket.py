@@ -423,6 +423,7 @@ async def test_unbatched_background_cost_event_keeps_its_own_object_readable_by_
     }
     cost: Final = {"id": response_id, "response_cost": 0.42, "error_str": None}
     ordinary: Final = {"id": "chatcmpl-ordinary", "error_str": None}
+    batch_retrieve: Final = {"id": "batch_abc123", "response_cost": 0.07, "error_str": None}
     events: Final = (
         ({"call_type": "aresponses", "litellm_params": {"metadata": {}}}, create),
         (
@@ -435,6 +436,7 @@ async def test_unbatched_background_cost_event_keeps_its_own_object_readable_by_
             cost,
         ),
         ({"call_type": "acompletion", "litellm_params": {"metadata": {}}}, ordinary),
+        ({"call_type": "aretrieve_batch", "litellm_params": {"metadata": {}}}, batch_retrieve),
     )
 
     for kwargs, payload in events:
@@ -447,7 +449,8 @@ async def test_unbatched_background_cost_event_keeps_its_own_object_readable_by_
         response_id: create,
         f"{response_id}_background_cost": cost,
         "chatcmpl-ordinary": ordinary,
-    }, "the create, its background cost event and an ordinary event must each keep their own object"
+        "batch_abc123": batch_retrieve,
+    }, "the create, its background cost event and every other event must each keep their own object"
     now: Final = datetime.now(timezone.utc)
     assert await logger.get_request_response_payload(f"{response_id}_background_cost", now, None) == cost
     assert await logger.get_request_response_payload(response_id, now, None) == create
