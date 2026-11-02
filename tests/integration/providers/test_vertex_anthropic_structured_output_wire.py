@@ -1565,22 +1565,15 @@ def _native_deployment(gateway: Gateway, scenario: Scenario, api_base: str, prov
             raise AssertionError(provider)
 
 
-@pytest.mark.parametrize(
-    ("backend", "extra"),
-    [(_FORCED_TOOL_NATIVE_MODEL, {}), (_THINKING_BY_DEFAULT_NATIVE_MODEL, {"reasoning_effort": "none"})],
-    ids=["thinking_off_by_default", "effort_none"],
-)
 @pytest.mark.parametrize("provider", ["anthropic", "azure_ai"])
 def test_native_model_json_schema_with_an_open_object_takes_the_json_tool_and_keeps_the_object_open(
-    gateway: Gateway, provider: str, backend: str, extra: dict[str, JsonValue]
+    gateway: Gateway, provider: str
 ) -> None:
     marker, marker_hex = _marker("values")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
-        model: Final = _native_deployment(gateway, scenario, wire.url, provider, backend)
+        model: Final = _native_deployment(gateway, scenario, wire.url, provider, _FORCED_TOOL_NATIVE_MODEL)
         response: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {**_chat_body(model, marker, response_format=_VALUES_RESPONSE_FORMAT), **extra},
+            "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=_VALUES_RESPONSE_FORMAT)
         )
         assert _chat_content(response) == _tool_input("values", marker_hex), response.text
         sent: Final = _one_delivery(wire, marker_hex)
@@ -1589,27 +1582,48 @@ def test_native_model_json_schema_with_an_open_object_takes_the_json_tool_and_ke
         assert sent.body.get("tool_choice") == _FORCED_JSON_TOOL, sent.body
 
 
+@pytest.mark.parametrize("provider", ["anthropic", "azure_ai"])
+def test_open_object_schema_takes_the_unforced_json_tool_on_a_model_that_thinks_by_default(
+    gateway: Gateway, provider: str
+) -> None:
+    marker, marker_hex = _marker("values")
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _native_deployment(gateway, scenario, wire.url, provider, _THINKING_BY_DEFAULT_NATIVE_MODEL)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=_VALUES_RESPONSE_FORMAT)
+        )
+        assert _chat_content(response) == _tool_input("values", marker_hex), response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert not _structured(sent.body), sent.body
+        assert _json_tool_schema(sent)["properties"] == _VALUES_SCHEMA["properties"], sent.body
+        assert _json_tool(sent).get("description") == _UNFORCED_JSON_TOOL_DESCRIPTION, sent.body
+        assert "tool_choice" not in sent.body, sent.body
+
+
 @pytest.mark.parametrize(
     ("provider", "backend", "extra"),
     [
         ("anthropic", _NATIVE_MODEL, {}),
         ("vertex_ai", _NATIVE_MODEL, {}),
         ("anthropic", _FORCED_TOOL_NATIVE_MODEL, {"thinking": {"type": "adaptive"}}),
-        ("anthropic", _THINKING_BY_DEFAULT_NATIVE_MODEL, {}),
-        ("azure_ai", _THINKING_BY_DEFAULT_NATIVE_MODEL, {}),
+        ("anthropic", _FORCED_TOOL_NATIVE_MODEL, {"tools": [_USER_TOOL_SPEC]}),
+        ("anthropic", _FORCED_TOOL_NATIVE_MODEL, {"reasoning_effort": "none"}),
+        ("azure_ai", _FORCED_TOOL_NATIVE_MODEL, {"reasoning_effort": "none"}),
     ],
     ids=[
         "forced_tool_refused-anthropic",
         "forced_tool_refused-vertex_ai",
         "thinking",
-        "thinks_by_default-anthropic",
-        "thinks_by_default-azure_ai",
+        "caller_tools",
+        "effort_none-anthropic",
+        "effort_none-azure_ai",
     ],
 )
-def test_open_object_schema_takes_the_unforced_json_tool_when_it_cannot_be_forced(
+def test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced(
     gateway: Gateway, provider: str, backend: str, extra: dict[str, JsonValue]
 ) -> None:
     marker, marker_hex = _marker("values")
+    expected_tools: Final[frozenset[str]] = frozenset({_USER_TOOL}) if "tools" in extra else frozenset()
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
         model: Final = _native_deployment(gateway, scenario, wire.url, provider, backend)
         response: Final = gateway.request(
@@ -1617,28 +1631,12 @@ def test_open_object_schema_takes_the_unforced_json_tool_when_it_cannot_be_force
             "/v1/chat/completions",
             {**_chat_body(model, marker, response_format=_VALUES_RESPONSE_FORMAT), **extra},
         )
-        assert _chat_content(response) == _tool_input("values", marker_hex), response.text
-        sent: Final = _one_delivery(wire, marker_hex)
-        assert not _structured(sent.body), sent.body
-        assert _json_tool_schema(sent)["properties"] == _VALUES_SCHEMA["properties"], sent.body
-        assert "tool_choice" not in sent.body, sent.body
-        assert ("thinking" in sent.body) is ("thinking" in extra), sent.body
-
-
-def test_open_object_schema_keeps_native_output_next_to_caller_tools(gateway: Gateway) -> None:
-    marker, marker_hex = _marker("values")
-    with wire_server(_peer) as wire, gateway.scenario() as scenario:
-        model: Final = _native_deployment(gateway, scenario, wire.url, "anthropic", _FORCED_TOOL_NATIVE_MODEL)
-        response: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {**_chat_body(model, marker, response_format=_VALUES_RESPONSE_FORMAT), "tools": [_USER_TOOL_SPEC]},
-        )
         assert _chat_content(response) == _payload(marker_hex), response.text
         sent: Final = _one_delivery(wire, marker_hex)
         assert _structured(sent.body), sent.body
-        assert _tool_names(sent.body) == frozenset({_USER_TOOL}), sent.body
+        assert _tool_names(sent.body) == expected_tools, sent.body
         assert "tool_choice" not in sent.body, sent.body
+        assert ("thinking" in sent.body) is ("thinking" in extra), sent.body
 
 
 def _thinking_then_json_tool(request: Request) -> Reply:
