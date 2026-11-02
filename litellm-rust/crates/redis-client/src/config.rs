@@ -1,8 +1,11 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{fmt, path::PathBuf, pin::Pin, sync::Arc, time::Duration};
+
+use futures_util::Stream;
 
 use redis::{
-    ClientTlsConfig, ConnectionAddr, ConnectionInfo, IntoConnectionInfo, RedisConnectionInfo,
-    TlsCertificates, TlsMode, io::tcp::TcpSettings,
+    BasicAuth, ClientTlsConfig, ConnectionAddr, ConnectionInfo, IntoConnectionInfo,
+    RedisConnectionInfo, RedisResult, StreamingCredentialsProvider, TlsCertificates, TlsMode,
+    io::tcp::TcpSettings,
 };
 
 use litellm_circuit_breaker::Breaker;
@@ -51,13 +54,33 @@ impl Default for Timeouts {
 }
 
 #[derive(Clone, Debug)]
-pub struct Credentials {
-    pub username: Option<SecretValue>,
-    pub password: Option<SecretValue>,
+pub enum Credentials {
+    Static {
+        username: Option<SecretValue>,
+        password: Option<SecretValue>,
+    },
+    Provider(CredentialsProvider),
+}
+
+#[derive(Clone)]
+pub struct CredentialsProvider(pub Arc<dyn StreamingCredentialsProvider>);
+
+impl fmt::Debug for CredentialsProvider {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CredentialsProvider")
+            .finish_non_exhaustive()
+    }
+}
+
+impl StreamingCredentialsProvider for CredentialsProvider {
+    fn subscribe(&self) -> Pin<Box<dyn Stream<Item = RedisResult<BasicAuth>> + Send + 'static>> {
+        self.0.subscribe()
+    }
 }
 
 impl Credentials {
-    pub const NONE: Self = Self {
+    pub const NONE: Self = Self::Static {
         username: None,
         password: None,
     };
@@ -222,7 +245,7 @@ pub(crate) fn connection_info(
     credentials: &Credentials,
 ) -> Result<ConnectionInfo, ConnectError> {
     let (info, tls) = match target {
-        Target::Url(url) => (url_info(url)?, url.tls.as_ref()),
+        Target::Url(url) => (url_info(url, credentials)?, url.tls.as_ref()),
         Target::Standalone(host) => {
             let info = addr(&host.host, host.port, host.tls.as_ref()).into_connection_info()?;
             let settings = info.redis_settings().clone().set_db(host.db);
@@ -245,26 +268,32 @@ pub(crate) fn connection_info(
     }
 }
 
-// parse_url reads ?db= over the path, and the url's userinfo over ?username= and ?password=
-fn url_info(url: &RedisUrl) -> Result<ConnectionInfo, ConnectError> {
+// parse_url reads ?db= over the path, and the url's userinfo over ?username= and ?password=. A credential
+// provider supersedes both, as it does in redis-py
+fn url_info(url: &RedisUrl, credentials: &Credentials) -> Result<ConnectionInfo, ConnectError> {
     let info = url.url.expose().into_connection_info()?;
     let settings = info.redis_settings().clone();
     let settings = match url.db {
         Some(db) => settings.set_db(db),
         None => settings,
     };
-    let query = Credentials {
-        username: url.username.clone(),
-        password: url.password.clone(),
-    };
-    Ok(with_static_credentials(
-        info.set_redis_settings(settings),
-        &query,
-    ))
+    let info = info.set_redis_settings(settings);
+    Ok(match credentials {
+        Credentials::Static { .. } => with_static_credentials(
+            info,
+            &Credentials::Static {
+                username: url.username.clone(),
+                password: url.password.clone(),
+            },
+        ),
+        Credentials::Provider(_) => info,
+    })
 }
 
 fn with_static_credentials(info: ConnectionInfo, credentials: &Credentials) -> ConnectionInfo {
-    let Credentials { username, password } = credentials;
+    let Credentials::Static { username, password } = credentials else {
+        return info;
+    };
     let settings = info.redis_settings().clone();
     let settings = match (username, settings.username()) {
         (Some(username), None) => settings.set_username(username.expose()),
@@ -328,7 +357,7 @@ mod tests {
             username: None,
             password: password.map(SecretValue::new),
         });
-        let static_password = Credentials {
+        let static_password = Credentials::Static {
             username: None,
             password: Some(SecretValue::new("static")),
         };

@@ -1,14 +1,16 @@
 #![allow(dead_code)] // each test binary compiles this module on its own and uses a different subset
 
-use std::time::Duration;
+use std::{pin::Pin, time::Duration};
 
+use futures_util::Stream;
 use litellm_circuit_breaker::Breaker;
 use litellm_redis_client::{
-    Cluster, Credentials, Expiry, Namespace, Node, RedisClient, RedisConfig, RedisUrl, Target,
-    Timeouts,
+    BasicAuth, Cluster, Credentials, Expiry, Namespace, Node, RedisClient, RedisConfig, RedisError,
+    RedisUrl, StreamingCredentialsProvider, Target, Timeouts,
 };
 use litellm_redis_testing::{ClientConnection, RedisDeployment};
 use litellm_secret_value::SecretValue;
+use tokio::sync::watch;
 
 pub const KEEP: Expiry = Expiry::KeepExisting(Duration::from_secs(60));
 
@@ -100,4 +102,38 @@ pub fn calls(stats: &str, command: &str) -> u64 {
         .filter_map(|line| line.trim().strip_prefix(&prefix))
         .filter_map(|rest| rest.split(',').next()?.parse::<u64>().ok())
         .sum()
+}
+
+pub struct Rotating(watch::Sender<BasicAuth>);
+
+impl Rotating {
+    pub fn new(username: &str, password: &str) -> Self {
+        Self(watch::Sender::new(BasicAuth::new(
+            username.to_owned(),
+            password.to_owned(),
+        )))
+    }
+
+    pub fn rotate(&self, username: &str, password: &str) {
+        self.0
+            .send_replace(BasicAuth::new(username.to_owned(), password.to_owned()));
+    }
+}
+
+impl StreamingCredentialsProvider for Rotating {
+    fn subscribe(
+        &self,
+    ) -> Pin<Box<dyn Stream<Item = Result<BasicAuth, RedisError>> + Send + 'static>> {
+        let receiver = self.0.subscribe();
+        Box::pin(futures_util::stream::unfold(
+            (receiver, true),
+            |(mut receiver, first)| async move {
+                if !first {
+                    receiver.changed().await.ok()?;
+                }
+                let credentials = receiver.borrow_and_update().clone();
+                Some((Ok(credentials), (receiver, false)))
+            },
+        ))
+    }
 }
