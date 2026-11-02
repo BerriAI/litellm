@@ -1,13 +1,11 @@
-import gc
 import json
 import re
 import time
-from collections import Counter, OrderedDict, defaultdict
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import suppress
 from enum import Enum
 from http import HTTPStatus
-from itertools import chain, groupby, takewhile, zip_longest
+from itertools import accumulate, chain, groupby, islice, repeat, takewhile
 from types import MappingProxyType
 from typing import Final
 
@@ -91,35 +89,8 @@ class _ErrorPayload(LiteLLMBaseModel):
         return {"message": self.error} if isinstance(self.error, str) else self.error
 
 
-_DROPPED: Final = object()
-
-
-class _BaseForm(Enum):
-    PRINTED = "printed"
-    DUMPED = "dumped"
-
-
-def _repr_owner(kind: type[object]) -> type[object]:
-    return next((owner for owner in kind.__mro__ if "__repr__" in owner.__dict__), object)
-
-
-def _repr_prints_every_item(kind: type[object]) -> bool:
-    return kind in (OrderedDict, Counter) or _repr_owner(kind) in (dict, list, tuple, defaultdict)
-
-
-def _format_prints_every_item(kind: type[object]) -> bool:
-    return kind.__str__ is object.__str__ and kind.__format__ is object.__format__ and _repr_prints_every_item(kind)
-
-
-def _str_prints_every_item(kind: type[object]) -> bool:
-    return kind.__str__ is object.__str__ and _repr_owner(kind) in (
-        dict,
-        list,
-        tuple,
-        OrderedDict,
-        defaultdict,
-        Counter,
-    )
+_JSON_LEAF_TYPES: Final = frozenset((str, int, float, bool, type(None)))
+_MAX_PLAIN_JSON_DEPTH: Final = 100
 
 
 def _is_dict(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: dict items as object
@@ -130,201 +101,36 @@ def _is_sequence(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: items 
     return isinstance(value, (list, tuple))
 
 
-def _is_proxy(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: mappingproxy cannot be subclassed
-    return isinstance(value, MappingProxyType)
-
-
-def _is_defaultdict(value: object) -> TypeIs[defaultdict[object, object]]:  # guard-ok: dict items as object
-    return isinstance(value, defaultdict)
-
-
-def _proxied(proxy: Mapping[object, object]) -> object:
-    return gc.get_referents(proxy)[0]
-
-
-def _repr_prints_its_fields(model: BaseModel) -> bool:
-    kind: Final = type(model)
-    return kind.__repr__ is BaseModel.__repr__ and kind.__repr_str__ is BaseModel.__repr_str__
-
-
-def _plain_scalar(value: str | float) -> str | float:
-    if isinstance(value, str):
-        return str.__str__(value)
-    if isinstance(value, int):
-        return int.__int__(value)
-    return float.__float__(value)
-
-
-def _repr_shows_its_value(value: str | float, printed: str) -> bool:
-    plain: Final = _plain_scalar(value)
+def _is_plain_node(value: object) -> bool:
+    kind: Final = type(value)
+    if kind in _JSON_LEAF_TYPES or kind in (list, tuple):
+        return True
     if isinstance(value, Enum):
-        return printed == f"<{type(value).__name__}.{value.name}: {plain!r}>"
-    return printed == repr(plain)
+        return isinstance(value, (str, int)) and kind.__repr__ is Enum.__repr__
+    return kind is dict and _is_dict(value) and all(type(key) is str for key in value)
 
 
-def _printed_text(value: object) -> object:
-    printed: Final = repr(value)
-    if isinstance(value, (str, int, float)) and _repr_shows_its_value(value, printed):
-        return _plain_scalar(value)
-    return printed
+def _children(value: object) -> tuple[object, ...]:
+    if _is_dict(value):
+        return tuple(value.values())
+    return tuple(value) if _is_sequence(value) else ()
 
 
-def _dumped_text(value: object) -> object:
-    return _plain_scalar(value) if isinstance(value, (str, int, float)) else str(value)
+def _next_level(level: tuple[object, ...], _: None) -> tuple[object, ...]:
+    return tuple(chain.from_iterable(_children(value) for value in level))
 
 
-def _text(value: object, form: _BaseForm) -> object:
-    try:
-        return _printed_text(value) if form is _BaseForm.PRINTED else _dumped_text(value)
-    except Exception:  # noqa: BLE001  # hook values run their own __repr__ and __str__, so a failure drops the value
-        return _DROPPED
-
-
-def _json_key(key: object, form: _BaseForm) -> object:
-    return key if key is None or type(key) in (str, int, float, bool) else _text(key, form)
-
-
-def _stored_sequence(value: Sequence[object]) -> Iterator[object]:
-    if isinstance(value, list):
-        return list[object].__iter__(value)
-    if isinstance(value, tuple):
-        return tuple[object, ...].__iter__(value)
-    return iter(value)
-
-
-def _stored_items(value: Mapping[object, object]) -> Iterable[tuple[object, object]]:
-    return dict[object, object].items(value) if isinstance(value, dict) else value.items()
-
-
-def _live_items(value: Mapping[object, object]) -> Iterator[tuple[object, object]]:
-    shown: Final = dict[int, object]()
-    while True:
-        with suppress(RuntimeError):
-            for key, item in _stored_items(value):
-                if id(key) not in shown:
-                    shown[id(key)] = key
-                    yield key, item
-            return
-
-
-def _dumps_shown(kind: type[object], shown: Iterable[object], stored: Iterable[object]) -> bool:
-    return _str_prints_every_item(kind) or any(left is not right for left, right in zip_longest(shown, stored))
-
-
-def _shown_sequence(value: object, form: _BaseForm) -> Iterable[object] | None:
-    if not _is_sequence(value):
-        return None
-    if form is _BaseForm.PRINTED:
-        return _stored_sequence(value) if _repr_prints_every_item(type(value)) else None
-    dumped: Final = tuple(value)
-    return dumped if _dumps_shown(type(value), dumped, _stored_sequence(value)) else None
-
-
-def _shown_items(value: object, form: _BaseForm) -> Iterable[tuple[object, object]] | None:
-    if not _is_dict(value):
-        return None
-    if form is _BaseForm.DUMPED:
-        dumped: Final = tuple(value.items())
-        stored: Final = chain.from_iterable(_stored_items(value))
-        return dumped if _dumps_shown(type(value), chain.from_iterable(dumped), stored) else None
-    if not _repr_prints_every_item(type(value)):
-        return None
-    if isinstance(value, OrderedDict):
-        return tuple(OrderedDict[object, object].items(value))
-    if isinstance(value, Counter):
-        return Counter[object].most_common(value)
-    return _live_items(value)
-
-
-def _proxy_items(proxy: Mapping[object, object], form: _BaseForm) -> Iterable[tuple[object, object]] | None:
-    mapping: Final = _proxied(proxy)
-    if form is _BaseForm.DUMPED and not _str_prints_every_item(type(mapping)):
-        return None
-    return _shown_items(mapping, _BaseForm.PRINTED)
-
-
-def _expansion(value: object, form: _BaseForm) -> tuple[Iterable[tuple[object, object]], _BaseForm] | None:
-    if _is_proxy(value):
-        proxy_items: Final = _proxy_items(value, form)
-        return None if proxy_items is None else (proxy_items, _BaseForm.PRINTED)
-    shown_items: Final = _shown_items(value, form)
-    if shown_items is not None:
-        return shown_items, form
-    if form is _BaseForm.PRINTED and isinstance(value, BaseModel) and _repr_prints_its_fields(value):
-        return value.__repr_args__(), _BaseForm.PRINTED
-    return None
-
-
-def _walked_ids(value: object) -> frozenset[int]:
-    return frozenset((id(value), id(_proxied(value)))) if _is_proxy(value) else frozenset((id(value),))
-
-
-def _container_marker(value: object) -> object:
-    if isinstance(value, list):
-        return "[...]"
-    if isinstance(value, tuple):
-        return "(...)"
-    if isinstance(value, OrderedDict):
-        return "..."
-    if _is_defaultdict(value):
-        factory: Final = _text(value.default_factory, _BaseForm.PRINTED)
-        return factory if factory is _DROPPED else f"{type(value).__name__}({factory}, {{...}})"
-    return "{...}" if _is_dict(value) and not isinstance(value, Counter) else None
-
-
-def _cycle_marker(value: object) -> object:
-    if not _is_proxy(value):
-        return _container_marker(value)
-    inner: Final = _container_marker(_proxied(value))
-    return inner if inner is None or inner is _DROPPED else f"mappingproxy({inner})"
-
-
-def _cycle_text(value: object, form: _BaseForm) -> object:
-    marker: Final = _cycle_marker(value)
-    return _text(value, form) if marker is None else marker
-
-
-def _json_safe(value: object, form: _BaseForm, path: frozenset[int]) -> object:
-    if value is None or type(value) in (str, int, float, bool):
-        return value
-    walked: Final = _walked_ids(value)
-    if not walked.isdisjoint(path):
-        return _cycle_text(value, form)
-    inner_path: Final = path | walked
-    try:
-        sequence: Final = _shown_sequence(value, form)
-        if sequence is not None:
-            shown_items: Final = [_json_safe(item, form, inner_path) for item in sequence]
-            return [item for item in shown_items if item is not _DROPPED]
-        expansion: Final = _expansion(value, form)
-        if expansion is None:
-            return _text(value, form)
-        items, inner = expansion
-        pairs: Final = [(_json_key(key, inner), _json_safe(item, inner, inner_path)) for key, item in items]
-        return {key: item for key, item in pairs if key is not _DROPPED and item is not _DROPPED}
-    except Exception:  # noqa: BLE001  # hook values run their own printers and can nest past the recursion limit
-        return _text(value, form)
-
-
-def _chunk_json(shown: object) -> str | None:
-    if isinstance(shown, str):
-        return shown
-    return None if shown is _DROPPED else json.dumps(shown)
+def _is_plain_json(chunk: object) -> bool:
+    levels: Final = islice(accumulate(repeat(None), _next_level, initial=(chunk,)), _MAX_PLAIN_JSON_DEPTH)
+    return next((not level for level in levels if not level or not all(map(_is_plain_node, level))), False)
 
 
 def responses_chunk_data(chunk: object) -> str | None:
-    if _is_proxy(chunk):
-        expandable: Final = _proxy_items(chunk, _BaseForm.DUMPED) is not None
-        return _chunk_json(_json_safe(chunk, _BaseForm.DUMPED, frozenset())) if expandable else None
-    if not _is_dict(chunk) or not _format_prints_every_item(type(chunk)):
+    kind: Final = type(chunk)
+    try:
+        return json.dumps(chunk, allow_nan=False) if kind is dict and _is_plain_json(chunk) else None
+    except (ValueError, RecursionError):
         return None
-    return _chunk_json(_json_safe(chunk, _BaseForm.PRINTED, frozenset()))
-
-
-def _dumped_detail(error: Mapping[str, object]) -> Mapping[str, object]:
-    path: Final = frozenset((id(error),))
-    shown: Final = [(key, _json_safe(value, _BaseForm.DUMPED, path)) for key, value in error.items()]
-    return {key: value for key, value in shown if value is not _DROPPED}
 
 
 def sse_error_object(data: str | bytes) -> Mapping[str, object] | None:
@@ -556,7 +362,7 @@ class ResponsesStreamErrorState:
     def format_error(self, error: Mapping[str, object]) -> str:
         fields: Final = responses_error_fields(error)
         sequence_number: Final = self.sequence_number + 1
-        payload: Final = json.dumps(_error_event(fields, _dumped_detail(error), sequence_number))
+        payload: Final = json.dumps(_error_event(fields, error, sequence_number), default=str)
         return f"event: error\ndata: {payload}\n\n"
 
     def format_error_message(self, frame: str) -> str:
