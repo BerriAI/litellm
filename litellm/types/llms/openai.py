@@ -91,7 +91,6 @@ from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject, LiteLLMBase
 from litellm.types.responses.main import (
     CustomToolCallOutputItem,
     GenericResponseOutputItem,
-    OpenAIChatCompletionLogprobsContent,
     OutputCodeInterpreterCall,
     OutputFunctionToolCall,
     OutputImageGenerationCall,
@@ -1863,6 +1862,19 @@ class OutputItemDoneEvent(BaseResponsesStreamEvent):
     item: BaseLiteLLMOpenAIResponseObject
 
 
+class OpenAIChatCompletionLogprobsContentTopLogprobs(TypedDict, total=False):
+    bytes: list
+    logprob: Required[float]
+    token: Required[str]
+
+
+class OpenAIChatCompletionLogprobsContent(TypedDict, total=False):
+    bytes: list
+    logprob: Required[float]
+    token: Required[str]
+    top_logprobs: list[OpenAIChatCompletionLogprobsContentTopLogprobs]
+
+
 class ContentPartAddedEvent(BaseResponsesStreamEvent):
     type: Literal[ResponsesAPIStreamEvents.CONTENT_PART_ADDED]
     item_id: str
@@ -1905,7 +1917,6 @@ class OutputTextDeltaEvent(BaseResponsesStreamEvent):
     output_index: int
     content_index: int
     delta: str
-    logprobs: Sequence[OpenAIChatCompletionLogprobsContent] | None = None
 
 
 class OutputTextAnnotationAddedEvent(BaseResponsesStreamEvent):
@@ -1923,7 +1934,6 @@ class OutputTextDoneEvent(BaseResponsesStreamEvent):
     output_index: int
     content_index: int
     text: str
-    logprobs: Sequence[OpenAIChatCompletionLogprobsContent] | None = None
 
 
 class RefusalDeltaEvent(BaseResponsesStreamEvent):

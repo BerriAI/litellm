@@ -126,7 +126,6 @@ from litellm.types.responses.main import (
     CustomToolCallOutputItem,
     GenericResponseOutputItem,
     GenericResponseOutputItemContentAnnotation,
-    OpenAIChatCompletionLogprobsContent,
     OutputCodeInterpreterCall,
     OutputFunctionToolCall,
     OutputImageGenerationCall,
@@ -136,7 +135,6 @@ from litellm.types.responses.main import (
 from litellm.types.utils import (
     ChatCompletionAnnotation,
     ChatCompletionMessageToolCall,
-    ChoiceLogprobs,
     Choices,
     Function,
     Message,
@@ -234,27 +232,6 @@ def _echoable_request_params(request: Mapping[str, object]) -> _EchoedResponsesR
         if name in request and _is_echoable(name, request[name])
     }
     return _ECHOED_PARAMS_ADAPTER.validate_python(echoable)
-
-
-_OUTPUT_TEXT_LOGPROBS_INCLUDE: Final = "message.output_text.logprobs"
-_OUTPUT_TEXT_LOGPROB_ADAPTER: Final = TypeAdapter(OpenAIChatCompletionLogprobsContent)
-
-
-def _chat_logprob_params(request: ResponsesAPIOptionalRequestParams) -> Mapping[str, object]:
-    if "include" not in request or _OUTPUT_TEXT_LOGPROBS_INCLUDE not in (request["include"] or ()):
-        return {}
-    if "top_logprobs" not in request:
-        return {"logprobs": True}
-    return {"logprobs": True, "top_logprobs": request["top_logprobs"]}
-
-
-def output_text_logprobs(chat_logprobs: object) -> Sequence[OpenAIChatCompletionLogprobsContent]:
-    if not isinstance(chat_logprobs, ChoiceLogprobs):
-        return []
-    return [
-        _OUTPUT_TEXT_LOGPROB_ADAPTER.validate_python(token_logprob.model_dump(exclude_none=True))
-        for token_logprob in chat_logprobs.content or ()
-    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1320,7 +1297,6 @@ class LiteLLMCompletionResponsesConfig:
             "metadata": kwargs.get("metadata"),
             "service_tier": responses_api_request.get("service_tier"),
             "safety_identifier": responses_api_request.get("safety_identifier"),
-            **_chat_logprob_params(responses_api_request),
             "web_search_options": web_search_options,
             "response_format": response_format,
             "reasoning_effort": reasoning.effort,
@@ -3719,9 +3695,7 @@ class LiteLLMCompletionResponsesConfig:
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)
-            elif content := LiteLLMCompletionResponsesConfig._message_output_content(
-                choice.message, getattr(choice, "logprobs", None)
-            ):
+            elif content := LiteLLMCompletionResponsesConfig._message_output_content(choice.message):
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
@@ -3734,7 +3708,7 @@ class LiteLLMCompletionResponsesConfig:
         return message_output_items
 
     @staticmethod
-    def _message_output_content(message: Message, logprobs: object) -> tuple[OutputText | ResponseOutputRefusal, ...]:
+    def _message_output_content(message: Message) -> tuple[OutputText | ResponseOutputRefusal, ...]:
         refusal: Final = openai_chat_refusal_text(message)
         refusal_parts: Final = (ResponseOutputRefusal(type="refusal", refusal=refusal),) if refusal is not None else ()
         has_text_part: Final = (
@@ -3743,7 +3717,7 @@ class LiteLLMCompletionResponsesConfig:
             or (message.content is not None and not refusal_parts)
         )
         text_parts: Final = (
-            (LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(message, logprobs),)
+            (LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(message),)
             if has_text_part
             else ()
         )
@@ -3795,7 +3769,6 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_chat_message_to_response_output_text(
         message: Message,
-        logprobs: object,
     ) -> OutputText:
         annotations: Final = getattr(message, "annotations", None)
         transformed_annotations: Final = (
@@ -3808,7 +3781,6 @@ class LiteLLMCompletionResponsesConfig:
             type="output_text",
             text=message.content or "",
             annotations=transformed_annotations,
-            logprobs=output_text_logprobs(logprobs),
         )
 
     @staticmethod

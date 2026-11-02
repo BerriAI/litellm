@@ -33,15 +33,6 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
-_RESPONSES_FIELDS_THE_BRIDGE_TRANSLATES: Final = frozenset({"top_logprobs"})
-
-
-def _passthrough_kwargs(kwargs: Mapping[str, object]) -> Mapping[str, object]:
-    return MappingProxyType(
-        {key: value for key, value in kwargs.items() if key not in _RESPONSES_FIELDS_THE_BRIDGE_TRANSLATES}
-    )
-
-
 _BRIDGE_TRANSFORM_KEYWORDS: Final = frozenset({"caller_input", "names_non_string_fields"})
 
 
@@ -147,11 +138,7 @@ class LiteLLMCompletionTransformationHandler:
             )
 
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
-            **{
-                **_passthrough_kwargs(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)),
-                **litellm_completion_request,
-                "_skip_responses_api_bridge": True,
-            },
+            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
@@ -250,11 +237,7 @@ class LiteLLMCompletionTransformationHandler:
             )
 
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
-            **{
-                **_passthrough_kwargs(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)),
-                **litellm_completion_request,
-                "_skip_responses_api_bridge": True,
-            },
+            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
         )
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (

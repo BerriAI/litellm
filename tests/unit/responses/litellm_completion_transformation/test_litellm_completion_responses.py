@@ -5,10 +5,8 @@ from copy import deepcopy
 from types import MappingProxyType
 from typing import Final, Literal, cast
 
-import httpx
 import pytest
-from openai import OpenAI
-from openai.types.responses import ResponseFunctionToolCall, ResponseIncludable
+from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.response_function_web_search import (
     ActionFind,
@@ -36,7 +34,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.base import HiddenParams
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.responses.main import OutputToolSearchCall, build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -48,7 +46,6 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
-from tests.capturing_transport import CapturingTransport
 
 
 class TestLiteLLMCompletionResponsesConfig:
@@ -7397,108 +7394,3 @@ def test_a_malformed_item_after_a_codex_additional_tools_item_is_named_by_its_in
         )
 
     assert f"'{field_path}'" in raised.value.message
-
-
-_NIM_CHAT_MODEL: Final = "nvidia_nim/meta/llama-3.3-70b-instruct"
-_CHAT_TOKEN_LOGPROBS: Final = (
-    {
-        "token": "Hi",
-        "logprob": -0.01,
-        "bytes": [72, 105],
-        "top_logprobs": [
-            {"token": "Hi", "logprob": -0.01, "bytes": [72, 105]},
-            {"token": "Hey", "logprob": -4.6, "bytes": [72, 101, 121]},
-        ],
-    },
-    {
-        "token": "!",
-        "logprob": -0.2,
-        "bytes": [33],
-        "top_logprobs": [
-            {"token": "!", "logprob": -0.2, "bytes": [33]},
-            {"token": ".", "logprob": -1.7, "bytes": [46]},
-        ],
-    },
-)
-
-
-def _bridged_nim_call(
-    include: Sequence[ResponseIncludable],
-    top_logprobs: int | None,
-    chat_logprobs: Mapping[str, object] | None = None,
-) -> tuple[Mapping[str, object], ResponsesAPIResponse]:
-    transport: Final = CapturingTransport(
-        ModelResponse(
-            id="chatcmpl-logprobs",
-            created=1717000000,
-            model="meta/llama-3.3-70b-instruct",
-            object="chat.completion",
-            choices=[
-                Choices(
-                    index=0,
-                    finish_reason="stop",
-                    message=Message(role="assistant", content="Hi!"),
-                    logprobs=chat_logprobs,
-                )
-            ],
-            usage=Usage(prompt_tokens=8, completion_tokens=2, total_tokens=10),
-        )
-    )
-    response: Final = litellm.responses(
-        model=_NIM_CHAT_MODEL,
-        input="Say hi",
-        include=list(include) or None,
-        top_logprobs=top_logprobs,
-        api_key="nvapi-unused",
-        client=OpenAI(api_key="nvapi-unused", http_client=httpx.Client(transport=transport)),
-    )
-    assert isinstance(response, ResponsesAPIResponse)
-    return transport.request_bodies[-1], response
-
-
-@pytest.mark.parametrize(
-    ("include", "top_logprobs", "chat_logprob_params"),
-    [
-        pytest.param(("message.output_text.logprobs",), 2, {"logprobs": True, "top_logprobs": 2}, id="include-and-top"),
-        pytest.param(("message.output_text.logprobs",), None, {"logprobs": True}, id="include-only"),
-        pytest.param((), 2, {}, id="top-logprobs-only"),
-    ],
-)
-def test_bridge_asks_chat_for_logprobs_only_when_include_requests_output_text_logprobs(
-    include: Sequence[ResponseIncludable], top_logprobs: int | None, chat_logprob_params: Mapping[str, object]
-):
-    chat_request, _ = _bridged_nim_call(include, top_logprobs)
-
-    assert {
-        key: chat_request[key] for key in ("logprobs", "top_logprobs") if key in chat_request
-    } == chat_logprob_params
-
-
-def test_bridge_rejects_output_text_logprobs_for_a_provider_without_logprobs_with_a_400():
-    with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
-        litellm.responses(
-            model="anthropic/claude-haiku-4-5",
-            input="Say hi",
-            include=["message.output_text.logprobs"],
-            api_key="sk-unused",
-        )
-
-    assert exc_info.value.status_code == 400
-    assert "logprobs" in str(exc_info.value)
-
-
-@pytest.mark.parametrize(
-    ("chat_logprobs", "output_text_logprobs"),
-    [
-        pytest.param({"content": list(_CHAT_TOKEN_LOGPROBS)}, list(_CHAT_TOKEN_LOGPROBS), id="chat-logprobs"),
-        pytest.param(None, [], id="no-chat-logprobs"),
-    ],
-)
-def test_bridged_output_text_carries_the_chat_token_logprobs(
-    chat_logprobs: Mapping[str, object] | None, output_text_logprobs: Sequence[Mapping[str, object]]
-):
-    _, response = _bridged_nim_call(("message.output_text.logprobs",), 2, chat_logprobs)
-
-    message: Final = response.model_dump(mode="json")["output"][0]
-    assert message["type"] == "message"
-    assert message["content"][0]["logprobs"] == output_text_logprobs

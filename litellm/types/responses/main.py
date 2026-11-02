@@ -6,7 +6,7 @@ from openai.types.responses.response_function_tool_call import ResponseFunctionT
 from openai.types.responses.response_function_web_search import ActionSearchSource, ResponseFunctionWebSearch
 from openai.types.responses.response_output_refusal import ResponseOutputRefusal
 from pydantic import ConfigDict, PrivateAttr
-from typing_extensions import Required, TypedDict
+from typing_extensions import TypedDict
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 
@@ -23,26 +23,12 @@ class GenericResponseOutputItemContentAnnotation(BaseLiteLLMOpenAIResponseObject
     title: str | None
 
 
-class OpenAIChatCompletionLogprobsContentTopLogprobs(TypedDict, total=False):
-    bytes: list
-    logprob: Required[float]
-    token: Required[str]
-
-
-class OpenAIChatCompletionLogprobsContent(TypedDict, total=False):
-    bytes: list
-    logprob: Required[float]
-    token: Required[str]
-    top_logprobs: list[OpenAIChatCompletionLogprobsContentTopLogprobs]
-
-
 class OutputText(BaseLiteLLMOpenAIResponseObject):
     """Text output content from an assistant message"""
 
     type: str | None  # "output_text"
     text: str | None
     annotations: list[GenericResponseOutputItemContentAnnotation] | None
-    logprobs: Sequence[OpenAIChatCompletionLogprobsContent] | None = None
 
 
 class OutputFunctionToolCall(BaseLiteLLMOpenAIResponseObject):

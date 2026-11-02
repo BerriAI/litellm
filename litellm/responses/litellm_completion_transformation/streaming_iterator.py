@@ -26,7 +26,6 @@ from litellm.responses.litellm_completion_transformation.tool_search import (
 )
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
-    output_text_logprobs,
 )
 from litellm.responses.streaming_iterator import (
     SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
@@ -67,12 +66,7 @@ from litellm.types.llms.openai import (
     WebSearchCallInProgressEvent,
     WebSearchCallSearchingEvent,
 )
-from litellm.types.responses.main import (
-    GenericResponseOutputItem,
-    GenericResponseOutputItemContentAnnotation,
-    OpenAIChatCompletionLogprobsContent,
-    OutputText,
-)
+from litellm.types.responses.main import GenericResponseOutputItemContentAnnotation
 from litellm.types.utils import Delta as ChatCompletionDelta
 from litellm.types.utils import (
     ModelResponse,
@@ -99,19 +93,6 @@ def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str |
 
     return tuple(
         item.model_copy(update={"id": item_id}) if index == target_index else item for index, item in enumerate(items)
-    )
-
-
-def _message_with_output_text_logprobs(
-    message: GenericResponseOutputItem, logprobs: Sequence[OpenAIChatCompletionLogprobsContent]
-) -> GenericResponseOutputItem:
-    return message.model_copy(
-        update={
-            "content": [
-                part.model_copy(update={"logprobs": list(logprobs)}) if isinstance(part, OutputText) else part
-                for part in message.content
-            ]
-        }
     )
 
 
@@ -209,7 +190,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.litellm_model_response: ModelResponse | TextCompletionResponse | None = None
         self.completed_response = None
         self.final_text: str = ""
-        self._output_text_logprobs: list[OpenAIChatCompletionLogprobsContent] = []  # mutable-ok: per-delta append
         self._cached_item_id: str | None = None
         self._message_output_index: int | None = None
         self._reasoning_output_index: int | None = None
@@ -813,9 +793,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             item_id=self._cached_item_id,
             output_index=self._message_index(),
             content_index=0,
-            part=BaseLiteLLMOpenAIResponseObject(
-                **{"type": "output_text", "text": "", "annotations": [], "logprobs": []}
-            ),
+            part=BaseLiteLLMOpenAIResponseObject(**{"type": "output_text", "text": "", "annotations": []}),
         )
 
     def _queue_message_item_added_events(self) -> None:
@@ -996,7 +974,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             output_index=self._message_index(),
             content_index=0,
             text=getattr(litellm_complete_object.choices[0].message, "content", "") or "",
-            logprobs=list(self._output_text_logprobs),
         )
 
     def create_output_content_part_done_event(self, litellm_complete_object: ModelResponse) -> ContentPartDoneEvent:
@@ -1015,7 +992,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             type="output_text",
             text=text,
             annotations=response_annotations,
-            logprobs=[],
+            logprobs=None,
         )
 
         return ContentPartDoneEvent(
@@ -1040,14 +1017,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             )
         )
         text_parts: Final = (
-            (
-                {
-                    "type": "output_text",
-                    "text": text,
-                    "annotations": response_annotations,
-                    "logprobs": list(self._output_text_logprobs),
-                },
-            )
+            ({"type": "output_text", "text": text, "annotations": response_annotations},)
             if self.sent_content_part_added_event
             else ()
         )
@@ -1498,15 +1468,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if not self.sent_content_part_added_event:
                 self._queue_message_item_added_events()
             self._hold_tool_calls_behind_text(getattr(chunk.choices[0].delta, "tool_calls", None))
-            delta_logprobs: Final = output_text_logprobs(chunk.choices[0].logprobs)
-            self._output_text_logprobs.extend(delta_logprobs)
             return OutputTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
                 item_id=item_id,
                 output_index=self._message_index(),
                 content_index=0,
                 delta=delta_content,
-                logprobs=delta_logprobs,
             )
 
         # Priority 3: Handle tool call deltas (if any) -> queue events and emit them
@@ -1547,15 +1514,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             "message",
             self._cached_item_id,
         )
-        message_index: Final = _index_of_output_item_type(message_aligned, "message")
-        logprobs_aligned: Final = tuple(
-            _message_with_output_text_logprobs(item, self._output_text_logprobs)
-            if index == message_index and isinstance(item, GenericResponseOutputItem)
-            else item
-            for index, item in enumerate(message_aligned)
-        )
         reasoning_aligned: Final = _output_items_with_id(
-            logprobs_aligned,
+            message_aligned,
             "reasoning",
             self._cached_reasoning_item_id,
         )
