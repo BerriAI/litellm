@@ -21,8 +21,9 @@ def ready(client: httpx.Client) -> bool:
 
 
 @pytest.mark.parametrize("server_arguments", [(), ("--run_gunicorn",)])
+@pytest.mark.parametrize(("trusted_proxies", "expected_ip"), [("", "127.0.0.2"), ("127.0.0.2", "198.51.100.10")])
 def test_gateway_preserves_metrics_bind_and_mcp_client_ip(
-    gateway: Gateway, tmp_path: Path, server_arguments: tuple[str, ...]
+    gateway: Gateway, tmp_path: Path, server_arguments: tuple[str, ...], trusted_proxies: str, expected_ip: str
 ) -> None:
     config: Final = tmp_path / "config.yaml"
     config.write_text(
@@ -40,6 +41,7 @@ def test_gateway_preserves_metrics_bind_and_mcp_client_ip(
         "LITELLM_MASTER_KEY": gateway.key,
         "STORE_MODEL_IN_DB": "False",
         "PYTHON_DOTENV_DISABLED": "1",
+        "FORWARDED_ALLOW_IPS": trusted_proxies,
     }
     with (tmp_path / "proxy.log").open("wb") as output:
         with subprocess.Popen(
@@ -80,10 +82,10 @@ def test_gateway_preserves_metrics_bind_and_mcp_client_ip(
                     assert response.status_code == 200, response.text
                     client_ip: Final = external.get(
                         "/v1/mcp/network/client-ip",
-                        headers={"Authorization": f"Bearer {gateway.key}", "X-Forwarded-For": "1.2.3.4"},
+                        headers={"Authorization": f"Bearer {gateway.key}", "X-Forwarded-For": "198.51.100.10"},
                     )
                     assert client_ip.status_code == 200, client_ip.text
-                    assert client_ip.json() == {"ip": "127.0.0.2"}
+                    assert client_ip.json() == {"ip": expected_ip}
             finally:
                 assert stop_root_process(supervisor), (tmp_path / "proxy.log").read_text()
             assert supervisor.returncode == 0, (tmp_path / "proxy.log").read_text()
