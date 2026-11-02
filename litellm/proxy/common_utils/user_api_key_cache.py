@@ -400,6 +400,11 @@ def team_membership_reservation_cache_key(user_id: str, team_id: str) -> str:
 NO_TEAM_MEMBERSHIP_SENTINEL: Final = "__no_team_membership__"
 
 
+def budget_windows_absent_cache_key(entity_type: str, entity_id: str) -> str:
+    """Cache key marking a key or team that holds no budget windows, so the spend fallback skips its row read."""
+    return f"budget_windows_absent:{entity_type}:{entity_id}"
+
+
 def get_management_object_ttl(cache: DualCache) -> float:
     """
     In-memory TTL for management-object cache writes (keys, teams, users, budgets, ...).

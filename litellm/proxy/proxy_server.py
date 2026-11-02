@@ -552,6 +552,7 @@ from litellm.proxy.common_utils.timezone_utils import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
+    budget_windows_absent_cache_key,
     end_user_cache_key,
     get_management_object_ttl,
     model_access_group_cache_key,
@@ -3469,13 +3470,17 @@ def _cached_budget_limits(cached: object) -> object:
     return _UNTYPED_VALUE.validate_python(json.loads(stored)) if isinstance(stored, str) else stored
 
 
+def _has_budget_windows(budget_limits: object) -> bool:
+    return isinstance(budget_limits, list) and budget_limits != []
+
+
 async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str) -> object:
     """Read only: caching the row here could race a delete and put a just-deleted key back into the auth cache."""
-    missing_row_key: Final = f"budget_limits_row_missing:{entity_type.value}:{entity_id}"
-    known_missing: Final[object] = _UNTYPED_VALUE.validate_python(
-        await user_api_key_cache.async_get_cache(key=missing_row_key, local_only=True)
+    absent_key: Final = budget_windows_absent_cache_key(entity_type.value, entity_id)
+    known_absent: Final[object] = _UNTYPED_VALUE.validate_python(
+        await user_api_key_cache.async_get_cache(key=absent_key, local_only=True)
     )
-    if known_missing is not None:
+    if known_absent is not None:
         return None
     if prisma_client is None:
         return None
@@ -3493,10 +3498,10 @@ async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str)
             e,
         )
         return None
-    if row is None:
-        await user_api_key_cache.async_set_cache(key=missing_row_key, value=True, local_only=True)
-        return None
-    return _cached_budget_limits(row)
+    budget_limits: Final[object] = None if row is None else _cached_budget_limits(row)
+    if not _has_budget_windows(budget_limits):
+        await user_api_key_cache.async_set_cache(key=absent_key, value=True, local_only=True)
+    return budget_limits
 
 
 async def _increment_spend_counters_batched(

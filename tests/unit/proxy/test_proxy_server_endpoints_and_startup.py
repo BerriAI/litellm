@@ -14139,20 +14139,31 @@ async def test_team_window_is_charged_when_the_cached_team_expired_before_the_re
     assert enqueued[0]["spend"] == pytest.approx(1.5)
 
 
+def _key_row_without_windows():
+    row = MagicMock()
+    row.budget_limits = None
+    return row
+
+
 @pytest.mark.asyncio
-async def test_a_token_with_no_key_row_reads_the_database_once_across_requests():
+@pytest.mark.parametrize(
+    "token, keys",
+    [
+        pytest.param("litellm_proxy_master_key", {}, id="no-key-row"),
+        pytest.param("hashed-token", {"hashed-token": _key_row_without_windows()}, id="key-row-without-windows"),
+    ],
+)
+async def test_a_token_without_budget_windows_reads_the_database_once_across_requests(token, keys):
     from litellm.proxy.proxy_server import increment_spend_counters
 
-    prisma_client = _prisma_with_rows()
+    prisma_client = _prisma_with_rows(keys=keys)
     find_unique: Final = prisma_client.db.litellm_verificationtoken.find_unique
 
     with _window_spend_enqueue_env({}, prisma_client=prisma_client) as queue:
-        await increment_spend_counters(token="litellm_proxy_master_key", team_id=None, user_id=None, response_cost=0.25)
+        await increment_spend_counters(token=token, team_id=None, user_id=None, response_cost=0.25)
         reads_after_first_request: Final = find_unique.await_count
         for _ in range(3):
-            await increment_spend_counters(
-                token="litellm_proxy_master_key", team_id=None, user_id=None, response_cost=0.25
-            )
+            await increment_spend_counters(token=token, team_id=None, user_id=None, response_cost=0.25)
         enqueued = await _drain(queue)
 
     assert enqueued == []
