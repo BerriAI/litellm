@@ -28,11 +28,6 @@ id = "GHSA-45c3-73f7-pv4m"
 ignoreUntil = 2026-11-27
 reason = "dnspython 2.9.0 (published 2026-10-09) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 2.8.0 while 3.11+ locks 2.9.0; the advisory is CPU use in dns.name.from_wire_parser and litellm only reaches dnspython through pydantic EmailStr, which never does DNS lookups; remove this entry once 3.10 is dropped or a 3.10-compatible fix ships"
 
-[[IgnoredVulns]]
-id = "GHSA-xcx6-jx8p-x3h5"
-ignoreUntil = 2026-11-24
-reason = "@azure/msal-node is fixed only in 7.1.0 (published 2026-10-13), but it is dev-only in vscode-extension via @vscode/vsce > @azure/identity, and the latest @azure/identity (4.14.0) still requires msal-node ^6.0.0, so the lock cannot move without forcing a major override; the advisory is in the auth_code flow, which extension packaging does not run; bump and remove this entry once @azure/identity accepts msal-node >= 7.1.0"
-
 [[PackageOverrides]]
 name = "pillow"
 version = "12.3.0"
