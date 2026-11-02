@@ -90,6 +90,7 @@ from litellm.constants import (
     LITELLM_UI_SESSION_DURATION,
     OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
+    VLLM_CHOICE_FIELDS,
 )
 from litellm.litellm_core_utils.access_windows import access_windows_config_error
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
@@ -107,6 +108,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     initialize_sentry,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER, LoggingWorker
+from litellm.litellm_core_utils.prompt_templates.chat_template_tools import chat_template_tool_section
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.routing_groups import parse_routing_groups
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -115,6 +117,7 @@ from litellm.litellm_core_utils.token_counter import (
     UnsupportedContentTypeError,
     deployment_openai_model,
     offload_token_count,
+    sends_function_tools,
 )
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     HUGGING_FACE_SOURCE,
@@ -1007,6 +1010,7 @@ from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.responses.main import provider_stores_the_conversation
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.router import (
     AssistantsTypedDict,
@@ -10223,6 +10227,11 @@ def _restamp_nested_response_model_in_sse_line(line: bytes, target_model: str) -
     return _SSE_DATA_FIELD + b" " + serialized_event.encode() + line_ending
 
 
+def _vllm_choice_fields(choice: BaseModel) -> Mapping[str, object]:
+    choice_extras: Final = choice.model_extra or {}
+    return MappingProxyType({field: choice_extras[field] for field in VLLM_CHOICE_FIELDS if field in choice_extras})
+
+
 def _json_encodes(value: object) -> bool:
     try:
         to_jsonable_python(value)
@@ -10278,9 +10287,50 @@ def _serialize_chat_chunk(chunk: ModelResponseStream) -> bytes:
 
 
 def _serialize_streaming_chunk(chunk: BaseModel) -> bytes:
+    choices: Final = _streaming_chunk_choices(chunk)
+    null_choice_fields: Final = tuple(_null_vllm_choice_fields(choice) for choice in choices)
+    if any(null_choice_fields):
+        serialized_chunk: Final = _serialize_keeping_null_choice_fields(chunk, choices, null_choice_fields)
+        if serialized_chunk is not None:
+            return serialized_chunk
     if isinstance(chunk, ModelResponseStream):
         return _serialize_chat_chunk(chunk)
     return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+
+
+def _serialize_keeping_null_choice_fields(
+    chunk: BaseModel, choices: Sequence[BaseModel], null_choice_fields: Sequence[Mapping[str, None]]
+) -> bytes | None:
+    try:
+        return json.dumps(
+            {
+                **_dump_set_fields(chunk, exclude=frozenset({"choices"})),
+                "choices": [
+                    {**_dump_set_fields(choice), **nulls}
+                    for choice, nulls in zip(choices, null_choice_fields, strict=True)
+                ],
+            },
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode()
+    except ValueError:
+        return None
+
+
+def _streaming_chunk_choices(chunk: BaseModel) -> Sequence[BaseModel]:
+    match chunk:
+        case ModelResponseStream() | TextCompletionResponse():
+            return chunk.choices
+        case _:
+            return ()
+
+
+def _null_vllm_choice_fields(choice: BaseModel) -> Mapping[str, None]:
+    return MappingProxyType({field: None for field, value in _vllm_choice_fields(choice).items() if value is None})
+
+
+def _dump_set_fields(model: BaseModel, exclude: AbstractSet[str] = frozenset()) -> Mapping[str, object]:
+    return model.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=set(exclude))
 
 
 async def _apply_streaming_chunk_hooks(
@@ -15053,7 +15103,7 @@ async def _provider_token_count(
     framing_can_stand_in: Final = (count_model is None or not count_model.configured) and (
         failure.cannot_count_model or (pinned_count_model is not None and failure.denied_in_region)
     )
-    if not (framing_can_stand_in and settings.framing is not None and local_estimate_allowed):
+    if not (framing_can_stand_in and settings.frames_counts and local_estimate_allowed):
         raise failure.to_proxy_exception()
     if pinned_count_model is not None:
         verbose_proxy_logger.warning(
@@ -15253,6 +15303,7 @@ async def _tokenizer_or_provider_error(
 
 async def _local_token_estimate(
     model: str,
+    template_model: str,
     prompt: str | None,
     messages: Sequence[AllMessageValues] | None,
     tools: list[ChatCompletionToolParam] | None,
@@ -15265,7 +15316,7 @@ async def _local_token_estimate(
         else await _tokenizer_or_provider_error(model, custom_tokenizer, provider_failure)
     )
     count: Final = offload_token_count(litellm.token_counter)(
-        model=model,
+        model=template_model,
         text=prompt,
         messages=messages,
         tools=tools,
@@ -15331,10 +15382,15 @@ def _deployment_aws_region(deployment: _TokenCountDeployment) -> str:
     )
 
 
+def _deployment_base_model(deployment: _TokenCountDeployment) -> str | None:
+    return _non_empty_str(deployment.get("model_info", {}).get("base_model")) or _non_empty_str(
+        deployment.get("litellm_params", {}).get("base_model")
+    )
+
+
 def _token_count_settings_model(deployment: _TokenCountDeployment, request_model: str) -> tuple[str, str | None]:
-    model_info: Final = deployment.get("model_info", {})
     params: Final = deployment.get("litellm_params", {})
-    base_model: Final = _non_empty_str(model_info.get("base_model")) or _non_empty_str(params.get("base_model"))
+    base_model: Final = _deployment_base_model(deployment)
     if base_model is not None:
         return base_model, None
     model: Final = _non_empty_str(params.get("model"))
@@ -15486,12 +15542,15 @@ def _responses_routing_kwargs(responses_request: Mapping[str, object] | None) ->
     return {"previous_response_id": previous_response_id} if isinstance(previous_response_id, str) else {}
 
 
+def _inference_params(
+    litellm_params: Mapping[str, object], responses_request: Mapping[str, object]
+) -> Mapping[str, object]:
+    return {**litellm_params, **_router_default_litellm_params(llm_router), **responses_request}
+
+
 def _count_drop_policy(deployment: Mapping[str, object] | None, responses_request: Mapping[str, object]) -> DropPolicy:
     litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
-    router_defaults: Final[Mapping[str, object]] = (
-        {} if llm_router is None else _router_default_litellm_params(llm_router)
-    )
-    return drop_policy({**litellm_params, **router_defaults, **responses_request})
+    return drop_policy(_inference_params(litellm_params, responses_request))
 
 
 def _native_responses_count(
@@ -15514,8 +15573,54 @@ def _native_responses_count(
     )
 
 
-def _deployment_api_base(deployment: _TokenCountDeployment) -> str | None:
-    return _non_empty_str(deployment.get("litellm_params", {}).get("api_base"))
+def _deployment_api_base(
+    deployment: _TokenCountDeployment, responses_request: Mapping[str, object] | None = None
+) -> str | None:
+    return _non_empty_str(
+        _inference_params(deployment.get("litellm_params", {}), responses_request or {}).get("api_base")
+    )
+
+
+def _deployment_provider(
+    deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
+) -> str | None:
+    params: Final = deployment.get("litellm_params", {})
+    try:
+        return litellm.get_llm_provider(
+            model=_non_empty_str(params.get("model")) or request_model,
+            custom_llm_provider=_non_empty_str(params.get("custom_llm_provider")),
+            api_base=_deployment_api_base(deployment, responses_request),
+        )[1]
+    except litellm.BadRequestError:
+        return None
+
+
+def _serves_native_responses(
+    deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object]
+) -> bool:
+    params: Final = deployment.get("litellm_params", {})
+    inference: Final = _inference_params(params, responses_request)
+    try:
+        return provider_stores_the_conversation(
+            _non_empty_str(params.get("model")) or request_model,
+            _non_empty_str(params.get("custom_llm_provider")),
+            {
+                "use_chat_completions_api": bool(inference.get("use_chat_completions_api")),
+                "model_info": dict(deployment.get("model_info", {})),
+                "api_base": _non_empty_str(inference.get("api_base")),
+            },
+        )
+    except litellm.BadRequestError:
+        return False
+
+
+_AZURE_PROVIDERS: Final = frozenset((litellm.LlmProviders.AZURE.value, litellm.LlmProviders.AZURE_AI.value))
+
+
+def _with_strict_by_default(tools: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        {**tool, "strict": True} if tool.get("type") == "function" and "strict" not in tool else tool for tool in tools
+    )
 
 
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
@@ -15720,7 +15825,7 @@ async def _count_request_tokens(
         else await chat_count_request(
             model_to_use,
             custom_llm_provider,
-            _deployment_api_base(deployment_view),
+            _deployment_api_base(deployment_view, routed_request),
             routed_request,
             _count_drop_policy(routed_deployment, routed_request),
         )
@@ -15818,10 +15923,31 @@ async def _count_request_tokens(
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
     )
-    counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
+    native_responses: Final = responses_request is not None and _serves_native_responses(
+        deployment_view, request.model, responses_request
+    )
+    sent_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
-    framing: Final = settings.framing if counted_messages is not None and settings.framing is not None else 0
+    openai_model: Final = deployment_openai_model(deployment_view)
+    template_model: Final = openai_model or _deployment_base_model(deployment_view) or model_to_use
+    tool_section: Final = chat_template_tool_section(template_model)
+    counted_tools: Final = (
+        cast(list[ChatCompletionToolParam], list(_with_strict_by_default(sent_tools)))  # cast-ok: strict added
+        if sent_tools is not None
+        and native_responses
+        and _deployment_provider(deployment_view, request.model, responses_request) in _AZURE_PROVIDERS
+        and tool_section is not None
+        and tool_section.renders_strict_only_when_true
+        else sent_tools
+    )
+    framing: Final = (
+        0
+        if counted_messages is None
+        else settings.hidden_prompt_tokens(
+            carries_tools=sends_function_tools(counted_tools), responses_api=native_responses
+        )
+    )
     kimi_k3_messages: Final = counted_messages if settings.tokenizer == "kimi_k3" else None
     exact: Final = (
         await _kimi_k3_count(
@@ -15845,7 +15971,8 @@ async def _count_request_tokens(
             count_source="local_estimate",
         )
     estimate: Final = await _local_token_estimate(
-        model=deployment_openai_model(deployment_view) or model_to_use,
+        model=openai_model or model_to_use,
+        template_model=template_model,
         prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
         tools=counted_tools,
