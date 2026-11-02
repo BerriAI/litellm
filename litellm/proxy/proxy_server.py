@@ -207,6 +207,7 @@ from litellm.rust_bridge.catalog import Target
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
+    CallTypes,
     CountContextManagement,
     LlmProviders,
     ModelResponse,
@@ -13560,7 +13561,10 @@ async def moderations(
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+            dispatched_call_type=CallTypes.amoderation.value,
         )
         log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, ProxyException):
@@ -13705,6 +13709,7 @@ async def audio_speech(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=data,
+            dispatched_call_type=CallTypes.aspeech.value,
         )
         log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, ProxyException):
@@ -13856,7 +13861,10 @@ async def audio_transcriptions(
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+            dispatched_call_type=CallTypes.atranscription.value,
         )
         log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, HTTPException):
