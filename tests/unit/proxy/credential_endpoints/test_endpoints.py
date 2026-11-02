@@ -1075,8 +1075,8 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
         stored = CredentialItem(credential_name="existing", credential_values={"api_key": "sk-old"}, credential_info={})
         update_by_name = AsyncMock(return_value=None)
         router = MagicMock()
-        router.get_deployment.return_value = {"model_name": "claude-opus-5-5"}
-        router.get_deployment_credentials.return_value = {
+        router.registry.return_value.deployment.return_value = {"model_name": "claude-opus-5-5"}
+        router.registry.return_value.credentials.return_value = {
             "anthropic_keycloak_token_url": "https://keycloak.internal/token",
             "anthropic_keycloak_client_secret_ref": "os.environ/KEYCLOAK_CLIENT_SECRET",
         }
@@ -1095,8 +1095,8 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
         stored = CredentialItem(credential_name="existing", credential_values={"api_key": "sk-old"}, credential_info={})
         update_by_name = AsyncMock(return_value=None)
         router = MagicMock()
-        router.get_deployment.return_value = {"model_name": "claude-opus-5-5"}
-        router.get_deployment_credentials.return_value = {
+        router.registry.return_value.deployment.return_value = {"model_name": "claude-opus-5-5"}
+        router.registry.return_value.credentials.return_value = {
             "anthropic_keycloak_token_url": "https://keycloak.internal/token"
         }
         credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name, llm_router=router)
@@ -1993,8 +1993,8 @@ def test_update_credential_resolves_credential_values_from_model_id_like_create(
     )
     update_by_name = AsyncMock(return_value=None)
     router = MagicMock()
-    router.get_deployment.return_value = {"model_name": "gpt-5.2"}
-    router.get_deployment_credentials.return_value = {"api_key": "sk-from-deployment"}
+    router.registry.return_value.deployment.return_value = {"model_name": "gpt-5.2"}
+    router.registry.return_value.credentials.return_value = {"api_key": "sk-from-deployment"}
     credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name, llm_router=router)
 
     response = _patch_credential(
@@ -2003,7 +2003,7 @@ def test_update_credential_resolves_credential_values_from_model_id_like_create(
     )
 
     assert response.status_code == 200, response.text
-    router.get_deployment_credentials.assert_called_once_with("deployment-1")
+    router.registry.return_value.credentials.assert_called_once_with("deployment-1")
     written = json.loads(update_by_name.await_args.kwargs["data"]["credential_values"])
     assert set(written) == {"api_key"}
     assert written["api_key"] != "sk-old", "the deployment's values must replace the stored ones"
@@ -2016,7 +2016,7 @@ def test_update_credential_answers_404_when_model_id_names_no_deployment(credent
     )
     update_by_name = AsyncMock(return_value=None)
     router = MagicMock()
-    router.get_deployment.return_value = None
+    router.registry.return_value.deployment.return_value = None
     credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name, llm_router=router)
 
     response = _patch_credential(
@@ -3275,3 +3275,51 @@ class TestCredentialDisplayName:
         assert (by_name["display_name"], by_name["source"]) == ("Prod OpenAI", "db")
         assert config_by_name["source"] == "config"
         assert listed["openai-prod"]["credential_values"]["api_key"] != "sk-old"
+
+
+def test_looking_up_a_missing_credential_is_labelled_a_client_error_not_a_gateway_failure(
+    restore_credential_list: None,
+):
+    """Naming a credential that does not exist is the caller's own mistake, and the shared
+    handler used to label every one of these internal_server_error, so an SDK branching on
+    the type read a 404 it can never retry past as a gateway outage and backed off forever."""
+    response: Final = _call_as("GET", "/credentials/by_name/definitely-not-there")
+
+    assert response.status_code == 404, f"lookup answered {response.status_code}: {response.text}"
+    assert response.json()["error"] == {
+        "message": "Credential not found. Got credential name: definitely-not-there",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "404",
+    }
+
+
+def test_get_credential_by_model_masks_the_deployment_credentials(monkeypatch):
+    import asyncio
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.credential_endpoints.endpoints import get_credential_by_model
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test-credential-value"},
+                    "model_info": {"id": "dep-1"},
+                }
+            ]
+        ),
+    )
+    caller: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    credential: Final = asyncio.run(get_credential_by_model(MagicMock(), MagicMock(), "dep-1", caller))
+    assert credential.credential_name == "gpt-credential-dep-1"
+    assert credential.credential_values["api_key"] != "sk-test-credential-value"
+
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as missing:
+        asyncio.run(get_credential_by_model(MagicMock(), MagicMock(), "no-such-id", caller))
+    assert missing.value.code == "404"

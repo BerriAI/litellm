@@ -2109,6 +2109,62 @@ class TestCiscoAIDefenseStreamingBypass:
         )
 
     @pytest.mark.asyncio
+    async def test_streaming_safe_n2_response_inspects_each_choice_and_yields_original_chunks(self):
+        g = _make_guardrail(event_hook=["pre_call", "post_call"])
+        chunks = [
+            ModelResponseStream(
+                id="resp_1",
+                choices=[StreamingChoices(delta=Delta(content=part), finish_reason=finish_reason, index=index)],
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+            )
+            for index, part, finish_reason in (
+                (0, "The persim", None),
+                (1, "The", None),
+                (0, "mon is ripe.", "stop"),
+                (1, " persimmon is ripe.", "stop"),
+            )
+        ]
+
+        received, post_mock = await _streaming_setup(g, chunks, cisco_response=_safe_response())
+
+        inspected = post_mock.call_args.kwargs["json"]["messages"]
+        assert [m["content"] for m in inspected if m["role"] == "assistant"] == [
+            "The persimmon is ripe.",
+            "The persimmon is ripe.",
+        ]
+        assert received == chunks
+
+    @pytest.mark.asyncio
+    async def test_streaming_safe_n2_response_with_a_function_call_choice_yields_original_chunks(self):
+        g = _make_guardrail(event_hook=["pre_call", "post_call"])
+        chunks = [
+            ModelResponseStream(
+                id="resp_1",
+                choices=[StreamingChoices(delta=delta, finish_reason=None, index=index)],
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+            )
+            for index, delta in (
+                (0, Delta(function_call={"name": "lookup_fruit", "arguments": '{"fruit": '})),
+                (1, Delta(content="Kiwis are")),
+                (0, Delta(function_call={"arguments": '"kiwi"}'})),
+                (1, Delta(content=" fuzzy.")),
+            )
+        ]
+
+        received, post_mock = await _streaming_setup(g, chunks, cisco_response=_safe_response())
+
+        inspected = post_mock.call_args.kwargs["json"]["messages"]
+        assert [m["content"] for m in inspected if m["role"] == "assistant"] == [
+            '{"fruit": "kiwi"}',
+            "Kiwis are fuzzy.",
+        ]
+        assert received == chunks
+
+    @pytest.mark.asyncio
     async def test_streaming_redact_does_not_replay_tool_call_arguments(self):
         g = _make_guardrail(
             event_hook=["pre_call", "post_call"], on_flagged_action="monitor"

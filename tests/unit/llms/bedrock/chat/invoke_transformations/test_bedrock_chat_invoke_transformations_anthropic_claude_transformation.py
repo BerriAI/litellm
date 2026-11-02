@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
 import litellm
+from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
@@ -2008,3 +2009,142 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
     assert not AmazonAnthropicClaudeConfig().uses_opt_in_native_output(
         model, optional_params, {"model_info": model_info}
     )
+
+
+BEDROCK_HAIKU_45_BASE_ID: Final = "anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}",
+        f"invoke/{BEDROCK_HAIKU_45_BASE_ID}",
+    ],
+)
+def test_bedrock_invoke_claude_default_max_tokens_comes_from_base_model(local_model_cost_map, model: str):
+    mapped_cap: Final = litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID)
+    assert mapped_cap != DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the model's mapped cap must differ from the fallback"
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == mapped_cap, f"default max_tokens should be the base model's cap, got {body['max_tokens']}"
+
+
+def test_bedrock_invoke_claude_explicit_max_tokens_is_kept(local_model_cost_map):
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"max_tokens": 123},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == 123, f"explicit max_tokens must not be overridden, got {body['max_tokens']}"
+
+
+def test_bedrock_invoke_claude_default_max_tokens_takes_the_deployments_own_cap(local_model_cost_map):
+    deployment_cap: Final = 8192
+    assert litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID) != deployment_cap
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"model_info": {"max_output_tokens": deployment_cap}},
+        headers={},
+    )
+
+    assert body["max_tokens"] == deployment_cap, f"the deployment's own cap should win, got {body['max_tokens']}"
+
+
+def test_bedrock_invoke_claude_default_max_tokens_ignores_a_sibling_deployments_cap(local_model_cost_map):
+    regional_id: Final = f"us.{BEDROCK_HAIKU_45_BASE_ID}"
+    mapped_cap: Final = litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID)
+    litellm.register_model(model_cost={regional_id: {"max_output_tokens": 50}}, persist_across_reloads=False)
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=f"invoke/{regional_id}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == mapped_cap, f"a sibling's cap on the shared id leaked, got {body['max_tokens']}"
+
+
+def test_bedrock_invoke_claude_default_max_tokens_yields_to_anthropic_config(local_model_cost_map):
+    configured_max_tokens: Final = 1000
+    assert litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID) != configured_max_tokens
+
+    body: Final = AmazonAnthropicClaudeConfig(
+        read_configured_max_tokens=lambda: configured_max_tokens
+    ).transform_request(
+        model=f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == configured_max_tokens, f"AnthropicConfig(max_tokens) was ignored, got {body['max_tokens']}"
+
+
+@pytest.mark.parametrize(("configured_max_tokens", "deployment_cap"), [(100000, 50), (1000, 8192)])
+def test_bedrock_invoke_claude_default_max_tokens_is_the_lower_of_anthropic_config_and_the_deployments_cap(
+    local_model_cost_map, configured_max_tokens: int, deployment_cap: int
+):
+    body: Final = AmazonAnthropicClaudeConfig(
+        read_configured_max_tokens=lambda: configured_max_tokens
+    ).transform_request(
+        model=f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"model_info": {"max_output_tokens": deployment_cap}},
+        headers={},
+    )
+
+    assert body["max_tokens"] == min(configured_max_tokens, deployment_cap), f"got {body['max_tokens']}"
+
+
+def test_bedrock_invoke_claude_default_max_tokens_reads_an_inference_profile_arns_base_model(local_model_cost_map):
+    mapped_cap: Final = litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID)
+    assert mapped_cap != DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the model's mapped cap must differ from the fallback"
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model="invoke/anthropic/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"base_model": BEDROCK_HAIKU_45_BASE_ID},
+        headers={},
+    )
+
+    assert body["max_tokens"] == mapped_cap, f"an ARN should take its base_model's cap, got {body['max_tokens']}"
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_bedrock_chat_invoke_adds_the_binding_beta_so_block_binding_is_kept(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    block_binding: Final = {"prefix_mismatch_behavior": "error"}
+    result: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "max_tokens": 2048,
+            "thinking": {"type": "enabled", "budget_tokens": 1024, "block_binding": block_binding},
+        },
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024, "block_binding": block_binding}
+    assert "thinking-binding-controls-2026-08-01" in result["anthropic_beta"]

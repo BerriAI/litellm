@@ -741,6 +741,7 @@ async def test_perform_health_check_and_save_passes_model_id_to_perform_health_c
         result = await _perform_health_check_and_save(
             model_list=model_list,
             target_model=None,
+            recorded_model_name=None,
             cli_model=None,
             details=True,
             prisma_client=None,
@@ -777,6 +778,7 @@ async def test_perform_health_check_and_save_forwards_skip_disabled_background_f
         await _perform_health_check_and_save(
             model_list=model_list,
             target_model=None,
+            recorded_model_name=None,
             cli_model=None,
             details=True,
             prisma_client=None,

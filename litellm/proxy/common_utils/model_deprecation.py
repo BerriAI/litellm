@@ -160,7 +160,7 @@ def _checked_successor(model_name: str, model_info: Mapping[str, object], llm_ro
     if successor is None:
         return None
     team_id: Final = model_info.get("team_id")
-    if not llm_router.get_model_list(model_name=successor, team_id=team_id if isinstance(team_id, str) else None):
+    if not llm_router.registry().deployments(successor, team_id=team_id if isinstance(team_id, str) else None):
         verbose_logger.warning(
             "model_deprecation: %s names successor %s, which matches no model group, alias, or wildcard route here",
             model_name,
@@ -235,7 +235,7 @@ def _bucket(models: Sequence[ModelDeprecationInfo], status: DeprecationStatus) -
 def _collect_from_router(
     llm_router: Router, today: date, warn_within_days: int, catalog: Mapping[str, object]
 ) -> tuple[ModelDeprecationInfo, ...]:
-    deployments: Final = llm_router.get_model_list() or ()
+    deployments: Final = llm_router.registry().deployments() or ()
     infos: Final = (_build_info(deployment, llm_router, today, warn_within_days, catalog) for deployment in deployments)
     deduped: Final = _dedupe(tuple(info for info in infos if info is not None))
 

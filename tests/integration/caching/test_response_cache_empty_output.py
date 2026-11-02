@@ -23,7 +23,7 @@ from typing import Final, TypeAlias, TypeVar
 import httpx
 import pytest
 from anthropic import Anthropic, AsyncAnthropic
-from openai import AsyncOpenAI, OpenAI
+from openai import AsyncOpenAI, InternalServerError, OpenAI
 from pydantic import JsonValue
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
@@ -420,14 +420,25 @@ def _streamed_chat(gateway: Gateway, model: str, text: str) -> _Answer:
     return ids, streamed, tuple(chunk.object for chunk in chunks)
 
 
-def test_streamed_chat_without_choices_is_never_assembled_or_cached(gateway: Gateway) -> None:
+def test_streamed_chat_without_choices_fails_and_is_never_cached(gateway: Gateway) -> None:
     upstream: Final = Upstream(gateway.upstream_url)
+    store: Final = redis_store()
     text: Final = prompt()
     with gateway.scenario() as scenario:
         handle: Final = scripted(scenario, CHAT_STREAM_WITHOUT_CHOICES)
         model: Final = scenario.model(api_base=handle.api_base())
-        empty: Final = _never_replayed(partial(_streamed_chat, gateway, model, text), upstream, handle.scenario_id)
-        assert all(answer.text == "" for answer in empty), empty
+        stream: Final = partial(_streamed_chat, gateway, model, text)
+        for attempt in range(1, EMPTY_STREAMS + 1):
+            with pytest.raises(InternalServerError, match="Stream ended before a finish_reason was received"):
+                stream()
+            _assert_prompt_reached_upstream(upstream, handle.scenario_id, text, attempt)
+        rescript(handle, CHAT_STREAM)
+        real_ids, real_text, _ = stream()
+        assert real_text == "streamed response" and len(real_ids) == 1, (real_ids, real_text)
+        _assert_prompt_reached_upstream(upstream, handle.scenario_id, text, EMPTY_STREAMS + 1)
+        await_entry(store, next(iter(real_ids)))
+        replay: Final = _replayed(stream, upstream, handle.scenario_id, real_ids)
+        assert replay.text == real_text, replay
 
 
 def _streamed_text(gateway: Gateway, model: str, text: str) -> _Answer:
