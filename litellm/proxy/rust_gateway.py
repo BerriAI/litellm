@@ -18,13 +18,6 @@ def gateway_binary() -> str | None:
     return shutil.which(name, path=sysconfig.get_path("scripts")) or shutil.which(name)
 
 
-def forwarded_allow_ips(trusted: str | None) -> str:
-    if trusted == "*":
-        return trusted
-    hosts: Final = tuple(host.strip() for host in (trusted or "").split(",") if host.strip())
-    return ",".join(dict.fromkeys(("127.0.0.1", *hosts)))
-
-
 def startup_error(binary: str | None, unsupported: Mapping[str, object]) -> str | None:
     flag: Final = next((name for name, value in unsupported.items() if value), None)
     if flag is not None:
@@ -77,7 +70,7 @@ async def _supervise(binary: str, command: Sequence[str], host: str, port: int) 
                 "LITELLM_RUST_GATEWAY": "false",
                 GATEWAY_FD: str(listener.fileno()),
                 "_LITELLM_GATEWAY_METRICS_HOST": host,
-                "FORWARDED_ALLOW_IPS": forwarded_allow_ips(os.environ.get("FORWARDED_ALLOW_IPS")),
+                "FORWARDED_ALLOW_IPS": "127.0.0.1",
             },
             pass_fds=(listener.fileno(),),
             start_new_session=True,
