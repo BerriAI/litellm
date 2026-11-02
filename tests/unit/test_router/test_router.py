@@ -110,6 +110,7 @@ import inspect
 from typing import List, Optional
 
 if TYPE_CHECKING:
+    from tests.unit.conftest import RedisWriteGate, RouterRedis
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
     from litellm.integrations.otel.logger import OpenTelemetryV2
@@ -1410,17 +1411,6 @@ _BATCH_NOT_FOUND = {
 }
 
 
-async def _router_usage_keys(router, timeout: float = 2.0) -> list[str]:
-    loop = asyncio.get_event_loop()
-    deadline = loop.time() + timeout
-    while loop.time() < deadline:
-        keys = sorted(k for k in router.cache.in_memory_cache.cache_dict if k.startswith("global_router:"))
-        if keys:
-            return keys
-        await asyncio.sleep(0.05)
-    return []
-
-
 @pytest.mark.asyncio
 async def test_arouter_aretrieve_batch_does_not_consume_deployment_rate_limits(monkeypatch: pytest.MonkeyPatch):
     """
@@ -1467,11 +1457,13 @@ async def test_arouter_aretrieve_batch_does_not_consume_deployment_rate_limits(m
         )
         response = await router.aretrieve_batch(batch_id=_BATCH_ID)
         payload = await collector.retrieve_batch_payload()
-        usage_keys = await _router_usage_keys(router)
+        requested_usage: Final = await router.get_model_group_usage(_BATCH_GROUP)
+        unrelated_usage: Final = await router.get_model_group_usage(_UNRELATED_BATCH_GROUP)
 
     assert response.id == _BATCH_ID
     assert payload["model_group"] == _BATCH_GROUP
-    assert usage_keys == []
+    assert requested_usage == (None, None)
+    assert unrelated_usage == (None, None)
 
 
 @pytest.mark.parametrize(
@@ -24162,11 +24154,9 @@ def test_router_keeps_wif_secret_pointers_unresolved(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_failure_rpm_increment_declares_the_router_usage_key_family():
+async def test_failure_rpm_increment_declares_the_router_usage_key_family(router_redis: "RouterRedis"):
     """The RPM bump a failed call still earns is router usage bookkeeping, so its Redis span
     reads ``redis.incr router_usage`` rather than a bare ``redis.incr``."""
-    from unittest.mock import AsyncMock
-
     from litellm._internal_context import current_service_target
 
     router = Router(
@@ -24178,42 +24168,26 @@ async def test_failure_rpm_increment_declares_the_router_usage_key_family():
             }
         ]
     )
-    seen: list[str | None] = []
-
-    async def _increment(**_kwargs):
-        seen.append(current_service_target())
-
-    with patch.object(router.cache, "async_increment_cache", new=AsyncMock(side_effect=_increment)):
-        await router.async_deployment_callback_on_failure(
-            kwargs={
-                "call_type": "acompletion",
-                "litellm_params": {
-                    "metadata": {"deployment": "openai/gpt-4o", "model_group": "gpt-group"},
-                    "model_info": {"id": "dep-1"},
-                },
+    redis, commands = router_redis
+    router.update_redis_cache(redis)
+    await router.async_deployment_callback_on_failure(
+        kwargs={
+            "call_type": "acompletion",
+            "litellm_params": {
+                "metadata": {"deployment": "openai/gpt-4o", "model_group": "gpt-group"},
+                "model_info": {"id": "dep-1"},
             },
-            completion_response=None,
-            start_time=None,
-            end_time=None,
-        )
+        },
+        completion_response=None,
+        start_time=None,
+        end_time=None,
+    )
 
-    assert seen == ["router_usage"]
+    observed: Final = tuple(commands.get_nowait() for _ in range(commands.qsize()))
+    assert tuple(
+        target for args, target, _ in observed if isinstance(args[0], bytes) and b"INCRBYFLOAT" in args[0]
+    ) == ("router_usage",)
     assert current_service_target() is None
-
-class _SpanRecordingInMemoryCache(InMemoryCache):
-    """Records the live OTel span each read runs under, so the test sees what a Redis span would nest in."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.active_span_names: list[str] = []
-
-    async def async_batch_get_cache(self, keys, **kwargs):
-        self.active_span_names.append(trace.get_current_span().name)
-        return await super().async_batch_get_cache(keys, **kwargs)
-
-    async def async_get_cache(self, key, **kwargs):
-        self.active_span_names.append(trace.get_current_span().name)
-        return await super().async_get_cache(key, **kwargs)
 
 
 @pytest.fixture
@@ -24233,7 +24207,9 @@ def v2_span_exporter(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_deployment_selection_runs_inside_a_route_phase_named_after_the_model_group(v2_span_exporter):
+async def test_deployment_selection_runs_inside_a_route_phase_named_after_the_model_group(
+    v2_span_exporter, router_redis: "RouterRedis"
+):
     """Picking a deployment opens ``route {model_group}`` (the requested group, not the deployment
     it picks) under the server span, and the cooldown reads it issues run inside it, so their Redis
     spans nest there instead of lying flat under the request."""
@@ -24253,9 +24229,8 @@ async def test_deployment_selection_runs_inside_a_route_phase_named_after_the_mo
             },
         ]
     )
-    recording_cache = _SpanRecordingInMemoryCache()
-    router.cache.in_memory_cache = recording_cache
-    router.cooldown_cache.cooldown_store.in_memory_cache = recording_cache
+    redis, commands = router_redis
+    router.update_redis_cache(redis)
 
     with TracerProvider().get_tracer("test").start_as_current_span("POST /v1/chat/completions") as server_span:
         deployment = await router.async_get_available_deployment(model="gpt-group", request_kwargs={})
@@ -24265,7 +24240,8 @@ async def test_deployment_selection_runs_inside_a_route_phase_named_after_the_mo
     assert route_span.name == "route gpt-group"
     assert route_span.parent is not None and route_span.parent.span_id == server_span.get_span_context().span_id
     assert route_span.end_time is not None
-    assert recording_cache.active_span_names and set(recording_cache.active_span_names) == {"route gpt-group"}
+    observed: Final = tuple(commands.get_nowait() for _ in range(commands.qsize()))
+    assert tuple(span for args, _, span in observed if args[0] == "MGET") == ("route gpt-group",)
 
 
 def _record_phase_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, str | int]]]:
@@ -25020,7 +24996,7 @@ async def test_router_get_model_group_usage_wildcard_routes():
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
-async def test_call_router_callbacks_on_success():
+async def test_call_router_callbacks_on_success(router_redis: "RouterRedis", redis_write_gate: "RedisWriteGate"):
     router = Router(
         model_list=[
             {
@@ -25031,30 +25007,26 @@ async def test_call_router_callbacks_on_success():
         ]
     )
 
-    with patch.object(router.cache, "async_increment_cache_pipeline", new=AsyncMock()) as mock_callback:
-        await router.acompletion(
-            model="gemini/gemini-2.5-flash",
-            messages=[{"role": "user", "content": "Hello, how are you?"}],
-            mock_response="Hello, I'm good.",
-        )
-        await asyncio.sleep(1)
-        assert mock_callback.call_count == 1
+    redis, _ = router_redis
+    started, _, _ = redis_write_gate
+    router.update_redis_cache(redis)
+    response: Final = await router.acompletion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, I'm good.",
+    )
+    await asyncio.wait_for(started.wait(), timeout=5)
+    client: Final = redis.init_async_client()
+    keys: Final = tuple(await client.keys("global_router:*"))
+    values: Final = {key.rsplit(b":", 2)[-2]: float(await client.get(key)) for key in keys}
+    assert len(keys) == 2
+    assert values == {b"tpm": response.usage.total_tokens, b"rpm": 1}
 
-        increment_list = mock_callback.call_args_list[0].kwargs["increment_list"]
-        assert len(increment_list) == 2
-
-        for increment in increment_list:
-            if "tpm" in increment["key"]:
-                assert increment["key"].startswith("global_router:1:gemini/gemini-2.5-flash:tpm")
-                assert increment["increment_value"] == 30
-            elif "rpm" in increment["key"]:
-                assert increment["key"].startswith("global_router:1:gemini/gemini-2.5-flash:rpm")
-                assert increment["increment_value"] == 1
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.serial
 @pytest.mark.asyncio
-async def test_call_router_callbacks_on_failure():
+async def test_call_router_callbacks_on_failure(router_redis: "RouterRedis", redis_write_gate: "RedisWriteGate"):
     router = Router(
         model_list=[
             {
@@ -25065,19 +25037,23 @@ async def test_call_router_callbacks_on_failure():
         ]
     )
 
-    with patch.object(router.cache, "async_increment_cache", new=AsyncMock()) as mock_callback:
-        with pytest.raises(litellm.RateLimitError):
-            await router.acompletion(
-                model="gemini/gemini-2.5-flash",
-                messages=[{"role": "user", "content": "Hello, how are you?"}],
-                mock_response="litellm.RateLimitError",
-                num_retries=0,
-            )
-        await asyncio.sleep(3)
-        print(mock_callback.call_args_list)
-        assert mock_callback.call_count == 1
+    redis, _ = router_redis
+    started, _, _ = redis_write_gate
+    router.update_redis_cache(redis)
+    with pytest.raises(litellm.RateLimitError):
+        await router.acompletion(
+            model="gemini/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            mock_response="litellm.RateLimitError",
+            num_retries=0,
+        )
+    await asyncio.wait_for(started.wait(), timeout=5)
+    client: Final = redis.init_async_client()
+    keys: Final = tuple(await client.keys("global_router:*"))
+    values: Final = {key.rsplit(b":", 2)[-2]: float(await client.get(key)) for key in keys}
+    assert len(keys) == 1
+    assert values == {b"rpm": 1}
 
-        assert mock_callback.call_args_list[0].kwargs["key"].startswith("global_router:1:gemini/gemini-2.5-flash:rpm")
 
 @pytest.mark.asyncio
 async def test_rate_limit_error_callback():

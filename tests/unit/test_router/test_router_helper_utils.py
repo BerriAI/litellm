@@ -7,7 +7,7 @@ import weakref
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from datetime import datetime, timezone
 from types import MethodType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -33,6 +33,10 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayload,
 )
+
+
+if TYPE_CHECKING:
+    from tests.unit.conftest import RouterRedis
 
 
 def create_standard_logging_payload() -> StandardLoggingPayload:
@@ -497,7 +501,7 @@ async def test_deployment_callback_on_success(sync_mode):
 
 
 @pytest.mark.asyncio
-async def test_deployment_callback_on_success_counts_a_responses_websocket_turn():
+async def test_deployment_callback_on_success_counts_a_responses_websocket_turn(router_redis: "RouterRedis"):
     import time
 
     model_list = [
@@ -508,6 +512,8 @@ async def test_deployment_callback_on_success_counts_a_responses_websocket_turn(
         }
     ]
     router = Router(model_list=model_list)
+    redis, _ = router_redis
+    router.update_redis_cache(redis)
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["total_tokens"] = 17
 
@@ -521,14 +527,15 @@ async def test_deployment_callback_on_success_counts_a_responses_websocket_turn(
             "standard_logging_object": standard_logging_payload,
         }
 
-    tpm_key = await router.deployment_callback_on_success(
+    counter = await router.deployment_callback_on_success(
         kwargs=turn_kwargs("_aresponses_websocket"),
         completion_response=None,
         start_time=time.time(),
         end_time=time.time(),
     )
-    assert tpm_key is not None
-    assert await router.cache.async_get_cache(key=tpm_key) == 17
+    assert counter is not None
+    tpm_key = f"global_router:ws-deployment:None:tpm:{counter.minute}"
+    assert await redis.async_get_cache(key=tpm_key) == 17
 
     realtime_key = await router.deployment_callback_on_success(
         kwargs=turn_kwargs("_arealtime"),
@@ -537,7 +544,7 @@ async def test_deployment_callback_on_success_counts_a_responses_websocket_turn(
         end_time=time.time(),
     )
     assert realtime_key is None
-    assert await router.cache.async_get_cache(key=tpm_key) == 17
+    assert await redis.async_get_cache(key=tpm_key) == 17
 
 
 async def _kwargs_routed_to(router: Router, model: str, function_name: str, **request: object) -> dict[str, object]:
@@ -1120,7 +1127,7 @@ async def test_deployment_callback_on_success_tracks_tpm_for_io_deployment():
 
     # The IO deployment is no longer skipped: its TPM routing counter is tracked.
     assert tpm_key is not None
-    assert await router.cache.async_get_cache(key=tpm_key) == 100
+    assert (await router.get_model_group_usage("opus"))[0] == 100
 
 
 @pytest.mark.asyncio
@@ -1778,8 +1785,8 @@ async def test_headers_on_fresh_worker_reflect_shared_redis_usage():
     store: dict = {}
     worker_a = _rpm_tpm_router("lit-3058-workers")
     worker_b = _rpm_tpm_router("lit-3058-workers")
-    worker_a.cache = DualCache(redis_cache=_shared_redis_stub(store), in_memory_cache=InMemoryCache())
-    worker_b.cache = DualCache(redis_cache=_shared_redis_stub(store), in_memory_cache=InMemoryCache())
+    worker_a.update_redis_cache(_shared_redis_stub(store))
+    worker_b.update_redis_cache(_shared_redis_stub(store))
 
     messages = [{"role": "user", "content": "hi"}]
     tokens_on_a = 0

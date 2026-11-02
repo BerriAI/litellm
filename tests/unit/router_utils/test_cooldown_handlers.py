@@ -18,6 +18,8 @@ import litellm
 from litellm import Router
 from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_cache import RedisCache
+from litellm.redis.stores.router_cooldowns import RouterCooldowns, RouterCooldownStore
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_api import RoutingContext
@@ -27,7 +29,6 @@ from litellm.router_utils.cooldown_handlers import (
     _get_deployment_cooldown_policy,
     _has_explicit_allowed_fails_policy_for_exception,
     _has_fallback_group,
-    _increment_allowed_fails,
     _is_cooldown_required,
     _resolve_allowed_fails_from_policy,
     _should_cooldown_based_on_deployment_policy,
@@ -74,6 +75,7 @@ def _ctx_double(
     ctx.settings.return_value.allowed_fails_policy = None
     ctx.settings.return_value.allowed_fails_for.return_value = None
     ctx.health.return_value.store = store if store is not None else DualCache(in_memory_cache=InMemoryCache())
+    ctx.health.return_value.cooldowns = CooldownCache(RouterCooldownStore(None), cooldown_time)
     return ctx
 
 
@@ -360,85 +362,57 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
 
 
 class TestShouldCooldownBasedOnAllowedFailsPolicy:
-    def _make_router(self, cooldown_time: float = 60.0, cache: DualCache | MagicMock | None = None) -> MagicMock:
-        return _ctx_double(cooldown_time=cooldown_time, allowed_fails=0, store=cache)
+    def _make_router(self, cooldown_time: float = 60.0, store: RouterCooldowns | None = None) -> MagicMock:
+        ctx: Final = _ctx_double(cooldown_time=cooldown_time, allowed_fails=0)
+        ctx.health.return_value.cooldowns = CooldownCache(store or RouterCooldownStore(None), cooldown_time)
+        return ctx
 
     def test_cooldown_time_override_zero_is_not_falsy(self):
-        """cooldown_time_override=0 must be honored; it must not fall through to the router-level value."""
-        store = MagicMock()
-        store.increment_cache.return_value = 1
-        ctx = self._make_router(cooldown_time=60.0, cache=store)
-        exc = litellm.RateLimitError("429", "openai", "gpt-4")
-
-        should_cooldown_based_on_allowed_fails_policy(
-            ctx=ctx,
-            deployment="dep-1",
-            original_exception=exc,
-            allowed_fails_override=5,
-            cooldown_time_override=0.0,
+        store: Final = MagicMock(spec=RouterCooldowns)
+        store.increment_allowed_fails.return_value = 1
+        ctx: Final = self._make_router(cooldown_time=60.0, store=store)
+        exc: Final = litellm.RateLimitError("429", "openai", "gpt-4")
+        assert not should_cooldown_based_on_allowed_fails_policy(
+            ctx=ctx, deployment="dep-1", original_exception=exc, allowed_fails_override=5, cooldown_time_override=0.0
         )
-
-        increment_call = store.increment_cache.call_args
-        assert increment_call is not None
-        assert increment_call[1]["ttl"] == 0.0, (
-            "cooldown_time_override=0 should be used as TTL, not the router-level 60.0"
-        )
+        store.increment_allowed_fails.assert_called_once_with("dep-1", None, 0.0)
 
     def test_fail_counter_is_shared_across_router_instances(self):
-        """Two workers (two Router objects over one shared cache) must pool their failures toward allowed_fails."""
-        shared_cache = DualCache(in_memory_cache=InMemoryCache())
-        workers = (self._make_router(cache=shared_cache), self._make_router(cache=shared_cache))
-        exc = litellm.AuthenticationError("401", "openai", "gpt-4")
-
-        results = [
+        redis: Final = MagicMock(spec=RedisCache)
+        redis.increment_cache.side_effect = itertools.count(1)
+        workers: Final = tuple(self._make_router(store=RouterCooldownStore(redis)) for _ in range(2))
+        exc: Final = litellm.AuthenticationError("401", "openai", "gpt-4")
+        results: Final = [
             should_cooldown_based_on_allowed_fails_policy(
-                ctx=workers[i % 2],
-                deployment="dep-1",
-                original_exception=exc,
-                allowed_fails_override=5,
+                ctx=workers[i % 2], deployment="dep-1", original_exception=exc, allowed_fails_override=5
             )
             for i in range(6)
         ]
-
         assert results == [False, False, False, False, False, True]
-        assert shared_cache.get_cache(key="deployment:dep-1:allowed_fails") == 6
+        assert redis.increment_cache.call_count == 6
 
     def test_fleet_wide_count_from_redis_decides_cooldown(self):
-        """The Redis (fleet-wide) count decides, even when this process has only seen one failure."""
-        redis_cache = MagicMock()
-        redis_cache.increment_cache.return_value = 6
-        router = self._make_router(cache=DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache))
-        exc = litellm.AuthenticationError("401", "openai", "gpt-4")
-
-        result = should_cooldown_based_on_allowed_fails_policy(
-            ctx=router,
-            deployment="dep-1",
-            original_exception=exc,
-            allowed_fails_override=5,
+        redis: Final = MagicMock(spec=RedisCache)
+        redis.increment_cache.return_value = 6
+        ctx: Final = self._make_router(store=RouterCooldownStore(redis))
+        exc: Final = litellm.AuthenticationError("401", "openai", "gpt-4")
+        assert should_cooldown_based_on_allowed_fails_policy(
+            ctx=ctx, deployment="dep-1", original_exception=exc, allowed_fails_override=5
         )
-
-        assert result is True
-        redis_cache.increment_cache.assert_called_once_with("deployment:dep-1:allowed_fails", 1, ttl=60.0)
+        redis.increment_cache.assert_called_once_with("deployment:dep-1:allowed_fails", 1, ttl=60.0)
 
     def test_redis_outage_falls_back_to_this_workers_count(self):
-        """When every Redis increment fails, the worker's own in-memory count must still cool the deployment down."""
-        redis_cache = MagicMock()
-        redis_cache.increment_cache.side_effect = ConnectionError("redis down")
-        router = self._make_router(cache=DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache))
-        exc = litellm.AuthenticationError("401", "openai", "gpt-4")
-
-        results = [
+        redis: Final = MagicMock(spec=RedisCache)
+        redis.increment_cache.side_effect = ConnectionError("redis down")
+        ctx: Final = self._make_router(store=RouterCooldownStore(redis))
+        exc: Final = litellm.AuthenticationError("401", "openai", "gpt-4")
+        assert [
             should_cooldown_based_on_allowed_fails_policy(
-                ctx=router,
-                deployment="dep-1",
-                original_exception=exc,
-                allowed_fails_override=5,
+                ctx=ctx, deployment="dep-1", original_exception=exc, allowed_fails_override=5
             )
             for _ in range(6)
-        ]
-
-        assert results == [False, False, False, False, False, True]
-        assert redis_cache.increment_cache.call_count == 6
+        ] == [False, False, False, False, False, True]
+        assert redis.increment_cache.call_count == 6
 
 
 class TestRoutingGroupCooldownAlternatives:
@@ -591,31 +565,31 @@ class TestIncrementAllowedFailsServiceTarget:
         """The allowed_fails INCR is cooldown bookkeeping, so its service span must read
         ``redis.incr router_cooldowns`` rather than a bare ``redis.incr``."""
         seen: list[str | None] = []
-        cache = MagicMock(spec=DualCache)
+        cache = MagicMock(spec=RedisCache)
 
-        def _increment(**_kwargs):
+        def _increment(*_args, **_kwargs):
             seen.append(current_service_target())
             return 2
 
         cache.increment_cache.side_effect = _increment
 
-        assert _increment_allowed_fails(cache, "deployment:dep-1:fails", ttl=60.0) == 2
+        assert RouterCooldownStore(cache).increment_allowed_fails("dep-1", None, 60.0) == 2
         assert seen == ["router_cooldowns"]
         assert current_service_target() is None
 
     def test_in_memory_fallback_reads_under_the_same_target(self):
         seen: list[str | None] = []
-        cache = MagicMock(spec=DualCache)
-        cache.increment_cache.side_effect = ConnectionError("redis down")
+        cache = MagicMock(spec=RedisCache)
 
-        def _get(**_kwargs):
+        def _increment(*_args, **_kwargs):
             seen.append(current_service_target())
-            return 4
+            raise ConnectionError("redis down")
 
-        cache.get_cache.side_effect = _get
+        cache.increment_cache.side_effect = _increment
+        store = RouterCooldownStore(cache)
 
-        assert _increment_allowed_fails(cache, "deployment:dep-1:fails", ttl=60.0) == 4
-        assert seen == ["router_cooldowns"]
+        assert [store.increment_allowed_fails("dep-1", None, 60.0) for _ in range(4)] == [1, 2, 3, 4]
+        assert seen == ["router_cooldowns"] * 4
 
 
 @pytest.fixture()
@@ -860,136 +834,57 @@ class TestExceptionTypeCountersTrackedIndependently:
         rate_limit_exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         ise = litellm.InternalServerError("Internal error", "openai", "gpt-4")
 
-        for _ in range(3):
+        assert [
             should_cooldown_based_on_allowed_fails_policy(
                 ctx=RoutingContext(router),
                 deployment="primary",
                 original_exception=rate_limit_exc,
-                allowed_fails_override=5,
+                allowed_fails_override=3,
                 cache_key_suffix="RateLimitError",
             )
-
-        rl_counter = router.cache.get_cache(key="deployment:primary:allowed_fails:RateLimitError") or 0
-        generic_counter = router.cache.get_cache(key="deployment:primary:allowed_fails:generic") or 0
-
-        assert rl_counter == 3, "RateLimitError counter should be 3"
-        assert generic_counter == 0, "generic counter must be untouched by RateLimitError increments"
-
-        should_cooldown_based_on_allowed_fails_policy(
+            for _ in range(3)
+        ] == [False, False, False]
+        assert not should_cooldown_based_on_allowed_fails_policy(
             ctx=RoutingContext(router),
             deployment="primary",
             original_exception=ise,
-            allowed_fails_override=5,
+            allowed_fails_override=1,
             cache_key_suffix="generic",
         )
-
-        generic_counter_after = router.cache.get_cache(key="deployment:primary:allowed_fails:generic") or 0
-        rl_counter_after = router.cache.get_cache(key="deployment:primary:allowed_fails:RateLimitError") or 0
-
-        assert generic_counter_after == 1, "generic counter should now be 1"
-        assert rl_counter_after == 3, "RateLimitError counter must remain unchanged after InternalServerError"
+        assert not should_cooldown_based_on_allowed_fails_policy(
+            ctx=RoutingContext(router),
+            deployment="primary",
+            original_exception=rate_limit_exc,
+            allowed_fails_override=4,
+            cache_key_suffix="RateLimitError",
+        )
+        assert should_cooldown_based_on_allowed_fails_policy(
+            ctx=RoutingContext(router),
+            deployment="primary",
+            original_exception=ise,
+            allowed_fails_override=1,
+            cache_key_suffix="generic",
+        )
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestCooldownCacheTTLCorrection:
-    def _make_cooldown_cache(self) -> CooldownCache:
-        in_memory = InMemoryCache()
-        dual_cache = DualCache(in_memory_cache=in_memory)
-        return CooldownCache(cache=dual_cache, default_cooldown_time=60.0)
-
-    def test_expired_entry_evicted_and_not_returned(self):
-        """
-        An entry with timestamp+cooldown_time in the past must be evicted from
-        in-memory cache and excluded from the active cooldown list.
-        """
-        cc = self._make_cooldown_cache()
-        model_id = "expired-deployment"
-        key = CooldownCache.get_cooldown_cache_key(model_id)
-
-        expired_value: CooldownCacheValue = {
-            "exception_received": "Rate limit",
-            "status_code": "429",
-            "timestamp": time.time() - 120.0,
-            "cooldown_time": 60.0,
-        }
-        cc.in_memory_cache.set_cache(key, expired_value, ttl=600)
-
-        active = cc.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
-
-        assert active == [], "Expired cooldown entry must not appear in active cooldowns"
-        assert cc.in_memory_cache.get_cache(key) is None, "Expired entry must be evicted from in-memory cache"
-
-    def test_active_entry_is_returned(self):
-        """
-        An entry whose cooldown window has not elapsed must appear in the active list.
-        """
-        cc = self._make_cooldown_cache()
-        model_id = "active-deployment"
-        key = CooldownCache.get_cooldown_cache_key(model_id)
-
-        active_value: CooldownCacheValue = {
-            "exception_received": "Rate limit",
-            "status_code": "429",
-            "timestamp": time.time(),
-            "cooldown_time": 60.0,
-        }
-        cc.in_memory_cache.set_cache(key, active_value, ttl=60)
-
-        active = cc.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
-
-        assert len(active) == 1
-        assert active[0][0] == model_id
-
-    def test_ttl_corrected_when_in_memory_expiry_far_exceeds_remaining(self):
-        """
-        When DualCache backfills from Redis using the default 600s TTL, the in-memory
-        TTL must be corrected to min(remaining, 60) seconds.
-        """
-        cc = self._make_cooldown_cache()
-        model_id = "backfilled-deployment"
-        key = CooldownCache.get_cooldown_cache_key(model_id)
-
-        remaining = 30.0
-        value: CooldownCacheValue = {
-            "exception_received": "Rate limit",
-            "status_code": "429",
-            "timestamp": time.time() - (60.0 - remaining),
-            "cooldown_time": 60.0,
-        }
-        cc.in_memory_cache.set_cache(key, value, ttl=600)
-
-        before_expiry = cc.in_memory_cache.ttl_dict.get(key)
-        assert before_expiry is not None
-
-        cc.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
-
-        after_expiry = cc.in_memory_cache.ttl_dict.get(key)
-        assert after_expiry is not None
-        corrected_remaining = after_expiry - time.time()
-        assert corrected_remaining <= 60.0, "Corrected TTL must not exceed 60s"
-        assert corrected_remaining > 0, "Corrected TTL must be positive (cooldown still active)"
-
+    @pytest.mark.parametrize(("timestamp", "active"), ((880.0, False), (1000.0, True)))
+    @pytest.mark.parametrize("asynchronous", (False, True))
     @pytest.mark.asyncio
-    async def test_async_expired_entry_evicted(self):
-        """
-        Async path must also evict expired entries.
-        """
-        cc = self._make_cooldown_cache()
-        model_id = "async-expired"
-        key = CooldownCache.get_cooldown_cache_key(model_id)
-
-        expired_value: CooldownCacheValue = {
-            "exception_received": "Rate limit",
-            "status_code": "429",
-            "timestamp": time.time() - 120.0,
-            "cooldown_time": 60.0,
-        }
-        cc.in_memory_cache.set_cache(key, expired_value, ttl=600)
-
-        active = await cc.async_get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
-
-        assert active == [], "Expired entry must not appear in async active cooldowns"
-        assert cc.in_memory_cache.get_cache(key) is None
+    async def test_only_unexpired_cooldowns_are_returned(self, timestamp: float, active: bool, asynchronous: bool):
+        store: Final = RouterCooldownStore(None, clock=lambda: 1000.0)
+        cc: Final = CooldownCache(store, default_cooldown_time=60.0)
+        value: Final = CooldownCacheValue(
+            exception_received="Rate limit", status_code="429", timestamp=timestamp, cooldown_time=60.0
+        )
+        store.put("deployment", value, 600)
+        result: Final = (
+            await cc.async_get_active_cooldowns(("deployment",), None)
+            if asynchronous
+            else cc.get_active_cooldowns(("deployment",), None)
+        )
+        assert result == ([("deployment", value)] if active else [])
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")

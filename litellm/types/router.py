@@ -46,6 +46,8 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.provider_affinity import validate_provider_affinity_header_name
+from litellm.redis.stores._keys import ROUTER_RPM_KEY as _ROUTER_RPM_KEY
+from litellm.redis.stores._keys import ROUTER_TPM_KEY as _ROUTER_TPM_KEY
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
 
@@ -1290,8 +1292,8 @@ class RoutingStrategy(enum.Enum):
 
 
 class RouterCacheEnum(enum.Enum):
-    TPM = "global_router:{id}:{model}:tpm:{current_minute}"
-    RPM = "global_router:{id}:{model}:rpm:{current_minute}"
+    TPM = _ROUTER_TPM_KEY
+    RPM = _ROUTER_RPM_KEY
     ITPM = "global_router:{id}:{model}:itpm:{current_minute}"
     OTPM = "global_router:{id}:{model}:otpm:{current_minute}"
 

@@ -238,6 +238,8 @@ from litellm.llms.openai_like.model_info import (
     get_openai_compatible_model_info,
 )
 from litellm.main import Chat as LitellmChat
+from litellm.redis.stores.router_cooldowns import RouterCooldownStore
+from litellm.redis.stores.router_usage import RouterUsage, RouterUsageStore, UsageCounter
 from litellm.responses.bridge_check import keep_registered_mode
 from litellm.responses.retrieve_stream_query import requests_streamed_retrieval, without_retrieve_stream_defaults
 from litellm.router_api import (
@@ -1742,6 +1744,7 @@ class PythonCore(DeprecatedRouterMembers):
         self._core_cache = DualCache(
             redis_cache=redis_cache, in_memory_cache=InMemoryCache()
         )  # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
+        self._core_usage_store: Final[RouterUsage] = RouterUsageStore(redis_cache)
         self._claude_code_session_router_cache: DualCache = DualCache(
             redis_cache=redis_cache,
             in_memory_cache=InMemoryCache(),
@@ -1847,7 +1850,7 @@ class PythonCore(DeprecatedRouterMembers):
         self.explicit_allowed_fails = allowed_fails
         self._core_cooldown_time = cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
         self._core_cooldown_cache = CooldownCache(
-            cache=self._core_cache, default_cooldown_time=self._core_cooldown_time
+            store=RouterCooldownStore(redis_cache), default_cooldown_time=self._core_cooldown_time
         )
         self._core_disable_cooldowns = disable_cooldowns
         self.fallback_on_unsupported_params = fallback_on_unsupported_params
@@ -2203,6 +2206,8 @@ class PythonCore(DeprecatedRouterMembers):
         and caching to just work.
         """
         self._core_cache.attach_redis_cache(cache)
+        self._core_usage_store.attach_redis(cache)
+        self._core_cooldown_cache.cooldown_store.attach_redis(cache)
         self._claude_code_session_router_cache.attach_redis_cache(cache)
         self._core_prompt_caching_pin_cache.attach_redis_cache(cache)
 
@@ -10047,35 +10052,17 @@ class PythonCore(DeprecatedRouterMembers):
         total_tokens: float,
         rpm_increment: int,
         parent_otel_span: Span | None,
-    ) -> str | None:
-        from litellm.types.caching import RedisPipelineIncrementOperation
-
+    ) -> UsageCounter | None:
         if total_tokens <= 0 and rpm_increment <= 0:
             return None
         if not self._cached_deployment_tracks_usage(deployment_id, model_group):
             return None
 
         current_minute: Final = get_utc_datetime().strftime("%H-%M")  # use the same timezone regardless of system clock
-        tpm_key: Final = RouterCacheEnum.TPM.value.format(
-            id=deployment_id, current_minute=current_minute, model=deployment_name
+        await self._core_usage_store.increment_deployment(
+            deployment_id, deployment_name, current_minute, total_tokens, rpm_increment, parent_otel_span
         )
-        rpm_key: Final = RouterCacheEnum.RPM.value.format(
-            id=deployment_id, current_minute=current_minute, model=deployment_name
-        )
-        pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = [
-            RedisPipelineIncrementOperation(key=key, increment_value=increment_value, ttl=RoutingArgs.ttl.value)
-            for key, increment_value in ((tpm_key, total_tokens), (rpm_key, rpm_increment))
-        ]
-        post_increment_values: Final = await self._core_cache.async_increment_cache_pipeline(
-            increment_list=pipeline_operations,
-            parent_otel_span=parent_otel_span,
-        )
-        if post_increment_values is not None and self._core_cache.redis_cache is not None:
-            for operation, value in zip(pipeline_operations, post_increment_values):
-                await self._core_cache.async_set_cache(
-                    operation["key"], int(value), local_only=True, ttl=RoutingArgs.ttl.value
-                )
-        return tpm_key
+        return UsageCounter(deployment_id, deployment_name, current_minute, "tpm")
 
     def _deployment_tracks_usage(self, deployment_id: str, model_group: str) -> bool:
         deployment_info: Final = self._core_get_deployment(model_id=deployment_id)
@@ -10292,10 +10279,10 @@ class PythonCore(DeprecatedRouterMembers):
         current_minute: Final = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
 
         ## RPM
-        rpm_key: Final = RouterCacheEnum.RPM.value.format(id=id, current_minute=current_minute, model=deployment_name)
+        counter: Final = UsageCounter(id, deployment_name, current_minute, "rpm")
         with service_target(ROUTER_USAGE_TARGET):
-            await self._core_cache.async_increment_cache(
-                key=rpm_key,
+            await self._core_usage_store.async_increment(
+                counter=counter,
                 value=1,
                 parent_otel_span=parent_otel_span,
                 ttl=RoutingArgs.ttl.value,
@@ -13403,8 +13390,8 @@ class PythonCore(DeprecatedRouterMembers):
         """
         dt: Final = get_utc_datetime()
         current_minute: Final = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
-        tpm_keys: Final[list[str]] = []
-        rpm_keys: Final[list[str]] = []
+        tpm_keys: Final[list[UsageCounter]] = []
+        rpm_keys: Final[list[UsageCounter]] = []
 
         model_list: Final = self._core_get_model_list(model_name=model_group)
         if model_list is None:  # no matching deployments
@@ -13417,28 +13404,16 @@ class PythonCore(DeprecatedRouterMembers):
             )  # USE THE MODEL SENT TO litellm.completion() - consistent with how global_router cache is written.
             if id is None or litellm_model is None:
                 continue
-            tpm_keys.append(
-                RouterCacheEnum.TPM.value.format(
-                    id=id,
-                    model=litellm_model,
-                    current_minute=current_minute,
-                )
-            )
-            rpm_keys.append(
-                RouterCacheEnum.RPM.value.format(
-                    id=id,
-                    model=litellm_model,
-                    current_minute=current_minute,
-                )
-            )
+            tpm_keys.append(UsageCounter(id, litellm_model, current_minute, "tpm"))
+            rpm_keys.append(UsageCounter(id, litellm_model, current_minute, "rpm"))
         combined_tpm_rpm_keys: Final = tpm_keys + rpm_keys
 
-        combined_tpm_rpm_values: Final = await self._core_cache.async_batch_get_cache(keys=combined_tpm_rpm_keys)
+        combined_tpm_rpm_values: Final = await self._core_usage_store.async_batch_get(combined_tpm_rpm_keys)
         if combined_tpm_rpm_values is None:
             return None, None
 
-        tpm_usage_list: Final[list | None] = combined_tpm_rpm_values[: len(tpm_keys)]
-        rpm_usage_list: Final[list | None] = combined_tpm_rpm_values[len(tpm_keys) :]
+        tpm_usage_list: Final = combined_tpm_rpm_values[: len(tpm_keys)]
+        rpm_usage_list: Final = combined_tpm_rpm_values[len(tpm_keys) :]
 
         ## TPM
         tpm_usage: int | None = None
@@ -17640,6 +17615,8 @@ class PythonCore(DeprecatedRouterMembers):
 
     def flush_cache(self):
         self._host.set_global_cache(None)
+        self._core_usage_store.flush_local_counters()
+        self._core_cooldown_cache.cooldown_store.flush_local_counters()
         self._core_cache.flush_cache()
         session_in_memory_cache: Final = self._claude_code_session_router_cache.in_memory_cache
         if session_in_memory_cache is not None:
