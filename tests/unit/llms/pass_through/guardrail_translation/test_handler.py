@@ -286,6 +286,9 @@ async def test_post_call_scan_reads_a_field_named_like_the_envelope_in_what_the_
             "4111111111111111",
         ),
         ({"choices": [{"message": {"tool_calls": [{"function": {"arguments": {"n": 5551234567}}}]}}]}, "5551234567"),
+        ({"usage": {}, "customer": {"phone": 5551234567}}, "5551234567"),
+        ({"output": {"card": 4111111111111111}}, "4111111111111111"),
+        ({"type": "message", "phone": 5551234567}, "5551234567"),
     ],
 )
 async def test_post_call_scan_reads_an_integer_in_what_the_model_or_api_wrote(response, expected):
@@ -311,6 +314,7 @@ async def test_post_call_scan_reads_a_field_name_in_what_the_model_or_api_wrote(
         {"created": 1793600123, "data": [{"url": "https://x.example/a.png"}]},
         {"id": "batch_1", "object": "batch", "created_at": 1793600123, "request_counts": {"total": 5551234567}},
         {"predictions": [{"embeddings": {"values": [0.0123456789]}, "total": 5551234567}]},
+        {"finish_reason": "COMPLETE", "message": {"role": "assistant"}, "usage": {"total": 5551234567}},
     ],
 )
 async def test_post_call_scan_leaves_out_the_numbers_of_a_provider_reply(response):

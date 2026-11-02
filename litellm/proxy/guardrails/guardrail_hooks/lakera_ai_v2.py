@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -17,7 +18,6 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
@@ -253,7 +253,7 @@ def _gemini_tool_results(content: object) -> str:
     part_fields: Final = (as_str_mapping(part) or {} for part in parts)
     responses: Final = (fields.get("functionResponse") or fields.get("function_response") for fields in part_fields)
     results: Final = ((as_str_mapping(response) or {}).get("response") for response in responses)
-    return "\n".join(safe_dumps(result) for result in results if result)
+    return "\n".join(json.dumps(result, default=str, ensure_ascii=False) for result in results if result)
 
 
 def _has_gemini_contents(data: object, call_type: str | None) -> bool:

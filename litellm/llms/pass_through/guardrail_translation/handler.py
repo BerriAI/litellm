@@ -63,25 +63,21 @@ _REPLY_NESTED_FIELDS: Final = MappingProxyType(
     }
 )
 _REPLY_MODEL_OUTPUT_FIELDS: Final = frozenset(("args", "arguments", "input", "parameters"))
-_REPLY_MARKER_FIELDS: Final = frozenset(
-    (
-        "candidates",
-        "choices",
-        "finish_reason",
-        "object",
-        "output",
-        "predictions",
-        "stop_reason",
-        "usage",
-        "usageMetadata",
-    )
-)
+_REPLY_LIST_FIELDS: Final = ("candidates", "choices", "output", "predictions")
 _IMAGE_REPLY_FIELDS: Final = frozenset(("created", "data"))
 _NO_FIELDS: Final[frozenset[str]] = frozenset()
 
 
 def _is_provider_reply(response: Mapping[str, object]) -> bool:
-    return bool(_REPLY_MARKER_FIELDS & response.keys()) or _IMAGE_REPLY_FIELDS.issubset(response)
+    """Whether a JSON response has the shape of a provider's reply, by the type of the field that names it, since a
+    custom API's JSON can use the same field names."""
+    return (
+        any(isinstance(response.get(field), list) for field in _REPLY_LIST_FIELDS)
+        or isinstance(response.get("object"), str)
+        or (response.get("type") == "message" and "stop_reason" in response)
+        or ("finish_reason" in response and "message" in response)
+        or _IMAGE_REPLY_FIELDS.issubset(response)
+    )
 
 
 def _reply_field_position(name: str, skipped: frozenset[str] | None) -> frozenset[str] | None:
