@@ -81449,16 +81449,16 @@
         "supports_xhigh_reasoning_effort": true
     },
     "cheapaimodel/deepseek-v4-1-flash": {
-        "cache_read_input_token_cost": 4.187022e-09,
-        "input_cost_per_token": 2.093511e-07,
+        "cache_read_input_token_cost": 4.200306e-09,
+        "input_cost_per_token": 2.100153e-07,
         "litellm_provider": "cheapaimodel",
         "max_input_tokens": 1000000,
         "max_output_tokens": 384000,
         "mode": "chat",
         "off_peak_pricing": {
-            "cache_read_input_token_cost": 2.093511e-09,
-            "input_cost_per_token": 1.0467555e-07,
-            "output_cost_per_token": 4.187022e-07,
+            "cache_read_input_token_cost": 2.100153e-09,
+            "input_cost_per_token": 1.0500765e-07,
+            "output_cost_per_token": 4.200306e-07,
             "windows": [
                 {
                     "hours_utc": [
@@ -81483,7 +81483,7 @@
                 }
             ]
         },
-        "output_cost_per_token": 8.374044e-07,
+        "output_cost_per_token": 8.400612e-07,
         "source": "https://cheapaimodel.ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions"
@@ -81503,13 +81503,13 @@
         ]
     },
     "cheapaimodel/glm-5.3": {
-        "cache_read_input_token_cost": 1.8143762e-07,
-        "input_cost_per_token": 9.769718e-07,
+        "cache_read_input_token_cost": 1.8201326e-07,
+        "input_cost_per_token": 9.800714e-07,
         "litellm_provider": "cheapaimodel",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 3.0704828e-06,
+        "output_cost_per_token": 3.0802244e-06,
         "source": "https://cheapaimodel.ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions"
@@ -81529,13 +81529,13 @@
         ]
     },
     "cheapaimodel/glm-5.3-flash": {
-        "cache_read_input_token_cost": 2.093511e-08,
-        "input_cost_per_token": 1.0467555e-07,
+        "cache_read_input_token_cost": 2.100153e-08,
+        "input_cost_per_token": 1.0500765e-07,
         "litellm_provider": "cheapaimodel",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 3.489185e-07,
+        "output_cost_per_token": 3.500255e-07,
         "source": "https://cheapaimodel.ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions"
@@ -81555,13 +81555,13 @@
         ]
     },
     "cheapaimodel/grok-4.7": {
-        "cache_read_input_token_cost": 4.97395e-08,
-        "input_cost_per_token": 1.98958e-07,
+        "cache_read_input_token_cost": 4.9897e-08,
+        "input_cost_per_token": 1.99588e-07,
         "litellm_provider": "cheapaimodel",
         "max_input_tokens": 500000,
         "max_output_tokens": 500000,
         "mode": "chat",
-        "output_cost_per_token": 5.96874e-07,
+        "output_cost_per_token": 5.98764e-07,
         "source": "https://cheapaimodel.ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions"
@@ -81582,14 +81582,14 @@
         ]
     },
     "cheapaimodel/kimi-k3": {
-        "cache_creation_input_token_cost": 2.093511e-06,
-        "cache_read_input_token_cost": 2.093511e-07,
-        "input_cost_per_token": 2.093511e-06,
+        "cache_creation_input_token_cost": 2.100153e-06,
+        "cache_read_input_token_cost": 2.100153e-07,
+        "input_cost_per_token": 2.100153e-06,
         "litellm_provider": "cheapaimodel",
         "max_input_tokens": 1048576,
         "max_output_tokens": 1048576,
         "mode": "chat",
-        "output_cost_per_token": 1.0467555e-05,
+        "output_cost_per_token": 1.0500765e-05,
         "source": "https://cheapaimodel.ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions"
