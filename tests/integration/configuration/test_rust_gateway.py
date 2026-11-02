@@ -12,6 +12,8 @@ from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.ports import allocate_port
 from tests.integration._support.process import stop_root_process
 
+TRUSTED_BALANCER: Final = "127.0.0.3"
+
 
 def ready(client: httpx.Client) -> bool:
     try:
@@ -21,6 +23,19 @@ def ready(client: httpx.Client) -> bool:
 
 
 @pytest.mark.parametrize("server_arguments", [(), ("--run_gunicorn",)])
+def client_ip(base_url: str, local_address: str, key: str, forwarded_for: str) -> httpx.Response:
+    with httpx.Client(
+        base_url=base_url,
+        transport=httpx.HTTPTransport(local_address=local_address),
+        trust_env=False,
+        timeout=5,
+    ) as client:
+        return client.get(
+            "/v1/mcp/network/client-ip",
+            headers={"Authorization": f"Bearer {key}", "X-Forwarded-For": forwarded_for},
+        )
+
+
 def test_gateway_preserves_metrics_bind_and_mcp_client_ip(
     gateway: Gateway, tmp_path: Path, server_arguments: tuple[str, ...]
 ) -> None:
@@ -40,6 +55,8 @@ def test_gateway_preserves_metrics_bind_and_mcp_client_ip(
         "LITELLM_MASTER_KEY": gateway.key,
         "STORE_MODEL_IN_DB": "False",
         "PYTHON_DOTENV_DISABLED": "1",
+        "LITELLM_RUST_GATEWAY": "true",
+        "FORWARDED_ALLOW_IPS": TRUSTED_BALANCER,
     }
     with (tmp_path / "proxy.log").open("wb") as output:
         with subprocess.Popen(
@@ -48,7 +65,6 @@ def test_gateway_preserves_metrics_bind_and_mcp_client_ip(
                 "-I",
                 "-m",
                 "litellm.proxy.proxy_cli",
-                "--rust_gateway",
                 "--config",
                 str(config),
                 "--host",
@@ -78,12 +94,16 @@ def test_gateway_preserves_metrics_bind_and_mcp_client_ip(
                     assert eventually(lambda: ready(external), bool, seconds=180), (tmp_path / "proxy.log").read_text()
                     response: Final = external.get(f"http://127.0.0.2:{metrics_port}/metrics")
                     assert response.status_code == 200, response.text
-                    client_ip: Final = external.get(
-                        "/v1/mcp/network/client-ip",
-                        headers={"Authorization": f"Bearer {gateway.key}", "X-Forwarded-For": "1.2.3.4"},
-                    )
-                    assert client_ip.status_code == 200, client_ip.text
-                    assert client_ip.json() == {"ip": "127.0.0.2"}
+                public: Final = f"http://127.0.0.1:{public_port}"
+                spoofed: Final = client_ip(public, "127.0.0.2", gateway.key, "1.2.3.4")
+                assert spoofed.status_code == 200, spoofed.text
+                assert spoofed.json() == {"ip": "127.0.0.2"}
+                behind_balancer: Final = client_ip(public, TRUSTED_BALANCER, gateway.key, "203.0.113.9")
+                assert behind_balancer.status_code == 200, behind_balancer.text
+                assert behind_balancer.json() == {"ip": "203.0.113.9"}
+                borrowed: Final = client_ip(public, "127.0.0.2", gateway.key, f"203.0.113.9, {TRUSTED_BALANCER}")
+                assert borrowed.status_code == 200, borrowed.text
+                assert borrowed.json() == {"ip": "127.0.0.2"}
             finally:
                 assert stop_root_process(supervisor), (tmp_path / "proxy.log").read_text()
             assert supervisor.returncode == 0, (tmp_path / "proxy.log").read_text()
