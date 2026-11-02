@@ -1067,6 +1067,13 @@ class _StreamRetryOpened:
     max_retries: int
 
 
+@dataclass(slots=True)
+class _GenericMirrorState:
+    """Shared by the attempts of one request, including mid-stream fallback hops."""
+
+    scheduled: bool = False
+
+
 @dataclass(frozen=True, slots=True)
 class _StreamRetriesExhausted:
     error: "MidStreamFallbackError"
@@ -6827,6 +6834,7 @@ class PythonCore(DeprecatedRouterMembers):
             kwargs["model"] = model
             kwargs["original_generic_function"] = original_function
             kwargs["original_function"] = attempt_function or self._ageneric_api_call_with_fallbacks_helper
+            kwargs["_silent_experiment_state"] = _GenericMirrorState()  # rebind-ok: request-owned attempt state
             if attempt_function is not None:
                 controls: Final = per_request_fallback_controls(kwargs)
                 kwargs[MID_STREAM_FALLBACK_CONTROLS_KEY] = controls  # rebind-ok: forwarded to every hop
@@ -6874,12 +6882,21 @@ class PythonCore(DeprecatedRouterMembers):
             kwargs["endpoint"] = replace_path_segment(kwargs["endpoint"], model, replacement_model_name)
         return kwargs
 
-    async def _ageneric_api_call_with_fallbacks_helper(self, model: str, original_generic_function: Callable, **kwargs):
+    async def _ageneric_api_call_with_fallbacks_helper(
+        self,
+        model: str,
+        original_generic_function: Callable,
+        _silent_experiment_state: object = None,
+        **kwargs,
+    ):
         """
         Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
         """
 
         passthrough_on_no_deployment: Final = kwargs.pop("passthrough_on_no_deployment", False)
+        mirror_state: Final = (
+            _silent_experiment_state if isinstance(_silent_experiment_state, _GenericMirrorState) else None
+        )
         function_name: Final = "_ageneric_api_call_with_fallbacks"
         handler_name: Final[str | None] = getattr(original_generic_function, "__name__", None)
         deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
@@ -6913,12 +6930,15 @@ class PythonCore(DeprecatedRouterMembers):
                 silent_model is not None
                 and handler_name in SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES
                 and not deployment_has_mcp
+                and (mirror_state is None or not mirror_state.scheduled)
             ):
                 # Snapshot now: `_update_kwargs_with_deployment` below mutates kwargs in place,
                 # and the task only starts running once this coroutine yields.
                 for silent_target in _silent_experiment_targets(silent_model):
                     silent_kwargs = self._silent_experiment_generic_kwargs(**kwargs)
                     if silent_kwargs is not None:
+                        if mirror_state is not None:
+                            mirror_state.scheduled = True
                         asyncio.create_task(
                             self._silent_experiment_ageneric(
                                 silent_model=silent_target,

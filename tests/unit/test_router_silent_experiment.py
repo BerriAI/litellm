@@ -1381,3 +1381,71 @@ async def test_calls_a_failure_function_callback_starts_for_a_mirrored_call_are_
     await _wait_for_judges(sync_and_async_recording_logger, {"shadow-a"})
 
     assert sync_and_async_recording_logger.judge_flags() == {"shadow-a": None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["aresponses", "anthropic_messages"])
+@pytest.mark.parametrize("use_fallback", [False, True], ids=["retry", "fallback"])
+async def test_generic_mirrors_only_once_across_attempts(call_type: str, use_fallback: bool) -> None:
+    calls: Final[list[tuple[str, bool]]] = []
+
+    async def provider_call(**kwargs):
+        model = kwargs["model"]
+        mirror = in_mirrored_call()
+        calls.append((model, mirror))
+        if not mirror and len([call for call in calls if not call[1]]) == 1:
+            raise litellm.InternalServerError(message="retry me", llm_provider="openai", model=model)
+        return "provider-result"
+
+    provider: Final = AsyncMock(side_effect=provider_call)
+    provider.__name__ = call_type
+    models = _generic_silent_model_list()
+    models.append(
+        {
+            "model_name": "fallback-model",
+            "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "fake-key", "silent_model": "silent-model"},
+        }
+    )
+    router: Final = Router(
+        model_list=models,
+        num_retries=0 if use_fallback else 1,
+        retry_after=0,
+        disable_cooldowns=True,
+        fallbacks=[{"primary-model": ["fallback-model"]}] if use_fallback else [],
+    )
+    endpoint: Final = router.factory_function(provider, call_type=call_type)
+    result = await endpoint(model="primary-model", input="hi")
+    mirrors = tuple(
+        task for task in asyncio.all_tasks() if task.get_coro().__qualname__.endswith("._silent_experiment_ageneric")
+    )
+    await asyncio.gather(*mirrors)
+
+    assert result == "provider-result"
+    assert len([call for call in calls if not call[1]]) == 2
+    assert len([call for call in calls if call[1]]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["aresponses", "anthropic_messages"])
+async def test_generic_mirror_attempt_state_is_per_request(call_type: str) -> None:
+    provider: Final = AsyncMock(return_value="provider-result")
+    provider.__name__ = call_type
+    router: Final = Router(model_list=_generic_silent_model_list(), num_retries=0)
+    endpoint: Final = router.factory_function(provider, call_type=call_type)
+
+    assert await asyncio.gather(
+        endpoint(model="primary-model", input="request-a"),
+        endpoint(model="primary-model", input="request-b"),
+    ) == ["provider-result", "provider-result"]
+    mirrors: Final = tuple(
+        task for task in asyncio.all_tasks() if task.get_coro().__qualname__.endswith("._silent_experiment_ageneric")
+    )
+    await asyncio.gather(*mirrors)
+
+    assert provider.await_count == 4
+    for request in ("request-a", "request-b"):
+        assert {call.kwargs["model"] for call in provider.await_args_list if call.kwargs["input"] == request} == {
+            "openai/gpt-4o-mini",
+            "openai/gpt-4o",
+        }
+    assert all("_silent_experiment_state" not in call.kwargs for call in provider.await_args_list)
