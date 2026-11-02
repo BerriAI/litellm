@@ -810,7 +810,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             skip_tool=skip_tool,
             scan_only=scan_only,
         )
-        if not extracted.inputs.get("texts"):
+        if not extracted.inputs.get("texts") and not extracted.inputs.get("images"):
             return data
         if scoped_structured_messages:
             extracted.inputs["structured_messages"] = scoped_structured_messages
@@ -1003,6 +1003,11 @@ class OpenAIResponsesHandler(BaseTranslation):
                 texts_to_check.append(text)
                 task_mappings.append((msg_idx, content_idx))
             return
+        if message.get("type") == "input_image":
+            image_url = message.get("image_url")
+            if isinstance(image_url, str) and image_url:
+                images_to_check.append(image_url)
+            return
         content: Final = message.get("content", None)
         if content is None:
             return
@@ -1023,11 +1028,20 @@ class OpenAIResponsesHandler(BaseTranslation):
                         task_mappings.append((msg_idx, int(content_idx)))
 
                     # Extract images
-                    if content_item.get("type") == "image_url":
-                        image_url = content_item.get("image_url", {})
-                        if isinstance(image_url, dict):
-                            url = image_url.get("url")
-                            if url:
+                    image_item = cast("Mapping[str, object]", content_item)
+                    if image_item.get("type") == "image_url":
+                        image_url = image_item.get("image_url", {})
+                        if isinstance(image_url, Mapping):
+                            url = cast("Mapping[str, object]", image_url).get("url")
+                            if isinstance(url, str) and url:
+                                images_to_check.append(url)
+                    elif image_item.get("type") == "input_image":
+                        image_url = image_item.get("image_url")
+                        if isinstance(image_url, str) and image_url:
+                            images_to_check.append(image_url)
+                        elif isinstance(image_url, Mapping):
+                            url = cast("Mapping[str, object]", image_url).get("url")
+                            if isinstance(url, str) and url:
                                 images_to_check.append(url)
 
     async def _apply_guardrail_responses_to_input(
