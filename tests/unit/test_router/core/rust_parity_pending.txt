@@ -1,0 +1,4 @@
+# unskipped by p3-selection
+test_construction_precall_characterization.py::test_retiring_one_router_keeps_the_callbacks_of_another_on_the_same_host[rust]
+# unskipped by p6-final
+test_construction_precall_characterization.py::test_alerting_config_registers_slack_alerting_and_its_slow_response_callback[rust]
