@@ -19,9 +19,11 @@ Run with:
 
 import os
 import sys
+import sysconfig
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
+from typing_extensions import assert_never
 from uvicorn.main import main as uvicorn_main
 
 from litellm_cli.main import without_gc_pauses
@@ -31,17 +33,29 @@ if TYPE_CHECKING:
 
     from litellm.proxy.db.db_url_settings import DatabaseURLSettings
     from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings
+    from litellm.proxy.rust_gateway import Supervised
 
 GATEWAY_APP: Final = "gateway.launch:worker_app"
 KEEPALIVE_FLAG: Final = "--timeout-keep-alive"
 
 
-def uvicorn_argv(argv: Sequence[str], environ: Mapping[str, str]) -> tuple[str, ...]:
+def uvicorn_argv(argv: Sequence[str], environ: Mapping[str, str], supervised: "Supervised | None") -> tuple[str, ...]:
     """Honor ``KEEPALIVE_TIMEOUT`` like ``proxy_cli.py`` does, unless the flag was passed explicitly."""
     keepalive: Final = environ.get("KEEPALIVE_TIMEOUT")
+    inherited_socket: Final = (
+        (
+            "--fd",
+            str(supervised.listener_fd),
+            "--proxy-headers",
+            "--forwarded-allow-ips",
+            ",".join(supervised.trusted_proxies),
+        )
+        if supervised is not None
+        else ()
+    )
     if keepalive is None or any(arg == KEEPALIVE_FLAG or arg.startswith(f"{KEEPALIVE_FLAG}=") for arg in argv):
-        return (GATEWAY_APP, "--factory", *argv)
-    return (GATEWAY_APP, "--factory", *argv, KEEPALIVE_FLAG, keepalive)
+        return (GATEWAY_APP, "--factory", *argv, *inherited_socket)
+    return (GATEWAY_APP, "--factory", *argv, KEEPALIVE_FLAG, keepalive, *inherited_socket)
 
 
 def pool_database_url(
@@ -75,7 +89,34 @@ def _serve(argv: Sequence[str]) -> None:
     uvicorn_main(tuple(argv), prog_name="uvicorn")
 
 
-def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
+def public_listener(argv: Sequence[str], binary: str | None) -> tuple[str, str, int, Mapping[str, str]]:
+    """Validate the uvicorn flags for Rust forwarding and return the binary, public address and child environment."""
+    from pydantic import TypeAdapter
+
+    from litellm.proxy.rust_gateway import TRUSTED_PROXIES, startup_error
+
+    params: Final[Mapping[str, object]] = uvicorn_main.make_context(
+        "uvicorn", list(uvicorn_argv(argv, os.environ, None))
+    ).params
+    error: Final = startup_error(
+        binary,
+        {
+            "--ssl-keyfile": params["ssl_keyfile"],
+            "--ssl-certfile": params["ssl_certfile"],
+            "--ssl-ciphers": any(arg.split("=")[0] == "--ssl-ciphers" for arg in argv),
+            "--uds": params["uds"] is not None,
+            "--fd": params["fd"] is not None,
+        },
+    )
+    if error is not None:
+        sys.exit(error)
+    assert binary is not None
+    host, port = TypeAdapter(tuple[str, int]).validate_python((params["host"], params["port"]))
+    operator_trust: Final = TypeAdapter(str | None).validate_python(params["forwarded_allow_ips"])
+    return binary, host, port, {} if operator_trust is None else {TRUSTED_PROXIES: operator_trust}
+
+
+def configure_database() -> None:
     from litellm.proxy.db.db_url_settings import DatabaseURLSettings
     from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings, export_pooled_database_url
 
@@ -86,7 +127,32 @@ def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -
         sys.exit(f"LiteLLM gateway: in-container pgbouncer could not start: {pooled_url.reason}")
     if pooled_url is not None:
         export_pooled_database_url(pooled_url)
-    serve(uvicorn_argv(argv, os.environ))
+
+
+def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
+    from litellm.proxy.rust_gateway import (
+        Disabled,
+        Supervised,
+        Supervisor,
+        gateway_binary,
+        rust_gateway_mode,
+        supervise,
+    )
+
+    mode: Final = rust_gateway_mode(os.environ)
+    match mode:
+        case Disabled():
+            configure_database()
+            serve(uvicorn_argv(argv, os.environ, None))
+        case Supervisor():
+            binary, host, port, trust = public_listener(argv, gateway_binary(sysconfig.get_path("scripts")))
+            configure_database()
+            command: Final = (sys.executable, "-m", "gateway.launch", *argv)
+            sys.exit(supervise(binary, command, host, port, {**os.environ, **trust}))
+        case Supervised():
+            serve(uvicorn_argv(argv, os.environ, mode))
+        case _:
+            assert_never(mode)
 
 
 if __name__ == "__main__":
