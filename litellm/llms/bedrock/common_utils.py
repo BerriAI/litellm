@@ -10,7 +10,7 @@ import json
 import os
 import re
 import warnings
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
@@ -1446,7 +1446,9 @@ def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     )
 
 
-def bedrock_model_accepts_cache_points(model: str | None, deployment_model: str | None = None) -> bool:
+def bedrock_model_accepts_cache_points(
+    model: str | None, deployment_model: str | None = None, model_info: Mapping[str, object] | None = None
+) -> bool:
     """
     Whether Converse ``cachePoint`` blocks may be sent to this model.
 
@@ -1466,41 +1468,55 @@ def bedrock_model_accepts_cache_points(model: str | None, deployment_model: str 
     never silently degrade. ``litellm.utils.supports_prompt_caching`` is not reusable here:
     it returns False for unmapped models, the opposite polarity. ``deployment_model`` is the
     model as configured when ``model`` is its ``base_model``: its own declaration wins.
+    A routed call passes its deployment's ``model_info``, whose flag wins outright. Without
+    one it reads the catalog as loaded, since the registered keys are shared by every
+    deployment of the same model string and carry whichever sibling registered last.
     """
     if model is None:
         return True
     deployment_declared: Final = (
-        None if deployment_model is None else bedrock_declared_cache_point_support(deployment_model)
+        None if deployment_model is None else bedrock_declared_cache_point_support(deployment_model, model_info)
     )
     declared: Final = (
-        deployment_declared if deployment_declared is not None else bedrock_declared_cache_point_support(model)
+        deployment_declared
+        if deployment_declared is not None
+        else bedrock_declared_cache_point_support(model, model_info)
     )
     return declared is not False
 
 
-def bedrock_declared_cache_point_support(model: str) -> bool | None:
+def bedrock_declared_cache_point_support(model: str, model_info: Mapping[str, object] | None = None) -> bool | None:
     if _OPENAI_FAMILY_MODEL_RE.search(model):
         return False
+    deployment_flag: Final = None if model_info is None else model_info.get("supports_prompt_cache_breakpoint")
+    if isinstance(deployment_flag, bool):
+        return deployment_flag
+    catalog_entry: Final = _catalog_entry_reader(model_info)
     map_keys: Final = (model, get_bedrock_base_model(model))
     registered_keys: Final = tuple(f"bedrock/{route}{model}" for route in ("", "converse/", "converse_like/"))
     explicit_marker_support: Final = next(
         (
             entry.get("supports_prompt_cache_breakpoint") is True
             for key in (*registered_keys, *map_keys)
-            if (entry := litellm.model_cost.get(key)) is not None
-            and entry.get("supports_prompt_cache_breakpoint") is not None
+            if (entry := catalog_entry(key)) is not None and entry.get("supports_prompt_cache_breakpoint") is not None
         ),
         None,
     )
     if explicit_marker_support is not None:
         return explicit_marker_support
-    if not any(key in litellm.model_cost for key in map_keys):
+    if not any(catalog_entry(key) is not None for key in map_keys):
         return None
     return any(
-        entry.get("supports_prompt_caching") is True
-        for key in map_keys
-        if (entry := litellm.model_cost.get(key)) is not None
+        entry.get("supports_prompt_caching") is True for key in map_keys if (entry := catalog_entry(key)) is not None
     )
+
+
+def _catalog_entry_reader(model_info: Mapping[str, object] | None) -> Callable[[str], Mapping[str, object] | None]:
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    if model_info is not None:
+        return GetModelCostMap.loaded_model_cost_map().get
+    return _model_cost_entry
 
 
 def bedrock_supports_tool_search(model: str) -> bool:

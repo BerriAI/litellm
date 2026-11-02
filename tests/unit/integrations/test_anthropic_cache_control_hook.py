@@ -5284,6 +5284,101 @@ async def test_openai_messages_bridge_sends_a_breakpoint_by_the_deployments_own_
     }
 
 
+_APPLICATION_INFERENCE_PROFILE: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/qa"
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected"),
+    [
+        ("us.anthropic.claude-sonnet-5-5", "bedrock", False),
+        ("converse/us.anthropic.claude-sonnet-5-5", "bedrock", False),
+        ("invoke/us.anthropic.claude-sonnet-5-5", "bedrock", False),
+        ("converse_like/us.anthropic.claude-sonnet-5-5", "bedrock", False),
+        ("openai/gpt-oss-120b", "bedrock", False),
+        ("moonshotai.kimi-k3", "bedrock", False),
+        (_APPLICATION_INFERENCE_PROFILE, "bedrock", False),
+        ("claude-sonnet-5-5", "anthropic", False),
+        ("claude-sonnet-5-5", "azure_ai", False),
+        ("claude-sonnet-5-5", "vertex_ai", False),
+        ("gemini-3-pro", "gemini", False),
+        ("qa-custom-model", "qa-custom-handler", False),
+        ("qa-shared-gpt-deployment", "azure_ai", True),
+        ("qa-mantle-model", "bedrock_mantle", True),
+    ],
+)
+def test_a_declared_breakpoint_flag_picks_openais_dialect_only_where_the_request_goes_out_openai_shaped(
+    model: str, custom_llm_provider: str, expected: bool
+) -> None:
+    assert (
+        AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+            model, custom_llm_provider, model_info={"supports_prompt_cache_breakpoint": True}
+        )
+        is expected
+    )
+
+
+_BEDROCK_CONVERSE_REPLY: Final = MappingProxyType(
+    {
+        "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 5, "outputTokens": 1, "totalTokens": 6},
+    }
+)
+_BEDROCK_INVOKE_REPLY: Final = MappingProxyType(
+    {
+        "id": "msg_bedrock",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 5, "output_tokens": 1},
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "expected_system"),
+    [
+        ("completion", [{"text": "stable"}, {"cachePoint": {"type": "default"}}]),
+        ("acompletion", [{"text": "stable"}, {"cachePoint": {"type": "default"}}]),
+        ("aanthropic_messages", [{"type": "text", "text": "stable", "cache_control": {"type": "ephemeral"}}]),
+    ],
+)
+async def test_a_bedrock_claude_deployment_declaring_the_breakpoint_flag_keeps_bedrocks_own_cache_marks(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, entrypoint: str, expected_system: list[object]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    bedrock: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
+        side_effect=lambda request: Response(
+            200,
+            json=dict(_BEDROCK_INVOKE_REPLY if request.url.path.endswith("/invoke") else _BEDROCK_CONVERSE_REPLY),
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-on-bedrock",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-sonnet-5-5",
+                    "aws_access_key_id": "bedrock-test-key",
+                    "aws_secret_access_key": "bedrock-test-secret",
+                    "aws_region_name": "us-east-1",
+                    "cache_control_injection_points": [{"location": "message", "role": "system"}],
+                },
+                "model_info": {"id": "claude-on-bedrock-id", "supports_prompt_cache_breakpoint": True},
+            }
+        ],
+        num_retries=0,
+    )
+
+    await _send_unmarked_system_prompt(router, "claude-on-bedrock", entrypoint)
+
+    body: Final = bedrock.calls.last.request.content
+    assert (json.loads(body)["system"], b"prompt_cache" in body) == (expected_system, False)
+
+
 def _search_conversation_with(follow_up: dict[str, object]) -> list[AllMessageValues]:
     return [
         cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),

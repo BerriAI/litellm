@@ -555,17 +555,23 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     ) -> tuple[Sequence[AllMessageValues], Sequence["ChatCompletionToolParam"] | None]:
         """
         A deployment that reads OpenAI's ``prompt_cache_breakpoint`` (gpt-5.6+ on
-        api.openai.com, or one opted in through ``prompt_cache_options`` or the cost
-        map) gets each Anthropic ``cache_control`` mark rewritten in place. Any other
+        api.openai.com, or one opted in through ``prompt_cache_options``, its own
+        ``model_info``, or the cost map entry of its base_model or name) gets each
+        Anthropic ``cache_control`` mark rewritten in place. Any other
         endpoint keeps or strips the marks as before, and under drop_params also loses
         every ``prompt_cache_breakpoint`` it cannot read.
         """
-        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook, routed_model_info
 
         custom_llm_provider: Final = _litellm_params_str(litellm_params, "custom_llm_provider")
         api_base: Final = _litellm_params_str(litellm_params, "api_base")
-        reads_breakpoints: Final = AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
-            model, custom_llm_provider, api_base, prompt_cache_options
+        base_model: Final = _litellm_params_str(litellm_params, "base_model")
+        model_info: Final = routed_model_info(litellm_params.get("model_info"))
+        reads_breakpoints: Final = any(
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+                name, custom_llm_provider, api_base, prompt_cache_options, model_info
+            )
+            for name in ((base_model, model) if base_model else (model,))
         )
         if not reads_breakpoints and self._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base):
             return (

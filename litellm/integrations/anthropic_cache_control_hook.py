@@ -14,6 +14,7 @@ import itertools
 import os
 import re
 from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar, cast
 from urllib.parse import urlparse
 
@@ -106,7 +107,7 @@ def _live_cost_map_unless(model_cost: CostMap | None) -> CostMap:
     return cast(CostMap, litellm.model_cost)  # cast-ok: the live map holds catalog entries
 
 
-def _declared_prompt_cache_breakpoint(model_info: Mapping[str, object] | None) -> bool | None:
+def declared_prompt_cache_breakpoint(model_info: Mapping[str, object] | None) -> bool | None:
     declared: Final = None if model_info is None else model_info.get("supports_prompt_cache_breakpoint")
     return declared if isinstance(declared, bool) else None
 
@@ -349,7 +350,7 @@ def supports_openai_prompt_cache_breakpoint(
 def openai_prompt_cache_breakpoint_support(
     model: str, custom_llm_provider: str | None = None, model_info: Mapping[str, object] | None = None
 ) -> bool | None:
-    declared: Final = _declared_prompt_cache_breakpoint(model_info)
+    declared: Final = declared_prompt_cache_breakpoint(model_info)
     if declared is not None:
         return declared
     model_cost: Final = _catalog_unless_unrouted(model_info)
@@ -442,8 +443,42 @@ def _hosted_openai_dialect_flag(
     return next((flag for flag in flags if flag is not None), None)
 
 
-def _declared_hosted_flag(declared: bool, provider: str | None) -> bool | None:
-    return None if provider is None or provider == "openai" else declared
+_PROVIDERS_READING_THE_FLAG_AS_CACHE_POINT: Final = frozenset(("bedrock", "bedrock_converse"))
+
+
+def _declared_hosted_flag(declared: bool, model: str, provider: str | None) -> bool | None:
+    """
+    A deployment's own ``supports_prompt_cache_breakpoint`` picks OpenAI's breakpoint only where the
+    request goes out OpenAI-shaped. Bedrock reads the same flag on every route as whether Converse takes
+    a ``cachePoint``, and a provider building Anthropic messages takes ``cache_control``, so both keep
+    the Anthropic mark.
+    """
+    if provider is None or provider == "openai":
+        return None
+    return (
+        declared
+        and provider not in _PROVIDERS_READING_THE_FLAG_AS_CACHE_POINT
+        and _sends_openai_shaped_chat(model, provider)
+    )
+
+
+@lru_cache(maxsize=512)
+def _sends_openai_shaped_chat(model: str, custom_llm_provider: str) -> bool:
+    from litellm.exceptions import BadRequestError
+    from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+    from litellm.llms.openai.openai import OpenAIConfig
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    try:
+        served_model, provider = resolve_model_and_provider_for_metadata(model, custom_llm_provider)
+        chat_config: Final = ProviderConfigManager.get_provider_chat_config(
+            model=served_model, provider=LlmProviders(provider)
+        )
+    except (BadRequestError, ValueError):
+        return False
+    return isinstance(chat_config, (OpenAIGPTConfig, OpenAIConfig))
 
 
 def targets_openai_api(api_base: object) -> bool:
@@ -770,7 +805,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     ) -> bool:
         if model is None:
             return False
-        declared: Final = _declared_prompt_cache_breakpoint(model_info)
+        declared: Final = declared_prompt_cache_breakpoint(model_info)
         hosted_flag: Final = (
             _hosted_openai_dialect_flag(
                 model,
@@ -780,7 +815,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             )
             if declared is None
             else _declared_hosted_flag(
-                declared, custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model, api_base)
+                declared, model, custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model, api_base)
             )
         )
         if hosted_flag is not None:
