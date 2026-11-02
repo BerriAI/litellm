@@ -10032,8 +10032,8 @@ def _input_transformations_response() -> AnthropicMessagesResponse:
     )
 
 
-def test_chat_response_surfaces_input_transformations_in_provider_specific_fields():
-    result = AnthropicConfig().transform_response(
+def test_chat_response_surfaces_input_transformations_in_provider_specific_fields() -> None:
+    result: Final = AnthropicConfig().transform_response(
         model="claude-sonnet-4-6",
         raw_response=httpx.Response(200, json=_input_transformations_response()),
         model_response=ModelResponse(),
@@ -10048,11 +10048,11 @@ def test_chat_response_surfaces_input_transformations_in_provider_specific_field
     assert result.choices[0].message.provider_specific_fields["input_transformations"] == _INPUT_TRANSFORMATIONS
 
 
-def test_chat_response_without_input_transformations_adds_no_key():
+def test_chat_response_without_input_transformations_adds_no_key() -> None:
     completion_response: Final = {
         key: value for key, value in _input_transformations_response().items() if key != "input_transformations"
     }
-    result = AnthropicConfig().transform_response(
+    result: Final = AnthropicConfig().transform_response(
         model="claude-sonnet-4-6",
         raw_response=httpx.Response(200, json=completion_response),
         model_response=ModelResponse(),
@@ -10067,7 +10067,7 @@ def test_chat_response_without_input_transformations_adds_no_key():
     assert "input_transformations" not in result.choices[0].message.provider_specific_fields
 
 
-def test_json_mode_chat_response_keeps_input_transformations():
+def test_json_mode_chat_response_keeps_input_transformations() -> None:
     completion_response: Final = {
         **_input_transformations_response(),
         "content": [{"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": 42}}],

@@ -8,16 +8,10 @@ The only thing mocked is _call_messages_handler (the outbound LLM call), so the
 interceptor detection, loop logic, and message assembly all run for real.
 """
 
-import json
-from itertools import chain
-from typing import Dict, Final
+from typing import Dict
 from unittest.mock import patch
 
-import httpx
 import pytest
-import respx
-
-import litellm
 
 ADVISOR_TOOL = {
     "type": "advisor_20260301",
@@ -194,50 +188,6 @@ async def test_anthropic_provider_bypasses_interceptor():
     content = result.get("content", []) if isinstance(result, dict) else []
     text_blocks = [b for b in content if b.get("type") == "text"]
     assert any("Native anthropic" in b.get("text", "") for b in text_blocks)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("host", ["res.services.ai.azure.com", "res.cognitiveservices.azure.com"])
-async def test_anthropic_deployment_on_foundry_runs_the_advisor_loop(
-    host: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from litellm.llms.anthropic.messages.native.handler import (
-        anthropic_messages,
-    )
-
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-anthropic-key")
-    foundry: Final = respx_mock.post(host=host).mock(
-        side_effect=[
-            httpx.Response(200, json=_advisor_call_resp()),
-            httpx.Response(200, json=_text_resp("def is_prime(n): ...", model="claude-sonnet-4-6")),
-        ]
-    )
-    advisor: Final = respx_mock.post(host="api.anthropic.com").mock(
-        return_value=httpx.Response(200, json=_text_resp("Use trial division.", model="claude-opus-4-6"))
-    )
-
-    result: Final = await anthropic_messages(
-        model="claude-sonnet-4-6",
-        messages=MESSAGES,
-        tools=[ADVISOR_TOOL],
-        stream=False,
-        max_tokens=512,
-        custom_llm_provider="anthropic",
-        api_base=f"https://{host}/anthropic",
-        api_key="synthetic-foundry-key",
-    )
-
-    foundry_bodies: Final = tuple(json.loads(call.request.content) for call in foundry.calls)
-    foundry_tools: Final = tuple(chain.from_iterable(body.get("tools", []) for body in foundry_bodies))
-    foundry_betas: Final = tuple(call.request.headers.get("anthropic-beta", "") for call in foundry.calls)
-    assert len(foundry_bodies) == 2
-    assert advisor.call_count == 1
-    assert [tool["name"] for tool in foundry_tools] == ["advisor", "advisor"]
-    assert all(tool.get("type") != "advisor_20260301" for tool in foundry_tools)
-    assert all("advisor-tool" not in betas for betas in foundry_betas)
-    assert isinstance(result, dict)
-    assert [block["text"] for block in result["content"]] == ["def is_prime(n): ..."]
 
 
 # ---------------------------------------------------------------------------

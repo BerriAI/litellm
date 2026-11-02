@@ -423,7 +423,9 @@ def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_n
 ):
     sent: Final = _SentRequestRecorder()
     recorder: Final = _AgenticLoopKwargsRecorder()
-    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["azure"]), recorder])
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["azure"]), recorder]
+    )
     logging_obj: Final = Mock()
     logging_obj.dynamic_success_callbacks = []
 
@@ -2577,9 +2579,7 @@ async def test_async_anthropic_messages_handler_passes_deployment_api_base_to_ag
             super().__init__()
             self.hook_kwargs: dict | None = None
 
-        async def async_should_run_agentic_loop(
-            self, response, model, messages, tools, stream, custom_llm_provider, kwargs
-        ):
+        async def async_should_run_agentic_loop(self, response, model, messages, tools, stream, custom_llm_provider, kwargs):
             self.hook_kwargs = dict(kwargs)
             return False, {}
 
@@ -3127,7 +3127,9 @@ def _transform_subtitle_response(payload):
 
 
 def test_subtitle_synthesis_fallback_without_timings_drops_words():
-    response = _transform_subtitle_response({"text": "hello world", "words": [{"word": "hello"}, {"word": "world"}]})
+    response = _transform_subtitle_response(
+        {"text": "hello world", "words": [{"word": "hello"}, {"word": "world"}]}
+    )
 
     assert response.text == "hello world"
     assert "words" not in response
@@ -4122,13 +4124,7 @@ def _capture_video_create_request(captured):
         captured["body"] = request.content
         return httpx.Response(
             200,
-            json={
-                "id": "video_123",
-                "object": "video",
-                "status": "queued",
-                "created_at": 1712697600,
-                "model": "sora-2",
-            },
+            json={"id": "video_123", "object": "video", "status": "queued", "created_at": 1712697600, "model": "sora-2"},
         )
 
     return respond
@@ -4151,9 +4147,7 @@ def test_video_generation_without_file_sends_multipart_form_data():
     captured = {}
     client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
 
-    result = BaseLLMHTTPHandler().video_generation_handler(
-        client=client, **_video_create_call_kwargs(OpenAIVideoConfig())
-    )
+    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(OpenAIVideoConfig()))
 
     assert captured["content_type"].startswith("multipart/form-data")
     assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
@@ -4193,9 +4187,7 @@ def test_azure_video_generation_without_file_sends_multipart_form_data():
     captured = {}
     client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
 
-    result = BaseLLMHTTPHandler().video_generation_handler(
-        client=client, **_video_create_call_kwargs(AzureVideoConfig())
-    )
+    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(AzureVideoConfig()))
 
     assert captured["content_type"].startswith("multipart/form-data")
     assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
@@ -4210,9 +4202,7 @@ def test_video_generation_json_provider_keeps_json_body():
     captured = {}
     client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
 
-    result = BaseLLMHTTPHandler().video_generation_handler(
-        client=client, **_video_create_call_kwargs(_JSONBodyVideoConfig())
-    )
+    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(_JSONBodyVideoConfig()))
 
     assert captured["content_type"] == "application/json"
     assert json.loads(captured["body"]) == {"model": "sora-2", "prompt": "a cat surfing", "seconds": "4"}
@@ -4242,7 +4232,6 @@ def test_video_generation_with_input_reference_keeps_file_multipart():
 AZURE_AI_BASE = "https://myfoundry.services.ai.azure.com"
 AZURE_AI_CHAT_COMPLETIONS_URL = f"{AZURE_AI_BASE}/models/chat/completions"
 
-
 def _a_tool_with_an_unsupported_field() -> dict:
     return {
         "type": "function",
@@ -4250,13 +4239,14 @@ def _a_tool_with_an_unsupported_field() -> dict:
         "strict": True,
     }
 
-
 A_COMPLETION = {
     "id": "chatcmpl-1",
     "object": "chat.completion",
     "created": 1,
     "model": "grok-3",
-    "choices": [{"index": 0, "message": {"role": "assistant", "content": "sent"}, "finish_reason": "stop"}],
+    "choices": [
+        {"index": 0, "message": {"role": "assistant", "content": "sent"}, "finish_reason": "stop"}
+    ],
     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
 }
 
@@ -4300,7 +4290,9 @@ def _call_azure_ai(recorder: _RecordedAzureAI, **overrides):
 
 
 def test_a_tool_field_the_provider_rejects_is_dropped_and_the_call_retried():
-    recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)])
+    recorder = _RecordedAzureAI(
+        [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
+    )
 
     response = _call_azure_ai(recorder)
 
@@ -4311,7 +4303,9 @@ def test_a_tool_field_the_provider_rejects_is_dropped_and_the_call_retried():
 
 
 def test_the_retry_changes_only_the_field_the_provider_named():
-    recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)])
+    recorder = _RecordedAzureAI(
+        [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
+    )
 
     _call_azure_ai(recorder)
 
@@ -4350,7 +4344,9 @@ def test_an_extra_input_outside_a_tool_is_not_retried_unless_dropping_params_was
 
 
 def test_an_extra_input_outside_a_tool_is_retried_when_dropping_params_was_asked_for():
-    recorder = _RecordedAzureAI([_rejection(UNRELATED_REJECTION), httpx.Response(200, json=A_COMPLETION)])
+    recorder = _RecordedAzureAI(
+        [_rejection(UNRELATED_REJECTION), httpx.Response(200, json=A_COMPLETION)]
+    )
 
     response = _call_azure_ai(recorder, drop_params=True)
 
@@ -4364,7 +4360,9 @@ async def test_a_tool_field_the_provider_rejects_is_dropped_and_retried_on_the_a
 ):
     import respx
 
-    recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)])
+    recorder = _RecordedAzureAI(
+        [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
+    )
 
     with respx.mock(assert_all_called=True) as router:
         router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=recorder)
@@ -4505,11 +4503,7 @@ async def test_create_batch_says_which_setting_is_missing_when_the_provider_reso
 
     with pytest.raises(ValueError, match="api_base is required for create_batch"):
         await BaseLLMHTTPHandler().create_batch(
-            create_batch_data={
-                "input_file_id": "file_1",
-                "endpoint": "/v1/chat/completions",
-                "completion_window": "24h",
-            },
+            create_batch_data={"input_file_id": "file_1", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
             litellm_params={},
             provider_config=provider_config,
             headers={},
@@ -4690,9 +4684,7 @@ def _start_async_completion(config, logging_obj=None):
         custom_llm_provider="openai",
         model_response=ModelResponse(),
         encoding=None,
-        logging_obj=logging_obj
-        if logging_obj is not None
-        else Mock(dynamic_success_callbacks=None, model_call_details={}),
+        logging_obj=logging_obj if logging_obj is not None else Mock(dynamic_success_callbacks=None, model_call_details={}),
         optional_params={},
         timeout=10.0,
         litellm_params={},
@@ -5080,9 +5072,7 @@ async def test_async_realtime_bridges_a_transcription_session_through_the_provid
     logging_obj.dispatch_failure_handlers = AsyncMock()
     handler = BaseLLMHTTPHandler()
 
-    with patch.object(
-        handler, "_open_realtime_backend_ws", AsyncMock(side_effect=AssertionError("dialed a websocket"))
-    ) as dial:
+    with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(side_effect=AssertionError("dialed a websocket"))) as dial:
         await handler.async_realtime(
             model="chirp_3",
             websocket=client_ws,
@@ -6137,9 +6127,7 @@ async def test_messages_opencode_session_header(
             model="anthropic/claude-haiku-5-5",
             messages=[{"role": "user", "content": "hello"}],
             max_tokens=128000,
-            api_base=None
-            if environment_base and api_base == "https://opencode.ai/inference/go/anthropic"
-            else api_base,
+            api_base=None if environment_base and api_base == "https://opencode.ai/inference/go/anthropic" else api_base,
             api_key="test-key",
             stream=stream,
             litellm_session_id="conversation-123",
@@ -6218,27 +6206,17 @@ async def test_vector_store_search_sends_once_when_the_connection_drops_without_
 @pytest.mark.parametrize("is_async", (False, True))
 @pytest.mark.parametrize("provider", ("openai", "azure"))
 async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
-    is_async: bool,
-    provider: str,
-    respx_mock: respx.MockRouter,
+    is_async: bool, provider: str, respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(url__regex=r"https://responses\.example\.com/.*").respond(
         200,
         json={
-            "id": "resp_headers",
-            "object": "response",
-            "created_at": 1,
-            "model": "gpt-6-luna",
-            "status": "completed",
-            "output": [],
-            "parallel_tool_calls": False,
-            "tool_choice": "auto",
-            "tools": [],
+            "id": "resp_headers", "object": "response", "created_at": 1,
+            "model": "gpt-6-luna", "status": "completed", "output": [],
+            "parallel_tool_calls": False, "tool_choice": "auto", "tools": [],
         },
     )
-    client: Final = (
-        AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()) if is_async else HTTPHandler(client=httpx.Client())
-    )
+    client: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()) if is_async else HTTPHandler(client=httpx.Client())
     kwargs: Final = {
         "model": f"{provider}/gpt-6-luna",
         "input": "hello",
@@ -6266,6 +6244,20 @@ async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
 
 
 _BETA_THE_TABLE_DOES_NOT_LIST: Final = "not-in-the-beta-table-2099-01-01"
+
+
+def _anthropic_messages_logging_obj():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    return Logging(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="foundry-beta-row",
+        function_id="foundry-beta-row",
+    )
 
 
 @pytest.mark.asyncio
@@ -6303,40 +6295,26 @@ _BETA_THE_TABLE_DOES_NOT_LIST: Final = "not-in-the-beta-table-2099-01-01"
     ],
 )
 async def test_async_anthropic_messages_handler_picks_the_beta_row_by_deployment_on_a_foundry_api_base(
-    monkeypatch, custom_llm_provider: str, messages_config: str, foundry_api_base: str, forwarded_betas: str
-):
+    monkeypatch: pytest.MonkeyPatch,
+    custom_llm_provider: str,
+    messages_config: str,
+    foundry_api_base: str,
+    forwarded_betas: str,
+) -> None:
     from litellm import anthropic_beta_headers_manager
     from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
     from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
     from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
-    anthropic_beta_headers_manager._BETA_HEADERS_CONFIG = None
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
     assert _BETA_THE_TABLE_DOES_NOT_LIST not in anthropic_beta_headers_manager._load_beta_headers_config()["azure_ai"]
     configs: Final = {
         "anthropic": AnthropicMessagesConfig,
         "azure_ai": AzureAnthropicMessagesConfig,
         "pass_through": OpenAILikeAnthropicMessagesConfig,
     }
-    upstream_response: Final = httpx.Response(
-        200,
-        json={
-            "id": "msg_123",
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type": "text", "text": "Hello!"}],
-            "model": "claude-sonnet-4-6",
-            "stop_reason": "end_turn",
-            "usage": {"input_tokens": 1, "output_tokens": 1},
-        },
-        request=httpx.Request("POST", f"{foundry_api_base}/v1/messages"),
-    )
-    mock_client: Final = AsyncMock(spec=AsyncHTTPHandler)
-    mock_client.post = AsyncMock(return_value=upstream_response)
-    mock_logging_obj: Final = Mock()
-    mock_logging_obj.model_call_details = {}
-    mock_logging_obj.stream = False
-    mock_logging_obj.dynamic_success_callbacks = None
+    upstream: Final = _AnthropicMessagesUpstream()
 
     await BaseLLMHTTPHandler().async_anthropic_messages_handler(
         model="claude-sonnet-4-6",
@@ -6345,10 +6323,10 @@ async def test_async_anthropic_messages_handler_picks_the_beta_row_by_deployment
         anthropic_messages_optional_request_params={"max_tokens": 8},
         custom_llm_provider=custom_llm_provider,
         litellm_params=GenericLiteLLMParams(api_base=foundry_api_base),
-        logging_obj=mock_logging_obj,
+        logging_obj=_anthropic_messages_logging_obj(),
         api_key="sk-test",
         api_base=foundry_api_base,
-        client=mock_client,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream.respond)),
         kwargs={
             "extra_headers": {
                 "anthropic-beta": (
@@ -6358,12 +6336,13 @@ async def test_async_anthropic_messages_handler_picks_the_beta_row_by_deployment
         },
     )
 
-    sent_headers: Final = mock_client.post.call_args.kwargs["headers"]
-    assert set(sent_headers["anthropic-beta"].split(",")) == set(forwarded_betas.split(","))
+    assert set(",".join(upstream.anthropic_beta).split(",")) == set(forwarded_betas.split(","))
 
 
 @pytest.mark.asyncio
-async def test_first_foundry_request_with_betas_fetches_the_beta_table_off_the_event_loop(monkeypatch):
+async def test_first_foundry_request_with_betas_fetches_the_beta_table_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm import anthropic_beta_headers_manager, anthropic_beta_headers_url
     from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
 
@@ -6371,58 +6350,31 @@ async def test_first_foundry_request_with_betas_fetches_the_beta_table_off_the_e
     monkeypatch.delenv("LITELLM_OFFLINE_MODE", raising=False)
     monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
     bundled_table: Final = anthropic_beta_headers_manager.GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
-    fetch_started: Final = threading.Event()
-    loop_answered: Final = threading.Event()
-
-    def table_held_until_the_loop_answers(request: httpx.Request) -> httpx.Response:
-        fetch_started.set()
-        return httpx.Response(200 if loop_answered.wait(timeout=2) else 504, json=bundled_table)
-
     foundry_api_base: Final = "https://my-resource.services.ai.azure.com/anthropic"
-    mock_client: Final = AsyncMock(spec=AsyncHTTPHandler)
-    mock_client.post = AsyncMock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "id": "msg_123",
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "text", "text": "Hello!"}],
-                "model": "claude-sonnet-4-6",
-                "stop_reason": "end_turn",
-                "usage": {"input_tokens": 1, "output_tokens": 1},
-            },
-            request=httpx.Request("POST", f"{foundry_api_base}/v1/messages"),
-        )
-    )
-    mock_logging_obj: Final = Mock()
-    mock_logging_obj.model_call_details = {}
-    mock_logging_obj.stream = False
-    mock_logging_obj.dynamic_success_callbacks = None
+    upstream: Final = _AnthropicMessagesUpstream()
 
     with respx.mock(assert_all_called=True) as router:
-        table_route: Final = router.get(anthropic_beta_headers_url).mock(side_effect=table_held_until_the_loop_answers)
-        request: Final = asyncio.create_task(
-            BaseLLMHTTPHandler().async_anthropic_messages_handler(
-                model="claude-sonnet-4-6",
-                messages=[{"role": "user", "content": "Hello"}],
-                anthropic_messages_provider_config=AnthropicMessagesConfig(),
-                anthropic_messages_optional_request_params={"max_tokens": 8},
-                custom_llm_provider="anthropic",
-                litellm_params=GenericLiteLLMParams(api_base=foundry_api_base),
-                logging_obj=mock_logging_obj,
-                api_key="sk-test",
-                api_base=foundry_api_base,
-                client=mock_client,
-                kwargs={"extra_headers": {"anthropic-beta": "advisor-tool-2026-03-01,compact-2026-01-12"}},
+        table_route: Final = router.get(anthropic_beta_headers_url).mock(
+            side_effect=lambda request: httpx.Response(
+                200, json=bundled_table, headers={"x-fetch-thread": str(threading.get_ident())}
             )
         )
-        assert await asyncio.to_thread(fetch_started.wait, 5)
-        loop_answered.set()
-        await request
+        await BaseLLMHTTPHandler().async_anthropic_messages_handler(
+            model="claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_provider_config=AnthropicMessagesConfig(),
+            anthropic_messages_optional_request_params={"max_tokens": 8},
+            custom_llm_provider="anthropic",
+            litellm_params=GenericLiteLLMParams(api_base=foundry_api_base),
+            logging_obj=_anthropic_messages_logging_obj(),
+            api_key="sk-test",
+            api_base=foundry_api_base,
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream.respond)),
+            kwargs={"extra_headers": {"anthropic-beta": "advisor-tool-2026-03-01,compact-2026-01-12"}},
+        )
 
-    assert table_route.calls.last.response.status_code == 200
-    assert mock_client.post.call_args.kwargs["headers"]["anthropic-beta"] == "compact-2026-01-12"
+    assert table_route.calls.last.response.headers["x-fetch-thread"] != str(threading.get_ident())
+    assert upstream.anthropic_beta == ("compact-2026-01-12",)
 
 
 @pytest.mark.asyncio

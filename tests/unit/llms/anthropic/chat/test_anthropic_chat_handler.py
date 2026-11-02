@@ -3705,7 +3705,7 @@ def test_streamed_end_turn_carries_no_stop_details():
     assert "stop_reason" not in provider_fields
 
 
-def test_message_start_surfaces_input_transformations_on_the_first_chunk():
+def test_message_start_surfaces_input_transformations_on_the_first_chunk() -> None:
     input_transformations: Final = [{"type": "thinking_block_binding", "count": 2}]
     chunk: Final = {
         "type": "message_start",
@@ -3729,7 +3729,7 @@ def test_message_start_surfaces_input_transformations_on_the_first_chunk():
     assert first_chunk.model == "claude-sonnet-4-6"
 
 
-def test_message_start_without_input_transformations_has_no_provider_specific_fields():
+def test_message_start_without_input_transformations_has_no_provider_specific_fields() -> None:
     chunk: Final = {
         "type": "message_start",
         "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-6", "content": []},
