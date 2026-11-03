@@ -2413,6 +2413,35 @@ async def test_lakera_post_call_allows_clean_content():
 
         assert result is llm_response
 
+@pytest.mark.asyncio
+async def test_post_call_with_no_messages_and_no_reply_text_returns_the_response():
+    guardrail: Final = LakeraAIGuardrail(api_key="test_key")
+    response: Final = {"candidates": [{"content": {"role": "model", "parts": [{"text": "hi"}]}}]}
+    rejected: Final = HTTPException(status_code=400, detail="either content, messages, or tools must be provided")
+    with patch.object(guardrail, "call_v2_guard", new=AsyncMock(side_effect=rejected)):
+        result: Final = await guardrail.async_post_call_success_hook(
+            data={"contents": [{"role": "user", "parts": [{"text": "hello"}]}]},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+            response=response,
+        )
+    assert result == response
+
+
+@pytest.mark.asyncio
+async def test_post_call_with_messages_still_reaches_lakera():
+    guardrail: Final = LakeraAIGuardrail(api_key="test_key")
+    rejected: Final = HTTPException(status_code=400, detail="rejected")
+    with (
+        patch.object(guardrail, "call_v2_guard", new=AsyncMock(side_effect=rejected)),
+        pytest.raises(HTTPException),
+    ):
+        await guardrail.async_post_call_success_hook(
+            data={"messages": [{"role": "user", "content": "hello"}]},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+            response={},
+        )
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_lakera_post_call_masks_pii_and_allows():
