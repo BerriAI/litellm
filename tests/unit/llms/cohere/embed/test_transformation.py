@@ -416,6 +416,42 @@ async def test_cohere_embed_v4_image_tokens_are_billed_apart_from_input_tokens(
     )
 
 
+@pytest.mark.usefixtures("_cohere_httpx_transport", "local_model_cost_map")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("model_name", ["Cohere-Embed-V5-Fast", "Cohere-Embed-V5-Pro"])
+@pytest.mark.parametrize(("input_tokens", "image_tokens"), [(5, 0), (0, 6), (3, 6)])
+async def test_cohere_foundry_embed_v5_charges_its_provider_billed_tokens(
+    respx_mock: respx.MockRouter, model_name: str, input_tokens: int, image_tokens: int
+) -> None:
+    api_base: Final = "https://foundry.example.com/providers/cohere/v2/embed"
+    route: Final = respx_mock.post(api_base).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "embeddings": {"float": [[0.125, -0.375]]},
+                "meta": {"billed_units": {"input_tokens": input_tokens, "image_tokens": image_tokens}},
+            },
+        )
+    )
+    foundry_prices: Final = litellm.get_model_info(f"azure_ai/{model_name}")
+
+    response: Final = await litellm.aembedding(
+        model=f"cohere/{model_name}",
+        input=[ONE_PIXEL_PNG if image_tokens else "hello world"],
+        api_base=api_base,
+        api_key="test-key",
+    )
+
+    assert json.loads(route.calls.last.request.content)["model"] == model_name
+    assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.125, -0.375]}]
+    assert response.usage is not None
+    assert response.usage.prompt_tokens == input_tokens + image_tokens
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        input_tokens * foundry_prices["input_cost_per_token"]
+        + image_tokens * foundry_prices["input_cost_per_image_token"]
+    )
+
+
 @pytest.mark.usefixtures("_cohere_httpx_transport")
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize("sync_mode", [True, False])
