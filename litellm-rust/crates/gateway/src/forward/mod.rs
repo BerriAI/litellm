@@ -4,15 +4,19 @@ use axum::{
     Router,
     body::Body,
     extract::{ConnectInfo, DefaultBodyLimit, Request, State},
-    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
+    http::{HeaderMap, HeaderValue, StatusCode, Uri, Version, header},
     response::Response,
 };
 use hyper_util::{
     client::legacy::{Client, connect::HttpConnector},
     rt::TokioExecutor,
 };
+use tokio::net::TcpListener;
 
 use crate::Error;
+use websocket::Upgrades;
+
+mod websocket;
 
 pub const PEER_HEADER: &str = "x-litellm-rust-peer";
 
@@ -20,6 +24,7 @@ pub const PEER_HEADER: &str = "x-litellm-rust-peer";
 pub struct Forward {
     upstream: Uri,
     client: Client<HttpConnector, Body>,
+    upgrades: Upgrades,
 }
 
 impl Forward {
@@ -41,7 +46,11 @@ impl Forward {
         let client = Client::builder(TokioExecutor::new())
             .retry_canceled_requests(false)
             .build_http();
-        Ok(Self { upstream, client })
+        Ok(Self {
+            upstream,
+            client,
+            upgrades: Upgrades::default(),
+        })
     }
 
     pub fn router(self) -> Router {
@@ -50,6 +59,32 @@ impl Forward {
             .layer(DefaultBodyLimit::disable())
             .with_state(self)
     }
+
+    /// Serves until `shutdown` resolves, then gives open WebSockets a bounded drain before closing them.
+    pub async fn serve(
+        self,
+        listener: TcpListener,
+        shutdown: impl Future<Output = ()> + Send + 'static,
+    ) -> std::io::Result<()> {
+        let upgrades = self.upgrades.clone();
+        let _close_on_drop = upgrades.close_on_drop();
+        let draining = upgrades.clone();
+        let result = axum::serve(
+            listener,
+            self.router()
+                .into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            shutdown.await;
+            draining.begin_shutdown();
+        })
+        .await;
+        if result.is_err() {
+            upgrades.close();
+        }
+        upgrades.wait().await;
+        result
+    }
 }
 
 async fn forward(
@@ -57,12 +92,16 @@ async fn forward(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     mut request: Request,
 ) -> Result<Response, StatusCode> {
+    let downstream = state.upgrades.take_handshake(&mut request)?;
     let mut uri = state.upstream.into_parts();
     uri.path_and_query = request.uri().path_and_query().cloned();
     *request.uri_mut() = Uri::from_parts(uri).map_err(|_| StatusCode::BAD_GATEWAY)?;
-    *request.version_mut() = axum::http::Version::HTTP_11;
+    *request.version_mut() = Version::HTTP_11;
     let headers = request.headers_mut();
     strip_hop_headers(headers);
+    if downstream.is_some() {
+        websocket::restore_handshake_headers(headers);
+    }
     // Forwarding headers pass through untouched so Python sees the request as if the client
     // connected to it directly. Inserting replaces any client-sent copy: the peer is the one
     // value a client must not choose.
@@ -70,10 +109,18 @@ async fn forward(
         PEER_HEADER,
         HeaderValue::from_str(&peer.to_string()).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
     );
-    let mut response = state.client.request(request).await.map_err(|error| {
+    let response = state.client.request(request);
+    let mut response = match downstream {
+        Some(_) => state.upgrades.until_closed(response).await?,
+        None => response.await,
+    }
+    .map_err(|error| {
         tracing::warn!(%error, "python proxy unreachable");
         StatusCode::BAD_GATEWAY
     })?;
+    if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+        return state.upgrades.switch(downstream, response).await;
+    }
     strip_hop_headers(response.headers_mut());
     Ok(response.map(Body::new))
 }

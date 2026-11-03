@@ -10,11 +10,12 @@ litellm-secret-value.workspace = true
 axum.workspace = true
 envy = "0.4.2"
 http-body-util = "0.1"
+hyper = { version = "1", features = ["http1"] }
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
 litellm-inference.workspace = true
 litellm-gateway-inference.workspace = true
 litellm-gateway-mcp.workspace = true
-tokio-util = "0.7"
+tokio-util = { version = "0.7", features = ["rt"] }
 thiserror.workspace = true
 futures-util.workspace = true
 litellm-gateway-auth.workspace = true
@@ -30,7 +31,7 @@ litellm-tracing.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 tracing.workspace = true
-tokio = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["signal", "io-util"] }
 uuid.workspace = true
 tower-sessions-moka-store = "0.15.0"
 
@@ -40,4 +41,5 @@ base64.workspace = true
 rstest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync"] }
+tokio-tungstenite.workspace = true
 tower = { version = "0.5", features = ["util"] }
