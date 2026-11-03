@@ -58,8 +58,10 @@ func resourceLiteLLMTeamMemberCreate(d *schema.ResourceData, m interface{}) erro
 				"user_email": d.Get("user_email").(string),
 			},
 		},
-		"team_id":            d.Get("team_id").(string),
-		"max_budget_in_team": d.Get("max_budget_in_team").(float64),
+		"team_id": d.Get("team_id").(string),
+	}
+	if v, ok := d.GetOk("max_budget_in_team"); ok {
+		memberData["max_budget_in_team"] = v.(float64)
 	}
 
 	log.Printf("[DEBUG] Create team member request payload: %+v", memberData)
@@ -94,11 +96,15 @@ func resourceLiteLLMTeamMemberUpdate(d *schema.ResourceData, m interface{}) erro
 	client := m.(*Client)
 
 	updateData := map[string]interface{}{
-		"user_id":            d.Get("user_id").(string),
-		"user_email":         d.Get("user_email").(string),
-		"team_id":            d.Get("team_id").(string),
-		"role":               d.Get("role").(string),
-		"max_budget_in_team": d.Get("max_budget_in_team").(float64),
+		"user_id":    d.Get("user_id").(string),
+		"user_email": d.Get("user_email").(string),
+		"team_id":    d.Get("team_id").(string),
+		"role":       d.Get("role").(string),
+	}
+	if v, ok := d.GetOk("max_budget_in_team"); ok {
+		updateData["max_budget_in_team"] = v.(float64)
+	} else if d.HasChange("max_budget_in_team") {
+		updateData["max_budget_in_team"] = nil
 	}
 
 	log.Printf("[DEBUG] Update team member request payload: %+v", updateData)
