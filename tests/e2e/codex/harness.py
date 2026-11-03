@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 from collections.abc import Generator, Mapping
@@ -38,6 +39,13 @@ model_catalog_url = "{gateway}/v1/models"
 
 
 @dataclass(frozen=True, slots=True)
+class McpServer:
+    command: str
+    args: tuple[str, ...]
+    env: Mapping[str, str]
+
+
+@dataclass(frozen=True, slots=True)
 class CodexHarness:
     home: Path
     api_key: str = field(repr=False)
@@ -56,6 +64,11 @@ class CodexHarness:
         for name, content in files.items():
             _ = (workspace / name).write_text(content)
         return workspace
+
+    @step("Give Codex the {name} MCP server")
+    def add_mcp_server(self, name: str, server: McpServer) -> None:
+        with (self.codex_home / "config.toml").open("a") as config:
+            _ = config.write(_mcp_server_table(name, server))
 
     @step('Run Codex on {model} through the proxy with the prompt "{prompt}"')
     def exec(self, prompt: str, *, model: str, cwd: Path, compact_after_tokens: int | None = None) -> CodexRun:
@@ -90,6 +103,17 @@ class CodexHarness:
             check=False,
         )
         return codex_run(exit_code=completed.returncode, stdout=completed.stdout, stderr=completed.stderr)
+
+
+def _mcp_server_table(name: str, server: McpServer) -> str:
+    env: Final = ", ".join(f"{key} = {json.dumps(value)}" for key, value in server.env.items())
+    return (
+        f"\n[mcp_servers.{name}]\n"
+        f"command = {json.dumps(server.command)}\n"
+        f"args = {json.dumps(server.args)}\n"
+        f"env = {{ {env} }}\n"
+        'default_tools_approval_mode = "approve"\n'
+    )
 
 
 def _compaction_flags(after_tokens: int | None) -> tuple[str, ...]:
