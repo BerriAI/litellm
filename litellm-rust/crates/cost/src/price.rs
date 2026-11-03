@@ -151,6 +151,8 @@ pub enum Uplift {
     Residency(Residency),
     /// Vertex non-global endpoint, from `regional_endpoint_uplift_multiplier`
     NonGlobalEndpoint,
+    /// OpenAI FedRAMP endpoint (gov.api.openai.com), from `fedramp_uplift_multiplier`
+    FedrampEndpoint,
     /// Anthropic `speed: fast`, from `provider_specific_entry.fast`
     Speed(Speed),
     /// Anthropic and Bedrock geo, from `provider_specific_entry.<geo>`, lowercased as on main
@@ -161,7 +163,6 @@ pub enum Uplift {
 pub enum Residency {
     Eu,
     Us,
-    Fedramp,
 }
 
 impl Band {

@@ -104,10 +104,7 @@ impl From<&EntryWire> for Adjustments {
                 (Uplift::NonGlobalEndpoint, wire.regional_endpoint_uplift),
                 (Uplift::Residency(Residency::Eu), wire.residency_uplift_eu),
                 (Uplift::Residency(Residency::Us), wire.residency_uplift_us),
-                (
-                    Uplift::Residency(Residency::Fedramp),
-                    wire.residency_uplift_fedramp,
-                ),
+                (Uplift::FedrampEndpoint, wire.fedramp_uplift),
             ]
             .into_iter()
             .filter_map(|(uplift, factor)| Some((uplift, factor?))),
@@ -751,7 +748,7 @@ mod tests {
         let wire = wire(json!({
             "regional_endpoint_uplift_multiplier": 1.1,
             "regional_processing_uplift_multiplier_eu": "1.2",
-            "regional_processing_uplift_multiplier_fedramp": 1.1
+            "fedramp_uplift_multiplier": 1.1
         }));
         let adjustments = Adjustments::from(&wire);
 
@@ -771,7 +768,7 @@ mod tests {
         assert_eq!(adjustments.get(&Uplift::Residency(Residency::Us)), None);
         assert_eq!(
             adjustments
-                .get(&Uplift::Residency(Residency::Fedramp))
+                .get(&Uplift::FedrampEndpoint)
                 .map(Multiplier::get),
             Some(1.1)
         );
