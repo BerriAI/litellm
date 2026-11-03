@@ -11,7 +11,7 @@ import httpx
 import pytest
 import yaml
 from integration._support.anthropic_sse import message_json
-from integration._support.client import Gateway, Scenario, eventually
+from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually
 from integration._support.openai_wire import chat_reply
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.safeguards_rig import key_hash
@@ -23,6 +23,8 @@ GLOBAL_POST_CALL: Final = "passthrough-global-post-call"
 KEY_POST_CALL: Final = "passthrough-key-post-call"
 GENERIC_POST_CALL: Final = "passthrough-generic-post-call"
 BLOCKING_POST_CALL: Final = "passthrough-post-call-blocks-every-reply"
+TAG_SCOPED_POST_CALL: Final = "passthrough-tag-scoped-post-call"
+POST_CALL_TAG: Final = "scan-the-reply"
 MODEL_POST_CALL: Final = "passthrough-model-post-call"
 GUARDED_MODEL: Final = "passthrough-guarded-model"
 POST_CALL_GUARDED_MODEL: Final = "passthrough-post-call-guarded-model"
@@ -149,7 +151,10 @@ _MONITORED_ANTHROPIC_BODY: Final = json.dumps(
 
 
 _UNPRICED_ANTHROPIC_BODY: Final = json.dumps(
-    _JSON.validate_json(message_json("msg_passthrough_auth_unpriced", UNPRICED_MODEL, "Hi"))
+    {
+        **JSON_OBJECT.validate_json(message_json("msg_passthrough_auth_unpriced", UNPRICED_MODEL, "Hi")),
+        "usage": {"input_tokens": 300, "output_tokens": 200},
+    }
 ).encode()
 
 
@@ -286,6 +291,16 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                             "litellm_params": {
                                 "guardrail": "generic_guardrail_api",
                                 "mode": "post_call",
+                                "default_on": False,
+                                "api_base": blocking_post_call_vendor.url,
+                                "api_key": "synthetic-guardrail-key",
+                            },
+                        },
+                        {
+                            "guardrail_name": TAG_SCOPED_POST_CALL,
+                            "litellm_params": {
+                                "guardrail": "generic_guardrail_api",
+                                "mode": {"tags": {POST_CALL_TAG: "post_call"}, "default": "logging_only"},
                                 "default_on": False,
                                 "api_base": blocking_post_call_vendor.url,
                                 "api_key": "synthetic-guardrail-key",
@@ -801,6 +816,39 @@ def test_a_blocked_response_with_no_cost_result_keeps_its_usage_on_the_failure_r
         assert float(str(rows[0]["spend"])) == 0, rows
         assert int(str(rows[0]["total_tokens"])) > 0, rows
         assert rows[0]["api_base"], rows
+
+
+def test_a_tpm_limit_counts_blocked_responses_with_no_cost_result(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": [BLOCKING_POST_CALL]}, tpm_limit=600)
+        _drain(rig)
+        body: Final = {**_route_body(ANTHROPIC_ROUTE, "Hello"), "model": UNPRICED_MODEL}
+
+        limited: Final = eventually(
+            lambda: _send(gateway, ANTHROPIC_ROUTE, body, key),
+            lambda response: response.status_code != 400,
+            seconds=70,
+        )
+
+        assert limited.status_code == 429, limited.text
+
+
+def test_a_tag_scoped_post_call_guardrail_scans_a_reply_for_a_request_with_its_tag(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": [TAG_SCOPED_POST_CALL]})
+        _drain(rig)
+
+        response: Final = _send(
+            gateway,
+            OPENAI_ROUTE,
+            {**_route_body(OPENAI_ROUTE, "Hello"), "metadata": {"tags": [POST_CALL_TAG]}},
+            key,
+        )
+
+        assert response.status_code == 400, response.text
+        assert len(rig.upstreams[OPENAI_ROUTE].drain()) == 1
 
 
 def test_custom_endpoint_writes_no_charge_for_a_response_its_post_call_guardrail_blocks(rig: AuthGuardrailRig) -> None:
