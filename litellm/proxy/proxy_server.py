@@ -1165,6 +1165,16 @@ server_root_path: Final = get_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
 premium_user_data: Optional["EnterpriseLicenseData"] = _license_check.airgapped_license_data
+
+
+def _premium_with_config_license(config_license: str) -> bool:
+    _license_check.license_str = config_license
+    if _license_check.is_premium():
+        return True
+    _license_check.license_str = os.getenv("LITELLM_LICENSE")
+    return _license_check.is_premium()
+
+
 global_max_parallel_request_retries_env: Final[str | None] = os.getenv("LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES")
 proxy_state: Final = ProxyState()
 SENSITIVE_DATA_MASKER: Final = SensitiveDataMasker()
@@ -6763,6 +6773,12 @@ class ProxyConfig:
 
         self._load_environment_variables(config=config)
 
+        config_license: Final = _GENERAL_SETTINGS_VIEW.validate_python(
+            _GENERAL_SETTINGS_VIEW.validate_python(config).get("general_settings") or {}
+        ).get("litellm_license")
+        if isinstance(config_license, str):
+            premium_user = _premium_with_config_license(config_license)
+
         ## Coordination Redis (before cache init, so the explicit block wins)
         coordination_redis_cache: Final = self._init_coordination_redis(config=config)
         if coordination_redis_cache is not None:
@@ -7173,9 +7189,6 @@ class ProxyConfig:
         _hc_staleness = None
         _hc_ignore_transient = False
         if general_settings:
-            if "litellm_license" in general_settings:
-                _license_check.license_str = general_settings["litellm_license"]
-                premium_user = _license_check.is_premium()
             ### LOAD KEY MANAGEMENT SETTINGS ###
             # The secret manager itself is brought up by get_config(), which runs before the
             # `os.environ/` references in this config were resolved. Re-reading the settings here

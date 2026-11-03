@@ -9,6 +9,7 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -25,11 +26,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from prisma.errors import DataError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import turn_on_json
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.config_resolvers.settings_store import SettingsStore
@@ -2687,26 +2692,84 @@ async def test_load_config_refuses_allowed_ips_without_a_license(tmp_path: Path,
         await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("gated_setting", ['allowed_ips: ["127.0.0.1"]', "enforced_params: [user]"])
-async def test_load_config_lets_a_config_license_unlock_its_enterprise_gates(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gated_setting: str
-):
-    from litellm.proxy import proxy_server
-
-    config_file: Final = tmp_path / "licensed.yaml"
-    config_file.write_text(
-        f'model_list: []\nlitellm_settings: {{}}\ngeneral_settings:\n  litellm_license: "config-license"\n  {gated_setting}\n'
+def _signed_test_license() -> tuple[RSAPublicKey, str]:
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    expiration_date: Final = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
+    message: Final = json.dumps({"expiration_date": expiration_date, "user_id": "test"}).encode()
+    signature: Final = private_key.sign(
+        message,
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+        hashes.SHA256(),
     )
+    return private_key.public_key(), base64.b64encode(message + b"." + signature).decode()
+
+
+def _start_unlicensed(monkeypatch: pytest.MonkeyPatch, public_key: RSAPublicKey) -> None:
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     monkeypatch.setattr("litellm.proxy.proxy_server._license_check.license_str", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server._license_check.public_key", public_key)
+    monkeypatch.setattr("litellm.proxy.proxy_server._license_check.airgapped_license_data", None)
     monkeypatch.setattr(
-        "litellm.proxy.proxy_server._license_check.is_premium",
-        lambda: proxy_server._license_check.license_str == "config-license",
+        "litellm.proxy.proxy_server._license_check.http_handler",
+        HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"verify": False})))),
     )
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("LITELLM_LICENSE", raising=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "gated_config",
+    [
+        {"general_settings": {"allowed_ips": ["127.0.0.1"]}},
+        {"general_settings": {"enforced_params": ["user"]}},
+        {"litellm_settings": {"callbacks": ["openai_moderations"]}},
+    ],
+)
+async def test_load_config_lets_a_config_license_unlock_its_enterprise_gates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gated_config: dict[str, dict[str, list[str]]]
+):
+    from litellm.proxy import proxy_server
+
+    public_key, license_key = _signed_test_license()
+    config_file: Final = tmp_path / "licensed.yaml"
+    config_file.write_text(
+        json.dumps(
+            {
+                "model_list": [],
+                "litellm_settings": gated_config.get("litellm_settings", {}),
+                "general_settings": {"litellm_license": license_key, **gated_config.get("general_settings", {})},
+            }
+        )
+    )
+    _start_unlicensed(monkeypatch, public_key)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    assert proxy_server.premium_user is True
+
+
+@pytest.mark.asyncio
+async def test_load_config_keeps_a_valid_env_license_when_the_config_license_is_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy import proxy_server
+
+    public_key, license_key = _signed_test_license()
+    config_file: Final = tmp_path / "stale_license.yaml"
+    config_file.write_text(
+        json.dumps(
+            {
+                "model_list": [],
+                "litellm_settings": {},
+                "general_settings": {"litellm_license": "not-a-valid-license", "allowed_ips": ["127.0.0.1"]},
+            }
+        )
+    )
+    _start_unlicensed(monkeypatch, public_key)
+    monkeypatch.setenv("LITELLM_LICENSE", license_key)
 
     await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
