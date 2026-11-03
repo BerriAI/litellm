@@ -309,7 +309,14 @@ async fn deployment_workspace_is_required_and_sent_as_a_header(
     })
     .await;
     if !configured {
-        assert!(matches!(result, Err(Error::Auth(_))));
+        let Err(error) = result else {
+            panic!("the call fails");
+        };
+        assert!(!error.dispatched(), "{error:?}");
+        assert!(
+            error.is_request() || error.is_missing_credential(),
+            "{error:?}"
+        );
         assert!(received(&upstream).await.is_empty());
         return;
     }

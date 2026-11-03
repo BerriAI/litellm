@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import json
-import os
 import re
 import threading
 import uuid
@@ -26,8 +25,6 @@ from integration._support.upstream import _aws_event_frame, aws_event_stream_fra
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
-
 pytestmark: Final = pytest.mark.shares_worker_state
 
 _MODEL_ID: Final = "global.moonshotai.kimi-k3"
@@ -43,7 +40,6 @@ _REJECTION: Final = "structured output schema uses unsupported regex negative lo
 _THROTTLED: Final = "Too many requests, please wait before trying again"
 _UNKNOWN_TYPE: Final = "somethingBedrockAddedLater"
 _UNKNOWN_ONLY: Final = "none of its 1 events carried a known event type"
-_SIGNING_KEY: Final = os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt")
 _JSON_HEADERS: Final = MappingProxyType({":content-type": "application/json", ":message-type": "event"})
 _USAGE: Final[dict[str, JsonValue]] = {"usage": {"inputTokens": 11, "outputTokens": 4, "totalTokens": 15}}
 _RESPONSE: Final = json.dumps(
@@ -277,17 +273,9 @@ def _responses_text(events: Iterable[dict[str, JsonValue]]) -> str:
     )
 
 
-def _inner_response_id(identity: str) -> str:
-    managed: Final = decrypt_if_encrypted_with(identity.removeprefix("resp_"), _SIGNING_KEY)
-    assert managed is not None, identity
-    issued: Final = managed.split(";", 1)[0].rsplit("response_id:", 1)[1]
-    decoded: Final = base64.b64decode(issued.removeprefix("resp_")).decode()
-    return decoded.rsplit("response_id:", 1)[1]
-
-
 def _completed_response_id(events: Iterable[dict[str, JsonValue]]) -> str:
     (completed,) = tuple(event for event in events if event.get("type") == "response.completed")
-    return _inner_response_id(str(_JSON.validate_python(completed["response"])["id"]))
+    return str(_JSON.validate_python(completed["response"])["id"])
 
 
 def _only_received(wire: Wire) -> tuple[str, dict[str, JsonValue]]:

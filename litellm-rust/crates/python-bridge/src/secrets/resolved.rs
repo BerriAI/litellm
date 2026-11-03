@@ -4,10 +4,9 @@ use futures_util::future::BoxFuture;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::PythonContext;
 use litellm_http::Client;
+use litellm_secret_value::SecretValue;
 use litellm_secrets::source::SecretSource;
-use litellm_secrets::{
-    Error, FailurePolicy, OidcResolver, SecretManagerState, SecretResolver, SecretValue,
-};
+use litellm_secrets::{Error, FailurePolicy, OidcResolver, SecretManagerState, SecretResolver};
 
 use super::config::SecretManagerSnapshot;
 
@@ -84,7 +83,7 @@ mod tests {
     }
 
     async fn resolve(state: Arc<SecretManagerState>, name: &'static str) -> Option<String> {
-        ResolvedSecrets::from_state(state, litellm_http::Client::plain_for_test())
+        ResolvedSecrets::from_state(state, litellm_http::Client::for_test())
             .resolve(&[name])
             .await
             .unwrap()
@@ -182,7 +181,7 @@ mod tests {
             .await;
         let source = ResolvedSecrets::from_state(
             state(&server, KeyManagementSettings::default()),
-            litellm_http::Client::plain_for_test(),
+            litellm_http::Client::for_test(),
         );
         let snapshot = source.resolve(&[declared]).await.unwrap();
         assert_eq!(snapshot.get(undeclared), None);
@@ -248,7 +247,7 @@ mod tests {
     async fn oidc_failures_are_not_converted_to_missing_secrets() {
         let result = ResolvedSecrets::from_state(
             Arc::new(SecretManagerState::default()),
-            litellm_http::Client::plain_for_test(),
+            litellm_http::Client::for_test(),
         )
         .resolve(&["oidc/"])
         .await;

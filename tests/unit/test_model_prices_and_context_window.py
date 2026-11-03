@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -12,9 +12,9 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.fallback_generalizations import match_capability_generalizations
+from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.llms.openai.chat.gpt_reasoning_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.types.utils import SearchFreeRequests
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -113,6 +113,23 @@ def test_no_row_carries_the_retired_max_tokens_field(prices: dict) -> None:
 
 def test_github_copilot_backup_rows_match_the_main_catalog() -> None:
     assert _github_copilot_catalog_rows(PRICES_PATH) == _github_copilot_catalog_rows(BACKUP_PRICES_PATH)
+
+
+class _TokenLimits(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    max_input_tokens: int
+    max_output_tokens: int
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_zerogpu_rows_have_an_output_limit_that_fits_the_context_window(path: Path) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    rows: Final = MappingProxyType(
+        {key: _TokenLimits.model_validate(value) for key, value in prices.items() if key.startswith("zerogpu/")}
+    )
+    assert rows, f"No ZeroGPU rows found in {path}"
+    assert tuple(key for key, row in rows.items() if row.max_output_tokens > row.max_input_tokens) == ()
 
 
 def test_github_copilot_rows_resolve_through_get_model_info() -> None:
@@ -224,6 +241,85 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
     )
 
 
+# Azure OpenAI web_search runs on Grounding with Bing and bills each Bing request reported in
+# tool_usage.web_search.num_requests: https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/web-search
+# Grounding with Bing lists $14 per 1,000 transactions: https://www.microsoft.com/en-us/bing/apis/grounding-pricing
+AZURE_WEB_SEARCH_COST_PER_REQUEST: Final = 0.014
+_AZURE_DEPLOYMENT_PREFIX: Final = re.compile(r"^azure/(us/|eu/|global/|global-standard/)?")
+
+
+def _azure_rows(prices: Mapping[str, object]) -> Mapping[str, dict]:
+    return MappingProxyType(
+        {key: row for key, row in prices.items() if key.startswith("azure/") and isinstance(row, dict)}
+    )
+
+
+def test_azure_web_search_rows_charge_the_grounding_with_bing_price(prices: dict):
+    wrong = {
+        key: row["search_context_cost_per_query"]
+        for key, row in _azure_rows(prices).items()
+        if row.get("search_context_cost_per_query")
+        and set(row["search_context_cost_per_query"].values()) != {AZURE_WEB_SEARCH_COST_PER_REQUEST}
+    }
+    assert wrong == {}
+
+
+def test_azure_rows_price_web_search_when_their_openai_model_does(prices: dict):
+    missing = sorted(
+        key
+        for key, row in _azure_rows(prices).items()
+        if not row.get("search_context_cost_per_query")
+        and row.get("mode") in ("chat", "responses", None)
+        and isinstance(twin := prices.get(_AZURE_DEPLOYMENT_PREFIX.sub("", key)), dict)
+        and twin.get("search_context_cost_per_query")
+    )
+    assert missing == []
+
+
+PRIORITY_SUFFIX: Final = "_priority"
+MIN_PRIORITY_MARKUP: Final = 1.0
+MAX_PRIORITY_MARKUP: Final = 5.0
+
+
+def _rate(value: JsonValue | None) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _priority_markup(entry: Mapping[str, JsonValue], key: str) -> float | None:
+    if not key.endswith(PRIORITY_SUFFIX):
+        return None
+    priority: Final = _rate(entry[key])
+    standard: Final = _rate(entry.get(key.removesuffix(PRIORITY_SUFFIX)))
+    if priority is None or standard is None or standard <= 0:
+        return None
+    return priority / standard
+
+
+def priority_markups(prices: Mapping[str, JsonValue]) -> Iterator[tuple[str, str, float]]:
+    for name, entry in prices.items():
+        if not isinstance(entry, dict):
+            continue
+        for key in entry:
+            if (markup := _priority_markup(entry, key)) is not None:
+                yield name, key, markup
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_priority_rates_stay_within_a_premium_of_their_standard_rate(path: Path) -> None:
+    prices: Final = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    markups: Final = tuple(priority_markups(prices))
+    assert markups
+    overpriced: Final = tuple(
+        f"{name}.{key} is {markup:.1f}x its standard rate"
+        for name, key, markup in markups
+        if not MIN_PRIORITY_MARKUP <= markup <= MAX_PRIORITY_MARKUP
+    )
+    assert overpriced == (), (
+        "a priority rate is a premium on the standard rate, so one below it or far above it was likely copied from "
+        "another model; drop the key when the provider sells no priority tier for the model:\n" + "\n".join(overpriced)
+    )
+
+
 # Azure Foundry GPT-6.1 Sol announcement, 2026-09-29: https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-gpt-6-1-sol-in-microsoft-foundry-advanced-intelligence-optimized-for/4560811
 AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM: Final = MappingProxyType({"us": 1.1, "eu": 1.2, "apac": 1.2})
 
@@ -290,6 +386,34 @@ VERTEX_GEMINI_FLASH_RETIREMENT_DATES: Final = MappingProxyType(
 @pytest.mark.parametrize("prefix", ["", "vertex_ai/"])
 def test_vertex_gemini_flash_rows_carry_the_documented_retirement_date(prices: dict, model: str, prefix: str):
     assert prices[f"{prefix}{model}"]["deprecation_date"] == VERTEX_GEMINI_FLASH_RETIREMENT_DATES[model]
+
+
+# https://developers.openai.com/api/docs/deprecations, the 2026-10-14 GPT-4 series notice
+OPENAI_GPT_4_SERIES_SNAPSHOTS: Final = MappingProxyType(
+    {
+        "gpt-4o": ("gpt-4o-2024-08-06", "gpt-4o-2024-11-20"),
+        "gpt-4o-mini": ("gpt-4o-mini-2024-07-18",),
+        "gpt-4.1": ("gpt-4.1-2025-04-14",),
+        "gpt-4.1-mini": ("gpt-4.1-mini-2025-04-14",),
+    }
+)
+
+
+class _ShutdownRow(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    deprecation_date: str | None = None
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+@pytest.mark.parametrize("alias", sorted(OPENAI_GPT_4_SERIES_SNAPSHOTS))
+def test_openai_gpt_4_series_aliases_retire_with_their_snapshots(path: Path, alias: str) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    snapshot_dates: Final = frozenset(
+        _ShutdownRow.model_validate(prices[snapshot]).deprecation_date
+        for snapshot in OPENAI_GPT_4_SERIES_SNAPSHOTS[alias]
+    )
+    assert snapshot_dates == {_ShutdownRow.model_validate(prices[alias]).deprecation_date}
 
 
 def _sampling_flags_across_provider_twins(prices: Mapping[str, Mapping[str, object]], key: str) -> frozenset[object]:
@@ -685,18 +809,6 @@ class TestBedrockClaude35SonnetContextWindow:
 
 PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
 MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "decisions", "evaluation"})
-VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST: Final = frozenset(
-    {
-        "vertex_ai-ai21_models",
-        "vertex_ai-embedding-models",
-        "vertex_ai-image-models",
-        "vertex_ai-llama_models",
-        "vertex_ai-mistral_models",
-        "vertex_ai-openai_models",
-        "vertex_ai-qwen_models",
-        "vertex_ai-video-models",
-    }
-)
 
 
 def is_registered_provider(label: str, model_names: tuple[str, ...]) -> bool:
@@ -718,7 +830,6 @@ def unregistered_providers(rows: Mapping[str, object]) -> list[str]:
         and "litellm_provider" in entry
         and entry.get("mode") not in MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY
         and entry["litellm_provider"] not in PROVIDER_LABELS_WITHOUT_A_MODEL_SET
-        and entry["litellm_provider"] not in VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST
     )
     return sorted(
         label
@@ -762,6 +873,26 @@ def _search_free_requests_rows(path: Path) -> Mapping[str, dict[str, JsonValue]]
     )
 
 
+def _supports_continuation_rows(path: Path) -> frozenset[str]:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    return frozenset(
+        key for key, row in prices.items() if isinstance(row, dict) and row.get("supports_continuation") is True
+    )
+
+
+def test_gemini_4_argon_google_rows_carry_supports_continuation_in_both_cost_map_copies() -> None:
+    main_rows: Final = _supports_continuation_rows(PRICES_PATH)
+    # long decode models: https://ai.google.dev/gemini-api/docs/generate-content/long-decode and
+    # https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon (2026-11-02)
+    long_decode_rows: Final = {
+        "gemini/gemini-4-argon",
+        "vertex_ai/gemini-4-argon",
+        "vertex_ai/gemini-4-argon-cyber-permissive",
+    }
+    assert long_decode_rows <= main_rows, sorted(main_rows)
+    assert _supports_continuation_rows(BACKUP_PRICES_PATH) == main_rows
+
+
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_search_free_requests_rows_are_grounding_rows_with_one_allowance_per_group(path: Path) -> None:
     rows = _search_free_requests_rows(path)
@@ -801,7 +932,10 @@ def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata(pa
     assert entry["cache_read_input_token_cost"] == pytest.approx(1.2 / 6.9565 / 1_000_000, rel=1e-4)
     sibling = rows["volcengine/doubao-seed-2-1-pro-260628"]
     assert isinstance(sibling, dict)
-    assert all(entry[key] == sibling[key] for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"))
+    assert all(
+        entry[key] == sibling[key]
+        for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+    )
 
 
 def _bedrock_gpt_oss_rows(prices: Mapping[str, JsonValue]) -> tuple[str, ...]:

@@ -36,19 +36,19 @@ where
     ) -> Result<T, Error> {
         match self {
             Self::Pool(pool) => {
-                let mut pooled = pool.get().map_err(|_| Error::Unavailable)?;
+                let mut pooled = pool.get().map_err(Error::unavailable)?;
                 let result = operation(&mut ConnectionRef::Node(&mut pooled.connection));
-                pooled.failed = matches!(result, Err(Error::Unavailable));
+                pooled.failed = matches!(result, Err(Error::Unavailable(_)));
                 result
             }
             Self::Cluster(pool) => {
-                let mut pooled = pool.get().map_err(|_| Error::Unavailable)?;
+                let mut pooled = pool.get().map_err(Error::unavailable)?;
                 let result = operation(&mut ConnectionRef::Cluster(&mut pooled.connection));
-                pooled.failed = matches!(result, Err(Error::Unavailable));
+                pooled.failed = matches!(result, Err(Error::Unavailable(_)));
                 result
             }
             Self::Fixed(connection) => {
-                let mut connection = connection.lock().map_err(|_| Error::Unavailable)?;
+                let mut connection = connection.lock()?;
                 operation(&mut ConnectionRef::Node(&mut *connection))
             }
         }
@@ -61,7 +61,7 @@ where
     {
         tokio::task::spawn_blocking(move || connections.execute(operation))
             .await
-            .map_err(|_| Error::Unavailable)?
+            .map_err(Error::unavailable)?
     }
 
     pub fn fixed(connection: C) -> Self {
@@ -95,7 +95,7 @@ fn pool<M: r2d2::ManageConnection>(manager: M) -> Result<r2d2::Pool<M>, Error> {
         .connection_timeout(REDIS_TIMEOUT)
         .test_on_check_out(false)
         .build(manager)
-        .map_err(|_| Error::Unavailable)
+        .map_err(Error::unavailable)
 }
 
 fn close_idle<M, T>(pool: &r2d2::Pool<M>)
@@ -123,7 +123,7 @@ impl ConnectionManager {
     fn open(url: &str) -> Result<Self, Error> {
         redis::Client::open(url)
             .map(Self)
-            .map_err(|_| Error::Unavailable)
+            .map_err(Error::unavailable)
     }
 }
 
@@ -151,14 +151,26 @@ impl r2d2::ManageConnection for ConnectionManager {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+enum TopologyFault {
+    #[error("Redis Cluster needs at least one startup node")]
+    NoStartupNodes,
+    #[error("Redis Cluster nodes need a TCP address")]
+    NonTcpAddress,
+    #[error("Redis Cluster answered a fan-out command without a per-node map")]
+    FanOutReply,
+    #[error("scan target does not match the connection topology")]
+    ScanTarget,
+}
+
 pub(crate) struct ClusterConnectionManager(ClusterClient);
 
 impl ClusterConnectionManager {
     fn open(url: &str, startup_nodes: &[RedisNode]) -> Result<Self, Error> {
         if startup_nodes.is_empty() {
-            return Err(Error::Unavailable);
+            return Err(Error::unavailable(TopologyFault::NoStartupNodes));
         }
-        let info = url.into_connection_info().map_err(|_| Error::Unavailable)?;
+        let info = url.into_connection_info().map_err(Error::unavailable)?;
         let nodes = startup_nodes
             .iter()
             .map(|node| node_info(&info, node))
@@ -168,7 +180,7 @@ impl ClusterConnectionManager {
             .response_timeout(REDIS_TIMEOUT)
             .build()
             .map(Self)
-            .map_err(|_| Error::Unavailable)
+            .map_err(Error::unavailable)
     }
 }
 
@@ -185,7 +197,7 @@ fn node_info(info: &ConnectionInfo, node: &RedisNode) -> Result<ConnectionInfo, 
             insecure: *insecure,
             tls_params: tls_params.clone(),
         },
-        _ => return Err(Error::Unavailable),
+        _ => return Err(Error::unavailable(TopologyFault::NonTcpAddress)),
     };
     Ok(info.clone().set_addr(addr))
 }
@@ -298,7 +310,7 @@ impl ConnectionRef<'_> {
                     .and_then(|replies| pipeline.query(&mut Replies(Some(replies))))
             }
         }
-        .map_err(|_| Error::Unavailable)
+        .map_err(Error::unavailable)
     }
 
     pub(crate) fn scan(
@@ -311,7 +323,7 @@ impl ConnectionRef<'_> {
             Self::Node(connection) => {
                 let page = scan_command(0, pattern, count)
                     .query::<ScanPage>(*connection)
-                    .map_err(|_| Error::Unavailable)?;
+                    .map_err(Error::unavailable)?;
                 vec![(None, page)]
             }
             Self::Cluster(connection) => connection
@@ -322,7 +334,7 @@ impl ConnectionRef<'_> {
                         Some(ResponsePolicy::Special),
                     )),
                 )
-                .map_err(|_| Error::Unavailable)
+                .map_err(Error::unavailable)
                 .and_then(primary_pages)?
                 .into_iter()
                 .map(|(node, page)| (Some(node), page))
@@ -362,7 +374,7 @@ impl ConnectionRef<'_> {
 
     pub(crate) fn node_text(&mut self, command: &redis::Cmd) -> Result<String, Error> {
         match self {
-            Self::Node(connection) => command.query(*connection).map_err(|_| Error::Unavailable),
+            Self::Node(connection) => command.query(*connection).map_err(Error::unavailable),
             Self::Cluster(connection) => {
                 let value = connection
                     .route_command(
@@ -372,18 +384,16 @@ impl ConnectionRef<'_> {
                             Some(ResponsePolicy::Special),
                         )),
                     )
-                    .map_err(|_| Error::Unavailable)?;
+                    .map_err(Error::unavailable)?;
                 let redis::Value::Map(entries) = value else {
-                    return Err(Error::Unavailable);
+                    return Err(Error::unavailable(TopologyFault::FanOutReply));
                 };
                 let mut replies = entries
                     .into_iter()
                     .map(|(node, reply)| {
                         Ok((
-                            redis::from_redis_value::<String>(node)
-                                .map_err(|_| Error::Unavailable)?,
-                            redis::from_redis_value::<String>(reply)
-                                .map_err(|_| Error::Unavailable)?,
+                            redis::from_redis_value::<String>(node).map_err(Error::unavailable)?,
+                            redis::from_redis_value::<String>(reply).map_err(Error::unavailable)?,
                         ))
                     })
                     .collect::<Result<Vec<(String, String)>, Error>>()?;
@@ -400,7 +410,7 @@ impl ConnectionRef<'_> {
     pub(crate) fn flushall(&mut self) -> Result<(), Error> {
         let command = redis::cmd("FLUSHALL");
         match self {
-            Self::Node(connection) => command.query(*connection).map_err(|_| Error::Unavailable),
+            Self::Node(connection) => command.query(*connection).map_err(Error::unavailable),
             Self::Cluster(connection) => connection
                 .route_command(
                     &command,
@@ -410,7 +420,7 @@ impl ConnectionRef<'_> {
                     )),
                 )
                 .map(|_| ())
-                .map_err(|_| Error::Unavailable),
+                .map_err(Error::unavailable),
         }
     }
 
@@ -424,7 +434,7 @@ impl ConnectionRef<'_> {
         let command = scan_command(cursor, pattern, count);
         match (self, node) {
             (Self::Node(connection), None) => {
-                command.query(*connection).map_err(|_| Error::Unavailable)
+                command.query(*connection).map_err(Error::unavailable)
             }
             (Self::Cluster(connection), Some(node)) => connection
                 .route_command(
@@ -434,9 +444,9 @@ impl ConnectionRef<'_> {
                         port: node.port(),
                     }),
                 )
-                .map_err(|_| Error::Unavailable)
-                .and_then(|value| redis::from_redis_value(value).map_err(|_| Error::Unavailable)),
-            _ => Err(Error::Unavailable),
+                .map_err(Error::unavailable)
+                .and_then(|value| redis::from_redis_value(value).map_err(Error::unavailable)),
+            _ => Err(Error::unavailable(TopologyFault::ScanTarget)),
         }
     }
 }
@@ -445,14 +455,14 @@ type ScanPage = (u64, Vec<String>);
 
 fn primary_pages(value: redis::Value) -> Result<Vec<(NodeAddress, ScanPage)>, Error> {
     let redis::Value::Map(entries) = value else {
-        return Err(Error::Unavailable);
+        return Err(Error::unavailable(TopologyFault::FanOutReply));
     };
     entries
         .into_iter()
         .map(|(node, page)| {
-            let node = redis::from_redis_value::<String>(node).map_err(|_| Error::Unavailable)?;
-            let node = NodeAddress::try_from(node.as_str()).map_err(|_| Error::Unavailable)?;
-            let page = redis::from_redis_value::<ScanPage>(page).map_err(|_| Error::Unavailable)?;
+            let node = redis::from_redis_value::<String>(node).map_err(Error::unavailable)?;
+            let node = NodeAddress::try_from(node.as_str()).map_err(Error::unavailable)?;
+            let page = redis::from_redis_value::<ScanPage>(page).map_err(Error::unavailable)?;
             Ok((node, page))
         })
         .collect()

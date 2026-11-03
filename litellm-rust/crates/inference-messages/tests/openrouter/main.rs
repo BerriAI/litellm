@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use futures_util::TryStreamExt;
-use litellm_inference_messages::{Error, MessagesCall, MessagesCallResponse, MessagesShaping};
+use litellm_inference_messages::{MessagesCall, MessagesCallResponse, MessagesShaping};
 use litellm_inference_testing::{RecordingSecrets, no_secrets};
 use rstest::{fixture, rstest};
 use serde_json::json;
@@ -92,13 +92,12 @@ async fn an_anthropic_key_alone_is_not_an_openrouter_credential(call: MessagesCa
             None,
         )
         .await;
-    assert!(matches!(
-        result,
-        Err(Error::Auth(litellm_auth::Error::MissingApiKey {
-            provider: "OpenRouter",
-            ..
-        }))
-    ));
+    let Err(error) = result else {
+        panic!("the call fails");
+    };
+    assert!(error.is_missing_credential(), "{error:?}");
+    let report = litellm_error::Report::new(&error).to_string();
+    assert!(report.contains("OpenRouter"), "{report}");
     assert!(received(&upstream).await.is_empty());
 }
 

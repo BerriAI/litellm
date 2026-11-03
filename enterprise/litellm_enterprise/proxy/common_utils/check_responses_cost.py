@@ -30,7 +30,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 
 from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
     ManagedObjectCreatorAttribution,
@@ -200,6 +200,7 @@ async def log_billed_background_response(billed: BilledBackgroundResponse) -> Bi
     unpriced: Final = _without_read_price(billed.response)
     cost: Final = logging_obj.response_cost_calculator(result=unpriced)
     end_time: Final = datetime.now()
+    logging_obj.capture_usage_before_logging(unpriced, logging_obj.start_time, end_time)
     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
         async_coroutine=logging_obj.async_success_handler(
             result=unpriced, start_time=logging_obj.start_time, end_time=end_time
@@ -273,7 +274,7 @@ class CheckResponsesCost:
 
     def _resolve_deployment(self, response_id: str) -> Deployment | None:
         model_id: str | None = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
-        return self.llm_router.get_deployment(model_id=model_id) if model_id is not None else None
+        return self.llm_router.registry().deployment(model_id) if model_id is not None else None
 
     async def _get_response(
         self,
@@ -290,12 +291,14 @@ class CheckResponsesCost:
         sees provider env vars, so it fails for every deployment whose credentials
         live in the config; the row then never leaves ``queued``.
         """
-        if not via_router:
-            return await litellm.aget_responses(response_id=response_id, litellm_metadata=litellm_metadata)
-        router_response = await self.llm_router.aget_responses(
-            response_id=response_id, litellm_metadata=litellm_metadata
+        retrieved: Final[object] = (
+            await self.llm_router.aget_responses(response_id=response_id, litellm_metadata=litellm_metadata)
+            if via_router
+            else await litellm.aget_responses(response_id=response_id, litellm_metadata=litellm_metadata)
         )
-        return cast(ResponsesAPIResponse, router_response)
+        if not isinstance(retrieved, ResponsesAPIResponse):
+            raise TypeError(f"Retrieving {response_id} did not return a response object")
+        return retrieved
 
     async def _fetch_unbilled(self, target: _PollTarget) -> ResponsesAPIResponse:
         return await self._get_response(
@@ -413,7 +416,7 @@ class CheckResponsesCost:
         if target.deployment is None or not isinstance(requested, str):
             return MappingProxyType({})
         routed: Final = _ROUTED_DEPLOYMENTS.validate_python(
-            self.llm_router.get_model_list(model_name=requested, team_id=team_id) or ()
+            self.llm_router.registry().deployments(requested, team_id=team_id) or ()
         )
         serving_id: Final = target.deployment.model_info.id
         return MappingProxyType(
