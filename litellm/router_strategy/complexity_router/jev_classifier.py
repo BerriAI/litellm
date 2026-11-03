@@ -1,3 +1,4 @@
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -445,10 +446,11 @@ def build_jev_request(
     model: str,
     instructions: str,
     criteria: Mapping[str, str],
+    question_name: Literal["tier", "model"] = "tier",
 ) -> JevSystemOneRequest:
     state: Final = prompt if system_prompt is None else f"System prompt:\n{system_prompt}\n\nRequest:\n{prompt}"
     question: Final = JevChoiceQuestion(instructions=instructions, criteria=criteria)
-    return JevSystemOneRequest(state=state, model=model, questions=MappingProxyType({"tier": question}))
+    return JevSystemOneRequest(state=state, model=model, questions=MappingProxyType({question_name: question}))
 
 
 def jev_classifier_cost(
@@ -468,3 +470,26 @@ def jev_classifier_cost(
     except ValidationError:
         return None
     return usage.input_tokens * pricing.input_cost_per_token + usage.output_tokens * pricing.output_cost_per_token
+
+
+def uncertainty_choice(
+    choice: str,
+    probabilities: Mapping[str, float],
+    ordered_labels: tuple[str, ...],
+    margin: float | None,
+) -> str:
+    if margin is None or len(ordered_labels) < 2 or set(probabilities) != set(ordered_labels):
+        return choice
+    if any(not math.isfinite(value) or not 0 <= value <= 1 for value in probabilities.values()):
+        return choice
+    if not math.isclose(sum(probabilities.values()), 1.0, abs_tol=1e-4):
+        return choice
+    ranked: Final = tuple(
+        sorted(ordered_labels, key=lambda label: (-probabilities[label], -ordered_labels.index(label)))
+    )
+    first, second = ranked[:2]
+    if choice not in probabilities or probabilities[choice] != probabilities[first]:
+        return choice
+    if probabilities[first] - probabilities[second] >= margin:
+        return choice
+    return max((first, second), key=ordered_labels.index)

@@ -734,6 +734,22 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
         default=None,
         description="Replaces the built-in classification instructions",
     )
+    selection_mode: Literal["tier", "model"] = "tier"
+    tier_descriptions: Mapping[str, str] = Field(default_factory=dict)
+    model_descriptions: Mapping[str, str] = Field(default_factory=dict)
+    uncertainty_margin: float | None = Field(default=None, gt=0, le=1, allow_inf_nan=False)
+
+    @field_validator("tier_descriptions", "model_descriptions")
+    @classmethod
+    def _validate_descriptions(cls, value: Mapping[str, str]) -> Mapping[str, str]:
+        if any(not key.strip() or not description.strip() for key, description in value.items()):
+            raise ValueError("Decision descriptions require non-empty names and descriptions")
+        return MappingProxyType(dict(value))
+
+    @field_serializer("tier_descriptions", "model_descriptions")
+    def _serialize_descriptions(self, value: Mapping[str, str]) -> Mapping[str, str]:
+        return dict(value)
+
     circuit_breaker_enabled: bool = True
     circuit_breaker_cooldown_seconds: float = Field(default=30.0, gt=0.0)
 
@@ -2183,6 +2199,30 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
                 "the tier exists to send operational traffic somewhere cheaper, and an unconfigured tier "
                 "would fall through to the default model"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_decision_selection(self) -> "ComplexityRouterConfig":
+        config: Final = self.opensource_classifier_config
+        if config is None:
+            return self
+        if config.tier_descriptions.keys() - self.tiers.keys():
+            raise ValueError("tier_descriptions must name configured tiers")
+        if config.uncertainty_margin is not None and (self.has_custom_tiers or config.selection_mode != "tier"):
+            raise ValueError("uncertainty_margin requires ordered built-in tier selection")
+        if config.selection_mode != "model":
+            return self
+        if self.classifier_type != "oss_classifier" or self.has_custom_tiers:
+            raise ValueError("model selection requires an oss_classifier with built-in tiers")
+        if self.adaptive or self.session_affinity or self.plugins:
+            raise ValueError("model selection cannot combine adaptive, session_affinity or routing plugins")
+        if any(not isinstance(model, str) for model in self.tiers.values()):
+            raise ValueError("model selection requires one model alias per tier")
+        models: Final = tuple(str(model) for model in self.tiers.values())
+        if len(set(models)) != len(models):
+            raise ValueError("model selection requires unique model aliases across tiers")
+        if set(config.model_descriptions) != set(models):
+            raise ValueError("model_descriptions must describe every configured model alias exactly once")
         return self
 
     @model_validator(mode="after")

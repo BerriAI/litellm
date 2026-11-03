@@ -1337,3 +1337,44 @@ def test_jev_input_targets_still_takes_a_router_with_a_deprecation_warning() -> 
 
     assert old_way == jev_input_targets(router._core_ctx, config)
     assert [target.max_tokens for target in old_way] == [1234]
+
+
+@pytest.mark.parametrize(
+    ("choice", "probabilities", "labels", "margin", "expected"),
+    [
+        ("small", {"small": 1.0}, ("small",), 0.05, "small"),
+        ("small", {"small": float("nan"), "large": 0.5}, ("small", "large"), 0.05, "small"),
+        ("small", {"small": -0.1, "large": 1.1}, ("small", "large"), 0.05, "small"),
+        ("small", {"small": 0.625, "large": 0.375}, ("small", "large"), 0.25, "small"),
+        ("large", {"small": 0.49, "large": 0.51}, ("small", "large"), 0.05, "large"),
+        ("absent", {"small": 0.5, "large": 0.5}, ("small", "large"), 0.05, "absent"),
+    ],
+)
+def test_uncertainty_choice_handles_boundaries_without_inventing_confidence(
+    choice: str, probabilities: dict[str, float], labels: tuple[str, ...], margin: float, expected: str
+) -> None:
+    from litellm.router_strategy.complexity_router.jev_classifier import uncertainty_choice
+
+    assert uncertainty_choice(choice, probabilities, labels, margin) == expected
+
+
+@pytest.mark.parametrize("field", ["tier_descriptions", "model_descriptions"])
+def test_decision_descriptions_survive_configuration_json_roundtrip(field: str) -> None:
+    config: Final = JevClassifierConfig.model_validate({field: {"simple": "Local edits"}})
+    restored: Final = JevClassifierConfig.model_validate_json(config.model_dump_json())
+    assert restored == config
+
+
+def test_model_selection_rejects_unordered_custom_tiers() -> None:
+    with pytest.raises(ValueError, match="built-in tiers"):
+        ComplexityRouterConfig.model_validate(
+            {
+                "classifier_type": "oss_classifier",
+                "tiers": {"basic": "cheap", "advanced": "strong"},
+                "tier_definitions": [
+                    {"name": "basic", "description": "Edits"},
+                    {"name": "advanced", "description": "Architecture"},
+                ],
+                "opensource_classifier_config": {"selection_mode": "model"},
+            }
+        )

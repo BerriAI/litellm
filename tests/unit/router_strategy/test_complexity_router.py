@@ -18174,3 +18174,341 @@ async def test_custom_classifier_failure_preserves_plan_floor_and_direct_default
     assert result.routing_decision.get("tier") == (
         ("premium" if planned_model == "premium-model" else "careful") if plan_mode else None
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("probabilities", "margin", "expected"),
+    [
+        ({"SIMPLE": 0.51, "COMPLEX": 0.49}, None, "SIMPLE"),
+        ({"SIMPLE": 0.51, "COMPLEX": 0.49}, 0.05, "COMPLEX"),
+        ({"SIMPLE": 0.9, "COMPLEX": 0.1}, 0.05, "SIMPLE"),
+        ({"SIMPLE": 0.5, "COMPLEX": 0.5}, 0.05, "COMPLEX"),
+        ({"SIMPLE": 0.51}, 0.05, "SIMPLE"),
+        ({"SIMPLE": 0.51, "COMPLEX": 0.48}, 0.05, "SIMPLE"),
+        ({"SIMPLE": 0.4, "COMPLEX": 0.6}, 0.05, "SIMPLE"),
+    ],
+)
+async def test_decision_uncertainty_preserves_original_and_routes_effective_tier(
+    mock_router_instance: MagicMock, probabilities: dict[str, float], margin: float | None, expected: str
+) -> None:
+    client: Final = _StaticJevClient(
+        JevSystemOneResponse(
+            answers={
+                "tier": JevChoiceAnswer(
+                    type="choice",
+                    choice="SIMPLE",
+                    probabilities=probabilities,
+                )
+            }
+        )
+    )
+    router: Final = ComplexityRouter(
+        "decision-router",
+        RoutingContext(mock_router_instance),
+        {
+            "classifier_type": "oss_classifier",
+            "tiers": {"SIMPLE": "cheap", "COMPLEX": "strong"},
+            "opensource_classifier_config": {"api_key": "test", "uncertainty_margin": margin},
+        },
+        jev_client=client,
+        derive_savings_baseline=False,
+    )
+    result: Final = await router._classify_and_route(
+        "decision-router",
+        {},
+        messages=[{"role": "user", "content": "Implement a parser"}],
+    )
+    assert result is not None
+    assert result.model == {"SIMPLE": "cheap", "COMPLEX": "strong"}[expected]
+    assert result.routing_decision is not None
+    assert result.routing_decision["tier"] == expected
+    assert result.routing_decision["classifier_probabilities"] == probabilities
+    assert ("uncertainty-override:SIMPLE->COMPLEX" in result.routing_decision["signals"]) == (expected == "COMPLEX")
+
+
+@pytest.mark.asyncio
+async def test_decision_description_override_keeps_builtin_tier_order(mock_router_instance: MagicMock) -> None:
+    client: Final = _StaticJevClient(
+        JevSystemOneResponse(
+            answers={
+                "tier": JevChoiceAnswer(
+                    type="choice",
+                    choice="Cheap",
+                    probabilities={"Cheap": 1.0},
+                )
+            }
+        )
+    )
+    router: Final = ComplexityRouter(
+        "decision-router",
+        RoutingContext(mock_router_instance),
+        {
+            "classifier_type": "oss_classifier",
+            "tiers": {"SIMPLE": "cheap", "COMPLEX": "strong"},
+            "tier_labels": {"SIMPLE": "Cheap"},
+            "opensource_classifier_config": {"api_key": "test", "tier_descriptions": {"SIMPLE": "Single-file edits"}},
+        },
+        jev_client=client,
+        derive_savings_baseline=False,
+    )
+    result: Final = await router.aclassify("Rename a variable")
+    assert result.tier == ComplexityTier.SIMPLE
+    assert client.last_request is not None
+    assert client.last_request.questions["tier"].criteria["Cheap"] == "Single-file edits"
+    assert router._escalate_tier(result.tier) == ComplexityTier.COMPLEX
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("choice", "expected"), [("strong", "strong"), ("unknown", "cheap")])
+async def test_decision_model_choice_routes_only_configured_aliases(
+    mock_router_instance: MagicMock, choice: str, expected: str
+) -> None:
+    client: Final = _StaticJevClient(
+        JevSystemOneResponse(
+            answers={
+                "model": JevChoiceAnswer(
+                    type="choice",
+                    choice=choice,
+                    probabilities={choice: 1.0},
+                )
+            }
+        )
+    )
+    router: Final = ComplexityRouter(
+        "decision-router",
+        RoutingContext(mock_router_instance),
+        {
+            "classifier_type": "oss_classifier",
+            "tiers": {"SIMPLE": "cheap", "COMPLEX": "strong"},
+            "default_model": "cheap",
+            "classifier_fallback": "default_model",
+            "opensource_classifier_config": {
+                "api_key": "test",
+                "selection_mode": "model",
+                "model_descriptions": {"cheap": "Simple edits", "strong": "Complex code"},
+            },
+        },
+        jev_client=client,
+        derive_savings_baseline=False,
+    )
+    result: Final = await router._classify_and_route(
+        "decision-router",
+        {},
+        messages=[{"role": "user", "content": "Implement a parser"}],
+    )
+    assert result is not None
+    assert result.model == expected
+    assert client.last_request is not None
+    assert client.last_request.questions["model"].criteria == {"cheap": "Simple edits", "strong": "Complex code"}
+    assert result.routing_decision is not None
+    assert result.routing_decision["cause"] == ("jev_classifier" if choice == "strong" else "default_model_fallback")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"tiers": {"SIMPLE": ["cheap", "other"], "COMPLEX": "strong"}},
+        {"tiers": {"SIMPLE": "cheap", "COMPLEX": "cheap"}},
+        {"adaptive": True},
+        {"session_affinity": True},
+        {"opensource_classifier_config": {"selection_mode": "model", "model_descriptions": {"cheap": "Only one"}}},
+    ],
+)
+def test_decision_model_selection_rejects_ambiguous_configuration(overrides: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="model"):
+        ComplexityRouterConfig.model_validate(
+            {
+                "classifier_type": "oss_classifier",
+                "tiers": {"SIMPLE": "cheap", "COMPLEX": "strong"},
+                "opensource_classifier_config": {
+                    "selection_mode": "model",
+                    "model_descriptions": {"cheap": "Edits", "strong": "Architecture"},
+                },
+                **overrides,
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_decision_model_candidates_exclude_text_only_models_for_images() -> None:
+    gateway: Final = Router(
+        model_list=[
+            {
+                "model_name": "text",
+                "litellm_params": {"model": "openai/text-fixture", "api_key": "test"},
+                "model_info": {"supports_vision": False},
+            },
+            {
+                "model_name": "vision",
+                "litellm_params": {"model": "openai/vision-fixture", "api_key": "test"},
+                "model_info": {"supports_vision": True},
+            },
+        ]
+    )
+    client: Final = _StaticJevClient(
+        JevSystemOneResponse(
+            answers={
+                "model": JevChoiceAnswer(
+                    type="choice",
+                    choice="vision",
+                    probabilities={"vision": 1.0},
+                )
+            }
+        )
+    )
+    router: Final = ComplexityRouter(
+        "decision-router",
+        RoutingContext(gateway),
+        {
+            "classifier_type": "oss_classifier",
+            "tiers": {"SIMPLE": "text", "COMPLEX": "vision"},
+            "opensource_classifier_config": {
+                "api_key": "test",
+                "selection_mode": "model",
+                "model_descriptions": {"text": "Text", "vision": "Images"},
+            },
+        },
+        jev_client=client,
+        derive_savings_baseline=False,
+    )
+    result: Final = await router.aclassify(
+        "Describe this",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}],
+            }
+        ],
+    )
+    assert result.tier == ComplexityTier.COMPLEX
+    assert client.last_request is not None
+    assert client.last_request.questions["model"].criteria == {"vision": "Images"}
+
+
+@pytest.mark.parametrize("margin", [0, -0.1, 1.1, float("nan"), float("inf")])
+def test_decision_uncertainty_rejects_invalid_margin(margin: float) -> None:
+    with pytest.raises(ValueError, match="uncertainty_margin"):
+        ComplexityRouterConfig.model_validate(
+            {
+                "classifier_type": "oss_classifier",
+                "tiers": {"SIMPLE": "cheap"},
+                "opensource_classifier_config": {"uncertainty_margin": margin},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("config", "error"),
+    [
+        ({"opensource_classifier_config": {"tier_descriptions": {"SIMPLE": " "}}}, "non-empty"),
+        ({"opensource_classifier_config": {"tier_descriptions": {"UNKNOWN": "Edits"}}}, "configured tiers"),
+        ({"opensource_classifier_config": {"selection_mode": "model", "uncertainty_margin": 0.05}}, "ordered"),
+        (
+            {"classifier_type": "heuristic", "opensource_classifier_config": {"selection_mode": "model"}},
+            "oss_classifier",
+        ),
+    ],
+)
+def test_decision_options_reject_incompatible_settings(config: dict[str, object], error: str) -> None:
+    with pytest.raises(ValueError, match=error):
+        ComplexityRouterConfig.model_validate(
+            {"classifier_type": "oss_classifier", "tiers": {"SIMPLE": "cheap"}, **config}
+        )
+
+
+@pytest.mark.asyncio
+async def test_decision_model_skips_classifier_when_no_candidate_accepts_images() -> None:
+    gateway: Final = Router(
+        model_list=[
+            {
+                "model_name": "text",
+                "litellm_params": {"model": "openai/text-fixture", "api_key": "test"},
+                "model_info": {"supports_vision": False},
+            }
+        ]
+    )
+    client: Final = _StaticJevClient(AssertionError("Ineligible models must never reach the classifier"))
+    router: Final = ComplexityRouter(
+        "decision-router",
+        RoutingContext(gateway),
+        {
+            "classifier_type": "oss_classifier",
+            "tiers": {"SIMPLE": "text"},
+            "classifier_fallback": "default_model",
+            "default_model": "text",
+            "opensource_classifier_config": {
+                "api_key": "test",
+                "selection_mode": "model",
+                "model_descriptions": {"text": "Text"},
+            },
+        },
+        jev_client=client,
+        derive_savings_baseline=False,
+    )
+    result: Final = await router.aclassify(
+        "Describe this",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}],
+            }
+        ],
+    )
+    assert client.calls == 0
+    assert result.cause == "default_model_fallback"
+    assert result.classifier_failure_reason == "unsupported_input"
+
+
+@pytest.mark.asyncio
+async def test_decision_model_candidates_exclude_insufficient_context_windows() -> None:
+    gateway: Final = Router(
+        model_list=[
+            {
+                "model_name": "small",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test"},
+                "model_info": {"max_input_tokens": 32},
+            },
+            {
+                "model_name": "large",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test"},
+                "model_info": {"max_input_tokens": 10000},
+            },
+        ]
+    )
+    client: Final = _StaticJevClient(
+        JevSystemOneResponse(
+            answers={
+                "model": JevChoiceAnswer(
+                    type="choice",
+                    choice="large",
+                    probabilities={"large": 1.0},
+                )
+            }
+        )
+    )
+    router: Final = ComplexityRouter(
+        "decision-router",
+        RoutingContext(gateway),
+        {
+            "classifier_type": "oss_classifier",
+            "tiers": {"SIMPLE": "small", "COMPLEX": "large"},
+            "enable_context_window_escalation": True,
+            "opensource_classifier_config": {
+                "api_key": "test",
+                "selection_mode": "model",
+                "model_descriptions": {"small": "Short", "large": "Long"},
+            },
+        },
+        jev_client=client,
+        derive_savings_baseline=False,
+    )
+    result: Final = await router._classify_and_route(
+        "decision-router",
+        {},
+        messages=[{"role": "user", "content": "word " * 100}],
+    )
+    assert result is not None
+    assert result.model == "large"
+    assert client.last_request is not None
+    assert client.last_request.questions["model"].criteria == {"large": "Long"}
