@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 DO $$
 BEGIN
     CREATE TYPE "MCPExecutionMode" AS ENUM ('litellm', 'provider');
