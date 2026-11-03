@@ -13261,6 +13261,7 @@ class PythonCore(DeprecatedRouterMembers):
                         "providers": [llm_provider],
                         "description": model_group_description,
                         **model_info,
+                        "supports_continuation": model_info.get("supports_continuation") is True,
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
                         "supported_endpoints": None,
@@ -13328,6 +13329,8 @@ class PythonCore(DeprecatedRouterMembers):
                     and model_info["supports_url_context"] is True
                 ):
                     model_group_info.supports_url_context = True
+                if model_info.get("supports_continuation") is True:
+                    model_group_info.supports_continuation = True
 
                 if model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True:
                     model_group_info.supports_reasoning = True

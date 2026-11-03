@@ -9,6 +9,7 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import math
@@ -986,3 +987,32 @@ def test_streamed_transcription_error_mid_stream_ends_with_an_error_event_and_ru
     )
     failure_hook.assert_awaited_once()
     assert isinstance(failure_hook.await_args.kwargs["original_exception"], litellm.APIConnectionError)
+
+
+def _post_speech(client: TestClient) -> httpx.Response:
+    return client.post("/v1/audio/speech", json={"model": "tts-1", "input": "Hi", "voice": "alloy"})
+
+
+def _post_transcription(client: TestClient) -> httpx.Response:
+    return client.post(
+        "/v1/audio/transcriptions",
+        files={"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")},
+        data={"model": "whisper-1"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("send", "call_type"),
+    [(_post_speech, "aspeech"), (_post_transcription, "atranscription")],
+)
+def test_a_provider_rejection_logs_the_audio_endpoint_call_type(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[object]],
+    failed_spend_row: Callable[[], tuple[str, str]],
+    send: Callable[[TestClient], httpx.Response],
+    call_type: str,
+) -> None:
+    with auth_as():
+        response: Final = send(client)
+    assert response.status_code == 400, response.text
+    assert failed_spend_row() == ("failure", call_type)
