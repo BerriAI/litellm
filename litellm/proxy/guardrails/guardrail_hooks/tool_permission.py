@@ -996,7 +996,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         member_names: Final = tuple(chain.from_iterable(map(self._bare_member_names, sent_tools)))
         if not member_names:
             return MappingProxyType({})
-        top_level_names: Final = self._tool_names_in(tuple(tool for tool in sent_tools if not _is_namespace(tool)))
+        top_level_names: Final = self._function_names_in(tuple(tool for tool in sent_tools if not _is_namespace(tool)))
         member_bare_names: Final = _grouped_values(
             (bare, name) for name, bare in member_names if bare not in top_level_names
         )
@@ -1241,6 +1241,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
     def _tool_names_in(self, tools: Sequence[object]) -> frozenset[str]:
         targets: Final = chain.from_iterable(self._get_request_tool_targets(tool) for tool in tools)
         return frozenset(name for name, _ in targets if name is not None)
+
+    def _function_names_in(self, tools: Sequence[object]) -> frozenset[str]:
+        targets: Final = chain.from_iterable(self._get_request_tool_targets(tool) for tool in tools)
+        return frozenset(name for name, kind in targets if name is not None and kind not in _HOSTED_SERVER_NAME_FIELDS)
 
     def _referable_names_in(self, tools: Sequence[object]) -> frozenset[str]:
         member_names: Final = chain.from_iterable(map(self._bare_member_names, tools))

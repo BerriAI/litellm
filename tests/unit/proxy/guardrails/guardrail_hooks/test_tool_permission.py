@@ -597,6 +597,44 @@ class TestToolPermissionGuardrail:
         assert [call.function.name for call in response.choices[0].message.tool_calls or ()] == ["lookup"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "hosted_server",
+        [
+            {"type": "mcp", "server_label": "lookup", "server_url": "https://mcp.example.com/sse"},
+            {"type": "mcp_toolset", "mcp_server_name": "lookup"},
+        ],
+        ids=["mcp", "mcp_toolset"],
+    )
+    async def test_post_call_judges_a_returned_namespace_member_named_like_a_hosted_mcp_server_as_that_member(
+        self, hosted_server: dict[str, str]
+    ) -> None:
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="post-mcp",
+            rules=[{"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        namespace = {"type": "namespace", "name": "mcp__weather", "tools": [{"type": "function", "name": "lookup"}]}
+        function = Function(name="lookup", arguments='{"country": "France"}')
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    message={"tool_calls": [{"id": "call_lookup", "type": "function", "function": function}]},
+                )
+            ]
+        )
+
+        await guardrail.async_post_call_success_hook(
+            data={"guardrails": ["post-mcp"], "tools": [namespace, hosted_server]},
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=response,
+        )
+
+        assert [call.function.name for call in response.choices[0].message.tool_calls or ()] == []
+
+    @pytest.mark.asyncio
     async def test_async_post_call_success_hook_missing_arguments_blocks_param_rule(
         self,
     ):
