@@ -2692,3 +2692,63 @@ async def test_during_mcp_call_blocked_raises() -> None:
             )
 
     assert exc_info.value.message == "credential detected in tool input"
+
+
+class TestToolCallsInResponse:
+    @staticmethod
+    def _tool_calls(arguments: str) -> list[dict[str, object]]:
+        return [{"id": "call_1", "type": "function", "function": {"name": "run_shell", "arguments": arguments}}]
+
+    @staticmethod
+    def _guardrail_answering(body: dict[str, object], sent_bodies: list[dict[str, object]]) -> GenericGuardrailAPI:
+        async def answer(request: httpx.Request) -> httpx.Response:
+            sent_bodies.append(json.loads(request.content))
+            return httpx.Response(200, json=body, request=request)
+
+        return GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="tool-call-rewriter",
+            event_hook="post_call",
+            default_on=True,
+            async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(answer)),
+        )
+
+    @pytest.mark.asyncio
+    async def test_rewritten_tool_calls_from_the_guardrail_reach_the_caller(self, mock_request_data_input):
+        rewritten: Final = self._tool_calls('{"cmd": "echo [REDACTED]"}')
+        sent_bodies: Final[list[dict[str, object]]] = []  # mutable-ok: records the body the guardrail endpoint received
+        guardrail: Final = self._guardrail_answering(
+            {"action": "GUARDRAIL_INTERVENED", "texts": [], "tool_calls": rewritten}, sent_bodies
+        )
+
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [], "tool_calls": self._tool_calls('{"cmd": "echo SECRET-123"}')},
+            request_data=mock_request_data_input,
+            input_type="response",
+        )
+
+        assert sent_bodies[0]["tool_calls"] == self._tool_calls('{"cmd": "echo SECRET-123"}')
+        assert guardrailed_inputs["tool_calls"] == rewritten
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"action": "NONE", "texts": []},
+            {"action": "NONE", "texts": [], "tool_calls": "not a list"},
+            {"action": "NONE", "texts": [], "tool_calls": ["not a tool call"]},
+            {"action": "NONE", "texts": [], "tool_calls": [{"id": "call_1", "type": "function", "function": None}]},
+            {"action": "NONE", "texts": [], "tool_calls": [{"function": {"name": "run_shell"}}]},
+            {"action": "GUARDRAIL_INTERVENED", "texts": ["my ssn is [MASKED]"], "tool_calls": []},
+        ],
+    )
+    async def test_an_answer_without_usable_tool_calls_leaves_the_key_out(self, mock_request_data_input, body):
+        guardrail: Final = self._guardrail_answering(body, [])
+
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [], "tool_calls": self._tool_calls('{"cmd": "echo SECRET-123"}')},
+            request_data=mock_request_data_input,
+            input_type="response",
+        )
+
+        assert "tool_calls" not in guardrailed_inputs

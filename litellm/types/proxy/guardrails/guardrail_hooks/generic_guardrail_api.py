@@ -1,8 +1,16 @@
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows have no typed constructor across roles
 
-from pydantic import ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
-from typing_extensions import TypedDict
+from pydantic import (
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    TypeAdapter,
+    ValidationError,
+    model_serializer,
+    with_config,
+)
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.guardrails import GuardrailNumRetries
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -188,12 +196,43 @@ def structured_messages_from_response(value: object) -> Sequence[AllMessageValue
     return cast("Sequence[AllMessageValues]", value)  # cast-ok: JSON rows checked for a role, the same trust texts get
 
 
+@with_config(ConfigDict(extra="allow"))
+class _GuardrailToolCallFunction(TypedDict):
+    name: ReadOnly[str]
+    arguments: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow"))
+class _GuardrailToolCallRow(TypedDict):
+    function: ReadOnly[_GuardrailToolCallFunction]
+
+
+_TOOL_CALL_ROWS: Final = TypeAdapter(tuple[_GuardrailToolCallRow, ...])
+
+
+def tool_calls_from_response(value: object) -> tuple[ChatCompletionToolCallChunk, ...] | None:
+    """The rewritten tool calls, or ``None`` when the answer carries none. An empty array is no rewrite
+    either, as the only thing it could say about the calls it received is to drop them, which a
+    positional rewrite cannot do, and forwarding it would read as a count change downstream."""
+    try:
+        rows: Final = _TOOL_CALL_ROWS.validate_python(value)
+    except ValidationError:
+        return None
+    if not rows:
+        return None
+    validated: Final = cast(  # cast-ok: rows validated to carry function.name/arguments
+        tuple[ChatCompletionToolCallChunk, ...], rows
+    )
+    return validated
+
+
 class GenericGuardrailAPIResponse:
     """Response model for the Generic Guardrail API"""
 
     texts: list[str] | None
     images: list[str] | None
     tools: list[GuardrailToolParam] | None
+    tool_calls: Sequence[ChatCompletionToolCallChunk] | None
     structured_messages: Sequence[AllMessageValues] | None
     action: str
     blocked_reason: str | None
@@ -208,12 +247,14 @@ class GenericGuardrailAPIResponse:
         tools: list[GuardrailToolParam] | None = None,
         stream_holdback_chars: list[int] | None = None,
         structured_messages: Sequence[AllMessageValues] | None = None,
+        tool_calls: Sequence[ChatCompletionToolCallChunk] | None = None,
     ) -> None:
         self.action = action
         self.blocked_reason = blocked_reason
         self.texts = texts
         self.images = images
         self.tools = tools
+        self.tool_calls = tool_calls
         self.structured_messages = structured_messages
         # Number of trailing chars, indexed the same as ``texts``, that the
         # framework must withhold from streaming emission until the next
@@ -226,6 +267,7 @@ class GenericGuardrailAPIResponse:
         stream_holdback_chars: Final = (
             [coerce_stream_holdback_value(value) for value in raw_holdback] if isinstance(raw_holdback, list) else None
         )
+        fields: Final = cast(Mapping[str, object], data)  # cast-ok: the decoded JSON body the guardrail answered with
         return cls(
             action=data.get("action", "NONE"),
             blocked_reason=data.get("blocked_reason"),
@@ -234,4 +276,5 @@ class GenericGuardrailAPIResponse:
             tools=data.get("tools"),
             stream_holdback_chars=stream_holdback_chars,
             structured_messages=structured_messages_from_response(data.get("structured_messages")),
+            tool_calls=tool_calls_from_response(fields.get("tool_calls")),
         )

@@ -157,6 +157,12 @@ class _TextAttrBlock(Protocol):
 
 
 @runtime_checkable
+class _ToolUseAttrBlock(Protocol):
+    name: str
+    input: Mapping[str, object]
+
+
+@runtime_checkable
 class _WritableMessage(Protocol):
     @overload
     def get(self, key: str, /) -> object | None: ...
@@ -165,6 +171,18 @@ class _WritableMessage(Protocol):
     def get(self, key: str, default: object, /) -> object: ...
 
     def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+_MESSAGE_ROWS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _message_rows(data: Mapping[str, object]) -> Sequence[_WritableMessage]:
+    """The request's own message rows, so a write-back lands on the request itself."""
+    try:
+        rows: Final = _MESSAGE_ROWS.validate_python(data.get("messages"))
+    except ValidationError:
+        return ()
+    return cast(Sequence[_WritableMessage], rows)  # cast-ok: the rows are the request's message dicts
 
 
 def _as_writable(value: _WritableMessage) -> _WritableMessage:
@@ -434,8 +452,45 @@ _RELEASED_TOOL_USE_STOP: Final = (
 
 
 def _rewritten_tool_use_input(arguments: str) -> Mapping[str, object] | None:
+    """OpenAI-shaped ``arguments`` for a call with no parameters are ``""``, which becomes the empty
+    ``tool_use`` input, as ``input: {}`` is what ``arguments: ""`` was translated from."""
     try:
-        return _TOOL_USE_INPUT_ADAPTER.validate_json(arguments)
+        return _TOOL_USE_INPUT_ADAPTER.validate_json("{}" if arguments == "" else arguments)
+    except ValidationError:
+        return None
+
+
+_CONTENT_BLOCKS: Final = TypeAdapter(tuple[object, ...])
+_MAPPING_BLOCK: Final = TypeAdapter(dict[str, object])
+
+
+def _tool_use_targets(messages: Sequence[_WritableMessage]) -> tuple[ToolUseInputTarget, ...]:
+    """Where the client's tool_use blocks sit now, since a structured-message write-back can merge
+    text blocks and move a tool_use away from the position it was scanned at."""
+    return tuple(
+        chain.from_iterable(_row_tool_use_targets(msg_idx, message) for msg_idx, message in enumerate(messages))
+    )
+
+
+def _row_tool_use_targets(msg_idx: int, message: _WritableMessage) -> tuple[ToolUseInputTarget, ...]:
+    return tuple(
+        ToolUseInputTarget(msg_idx, content_idx)
+        for content_idx, block in enumerate(_content_blocks(message))
+        if block is not None and _is_client_tool_use(block)
+    )
+
+
+def _content_blocks(message: _WritableMessage) -> tuple[Mapping[str, object] | None, ...]:
+    try:
+        blocks: Final = _CONTENT_BLOCKS.validate_python(message.get("content"))
+    except ValidationError:
+        return ()
+    return tuple(_mapping_block(block) for block in blocks)
+
+
+def _mapping_block(block: object) -> Mapping[str, object] | None:
+    try:
+        return _MAPPING_BLOCK.validate_python(block)
     except ValidationError:
         return None
 
@@ -450,6 +505,22 @@ def _write_back_tool_use(
     block["input"] = rewritten_input
     if shape.name is not None and shape.name != block.get("name"):
         block["name"] = shape.name
+
+
+def _write_back_tool_use_block(
+    block: object, before: _ToolCallShape, after: _ToolCallShape, rewritten_input: Mapping[str, object]
+) -> None:
+    renamed: Final = after.name is not None and after.name != before.name
+    if isinstance(block, dict):
+        block["input"] = rewritten_input  # rebind-ok: the tool_use block is the client-visible object being rewritten
+        if renamed:
+            block["name"] = after.name  # rebind-ok: same in-place rewrite as the input above
+        return
+    if not isinstance(block, _ToolUseAttrBlock):
+        return
+    block.input = rewritten_input  # rebind-ok: same in-place rewrite for an object-shaped tool_use block
+    if renamed and after.name is not None:
+        block.name = after.name  # rebind-ok: same in-place rewrite as the input above
 
 
 def _streamed_query_strings(
@@ -536,6 +607,27 @@ def _tool_call_shapes(tool_calls: Sequence[object]) -> tuple[_ToolCallShape, ...
         )
         for function in functions
     )
+
+
+def _post_guardrail_tool_call_shapes(
+    returned_tool_calls: Sequence[object] | None,
+    pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+    scanned_tool_calls: Sequence[object],
+    guardrail_name: str | None,
+) -> tuple[_ToolCallShape, ...]:
+    """A returned list of another length cannot be matched to the scanned calls by position, so
+    the calls the guardrail was handed stand, as on the chat and responses endpoints."""
+    if returned_tool_calls is None:
+        return _tool_call_shapes(scanned_tool_calls)
+    if len(returned_tool_calls) == len(pre_guardrail_tool_calls):
+        return _tool_call_shapes(returned_tool_calls)
+    verbose_proxy_logger.warning(
+        "Anthropic Messages: guardrail %s returned %d tool calls for the %d scanned, leaving the tool_use blocks unchanged",
+        guardrail_name,
+        len(returned_tool_calls),
+        len(pre_guardrail_tool_calls),
+    )
+    return _tool_call_shapes(scanned_tool_calls)
 
 
 @with_config(ConfigDict(extra="ignore", strict=True))
@@ -971,6 +1063,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 guardrailed_structured_messages is not None
                 and guardrailed_structured_messages is not original_structured_messages
             ):
+                scanned_rows: Final = _message_rows(cast(Mapping[str, object], data))  # cast-ok: Anthropic request body
                 self._write_back_structured_messages(
                     data,
                     guardrailed_structured_messages
@@ -985,6 +1078,25 @@ class AnthropicMessagesHandler(BaseTranslation):
                     original_tool_names=original_tool_names.used,
                     model=model,
                 )
+                rewritten_messages: Final = _message_rows(
+                    cast(Mapping[str, object], data)  # cast-ok: Anthropic request body
+                )
+                if len(rewritten_messages) == len(scanned_rows):
+                    self._apply_guardrail_tool_calls_to_input(
+                        messages=rewritten_messages,
+                        scanned_tool_calls=scanned_tool_calls,
+                        pre_guardrail_tool_calls=pre_guardrail_tool_calls,
+                        returned_tool_calls=guardrailed_inputs.get("tool_calls"),
+                        guardrail_name=guardrail_to_apply.guardrail_name,
+                    )
+                else:
+                    verbose_proxy_logger.warning(
+                        "Anthropic Messages: guardrail %s rewrote the conversation to %d rows from %d, "
+                        "so its tool_calls rewrite cannot be placed and is left unapplied",
+                        guardrail_to_apply.guardrail_name,
+                        len(rewritten_messages),
+                        len(scanned_rows),
+                    )
             else:
                 if guardrailed_texts and len(guardrailed_texts) != len(scanned):
                     raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
@@ -1434,23 +1546,36 @@ class AnthropicMessagesHandler(BaseTranslation):
         returned_tool_calls: Sequence[object] | None,
         guardrail_name: str | None,
     ) -> None:
-        post_guardrail_tool_calls: Final = _tool_call_shapes(
-            returned_tool_calls
-            if returned_tool_calls is not None and len(returned_tool_calls) == len(pre_guardrail_tool_calls)
-            else tuple(item.tool_call for item in scanned_tool_calls)
+        post_guardrail_tool_calls: Final = _post_guardrail_tool_call_shapes(
+            returned_tool_calls,
+            pre_guardrail_tool_calls,
+            tuple(item.tool_call for item in scanned_tool_calls),
+            guardrail_name,
         )
+        targets: Final = _tool_use_targets(messages)
+        if len(targets) != len(scanned_tool_calls):
+            verbose_proxy_logger.warning(
+                "Anthropic Messages: guardrail %s left %d tool_use blocks where %d were scanned, "
+                "so its tool_calls rewrite cannot be placed and is left unapplied",
+                guardrail_name,
+                len(targets),
+                len(scanned_tool_calls),
+            )
+            return
         rewritten: Final = tuple(
-            (item, after, _rewritten_tool_use_input(after.arguments))
-            for item, before, after in zip(scanned_tool_calls, pre_guardrail_tool_calls, post_guardrail_tool_calls)
+            (target, after, _rewritten_tool_use_input(after.arguments))
+            for target, before, after in zip(targets, pre_guardrail_tool_calls, post_guardrail_tool_calls)
             if before != after
         )
         applicable: Final = tuple(
-            (item, after, rewritten_input) for item, after, rewritten_input in rewritten if rewritten_input is not None
+            (target, after, rewritten_input)
+            for target, after, rewritten_input in rewritten
+            if rewritten_input is not None
         )
         if len(applicable) != len(rewritten):
             raise unappliable_request_rewrite(guardrail_name)
-        for item, after, rewritten_input in applicable:
-            _write_back_tool_use(messages[item.target.msg_idx], item.target, after, rewritten_input)
+        for target, after, rewritten_input in applicable:
+            _write_back_tool_use(messages[target.msg_idx], target, after, rewritten_input)
 
     async def process_output_response(
         self,
@@ -1520,6 +1645,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 tool_calls_to_check,
                 response,
             )
+            pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
 
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -1540,6 +1666,13 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
             self._write_back_web_search_strings(
                 response_content, _web_search_rewrites_by_block(web_search_strings, web_search_rewrites)
+            )
+            self._apply_guardrail_tool_calls_to_output(
+                response_content,
+                tool_calls_to_check,
+                pre_guardrail_tool_calls,
+                guardrailed_inputs.get("tool_calls"),
+                guardrail_to_apply.guardrail_name,
             )
 
         verbose_proxy_logger.debug("Anthropic Messages: Processed output response: %s", response)
@@ -1716,6 +1849,42 @@ class AnthropicMessagesHandler(BaseTranslation):
     ) -> None:
         for block_idx, rewrites in rewrites_by_block.items():
             _write_back_web_search_block(_content_block_at(response_content, block_idx), rewrites)
+
+    @classmethod
+    def _apply_guardrail_tool_calls_to_output(
+        cls,
+        response_content: Sequence[object],
+        scanned_tool_calls: Sequence[object],
+        pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+        returned_tool_calls: Sequence[object] | None,
+        guardrail_name: str | None,
+    ) -> None:
+        """Land guardrail tool-call rewrites on the response's ``tool_use`` blocks, which
+        ``_extract_from_content_blocks`` listed in content order, so the nth returned call
+        belongs to the nth block. A rewrite whose arguments are not a JSON object cannot become a
+        ``tool_use`` input, so it fails the request instead of leaking the originals."""
+        post_guardrail_tool_calls: Final = _post_guardrail_tool_call_shapes(
+            returned_tool_calls, pre_guardrail_tool_calls, scanned_tool_calls, guardrail_name
+        )
+        tool_use_blocks: Final = tuple(
+            block
+            for block in response_content
+            if (fields := cls._output_block_fields(block)) is not None and fields[0] == "tool_use"
+        )
+        rewritten: Final = tuple(
+            (block, before, after, _rewritten_tool_use_input(after.arguments))
+            for block, before, after in zip(tool_use_blocks, pre_guardrail_tool_calls, post_guardrail_tool_calls)
+            if before != after
+        )
+        applicable: Final = tuple(
+            (block, before, after, rewritten_input)
+            for block, before, after, rewritten_input in rewritten
+            if rewritten_input is not None
+        )
+        if len(applicable) != len(rewritten):
+            raise unappliable_request_rewrite(guardrail_name)
+        for block, before, after, rewritten_input in applicable:
+            _write_back_tool_use_block(block, before, after, rewritten_input)
 
     @staticmethod
     def _get_response_content(response: object) -> Sequence[object]:

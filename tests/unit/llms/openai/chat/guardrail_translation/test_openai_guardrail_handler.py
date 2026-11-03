@@ -1146,6 +1146,151 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         ]
 
 
+class MockFunctionOnlyToolCallGuardrail(CustomGuardrail):
+    """Mock guardrail that returns each tool call as only its rewritten function, the way a
+    scrubber that does not echo id and type does."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(
+            texts=inputs.get("texts", []),
+            tool_calls=[
+                {"function": {"name": tool_call["function"]["name"], "arguments": json.dumps({"email": "[EMAIL]"})}}
+                for tool_call in inputs.get("tool_calls", [])
+            ],
+        )
+
+
+class MockRowsAndToolCallsGuardrail(CustomGuardrail):
+    """Mock guardrail that rewrites the message rows and the tool calls in one answer."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(
+            texts=[text.replace("john@example.com", "[EMAIL]") for text in inputs.get("texts", [])],
+            structured_messages=[
+                {**message, "content": message["content"].replace("john@example.com", "[EMAIL]")}
+                if isinstance(message.get("content"), str)
+                else dict(message)
+                for message in inputs.get("structured_messages") or []
+            ],
+            tool_calls=[
+                {**tool_call, "function": {**tool_call["function"], "arguments": json.dumps({"email": "[EMAIL]"})}}
+                for tool_call in inputs.get("tool_calls", [])
+            ],
+        )
+
+
+class MockRowRedactingEchoingToolCallsGuardrail(CustomGuardrail):
+    """Mock guardrail that redacts a tool call inside the message rows and echoes the scanned
+    tool_calls list back unchanged, the way a backend that only answers rows does."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(
+            texts=inputs.get("texts", []),
+            structured_messages=[
+                json.loads(json.dumps(message).replace("john@example.com", "[EMAIL]"))
+                for message in inputs.get("structured_messages") or []
+            ],
+            tool_calls=list(inputs.get("tool_calls", [])),
+        )
+
+
+class TestOpenAIChatCompletionsHandlerToolCallsInputWriteBack:
+    @pytest.mark.asyncio
+    async def test_echoed_tool_calls_do_not_undo_a_redaction_made_in_the_message_rows(self):
+        handler = OpenAIChatCompletionsHandler()
+        data = self._assistant_tool_call_turn(json.dumps({"email": "john@example.com"}))
+
+        await handler.process_input_messages(
+            data, MockRowRedactingEchoingToolCallsGuardrail(guardrail_name="test")
+        )
+
+        assert data["messages"][1]["tool_calls"][0]["function"]["arguments"] == json.dumps({"email": "[EMAIL]"}), (
+            "an echoed, unchanged tool_calls list must not overwrite the redaction the rows carry"
+        )
+
+    @pytest.mark.asyncio
+    async def test_tool_call_rewrites_land_when_the_guardrail_also_rewrites_the_message_rows(self):
+        handler = OpenAIChatCompletionsHandler()
+        data = self._assistant_tool_call_turn(json.dumps({"email": "john@example.com"}))
+        data["messages"][0]["content"] = "email john@example.com"
+
+        await handler.process_input_messages(data, MockRowsAndToolCallsGuardrail(guardrail_name="test"))
+
+        assert data["messages"][0]["content"] == "email [EMAIL]", "the row rewrite must land"
+        assert data["messages"][1]["tool_calls"] == [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "send_email", "arguments": json.dumps({"email": "[EMAIL]"})},
+            }
+        ], "the tool_calls rewrite must land on the rewritten rows too"
+
+    @staticmethod
+    def _assistant_tool_call_turn(*arguments: str) -> dict[str, Any]:
+        return {
+            "messages": [
+                {"role": "user", "content": "email them"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": f"call_{idx}",
+                            "type": "function",
+                            "function": {"name": "send_email", "arguments": call_arguments},
+                        }
+                        for idx, call_arguments in enumerate(arguments, start=1)
+                    ],
+                },
+            ]
+        }
+
+    @pytest.mark.asyncio
+    async def test_returned_function_only_rows_keep_the_request_tool_call_id_and_type(self):
+        handler = OpenAIChatCompletionsHandler()
+        data = self._assistant_tool_call_turn(json.dumps({"email": "john@example.com"}))
+
+        await handler.process_input_messages(data, MockFunctionOnlyToolCallGuardrail(guardrail_name="test"))
+
+        assert data["messages"][1]["tool_calls"] == [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "send_email", "arguments": json.dumps({"email": "[EMAIL]"})},
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_returned_list_of_another_length_leaves_the_request_tool_calls_unchanged(self):
+        handler = OpenAIChatCompletionsHandler()
+        first_args = json.dumps({"email": "a@example.com"})
+        second_args = json.dumps({"email": "b@example.com"})
+        data = self._assistant_tool_call_turn(first_args, second_args)
+        original = json.loads(json.dumps(data))
+
+        await handler.process_input_messages(data, MockMisalignedToolCallGuardrail(guardrail_name="test"))
+
+        assert data["messages"] == original["messages"], "one returned call for two scanned cannot be placed"
+
+
 class MockPassThroughGuardrail(CustomGuardrail):
     """Mock guardrail that passes through without blocking - for testing streaming fallback behavior"""
 

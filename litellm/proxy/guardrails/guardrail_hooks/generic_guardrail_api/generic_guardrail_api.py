@@ -456,6 +456,8 @@ class GenericGuardrailAPI(CustomGuardrail):
             return_inputs["tools"] = guardrail_response.tools
         elif tools:
             return_inputs["tools"] = tools
+        if guardrail_response.tool_calls is not None:
+            return_inputs["tool_calls"] = list(guardrail_response.tool_calls)
         compared_rows, is_echo = (
             (structured_messages, _is_echo) if self.forward_messages_as_sent else (shown_messages, _is_shown_row)
         )

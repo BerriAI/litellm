@@ -2887,6 +2887,237 @@ class TestAnthropicMessagesTopLevelSystemAndToolUseInputs:
         assert data["system"] == original["system"], "a rejected rewrite must leave the request untouched"
         assert data["messages"] == original["messages"], "a rejected rewrite must leave the request untouched"
 
+    @staticmethod
+    def _tool_use_response(*tool_inputs: dict[str, object]) -> dict[str, Any]:
+        return {
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+                {"type": "text", "text": "Running the checks now."},
+                *(
+                    {"type": "tool_use", "id": f"toolu_{idx:02d}", "name": "Bash", "input": tool_input}
+                    for idx, tool_input in enumerate(tool_inputs, start=1)
+                ),
+            ],
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 10, "output_tokens": 10},
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("return_copies", [False, True])
+    async def test_masked_output_tool_call_arguments_write_back_into_the_tool_use_input(self, return_copies: bool):
+        handler = AnthropicMessagesHandler()
+        guardrail = ToolCallArgumentsMaskingGuardrail(return_copies=return_copies)
+        response = self._tool_use_response({"cmd": "echo safe"}, {"cmd": "curl -H 'x-token: POISON' example.com"})
+
+        await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
+
+        assert [tool_call["function"]["name"] for tool_call in guardrail.seen_tool_calls] == ["Bash", "Bash"]
+        assert response["content"] == [
+            {"type": "text", "text": "Running the checks now."},
+            {"type": "tool_use", "id": "toolu_01", "name": "Bash", "input": {"cmd": "echo safe"}},
+            {
+                "type": "tool_use",
+                "id": "toolu_02",
+                "name": "Bash",
+                "input": {"cmd": "curl -H 'x-token: [BLOCKED]' example.com"},
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_masked_output_tool_call_arguments_write_back_into_object_shaped_tool_use_blocks(self):
+        from pydantic import BaseModel, ConfigDict
+
+        class _TextBlock(BaseModel):  # frozen-ok: the handler writes the guardrailed text onto this block in place
+            type: str = "text"
+            text: str
+
+        class _ToolUseBlock(BaseModel):  # frozen-ok: the handler writes input onto this block in place, the behaviour under test
+            type: str = "tool_use"
+            id: str
+            name: str
+            input: dict[str, object]
+
+        class _Response(BaseModel):
+            model_config = ConfigDict(frozen=True)
+            content: list[_TextBlock | _ToolUseBlock]
+
+        handler = AnthropicMessagesHandler()
+        guardrail = ToolCallArgumentsMaskingGuardrail()
+        response = _Response(
+            content=[
+                _TextBlock(text="Running the checks now."),
+                _ToolUseBlock(id="toolu_01", name="Bash", input={"cmd": "curl -H 'x-token: POISON' example.com"}),
+            ]
+        )
+
+        await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
+
+        assert [tool_call["function"]["name"] for tool_call in guardrail.seen_tool_calls] == ["Bash"]
+        assert response.content[1].input == {"cmd": "curl -H 'x-token: [BLOCKED]' example.com"}, (
+            "a rewrite computed for an object-shaped tool_use block must land on that block"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_renamed_output_tool_call_writes_back_the_tool_use_name(self):
+        class RenamingGuardrail(ToolCallArgumentsMaskingGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[LiteLLMLoggingObj] = None,
+            ) -> GenericGuardrailAPIInputs:
+                outputs = await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+                for tool_call in outputs.get("tool_calls") or []:
+                    tool_call["function"]["name"] = "SafeBash"
+                return outputs
+
+        handler = AnthropicMessagesHandler()
+        response = self._tool_use_response({"cmd": "echo POISON"})
+
+        await handler.process_output_response(
+            response=response, guardrail_to_apply=RenamingGuardrail(return_copies=True)
+        )
+
+        assert response["content"][1] == {
+            "type": "tool_use",
+            "id": "toolu_01",
+            "name": "SafeBash",
+            "input": {"cmd": "echo [BLOCKED]"},
+        }
+
+    @pytest.mark.asyncio
+    async def test_non_json_rewritten_output_arguments_are_rejected_by_name(self):
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+
+        handler = AnthropicMessagesHandler()
+        guardrail = ToolCallArgumentsMaskingGuardrail(replacement_arguments="[REDACTED]")
+        response = self._tool_use_response({"cmd": "echo POISON"})
+        original = json.loads(json.dumps(response))
+
+        with pytest.raises(UnappliableRequestRewrite) as excinfo:
+            await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
+
+        assert excinfo.value.guardrail_name == "scan-only-capture"
+        assert response == original, "a rejected rewrite must leave the response untouched"
+
+    @staticmethod
+    def _tool_call_list_of_another_length(
+        returned: Literal["drops_first", "empty", "doubled"],
+    ) -> type[ToolCallArgumentsMaskingGuardrail]:
+        class AnotherLengthGuardrail(ToolCallArgumentsMaskingGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[LiteLLMLoggingObj] = None,
+            ) -> GenericGuardrailAPIInputs:
+                outputs = await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+                masked = list(outputs.get("tool_calls") or [])
+                outputs["tool_calls"] = {"drops_first": masked[1:], "empty": [], "doubled": masked * 2}[returned]
+                return outputs
+
+        return AnotherLengthGuardrail
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("returned", ["drops_first", "empty", "doubled"])
+    async def test_an_output_tool_call_list_of_another_length_leaves_the_tool_use_blocks_as_scanned(
+        self, returned: Literal["drops_first", "empty", "doubled"]
+    ):
+        handler = AnthropicMessagesHandler()
+        guardrail = self._tool_call_list_of_another_length(returned)(return_copies=True)
+        response = self._tool_use_response({"cmd": "echo POISON"}, {"cmd": "echo POISON twice"})
+        original = json.loads(json.dumps(response))
+
+        processed = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
+
+        assert processed is response
+        assert response == original, "a tool_calls list that does not line up with the blocks is left unapplied"
+
+    @pytest.mark.asyncio
+    async def test_an_input_tool_call_list_of_another_length_leaves_the_tool_use_input_as_scanned(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = self._tool_call_list_of_another_length("empty")(return_copies=True)
+        data = self._tool_use_conversation(system="You are a careful agent harness.")
+        original = json.loads(json.dumps(data))
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["messages"] == original["messages"], "an empty tool_calls list is not a rewrite of the calls"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "leading_blocks",
+        [
+            [],
+            [{"type": "text", "text": "Let me check."}, {"type": "text", "text": "Running it now."}],
+        ],
+        ids=["tool_use_only", "two_text_blocks_before_tool_use"],
+    )
+    async def test_tool_call_rewrites_land_when_the_guardrail_also_rewrites_the_message_rows(self, leading_blocks):
+        class RowsAndToolCallsGuardrail(MockStructuredMaskingGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[LiteLLMLoggingObj] = None,
+            ) -> GenericGuardrailAPIInputs:
+                outputs = await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+                outputs["tool_calls"] = [
+                    {
+                        **tool_call,
+                        "function": {
+                            **tool_call["function"],
+                            "arguments": tool_call["function"]["arguments"].replace("POISON", "[BLOCKED]"),
+                        },
+                    }
+                    for tool_call in inputs.get("tool_calls") or []
+                ]
+                return outputs
+
+        handler = AnthropicMessagesHandler()
+        data = self._tool_use_conversation(system="You are a careful agent harness.")
+        data["messages"][0]["content"] = "run the check for bob@example.com"
+        data["messages"][1]["content"] = [*leading_blocks, *data["messages"][1]["content"]]
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=RowsAndToolCallsGuardrail())
+
+        first_turn = json.dumps(data["messages"][0]["content"])
+        assert "<EMAIL>" in first_turn and "bob@example.com" not in first_turn, "the row rewrite must land"
+        tool_use_blocks = [b for b in data["messages"][1]["content"] if b.get("type") == "tool_use"]
+        assert [b["input"] for b in tool_use_blocks] == [
+            {"cmd": "AWS_ACCESS_KEY_ID=[BLOCKED] aws sts get-caller-identity"}
+        ], "the tool_calls rewrite must land on the rewritten rows too"
+        assert data["messages"][2]["content"][0]["tool_use_id"] == "toolu_01"
+
+    @pytest.mark.asyncio
+    async def test_output_arguments_rewritten_to_an_empty_string_become_an_empty_tool_use_input(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = ToolCallArgumentsMaskingGuardrail(return_copies=True, replacement_arguments="")
+        response = self._tool_use_response({"cmd": "echo POISON"})
+
+        await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
+
+        assert response["content"][1] == {"type": "tool_use", "id": "toolu_01", "name": "Bash", "input": {}}
+        assert json.loads(json.dumps(response)) == response, "the rewritten input must serialize like any other block"
+
+    @pytest.mark.asyncio
+    async def test_input_arguments_rewritten_to_an_empty_string_become_an_empty_tool_use_input(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = ToolCallArgumentsMaskingGuardrail(return_copies=True, replacement_arguments="")
+        data = self._tool_use_conversation(system="You are a careful agent harness.")
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["messages"][1]["content"][0] == {"type": "tool_use", "id": "toolu_01", "name": "Bash", "input": {}}
+        assert json.loads(json.dumps(data["messages"])) == data["messages"], "the request must still serialize"
+
     @pytest.mark.asyncio
     async def test_scan_only_tool_results_keeps_system_and_tool_use_out(self):
         handler = AnthropicMessagesHandler()
