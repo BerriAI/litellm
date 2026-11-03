@@ -164,7 +164,14 @@ def _daily_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
         ("mcp_namespaced_tool_name", _text(row.get("mcp_namespaced_tool_name"))),
         ("endpoint", _text(endpoint)),
     )
-    return tuple(_daily_rows(row, shared_key, counters))
+    # The legacy daily organization writer uses the charged org argument, not
+    # SpendLogs' normalized empty-string identity for a request with no org.
+    daily_row: Final = (
+        {**row, "organization_id": _fields(metadata["accounting_entities"]).get("organization_id")}
+        if "accounting_entities" in metadata
+        else row
+    )
+    return tuple(_daily_rows(daily_row, shared_key, counters))
 
 
 def _daily_rows(

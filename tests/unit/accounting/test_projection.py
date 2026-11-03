@@ -316,3 +316,24 @@ def test_report_only_or_invalid_guardrail_prices_remain_untracked(cost_fields: M
     model: Final = next(item for item in contributions if item.table == "LiteLLM_DailyModelUsage")
     assert dict(guardrail.increments) == {"units": 2, "cost": 0.0, "untracked_units": 2}
     assert dict(model.key)["task_type"] == "debugging"
+
+
+@pytest.mark.parametrize("organization_id", [None, "", "charged-org"])
+def test_daily_organization_uses_frozen_charged_identity(organization_id: str | None) -> None:
+    row: Final[Mapping[str, object]] = {
+        "startTime": _NOW,
+        "api_key": "key",
+        "model": "projection-test",
+        "model_group": "group",
+        "custom_llm_provider": "openai",
+        "organization_id": "stored-org",
+        "spend": 0.25,
+        "metadata": {"accounting_entities": {"organization_id": organization_id}},
+    }
+    daily: Final = tuple(item for item in project(row) if item.table == "LiteLLM_DailyOrganizationSpend")
+    if organization_id is None:
+        assert daily == ()
+    else:
+        assert len(daily) == 1
+        assert dict(daily[0].key)["organization_id"] == organization_id
+        assert dict(daily[0].increments)["spend"] == 0.25
