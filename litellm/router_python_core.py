@@ -4648,11 +4648,11 @@ class PythonCore(DeprecatedRouterMembers):
         """What a fallback continues from once a Responses stream broke after text, raising the primary's error
         when the request constrains its output or the stream began a tool call, since a continued JSON document or
         tool call would not parse, and when a content filter cut it, so no other model finishes filtered text."""
+        if source_iterator.started_tool_call:
+            PythonCore._raise_original_mid_stream_error(e)
         if _mid_stream_error_before_output(e):
             return None
-        if source_iterator.started_tool_call or isinstance(
-            e.original_exception, litellm_exceptions.ContentPolicyViolationError
-        ):
+        if isinstance(e.original_exception, litellm_exceptions.ContentPolicyViolationError):
             PythonCore._raise_original_mid_stream_error(e)
         cut_deployment_id: Final = (get_hidden_params(source_iterator) or {}).get("model_id")
         cut_deployment: Final = (
