@@ -31,7 +31,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import get_llm_provider
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
@@ -2388,7 +2388,10 @@ async def _relay_router_model(
         if rejection is None:
             raise
         raise ProxyException(
-            message=rejection.message, type=ProxyErrorTypes.auth_error, param=None, code=rejection.status_code
+            message=redact_internal_details_from_client_message(rejection.message),
+            type=ProxyErrorTypes.auth_error,
+            param=None,
+            code=rejection.status_code,
         ) from error
 
     if not is_streaming_request:

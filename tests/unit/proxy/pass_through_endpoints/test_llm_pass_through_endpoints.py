@@ -7268,6 +7268,33 @@ class TestRouterModelRelayUpstreamContract:
         assert (excinfo.value.code, excinfo.value.message) == ("401", reason)
 
     @pytest.mark.asyncio
+    async def test_azure_relay_entra_rejection_hides_an_internal_issuer_host(self, monkeypatch):
+        from litellm.llms.azure.common_utils import EntraRejectionError
+
+        reason: Final = (
+            "Failed to get Azure AD token: AADSTS700211: No matching federated identity record found for "
+            "presented assertion issuer 'https://oidc.build.internal:8443/realms/ci'."
+        )
+
+        class EntraRejectingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                raise EntraRejectionError(status_code=401, message=reason)
+
+        self._install_router(monkeypatch, EntraRejectingRouter(), {"model": "gpt-5", "stream": False})
+
+        with pytest.raises(ProxyException) as excinfo:
+            await azure_proxy_route(
+                endpoint="openai/deployments/gpt-5/chat/completions",
+                request=self._request("application/json"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+
+        assert excinfo.value.code == "401"
+        assert "AADSTS700211" in excinfo.value.message
+        assert "oidc.build.internal" not in excinfo.value.message
+
+    @pytest.mark.asyncio
     async def test_azure_relay_keeps_a_failure_entra_did_not_cause(self, monkeypatch):
         from litellm.llms.base_llm.chat.transformation import BaseLLMException
 

@@ -1,4 +1,5 @@
 import asyncio
+import os
 from collections.abc import Callable, Mapping
 from functools import partial
 from types import MappingProxyType
@@ -53,6 +54,28 @@ AZURE_ENTRA_CREDENTIAL_PARAM_KEYS: Final = frozenset({"azure_ad_token", "client_
 AZURE_ENTRA_LITELLM_PARAM_KEYS: Final = AZURE_ENTRA_CREDENTIAL_PARAM_KEYS | frozenset(
     {"tenant_id", "client_id", "azure_username", "azure_scope"}
 )
+AZURE_DEFAULT_SCOPE: Final = "https://cognitiveservices.azure.com/.default"
+_AZURE_ENTRA_ENVIRONMENT_VARIABLES: Final = MappingProxyType(
+    {
+        "tenant_id": "AZURE_TENANT_ID",
+        "client_id": "AZURE_CLIENT_ID",
+        "client_secret": "AZURE_CLIENT_SECRET",
+        "azure_username": "AZURE_USERNAME",
+        "azure_password": "AZURE_PASSWORD",
+        "azure_ad_token": "AZURE_AD_TOKEN",
+    }
+)
+
+
+def azure_entra_environment_defaults() -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            **{key: os.getenv(variable) for key, variable in _AZURE_ENTRA_ENVIRONMENT_VARIABLES.items()},
+            "azure_scope": os.getenv("AZURE_SCOPE", AZURE_DEFAULT_SCOPE),
+        }
+    )
+
+
 AZURE_ENTRA_CREDENTIAL_HELP: Final = (
     "Set `tenant_id` + `client_id` + `client_secret`, `azure_ad_token` (an `oidc/` token also needs "
     "`tenant_id` + `client_id`), or `client_id` + `azure_username` + `azure_password` in the agent's `litellm_params`"

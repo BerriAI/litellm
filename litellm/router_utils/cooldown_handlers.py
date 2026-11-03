@@ -861,13 +861,9 @@ def is_caller_entra_credential_failure(
 
     if not caused_by_entra_rejection(exception):
         return False
-    raw_call_params: Final = model_call_details.get("litellm_params")
-    if not isinstance(raw_call_params, Mapping):
-        return False
+    from litellm.llms.azure_ai.common_utils import AZURE_ENTRA_LITELLM_PARAM_KEYS, azure_entra_environment_defaults
 
-    from litellm.llms.azure_ai.common_utils import AZURE_ENTRA_LITELLM_PARAM_KEYS
-
-    call_params: Final = _CREDENTIAL_VALUES_ADAPTER.validate_python(raw_call_params)
+    call_params: Final = _CREDENTIAL_VALUES_ADAPTER.validate_python(model_call_details.get("litellm_params") or {})
 
     credential_name: Final = deployment.litellm_params.litellm_credential_name
     configured: Final[tuple[Mapping[str, object], ...]] = (
@@ -876,9 +872,10 @@ def is_caller_entra_credential_failure(
             CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
         ),
         router_defaults,
+        azure_entra_environment_defaults(),
     )
     return any(
-        call_params.get(key) is not None and all(call_params.get(key) != values.get(key) for values in configured)
+        call_params.get(key) not in (None, "") and all(call_params.get(key) != values.get(key) for values in configured)
         for key in AZURE_ENTRA_LITELLM_PARAM_KEYS
     )
 
