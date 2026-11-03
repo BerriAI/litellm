@@ -37,6 +37,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm._internal_context import internal_sub_call
 from litellm._logging import redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import (
     aload_beta_headers_config,
@@ -6252,12 +6253,13 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
-                model=patch.model or model,
-                input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
-                **optional_params,
-                **kwargs_for_followup,
-            )
+            with internal_sub_call(logging_obj.litellm_call_id):
+                response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
+                    model=patch.model or model,
+                    input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
+                    **optional_params,
+                    **kwargs_for_followup,
+                )
 
             if callback is not None:
                 try:
@@ -6346,6 +6348,7 @@ class BaseLLMHTTPHandler:
         max_loops: int,
         fingerprints: list[str],
         fingerprint: str,
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> ModelResponse | CustomStreamWrapper:
         patch: Final = plan.request_patch or AgenticLoopRequestPatch()
         if patch.messages is None:
@@ -6385,12 +6388,14 @@ class BaseLLMHTTPHandler:
             fingerprint=fingerprint,
         )
 
-        return await litellm.acompletion(
-            model=full_model_name,
-            messages=patch.messages,
-            **optional_params_for_followup,
-            **kwargs_for_followup,
-        )
+        with internal_sub_call(logging_obj.litellm_call_id if logging_obj is not None else None):
+            response: Final = await litellm.acompletion(
+                model=full_model_name,
+                messages=patch.messages,
+                **optional_params_for_followup,
+                **kwargs_for_followup,
+            )
+        return response
 
     def _maybe_wrap_in_fake_stream(
         self,
@@ -6739,6 +6744,7 @@ class BaseLLMHTTPHandler:
                     messages=messages,
                     optional_params=optional_params,
                     kwargs=kwargs_with_provider,
+                    logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
                     depth=depth,
                     max_loops=max_loops,
