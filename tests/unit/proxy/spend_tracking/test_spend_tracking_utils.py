@@ -4418,7 +4418,9 @@ def test_get_logging_payload_uses_recovered_combined_usage_on_failure():
     assert payload["total_tokens"] == 31
 
 
-def _fallback_after_a_failed_follow_up(cache_hit: bool):
+def _fallback_after_a_failed_follow_up(
+    cache_hit: bool, request_params: Mapping[str, object] = MappingProxyType({})
+):
     from litellm.litellm_core_utils.hidden_params import set_hidden_param
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.utils import ModelResponse, Usage
@@ -4437,7 +4439,7 @@ def _fallback_after_a_failed_follow_up(cache_hit: bool):
         model="fallback-model",
         custom_llm_provider="openai",
         litellm_params={"metadata": {"user_api_key": "sk-test"}},
-        optional_params={},
+        optional_params=dict(request_params),
     )
     fallback: Final = ModelResponse(id="fallback", usage=Usage(prompt_tokens=3, completion_tokens=1, total_tokens=4))
     set_hidden_param(fallback, "response_cost", 0.1)
@@ -4459,6 +4461,26 @@ def test_success_row_bills_a_failed_follow_ups_cost_and_tokens(cache_hit: bool, 
 
     assert payload["spend"] == pytest.approx(own_cost + 0.4)
     assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (3 + 5, 1 + 2, 4 + 7)
+
+
+@pytest.mark.parametrize(("cache_hit", "own_cost"), [(False, 0.1), (True, 0.0)], ids=["fresh", "cached"])
+def test_request_params_cannot_change_what_a_failed_follow_up_bills(cache_hit: bool, own_cost: float):
+    forged_attempt: Final = [{"prompt_tokens": 1000, "completion_tokens": 1000, "total_tokens": 2000}, -100.0]
+    logger, fallback, _, now = _fallback_after_a_failed_follow_up(
+        cache_hit,
+        {
+            "stash_billed_by_continuation": True,
+            "failed_attempts_owed_on_success": [forged_attempt],
+            "failed_attempts_billed_on_success": [forged_attempt],
+        },
+    )
+
+    payload: Final = get_logging_payload(
+        kwargs=logger.model_call_details, response_obj=fallback, start_time=now, end_time=now
+    )
+
+    assert payload["spend"] == pytest.approx(own_cost + 0.4)
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (8, 3, 11)
 
 
 def test_cached_fallback_cost_breakdown_adds_up_to_the_billed_failed_follow_up():
