@@ -6,7 +6,7 @@ import re
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import closing
 from types import MappingProxyType
-from typing import Final, Literal, NamedTuple, TypeVar, cast
+from typing import Final, Literal, NamedTuple, NoReturn, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -33,6 +33,7 @@ from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
 _LAST_OPENAI_PATH_SEGMENT: Final = re.compile(r"^(.*/openai)(?=/|$)")
+_MAX_EXCEPTION_CHAIN_DEPTH: Final = 20
 
 
 class _AzureAdTokenJson(TypedDict, total=False):
@@ -52,7 +53,9 @@ class _AsyncAzureClientParams(TypedDict, total=False, extra_items=object):
 
 
 _ASYNC_AZURE_CLIENT_PARAMS_ADAPTER: Final = TypeAdapter(_AsyncAzureClientParams)
-_AZURE_AD_TOKEN_PROVIDER_ADAPTER: Final = TypeAdapter[Callable[[], str] | None](Callable[[], str] | None)
+_AZURE_AD_TOKEN_PROVIDER_ADAPTER: Final = TypeAdapter[Callable[[], str | Awaitable[str]] | None](
+    Callable[[], str | Awaitable[str]] | None
+)
 
 
 class _AzureGatewayClientParams(TypedDict, total=False, extra_items=object):
@@ -85,7 +88,6 @@ class AzureOpenAIError(BaseLLMException):
 _GUID: Final = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
 _AADSTS_REASON: Final = re.compile(r"AADSTS\d+:.*?(?:\.(?=\s|$)|$)", re.MULTILINE)
 _FIRST_SENTENCE: Final = re.compile(r"^.*?(?:\.(?=\s|$)|$)", re.MULTILINE)
-_Token: Final = TypeVar("_Token")
 
 
 def _entra_rejection_reason(message: str) -> str:
@@ -93,22 +95,38 @@ def _entra_rejection_reason(message: str) -> str:
     return _GUID.sub("<redacted>", reason.group(0) if reason else message)
 
 
-def _exception_causes(error: BaseException) -> Iterator[BaseException]:
-    cause: Final = error.__cause__ or error.__context__
-    if cause is None:
-        return
-    yield cause
-    yield from _exception_causes(cause)
+def _exception_chain(error: BaseException) -> Iterator[BaseException]:
+    current = error  # rebind-ok: advances one link per iteration of the bounded walk
+    for _ in range(_MAX_EXCEPTION_CHAIN_DEPTH):
+        yield current
+        following = current.__cause__ or current.__context__
+        if following is None:
+            return
+        current = following
 
 
 def _entra_rejection_as_auth_error(error: Exception) -> AzureOpenAIError | None:
     try:
-        from azure.core.exceptions import ClientAuthenticationError, ServiceRequestError, ServiceResponseError
+        from azure.core.exceptions import (
+            ClientAuthenticationError,
+            HttpResponseError,
+            ServiceRequestError,
+            ServiceResponseError,
+        )
+        from msal.exceptions import (  # pyright: ignore[reportMissingTypeStubs]  # msal ships no py.typed marker
+            MsalServiceError,
+        )
     except ImportError:
         return None
     if not isinstance(error, ClientAuthenticationError):
         return None
-    if any(isinstance(cause, (ServiceRequestError, ServiceResponseError)) for cause in _exception_causes(error)):
+    failures: Final = tuple(_exception_chain(error))
+    if any(isinstance(failure, (ServiceRequestError, ServiceResponseError, MsalServiceError)) for failure in failures):
+        return None
+    if any(
+        isinstance(failure, HttpResponseError) and failure.status_code is not None and failure.status_code >= 500
+        for failure in failures
+    ):
         return None
     return AzureOpenAIError(
         status_code=401,
@@ -116,15 +134,37 @@ def _entra_rejection_as_auth_error(error: Exception) -> AzureOpenAIError | None:
     )
 
 
-def _entra_rejections_as_auth_errors(provider: Callable[[], _Token]) -> Callable[[], _Token]:
-    def call_provider() -> _Token:
+def _raise_entra_rejection_as_auth_error(error: Exception) -> NoReturn:
+    auth_error: Final = _entra_rejection_as_auth_error(error)
+    if auth_error is None:
+        raise error
+    raise auth_error from error
+
+
+def _entra_rejection_types() -> tuple[type[Exception], ...]:
+    try:
+        from azure.core.exceptions import ClientAuthenticationError
+    except ImportError:
+        return ()
+    return (ClientAuthenticationError,)
+
+
+async def _awaited_token(token: Awaitable[str]) -> str:
+    try:
+        return await token
+    except _entra_rejection_types() as error:
+        _raise_entra_rejection_as_auth_error(error)
+
+
+def _entra_rejections_as_auth_errors(
+    provider: Callable[[], str | Awaitable[str]],
+) -> Callable[[], str | Awaitable[str]]:
+    def call_provider() -> str | Awaitable[str]:
         try:
-            return provider()
-        except Exception as error:
-            auth_error: Final = _entra_rejection_as_auth_error(error)
-            if auth_error is None:
-                raise
-            raise auth_error from error
+            token: Final = provider()
+        except _entra_rejection_types() as error:
+            _raise_entra_rejection_as_auth_error(error)
+        return token if isinstance(token, str) else _awaited_token(token)
 
     return call_provider
 

@@ -7,7 +7,7 @@ import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from queue import SimpleQueue
-from typing import Callable, Final, Optional
+from typing import Awaitable, Callable, Final, Optional
 from urllib.parse import parse_qs
 from unittest.mock import ANY, MagicMock, patch
 
@@ -2625,6 +2625,34 @@ def test_entra_rejection_without_an_aadsts_code_keeps_only_its_first_sentence(no
     assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
 
 
+@pytest.mark.parametrize("api_version", ["2025-04-01-preview", "v1"])
+def test_entra_rejecting_an_async_token_provider_answers_401(no_azure_api_key, api_version):
+    from azure.core.exceptions import ClientAuthenticationError
+
+    aadsts_code, entra_message = _ENTRA_REJECTIONS["wrong_secret"]
+
+    async def token_provider() -> str:
+        raise ClientAuthenticationError(message=entra_message)
+
+    async_token_provider: Final[Callable[[], Awaitable[str]]] = token_provider
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        asyncio.run(
+            litellm.acompletion(
+                model="azure/gpt-4.1",
+                api_base="https://litellm-qa.openai.azure.com",
+                api_version=api_version,
+                messages=[{"role": "user", "content": "hi"}],
+                azure_ad_token_provider=async_token_provider,
+            )
+        )
+
+    assert excinfo.value.status_code == 401
+    assert aadsts_code in str(excinfo.value)
+    assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
+    assert _ENTRA_TRACE_ID not in str(excinfo.value)
+
+
 def _azure_identity_wrapped_token_provider(inner_error: Exception) -> Callable[[], str]:
     from azure.core.exceptions import ClientAuthenticationError
 
@@ -2659,6 +2687,36 @@ def test_unreachable_entra_endpoint_stays_a_retryable_server_error(no_azure_api_
 
     with pytest.raises(openai.APIError) as excinfo:
         call(_azure_identity_wrapped_token_provider(transport_error))
+
+    assert not isinstance(excinfo.value, litellm.AuthenticationError)
+    assert excinfo.value.status_code != 401
+
+
+class _EntraServiceUnavailableAnswer:
+    status_code: Final = 503
+    reason: Final = "Service Unavailable"
+
+    def text(self, encoding: str | None = None) -> str:
+        return "<html><body>Service Unavailable</body></html>"
+
+
+@pytest.mark.parametrize("call", _AZURE_CALLS.values(), ids=_AZURE_CALLS.keys())
+@pytest.mark.parametrize("credential_kind", ["client_secret", "managed_identity"])
+def test_entra_answering_a_server_error_stays_a_retryable_server_error(no_azure_api_key, call, credential_kind):
+    from azure.core.exceptions import ClientAuthenticationError
+    from msal.exceptions import MsalServiceError
+
+    token_providers: Final = {
+        "client_secret": _azure_identity_wrapped_token_provider(
+            MsalServiceError("HTTP Error: 503", error=None, error_description=None)
+        ),
+        "managed_identity": _raising_token_provider(
+            ClientAuthenticationError(message="No token received.", response=_EntraServiceUnavailableAnswer())
+        ),
+    }
+
+    with pytest.raises(openai.APIError) as excinfo:
+        call(token_providers[credential_kind])
 
     assert not isinstance(excinfo.value, litellm.AuthenticationError)
     assert excinfo.value.status_code != 401

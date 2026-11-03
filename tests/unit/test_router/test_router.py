@@ -25105,6 +25105,46 @@ async def test_router_clientside_credential_not_reused_by_other_callers(respx_mo
     assert used_auth_headers == {"Bearer configured-key"}
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize("caller_credential", ["client_secret", "azure_password", "azure_ad_token"])
+async def test_router_caller_entra_credential_rejection_leaves_the_shared_deployment_routable(caller_credential):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "entra-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "tenant_id": "configured-tenant",
+                    "client_id": "configured-client",
+                    "client_secret": "configured-secret",
+                },
+                "model_info": {"id": "configured-deployment"},
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="entra-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(
+                message="Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided.",
+                llm_provider="azure",
+                model="gpt-4.1",
+            ),
+            **{caller_credential: "not-the-credential"},
+        )
+
+    response: Final = await router.acompletion(
+        model="entra-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hi",
+    )
+
+    assert response.choices[0].message.content == "hi"
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_router_get_async_openai_model_client():
     router = Router(
         model_list=[

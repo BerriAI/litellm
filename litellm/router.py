@@ -4871,7 +4871,7 @@ class Router:
         metadata_variable_name: Final = get_router_metadata_variable_name(
             function_name=function_name,
         )
-        model_group: Final = kwargs.get(metadata_variable_name, {}).get("model_group")
+        model_group: Final = kwargs.get(metadata_variable_name, {}).get("model_group") or deployment["model_name"]
         _model_id: Final = self.generate_model_id(model_group=model_group, litellm_params=dynamic_litellm_params)
         original_model_id: Final = model_info.get("id")
         model_info["id"] = _model_id
