@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm.anthropic_beta_headers_manager import get_unsupported_headers
 from litellm.constants import (
     ANTHROPIC_BILLING_METADATA_PREFIX,
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
@@ -26,6 +27,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
+from litellm.litellm_core_utils.asyncify import is_event_loop_running
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
@@ -46,8 +48,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     RemoteMedia,
+    async_format_pdf_links,
     async_inline_remote_media,
+    format_pdf_links,
     inline_remote_image_urls,
+    is_unformatted_pdf_link_image,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     message_field,
@@ -56,6 +61,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     split_leading_system_run,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_non_string_reasoning_effort
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
     as_json_object,
@@ -1315,6 +1321,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             *(tool for tool in tools[first_search_tool_index + 1 :] if not _is_openai_tool_search_tool(tool)),
         ]
 
+    def runs_hosted_mcp(self) -> bool:
+        return ANTHROPIC_BETA_HEADER_VALUES.MCP_CLIENT_2025_04_04.value not in get_unsupported_headers(
+            self._resolved_provider
+        )
+
     def _tools_param_with_openai_tool_search_mapped(
         self, non_default_params: Mapping[str, object], model: str, drop_params: bool
     ) -> Mapping[str, object]:
@@ -1903,7 +1914,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params=non_default_params)
+        request_params: Final = tool_params_without_hosted_mcp(
+            non_default_params,
+            model=model,
+            route=self._resolved_provider,
+            drop_params=drop_params,
+            runs_hosted_mcp=self.runs_hosted_mcp,
+        )
+        is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params=request_params)
 
         # NB: ``map_openai_params`` deliberately does NOT sanitize tool names
         # here. Names are the *original* OpenAI names at this stage, and must
@@ -1916,7 +1934,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         #      via ``data = {**optional_params}`` and would 400 with
         #      ``Extra inputs are not permitted``).
 
-        for param, value in non_default_params.items():
+        for param, value in request_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value if isinstance(value, int) else max(1, int(round(value)))
             elif param == "tools":
@@ -1930,8 +1948,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     optional_params["mcp_servers"] = mcp_servers
             elif param == "tool_choice" or param == "parallel_tool_calls":
                 _tool_choice: AnthropicMessagesToolChoice | None = self._map_tool_choice(
-                    tool_choice=non_default_params.get("tool_choice"),
-                    parallel_tool_use=non_default_params.get("parallel_tool_calls"),
+                    tool_choice=request_params.get("tool_choice"),
+                    parallel_tool_use=request_params.get("parallel_tool_calls"),
                 )
 
                 if _tool_choice is not None:
@@ -1957,7 +1975,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if self.uses_native_structured_output_for_schema(
                     model,
                     self._extract_json_schema_from_response_format(value),
-                    REQUEST_PARAMS.validate_python(non_default_params),
+                    REQUEST_PARAMS.validate_python(request_params),
                 ):
                     _output_format = self.map_response_format_to_anthropic_output_format(value)
                     if _output_format is not None:
@@ -1993,7 +2011,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     # `thinking={type: enabled, budget_tokens}` interface a
                     # pre-4.6 model actually supports instead of forwarding a
                     # shape the model will reject.
-                    max_tokens = non_default_params.get("max_completion_tokens") or non_default_params.get("max_tokens")
+                    max_tokens = request_params.get("max_completion_tokens") or request_params.get("max_tokens")
                     legacy_thinking = AnthropicConfig._map_reasoning_effort(
                         reasoning_effort="medium",
                         model=model,
@@ -2087,7 +2105,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
-            non_default_params=non_default_params, optional_params=optional_params
+            non_default_params=request_params, optional_params=optional_params
         )
 
         return optional_params
@@ -2319,6 +2337,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def inlines_remote_media(self, media: RemoteMedia) -> bool:
         return inline_remote_image_urls(media) and media.url.startswith("http://")
 
+    def probes_pdf_link(self, media: RemoteMedia) -> bool:
+        return is_unformatted_pdf_link_image(media) and not self.inlines_remote_media(media)
+
+    def _with_pdf_links_formatted(self, messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
+        return messages if is_event_loop_running() else format_pdf_links(messages, should_probe=self.probes_pdf_link)
+
     async def async_transform_request(
         self,
         model: str,
@@ -2327,9 +2351,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
         headers: dict[str, object],  # mutable-ok: BaseConfig signature
     ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+        inlined: Final = await async_inline_remote_media(messages, should_inline=self.inlines_remote_media)
         return self.transform_request(
             model=model,
-            messages=await async_inline_remote_media(messages, should_inline=self.inlines_remote_media),
+            messages=list(await async_format_pdf_links(inlined, should_probe=self.probes_pdf_link)),
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
@@ -2463,7 +2488,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         try:
             anthropic_messages = anthropic_messages_pt(
                 model=model,
-                messages=list(conversation),
+                messages=list(self._with_pdf_links_formatted(conversation)),
                 llm_provider=self._resolved_provider,
                 drop_params=drop_params,
             )
@@ -3028,7 +3053,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def _build_provider_specific_fields(
         self,
-        completion_response: dict,
+        completion_response: Mapping[str, object],
         citations: Sequence[object] | None,
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None,
         web_search_results: Sequence[object] | None,
@@ -3045,6 +3070,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if context_management is not None:
             provider_specific_fields["context_management"] = context_management
 
+        input_transformations: Final = completion_response.get("input_transformations")
+        if input_transformations is not None:
+            provider_specific_fields["input_transformations"] = input_transformations
+
         if web_search_results is not None:
             provider_specific_fields["web_search_results"] = web_search_results
 
@@ -3055,17 +3084,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if tool_results is not None:
             provider_specific_fields["tool_results"] = tool_results
 
+        container: Final = completion_response.get("container")
+        container_fields: Final[Mapping[str, object] | None] = container if isinstance(container, dict) else None
         if tool_results is not None and any(result.get("type") != "tool_search_tool_result" for result in tool_results):
-            container_id: Final = (
-                completion_response.get("container", {}).get("id")
-                if isinstance(completion_response.get("container"), dict)
-                else None
-            )
+            raw_container_id: Final = container_fields.get("id") if container_fields is not None else None
+            container_id: Final = raw_container_id if isinstance(raw_container_id, str) else None
             code_by_id: Final = self._build_code_by_id_map(tool_calls)
             code_interpreter_results = self._build_code_interpreter_results(tool_results, code_by_id, container_id)
             provider_specific_fields["code_interpreter_results"] = code_interpreter_results
 
-        container: Final = completion_response.get("container")
         if container is not None:
             provider_specific_fields["container"] = container
 
@@ -3166,8 +3193,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 STOP_REASON_FIELDS.validate_python(completion_response)
             )
             completion_response["stop_reason"] = "stop"
-            if stop_reason_fields:
-                json_mode_message.provider_specific_fields = dict(stop_reason_fields)
+            input_transformations: Final = provider_specific_fields.get("input_transformations")
+            json_mode_fields: Final = {
+                **stop_reason_fields,
+                **({} if input_transformations is None else {"input_transformations": input_transformations}),
+            }
+            if json_mode_fields:
+                json_mode_message.provider_specific_fields = json_mode_fields
             if "refusal" in refusal_fields:
                 json_mode_message.refusal = refusal_fields["refusal"]
             if thinking_blocks:

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { z } from "zod";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
@@ -19,20 +20,20 @@ import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import i18n from "@/i18n/i18n";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, ChevronRight, CopyIcon } from "lucide-react";
 
 const tagEditShape = {
-  name: z.string().min(1, "Please input a tag name"),
+  name: z.string().min(1, { error: () => i18n.t("tagManagement.editForm.validation.nameRequired") }),
   description: z.string().optional(),
   models: z.array(z.string()).optional(),
   max_budget: z
     .union([z.string(), z.number()])
-    .refine(
-      (value) => value === "" || (Number.isFinite(Number(value)) && Number(value) >= 0),
-      "Enter a nonnegative budget",
-    )
+    .refine((value) => value === "" || (Number.isFinite(Number(value)) && Number(value) >= 0), {
+      error: () => i18n.t("tagManagement.editForm.validation.budgetNonnegative"),
+    })
     .optional(),
   budget_duration: z.string().nullish(),
 };
@@ -56,6 +57,7 @@ interface TagEditFormProps {
 }
 
 const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userModels, onCancel, onSave }) => {
+  const { t } = useTranslation();
   const [budgetSectionOpen, setBudgetSectionOpen] = useState(false);
   const form = useZodForm(tagEditSchema, {
     defaultValues: {
@@ -75,22 +77,27 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userMo
   return (
     <form onSubmit={form.handleSubmit(submitVisibleValues)} noValidate>
       <FieldGroup>
-        <FormField control={form.control} name="name" label="Tag Name">
+        <FormField control={form.control} name="name" label={t("tagManagement.editForm.fields.name")}>
           {({ ref, ...field }) => <Input {...field} ref={ref} />}
         </FormField>
 
-        <FormField control={form.control} name="description" label="Description">
+        <FormField control={form.control} name="description" label={t("tagManagement.editForm.fields.description")}>
           {({ ref, value, ...field }) => <Textarea {...field} ref={ref} value={value ?? ""} rows={4} />}
         </FormField>
 
         <FormField
           control={form.control}
           name="models"
-          label="Allowed Models"
-          description="Select which models are allowed to process this type of data"
+          label={t("tagManagement.editForm.fields.models")}
+          description={t("tagManagement.editForm.fields.modelsDescription")}
         >
           {({ value, onChange }) => (
-            <MultiSelect options={modelOptions} value={value} onValueChange={onChange} placeholder="Select Models" />
+            <MultiSelect
+              options={modelOptions}
+              value={value}
+              onValueChange={onChange}
+              placeholder={t("tagManagement.editForm.fields.modelsPlaceholder")}
+            />
           )}
         </FormField>
       </FieldGroup>
@@ -101,7 +108,7 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userMo
         className="mt-4 mb-4 rounded-md border border-border"
       >
         <CollapsibleTrigger className="group flex w-full items-center justify-between px-4 py-3 text-base font-medium text-foreground">
-          Budget & Rate Limits
+          {t("tagManagement.editForm.budgetSection")}
           <ChevronRight className="size-4 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
         </CollapsibleTrigger>
         <CollapsibleContent className="px-4 pb-4">
@@ -109,8 +116,8 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userMo
             <FormField
               control={form.control}
               name="max_budget"
-              label="Max Budget (USD)"
-              description="Maximum amount in USD this tag can spend"
+              label={t("tagManagement.editForm.fields.maxBudget")}
+              description={t("tagManagement.editForm.fields.maxBudgetDescription")}
             >
               {({ ref, value, ...field }) => <NumericalInput {...field} value={value ?? ""} step={0.01} />}
             </FormField>
@@ -118,8 +125,8 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userMo
             <FormField
               control={form.control}
               name="budget_duration"
-              label="Reset Budget"
-              description="How often the budget should reset"
+              label={t("tagManagement.editForm.fields.resetBudget")}
+              description={t("tagManagement.editForm.fields.resetBudgetDescription")}
             >
               {({ id, value, onChange }) => (
                 <BudgetDurationDropdown id={id} value={value ?? null} onChange={onChange} />
@@ -129,16 +136,19 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userMo
 
           <div className="mt-4 rounded-md border border-border bg-muted p-3">
             <p className="text-sm text-muted-foreground">
-              TPM/RPM limits for tags are not currently supported. If you need this feature, please{" "}
-              <a
-                href="https://github.com/BerriAI/litellm/issues/new"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-info underline hover:text-info/80"
-              >
-                create a GitHub issue
-              </a>
-              .
+              <Trans
+                i18nKey="tagManagement.editForm.rateLimitsNotice"
+                components={{
+                  issue: (
+                    <a
+                      href="https://github.com/BerriAI/litellm/issues/new"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-info underline hover:text-info/80"
+                    />
+                  ),
+                }}
+              />
             </p>
           </div>
         </CollapsibleContent>
@@ -146,9 +156,9 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userMo
 
       <div className="flex justify-end space-x-2">
         <Button type="button" variant="outline" onClick={onCancel}>
-          Cancel
+          {t("tagManagement.editForm.cancel")}
         </Button>
-        <Button type="submit">Save Changes</Button>
+        <Button type="submit">{t("tagManagement.editForm.save")}</Button>
       </div>
     </form>
   );
@@ -163,6 +173,7 @@ interface TagInfoViewProps {
 }
 
 const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, is_admin, editTag }) => {
+  const { t } = useTranslation();
   const [tagDetails, setTagDetails] = useState<Tag | null>(null);
   const [isEditing, setIsEditing] = useState<boolean>(editTag);
   const [userModels, setUserModels] = useState<string[]>([]);
@@ -188,7 +199,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
       }
     } catch (error) {
       console.error("Error fetching tag details:", error);
-      toast.fromError("Error fetching tag details: " + error);
+      toast.fromError(t("tagManagement.info.toasts.fetchFailed", { error: String(error) }));
     }
   };
 
@@ -216,17 +227,17 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
         rpm_limit: undefined,
         budget_duration: values.budget_duration,
       });
-      toast.success("Tag updated successfully");
+      toast.success(t("tagManagement.info.toasts.updated"));
       setIsEditing(false);
       fetchTagDetails();
     } catch (error) {
       console.error("Error updating tag:", error);
-      toast.fromError("Error updating tag: " + error);
+      toast.fromError(t("tagManagement.info.toasts.updateFailed", { error: String(error) }));
     }
   };
 
   if (!tagDetails) {
-    return <div>Loading...</div>;
+    return <div>{t("tagManagement.info.loading")}</div>;
   }
 
   return (
@@ -234,10 +245,10 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button onClick={onClose} className="mb-4">
-            ← Back to Tags
+            {t("tagManagement.info.back")}
           </Button>
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">Tag Name:</span>
+            <span className="text-sm font-medium">{t("tagManagement.info.tagNameLabel")}</span>
             <span className="font-mono px-2 py-1 bg-muted rounded-sm text-sm border border-border">
               {tagDetails.name}
             </span>
@@ -254,9 +265,13 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
               {copiedStates["tag-name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
             </Button>
           </div>
-          <p className="text-sm text-muted-foreground">{tagDetails.description || "No description"}</p>
+          <p className="text-sm text-muted-foreground">
+            {tagDetails.description || t("tagManagement.info.noDescription")}
+          </p>
         </div>
-        {is_admin && !isEditing && <Button onClick={() => setIsEditing(true)}>Edit Tag</Button>}
+        {is_admin && !isEditing && (
+          <Button onClick={() => setIsEditing(true)}>{t("tagManagement.info.editTag")}</Button>
+        )}
       </div>
 
       {isEditing ? (
@@ -275,25 +290,25 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
         <div className="space-y-6">
           <Card>
             <CardContent>
-              <CardTitle>Tag Details</CardTitle>
+              <CardTitle>{t("tagManagement.info.details.title")}</CardTitle>
               <div className="space-y-4 mt-4">
                 <div>
-                  <p className="font-medium">Name</p>
+                  <p className="font-medium">{t("tagManagement.info.details.name")}</p>
                   <p>{tagDetails.name}</p>
                 </div>
                 <div>
-                  <p className="font-medium">Description</p>
+                  <p className="font-medium">{t("tagManagement.info.details.description")}</p>
                   <p>{tagDetails.description || "-"}</p>
                 </div>
                 <div>
-                  <p className="font-medium">Allowed Models</p>
+                  <p className="font-medium">{t("tagManagement.info.details.models")}</p>
                   <div className="flex flex-wrap gap-2 mt-2">
                     {!tagDetails.models || tagDetails.models.length === 0 ? (
-                      <Badge variant="secondary">All Models</Badge>
+                      <Badge variant="secondary">{t("tagManagement.info.details.allModels")}</Badge>
                     ) : (
                       tagDetails.models.map((modelId) => (
                         <Badge key={modelId} variant="secondary">
-                          <SimpleTooltip content={`ID: ${modelId}`}>
+                          <SimpleTooltip content={t("tagManagement.info.details.modelId", { id: modelId })}>
                             {tagDetails.model_info?.[modelId] || modelId}
                           </SimpleTooltip>
                         </Badge>
@@ -302,11 +317,11 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
                   </div>
                 </div>
                 <div>
-                  <p className="font-medium">Created</p>
+                  <p className="font-medium">{t("tagManagement.info.details.created")}</p>
                   <p>{tagDetails.created_at ? new Date(tagDetails.created_at).toLocaleString() : "-"}</p>
                 </div>
                 <div>
-                  <p className="font-medium">Last Updated</p>
+                  <p className="font-medium">{t("tagManagement.info.details.lastUpdated")}</p>
                   <p>{tagDetails.updated_at ? new Date(tagDetails.updated_at).toLocaleString() : "-"}</p>
                 </div>
               </div>
@@ -316,32 +331,32 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
           {tagDetails.litellm_budget_table && (
             <Card>
               <CardContent>
-                <CardTitle>Budget & Rate Limits</CardTitle>
+                <CardTitle>{t("tagManagement.info.budget.title")}</CardTitle>
                 <div className="space-y-4 mt-4">
                   {tagDetails.litellm_budget_table.max_budget !== undefined &&
                     tagDetails.litellm_budget_table.max_budget !== null && (
                       <div>
-                        <p className="font-medium">Max Budget</p>
+                        <p className="font-medium">{t("tagManagement.info.budget.maxBudget")}</p>
                         <p>${tagDetails.litellm_budget_table.max_budget}</p>
                       </div>
                     )}
                   {tagDetails.litellm_budget_table.budget_duration && (
                     <div>
-                      <p className="font-medium">Budget Duration</p>
+                      <p className="font-medium">{t("tagManagement.info.budget.duration")}</p>
                       <p>{tagDetails.litellm_budget_table.budget_duration}</p>
                     </div>
                   )}
                   {tagDetails.litellm_budget_table.tpm_limit !== undefined &&
                     tagDetails.litellm_budget_table.tpm_limit !== null && (
                       <div>
-                        <p className="font-medium">TPM Limit</p>
+                        <p className="font-medium">{t("tagManagement.info.budget.tpmLimit")}</p>
                         <p>{tagDetails.litellm_budget_table.tpm_limit.toLocaleString()}</p>
                       </div>
                     )}
                   {tagDetails.litellm_budget_table.rpm_limit !== undefined &&
                     tagDetails.litellm_budget_table.rpm_limit !== null && (
                       <div>
-                        <p className="font-medium">RPM Limit</p>
+                        <p className="font-medium">{t("tagManagement.info.budget.rpmLimit")}</p>
                         <p>{tagDetails.litellm_budget_table.rpm_limit.toLocaleString()}</p>
                       </div>
                     )}
