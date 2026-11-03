@@ -8,7 +8,7 @@ from typing import Final
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
-_GLOBAL_ENV_NAME: Final = "LITELLM_RUST"
+ENV_NAME: Final = "LITELLM_RUST"
 _ENV_BOOL: Final = TypeAdapter(bool)
 
 
@@ -72,7 +72,7 @@ def decision(rollout: Rollout) -> Decision:
     return decide(
         rollout,
         process_override=_CONFIGURATION.override,
-        environment_override=_parse_env_bool(os.getenv(_GLOBAL_ENV_NAME)),
+        environment_override=_parse_env_bool(os.getenv(ENV_NAME)),
     )
 
 
