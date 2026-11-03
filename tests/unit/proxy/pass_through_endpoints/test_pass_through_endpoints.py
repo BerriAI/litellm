@@ -13851,6 +13851,43 @@ class TestGuardrailResponseHeaders:
         assert headers == {"x-litellm-applied-policies": "tag-policy"}
         assert h11.Response(status_code=200, headers=[*headers.items()]).status_code == 200
 
+    @pytest.mark.parametrize(
+        ("upstream_bytes", "names", "kept"),
+        [(12000, 500, False), (12000, 1, True), (8000, 500, True), (15340, 1, False)],
+        ids=["large-and-large", "large-and-small", "both-within-the-limit", "upstream-at-the-limit"],
+    )
+    def test_guardrail_headers_leave_the_whole_response_within_a_clients_limit(self, upstream_bytes, names, kept):
+        upstream: Final = "u" * upstream_bytes
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"x-upstream": upstream}),
+            guardrail_request_data=(
+                {},
+                {"litellm_params": {"metadata": {"applied_guardrails": [f"guardrail-{i:03d}" for i in range(names)]}}},
+            ),
+        )
+
+        assert headers["x-upstream"] == upstream
+        assert ("x-litellm-applied-guardrails" in headers) is kept
+        assert sum(len(name) + len(value) for name, value in headers.items()) <= 15360 or not kept
+
+    def test_many_small_upstream_headers_count_with_their_framing(self):
+        upstream: Final = httpx.Headers({f"x-{index:04d}": "v" for index in range(1_500)})
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=upstream,
+            guardrail_request_data=({}, {"litellm_params": {"metadata": {"applied_guardrails": ["guard"]}}}),
+        )
+
+        assert "x-litellm-applied-guardrails" not in headers
+        assert len(headers) == 1_500
+
+    def test_an_upstream_guardrail_header_the_proxy_replaces_takes_no_room(self):
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"x-litellm-applied-guardrails": "u" * 15_400}),
+            guardrail_request_data=({}, {"litellm_params": {"metadata": {"applied_guardrails": ["guard"]}}}),
+        )
+
+        assert headers["x-litellm-applied-guardrails"] == "guard"
+
     def test_guardrail_header_past_the_size_budget_is_left_out(self):
         names: Final = [f"g{index}" for index in range(2_000)]
 

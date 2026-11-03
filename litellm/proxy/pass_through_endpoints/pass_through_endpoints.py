@@ -230,6 +230,10 @@ _JOINED_HEADER_METADATA_FIELDS: Final = frozenset(
 _SENDABLE_HEADER_VALUE: Final = re.compile(rb"(?:[\x21-\x7e\x80-\xff]+(?:[ \t]+[\x21-\x7e\x80-\xff]+)*)?")
 # Half of the 16 KB response header limit in Node.js, the smallest common client limit, leaving room for the others.
 _GUARDRAIL_HEADERS_MAX_BYTES: Final = 8192
+# Node.js's limit for a whole response, less 1 KB for the status line and what the server adds.
+_RESPONSE_HEADERS_MAX_BYTES: Final = 15360
+# The ": " and the line ending around each header on the wire.
+_HEADER_FRAMING_BYTES: Final = 4
 
 
 def _is_mergeable_client_metadata(key: str, value: object) -> bool:
@@ -285,9 +289,29 @@ def _is_sendable_header_value(value: str) -> bool:
     )
 
 
-def _with_header_in_budget(kept: Mapping[str, str], header: tuple[str, str]) -> Mapping[str, str]:
+def _with_header_in_budget(
+    kept: Mapping[str, str], header: tuple[str, str], budget: int = _GUARDRAIL_HEADERS_MAX_BYTES
+) -> Mapping[str, str]:
     size: Final = sum(len(name) + len(value) for name, value in (*kept.items(), header))
-    return MappingProxyType({**kept, header[0]: header[1]}) if size <= _GUARDRAIL_HEADERS_MAX_BYTES else kept
+    return MappingProxyType({**kept, header[0]: header[1]}) if size <= budget else kept
+
+
+def _guardrail_headers_with_room(
+    guardrail_headers: Mapping[str, str], response_headers: Mapping[str, str]
+) -> Mapping[str, str]:
+    """``guardrail_headers``, without one the response's other headers leave no room for, so adding them can't cost a
+    client the response"""
+    others: Final = sum(
+        len(name) + len(value) + _HEADER_FRAMING_BYTES
+        for name, value in response_headers.items()
+        if name not in guardrail_headers
+    )
+    no_headers: Final[Mapping[str, str]] = MappingProxyType({})
+    return reduce(
+        partial(_with_header_in_budget, budget=_RESPONSE_HEADERS_MAX_BYTES - others),
+        guardrail_headers.items(),
+        no_headers,
+    )
 
 
 def _recorded_guardrail_headers(
@@ -595,13 +619,12 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             }
             return_headers.update(sanitized_custom_headers)
         guardrail_headers: Final = _guardrail_response_headers(*guardrail_request_data)
-        return_headers.update(
-            reduce(
-                _with_header_in_budget,
-                (header for header in earlier_guardrail_headers.items() if header[0] not in guardrail_headers),
-                guardrail_headers,
-            )
+        combined_guardrail_headers: Final = reduce(
+            _with_header_in_budget,
+            (header for header in earlier_guardrail_headers.items() if header[0] not in guardrail_headers),
+            guardrail_headers,
         )
+        return_headers.update(_guardrail_headers_with_room(combined_guardrail_headers, return_headers))
 
         return return_headers
 
