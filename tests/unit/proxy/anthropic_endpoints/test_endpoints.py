@@ -303,7 +303,7 @@ class TestProxyExceptionAnthropicEnvelope:
         import litellm.proxy.anthropic_endpoints.endpoints as ep
         from litellm.proxy._types import ProxyException
 
-        request = MagicMock()
+        request: Final = MagicMock()
         request.headers = {}
 
         response = ep._anthropic_error_json_response(
@@ -361,7 +361,7 @@ class TestProxyExceptionAnthropicEnvelope:
         from litellm.proxy._types import UserAPIKeyAuth
 
         raised_status: Final = unavailable.status_code
-        request = MagicMock()
+        request: Final = MagicMock()
         request.headers = {}
 
         with (
@@ -380,7 +380,7 @@ class TestProxyExceptionAnthropicEnvelope:
                 user_api_key_dict=UserAPIKeyAuth(),
             )
 
-        recorded = mock_logging.post_call_failure_hook.await_args.kwargs["original_exception"]
+        recorded: Final = mock_logging.post_call_failure_hook.await_args.kwargs["original_exception"]
         assert recorded is not None
         assert (recorded is not unavailable) is hook_receives_copy
         assert recorded.status_code == expected_status
@@ -438,9 +438,9 @@ class TestProxyExceptionAnthropicEnvelope:
                 proxy_server, "count_request_tokens", new=AsyncMock(side_effect=unavailable)
             ),
         ):
-            response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+            response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
 
-        body = json.loads(response.body)
+        body: Final = json.loads(response.body)
         assert response.status_code == expected_status
         assert body["type"] == "error"
         assert body["error"]["type"] == expected_error_type
@@ -553,7 +553,7 @@ class TestHttpExceptionDictDetail:
             ) as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
         ):
             mock_logging.post_call_failure_hook = AsyncMock()
-            response = await ep.anthropic_response(
+            response: Final = await ep.anthropic_response(
                 fastapi_response=MagicMock(),
                 request=request,
                 user_api_key_dict=UserAPIKeyAuth(),

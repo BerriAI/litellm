@@ -561,7 +561,7 @@ class TestUpstreamFailureEndsStreamWithErrorEvent:
         [
             (
                 MidStreamFallbackError(message="boom", model="m", llm_provider="openai"),
-                {"type": "overloaded_error", "message": "litellm.MidStreamFallbackError: boom"},
+                {"type": "api_error", "message": "litellm.MidStreamFallbackError: boom"},
             ),
             (
                 type("StringStatusError", (Exception,), {"status_code": "429"})("throttled"),

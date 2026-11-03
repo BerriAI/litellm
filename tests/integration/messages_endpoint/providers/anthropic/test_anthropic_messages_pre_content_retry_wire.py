@@ -404,7 +404,7 @@ def test_retry_rejected_before_it_opens_counts_against_the_same_budget(gateway: 
             seconds=70,
         )
         rejected: Final = gateway.request("POST", "/v1/messages", _body(model, prompt, "request", budget=0))
-        _assert_rejected_before_content(rejected, wire, status=500, attempts=1, error="error")
+        _assert_rejected_before_content(rejected, wire, status=529, attempts=1, error="overloaded_error")
         rejection_rows: Final = eventually(
             lambda: _request_rows(gateway, rejected.headers["x-litellm-call-id"]),
             lambda values: len(values) >= 1,

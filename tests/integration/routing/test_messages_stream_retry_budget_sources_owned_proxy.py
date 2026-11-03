@@ -55,7 +55,7 @@ Behavior = Literal[
     "hold-ping",
     "drop-then-too-long",
     "drop-then-401",
-    "overloaded-frames-fallback-503",
+    "overloaded-frames-fallback-529",
     "overloaded-frames",
     "overloaded-once",
 ]
@@ -90,7 +90,7 @@ def _primary_reply(
             return Reply(status=400, body=error_body(400, "prompt is too long: 250000 tokens > 200000 maximum"))
         case "drop-then-401":
             return dropped if attempt == 1 else status_reply(401)
-        case "overloaded-frames-fallback-503" | "overloaded-frames":
+        case "overloaded-frames-fallback-529" | "overloaded-frames":
             return stream_reply((error_frame(529, "scripted overloaded"),))
         case "overloaded-once":
             return status_reply(529) if attempt == 1 else stream_reply(full)
@@ -98,7 +98,7 @@ def _primary_reply(
 
 
 def _fallback_reply(behavior: str, full: tuple[bytes, bytes, bytes, bytes]) -> Reply:
-    if behavior == "overloaded-frames-fallback-503":
+    if behavior == "overloaded-frames-fallback-529":
         return status_reply(503)
     return stream_reply(full)
 
@@ -309,7 +309,7 @@ def test_a_retry_rejected_with_401_ends_the_retries_and_reaches_the_client_uncha
 
 def test_overloaded_frames_whose_fallback_fails_answer_529_overloaded_error(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
-    response: Final = rig.stream(_WITH_FALLBACKS, "overloaded-frames-fallback-503", marker)
+    response: Final = rig.stream(_WITH_FALLBACKS, "overloaded-frames-fallback-529", marker)
     assert response.status_code == 529, response.text
     assert "overloaded_error" in response.text, response.text
     assert "content_block_delta" not in response.text, response.text

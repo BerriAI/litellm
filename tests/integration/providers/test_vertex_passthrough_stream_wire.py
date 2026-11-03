@@ -115,8 +115,7 @@ def test_vertex_pass_through_stream_relays_an_upstream_503_as_503(vertex: _Verte
     response: Final = vertex.stream(_UNAVAILABLE_MODEL, uuid.uuid4().hex)
 
     assert response.status_code == 503, response.text
-    assert _UNAVAILABLE_MESSAGE in response.text, response.text
-    assert "overloaded_error" not in response.text, response.text
+    assert response.content == _UNAVAILABLE_BODY, response.text
     assert [request.target for request in vertex.wire.drain()] == [
         f"/v1/{_model_path(_UNAVAILABLE_MODEL)}:streamGenerateContent?alt=sse"
     ]

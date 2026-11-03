@@ -1438,8 +1438,6 @@ def test_an_already_mapped_litellm_exception_passes_through_untouched(provider, 
     ['{"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}', "upstream failure"],
 )
 def test_an_anthropic_529_stays_an_internal_server_error_that_carries_the_529(message, quiet_exception_mapping):
-    """An Anthropic overload keeps the InternalServerError class and 500 status that retry and allowed-fails
-    policies and SDK callers key on, and carries the provider's 529 for the Anthropic-shaped routes to answer."""
     with pytest.raises(litellm.InternalServerError) as raised:
         exception_type(
             model="claude-opus-5-5",

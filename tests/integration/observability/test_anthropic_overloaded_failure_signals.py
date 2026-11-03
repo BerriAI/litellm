@@ -214,7 +214,7 @@ def _until(rig: _Rig, name: str, model: str) -> tuple[Sample, ...]:
     ("route", "model", "answered", "deployment_status", "deployment_class"),
     (
         pytest.param("/v1/messages", _MESSAGES_ANTHROPIC, 529, "500", "InternalServerError", id="messages-anthropic"),
-        pytest.param("/v1/messages", _MESSAGES_BEDROCK, 529, "503", "ServiceUnavailableError", id="messages-bedrock"),
+        pytest.param("/v1/messages", _MESSAGES_BEDROCK, 503, "503", "ServiceUnavailableError", id="messages-bedrock"),
         pytest.param("/v1/chat/completions", _CHAT_ANTHROPIC, 500, "500", "InternalServerError", id="chat-anthropic"),
     ),
 )
@@ -312,7 +312,7 @@ def _datadog_status_codes(rig: _Rig, alias: str, expected: int) -> tuple[tuple[s
     ("route", "model", "answered", "deployment_status"),
     (
         pytest.param("/v1/messages", _DATADOG_MESSAGES_ANTHROPIC, 529, "500", id="messages-anthropic"),
-        pytest.param("/v1/messages", _DATADOG_MESSAGES_BEDROCK, 529, "503", id="messages-bedrock"),
+        pytest.param("/v1/messages", _DATADOG_MESSAGES_BEDROCK, 503, "503", id="messages-bedrock"),
         pytest.param("/v1/chat/completions", _DATADOG_CHAT_ANTHROPIC, 500, "500", id="chat-anthropic"),
     ),
 )
@@ -332,7 +332,7 @@ def test_the_datadog_proxy_failure_log_carries_the_answered_status_and_the_llm_f
 @pytest.mark.parametrize(
     ("route", "model", "answered"),
     (
-        pytest.param("/v1/messages", _GUARDED_MESSAGES, 529, id="messages"),
+        pytest.param("/v1/messages", _GUARDED_MESSAGES, 503, id="messages"),
         pytest.param("/v1/chat/completions", _GUARDED_CHAT, 503, id="chat"),
     ),
 )
@@ -360,7 +360,7 @@ def test_a_fail_closed_guardrail_outage_is_answered_and_recorded_with_the_routes
     ("route", "model", "answered"),
     (
         pytest.param("/v1/messages", _TRACED_MESSAGES, 529, id="messages-anthropic"),
-        pytest.param("/v1/messages", _MESSAGES_BEDROCK, 529, id="messages-bedrock"),
+        pytest.param("/v1/messages", _MESSAGES_BEDROCK, 503, id="messages-bedrock"),
         pytest.param("/v1/chat/completions", _TRACED_CHAT, 500, id="chat-anthropic"),
     ),
 )

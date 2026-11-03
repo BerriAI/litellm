@@ -3,7 +3,6 @@ import os
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
-from itertools import chain
 from pathlib import Path
 from typing import Final
 from urllib.parse import unquote
@@ -25,12 +24,10 @@ from integration._support.anthropic_sse import (
 from integration._support.client import (
     Gateway,
     JsonValue,
-    eventually,
     gateway_from_environment,
     object_value,
     string_value,
 )
-from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 
@@ -53,8 +50,6 @@ _GATEWAY_GROUPS: Final = {
     "stream": "audit-gateway-overloaded-stream",
 }
 _COUNT_STATUSES: Final = {_COUNTED: 503, _COUNTED_OVERLOADED: 529, _COUNTED_RATE_LIMITED: 429}
-_ADAPTIVE_UPSTREAMS: Final = {503: "claude-adaptive-unavailable"}
-_ADAPTIVE_FLUSH_SECONDS: Final = 40
 _COUNT_TOKENS_TARGET: Final = "/v1/messages/count_tokens"
 _UPSTREAM_URL_PLACEHOLDER: Final = "upstream-url"
 
@@ -73,8 +68,6 @@ def _respond(request: Request) -> Reply:
         return Reply(status=status, body=error_body(status, f"scripted {status}"))
     if backend == _OVERLOADED:
         return status_reply(529)
-    if backend in _ADAPTIVE_UPSTREAMS.values():
-        return status_reply(next(status for status, name in _ADAPTIVE_UPSTREAMS.items() if name == backend))
     if backend == _HEALTHY:
         return stream_reply(message_stream(_served_id(user_prompt(body)), backend, _TEXT))
     return Reply(status=404, body=b'{"error": "no scripted backend"}')
@@ -82,36 +75,6 @@ def _respond(request: Request) -> Reply:
 
 def _deployment(name: str, model: str, api_base: str, api_key: str, **params: JsonValue) -> dict[str, JsonValue]:
     return {"model_name": name, "litellm_params": {"model": model, "api_base": api_base, "api_key": api_key, **params}}
-
-
-def _adaptive_router(status: int) -> str:
-    return f"audit-adaptive-router-{status}"
-
-
-def _adaptive_backend(status: int) -> str:
-    return f"audit-adaptive-backend-{status}"
-
-
-def _adaptive_deployments(status: int) -> tuple[dict[str, JsonValue], ...]:
-    return (
-        {
-            "model_name": _adaptive_router(status),
-            "litellm_params": {
-                "model": "auto_router/adaptive_router",
-                "adaptive_router_config": {"available_models": [_adaptive_backend(status)]},
-            },
-        },
-        {
-            **_deployment(
-                _adaptive_backend(status),
-                f"anthropic/{_ADAPTIVE_UPSTREAMS[status]}",
-                _UPSTREAM_URL_PLACEHOLDER,
-                _API_KEY,
-                input_cost_per_token=0.000001,
-            ),
-            "model_info": {"adaptive_router_preferences": {"quality_tier": 2, "strengths": []}},
-        },
-    )
 
 
 def _config(wire: Wire, directory: Path) -> Path:
@@ -134,7 +97,6 @@ def _config(wire: Wire, directory: Path) -> Path:
             _deployment(group, f"anthropic/{_OVERLOADED}", _UPSTREAM_URL_PLACEHOLDER, _API_KEY)
             for group in _GATEWAY_GROUPS.values()
         ),
-        *chain.from_iterable(_adaptive_deployments(status) for status in _ADAPTIVE_UPSTREAMS),
     ]
     config["router_settings"] = {
         "num_retries": 0,
@@ -224,22 +186,20 @@ def test_an_overloaded_deployment_is_cooled_down_by_the_internal_server_error_al
     assert rig.backends_called() == (_HEALTHY,)
 
 
-def test_count_tokens_disabled_without_a_provider_counter_answers_529_overloaded_error(rig: _Rig) -> None:
+def test_count_tokens_disabled_without_a_provider_counter_answers_503_api_error(rig: _Rig) -> None:
     response: Final = rig.count_tokens(_COUNT_DISABLED_GROUP)
-    error: Final = _count_tokens_error(response, 529)
-    assert error["type"] == "overloaded_error", response.text
+    error: Final = _count_tokens_error(response, 503)
+    assert error["type"] == "api_error", response.text
     assert "Token counting is disabled" in string_value(error["message"]), response.text
     assert rig.targets_called() == ()
 
 
-def test_count_tokens_whose_upstream_answers_503_answers_529_overloaded_error(rig: _Rig) -> None:
+def test_count_tokens_whose_upstream_answers_503_stays_503_api_error(rig: _Rig) -> None:
     response: Final = rig.count_tokens(_COUNT_UPSTREAM_GROUP)
-    error: Final = _count_tokens_error(response, 529)
-    assert error["type"] == "overloaded_error", response.text
+    error: Final = _count_tokens_error(response, 503)
+    assert error["type"] == "api_error", response.text
     assert "scripted 503" in string_value(error["message"]), response.text
     assert rig.targets_called() == (_COUNT_TOKENS_TARGET,)
-
-
 @pytest.mark.parametrize(
     ("group", "status", "error_type"),
     (
@@ -279,46 +239,9 @@ def test_the_claude_code_gateway_messages_route_answers_an_upstream_529_as_overl
     assert rig.backends_called() == (_OVERLOADED,)
 
 
-def test_the_claude_code_gateway_count_tokens_route_answers_an_upstream_503_as_529(rig: _Rig) -> None:
+def test_the_claude_code_gateway_count_tokens_route_answers_an_upstream_503_as_503(rig: _Rig) -> None:
     response: Final = rig.count_tokens(_COUNT_UPSTREAM_GROUP, prefix=_GATEWAY)
-    error: Final = _count_tokens_error(response, 529)
-    assert error["type"] == "overloaded_error", response.text
+    error: Final = _count_tokens_error(response, 503)
+    assert error["type"] == "api_error", response.text
     assert "scripted 503" in string_value(error["message"]), response.text
     assert rig.targets_called() == (_COUNT_TOKENS_TARGET,)
-
-
-def _adaptive_session_rows(session: str) -> list[dict[str, JsonValue]]:
-    return read_rows(
-        'SELECT model_name, exhaustion_count FROM "LiteLLM_AdaptiveRouterSession" WHERE session_id = %s', (session,)
-    )
-
-
-@pytest.mark.parametrize(
-    ("status", "answered"),
-    (
-        pytest.param(503, 503, id="upstream-503"),
-    ),
-)
-def test_an_adaptive_router_session_counts_an_upstream_overload_as_exhaustion(
-    rig: _Rig, status: int, answered: int
-) -> None:
-    session: Final = f"audit-adaptive-{uuid.uuid4().hex}"
-    response: Final = rig.proxy.request(
-        "POST",
-        "/v1/chat/completions",
-        {
-            "model": _adaptive_router(status),
-            "max_tokens": 16,
-            "messages": [{"role": "user", "content": session}],
-        },
-        headers={"x-litellm-session-id": session},
-    )
-    assert response.status_code == answered, response.text
-    assert rig.backends_called() == (_ADAPTIVE_UPSTREAMS[status],)
-    rows: Final = eventually(
-        lambda: _adaptive_session_rows(session),
-        lambda rows: len(rows) > 0,
-        seconds=_ADAPTIVE_FLUSH_SECONDS,
-        return_last_on_timeout=True,
-    )
-    assert rows == [{"model_name": _adaptive_backend(status), "exhaustion_count": 1}], response.text

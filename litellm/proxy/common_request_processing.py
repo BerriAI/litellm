@@ -2991,7 +2991,6 @@ class ProxyBaseLLMRequestProcessing:
         idle. See ``open_sse_before_first_byte``; unwrapped unless an operator sets
         ``litellm_settings.sse_keepalive_ping_interval_seconds``.
         """
-
         answers_as_anthropic: Final = route_type == "anthropic_messages"
 
         async def _audit_late_failure(exc: Exception) -> HTTPException | None:
