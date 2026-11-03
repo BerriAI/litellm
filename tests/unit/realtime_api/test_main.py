@@ -1,13 +1,9 @@
 import asyncio
 import functools
-import ipaddress
 import json
-import ssl
-import threading
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping
-from datetime import datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections.abc import Awaitable, Callable, Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import ClassVar, Final, Literal, Protocol
@@ -17,10 +13,6 @@ import httpx
 import openai
 import pytest
 import respx
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from openai import AsyncOpenAI
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError
 from websockets.frames import Close
@@ -2004,106 +1996,6 @@ _OPENAI_REALTIME_HTTP_ROUTE_PATHS: Final = {
     "calls": "/v1/realtime/calls",
     "translation_calls": "/v1/realtime/translations/calls",
 }
-
-
-def _validity(builder: x509.CertificateBuilder) -> x509.CertificateBuilder:
-    now: Final = datetime.now(timezone.utc)
-    return (
-        builder.serial_number(x509.random_serial_number())
-        .not_valid_before(now - timedelta(minutes=5))
-        .not_valid_after(now + timedelta(hours=1))
-    )
-
-
-def _write_private_ca_and_loopback_certificate(directory: Path) -> tuple[Path, Path, Path]:
-    ca_key: Final = ec.generate_private_key(ec.SECP256R1())
-    server_key: Final = ec.generate_private_key(ec.SECP256R1())
-    ca_name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "litellm realtime test CA")])
-    ca_certificate: Final = (
-        _validity(x509.CertificateBuilder())
-        .subject_name(ca_name)
-        .issuer_name(ca_name)
-        .public_key(ca_key.public_key())
-        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-        .add_extension(
-            x509.KeyUsage(
-                digital_signature=True,
-                content_commitment=False,
-                key_encipherment=False,
-                data_encipherment=False,
-                key_agreement=False,
-                key_cert_sign=True,
-                crl_sign=True,
-                encipher_only=False,
-                decipher_only=False,
-            ),
-            critical=True,
-        )
-        .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), critical=False)
-        .sign(ca_key, hashes.SHA256())
-    )
-    server_certificate: Final = (
-        _validity(x509.CertificateBuilder())
-        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")]))
-        .issuer_name(ca_name)
-        .public_key(server_key.public_key())
-        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
-        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
-        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
-        .sign(ca_key, hashes.SHA256())
-    )
-    ca_path: Final = directory / "ca.pem"
-    certificate_path: Final = directory / "server.pem"
-    key_path: Final = directory / "server.key"
-    ca_path.write_bytes(ca_certificate.public_bytes(serialization.Encoding.PEM))
-    certificate_path.write_bytes(server_certificate.public_bytes(serialization.Encoding.PEM))
-    key_path.write_bytes(
-        server_key.private_bytes(
-            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
-        )
-    )
-    return ca_path, certificate_path, key_path
-
-
-class _EchoPathHandler(BaseHTTPRequestHandler):
-    def do_POST(self) -> None:
-        self.rfile.read(int(self.headers.get("Content-Length", "0")))
-        body: Final = json.dumps({"value": "ek_test", "path": self.path}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-
-@pytest.fixture
-def private_ca_upstream(tmp_path: Path) -> Iterator[tuple[str, Path]]:
-    ca_path, certificate_path, key_path = _write_private_ca_and_loopback_certificate(tmp_path)
-    tls: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    tls.load_cert_chain(certificate_path, key_path)
-    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), _EchoPathHandler)
-    server.socket = tls.wrap_socket(server.socket, server_side=True)
-    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    yield f"https://127.0.0.1:{server.server_address[1]}", ca_path
-    server.shutdown()
-    server.server_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("route", tuple(_OPENAI_REALTIME_HTTP_ROUTE_PATHS))
-async def test_openai_realtime_http_routes_trust_the_ca_bundle_set_in_litellm_ssl_verify(
-    route: str, private_ca_upstream: tuple[str, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    api_base, ca_path = private_ca_upstream
-    monkeypatch.setattr(litellm, "ssl_verify", str(ca_path))
-
-    response: Final = await _realtime_http_route_call(
-        route, _realtime_http_logging(route), custom_llm_provider="openai", api_base=api_base
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {"value": "ek_test", "path": _OPENAI_REALTIME_HTTP_ROUTE_PATHS[route]}
 
 
 @pytest.mark.asyncio

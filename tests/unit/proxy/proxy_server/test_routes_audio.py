@@ -930,7 +930,7 @@ class _FailsAfterTwoDeltas(httpx.AsyncByteStream):
     async def __aiter__(self) -> AsyncIterator[bytes]:
         yield b'data: {"type":"transcript.text.delta","delta":"hello "}\n\n'
         yield b'data: {"type":"transcript.text.delta","delta":"world"}\n\n'
-        raise httpx.ReadError("upstream connection dropped")
+        raise httpx.ReadError("upstream connection dropped at /srv/app/stt_stream.py via stt.internal.corp")
 
 
 @pytest.mark.usefixtures("patched_transcription_stream")
@@ -976,6 +976,8 @@ def test_streamed_transcription_error_mid_stream_ends_with_an_error_event_and_ru
     assert len(frames) == 3
     assert data_lines[-1] == "[DONE]"
     assert "upstream connection dropped" in frames[2]["error"]["message"]
+    assert "/srv/app/stt_stream.py" not in frames[2]["error"]["message"]
+    assert "stt.internal.corp" not in frames[2]["error"]["message"]
     assert set(frames[2]["error"]) == {"message", "type", "param", "code"}
     assert (frames[2]["error"]["type"], frames[2]["error"]["param"], frames[2]["error"]["code"]) == (
         "internal_server_error",

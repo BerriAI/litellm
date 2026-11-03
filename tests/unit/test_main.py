@@ -6127,6 +6127,20 @@ async def test_groq_atranscription_honors_base_url_alias(respx_mock: respx.MockR
     assert response.text == "hello"
 
 
+def test_transcription_keeps_the_prompt_passed_by_position(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+
+    litellm.transcription(
+        "groq/whisper-large-v3", GROQ_WAV_FILE, "en", "Four score", base_url=GROQ_INTERNAL_BASE, api_key="fake-key"
+    )
+
+    sent: Final = route.calls.last.request.content
+    assert b'name="language"\r\n\r\nen\r\n' in sent
+    assert b'name="prompt"\r\n\r\nFour score\r\n' in sent
+
+
 @pytest.mark.parametrize(
     "provider_body,expected_upload_measurements",
     [({"text": "hello", "duration": 2.5}, 0), ({"text": "hello"}, 1)],

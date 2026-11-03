@@ -324,6 +324,7 @@ from litellm._internal_context import service_target, with_service_target
 from litellm._logging import (
     STARTUP_OUTPUT_SETTINGS,
     print_startup_message,
+    redact_internal_details_from_client_message,
     redact_string,
     verbose_proxy_logger,
     verbose_router_logger,
@@ -10607,7 +10608,9 @@ def _transcription_sse_error_frame(client_error: Exception) -> str:
             "error": sse_error_payload(client_error)[1]
             if isinstance(client_error, HTTPException)
             else ProxyException(
-                message=getattr(client_error, "message", str(client_error)),
+                message=redact_internal_details_from_client_message(
+                    str(getattr(client_error, "message", client_error))
+                ),
                 type=openai_error_type(client_error, status_code),
                 param=openai_error_param(client_error),
                 code=status_code,
