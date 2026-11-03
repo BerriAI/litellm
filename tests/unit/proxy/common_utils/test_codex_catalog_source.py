@@ -97,7 +97,7 @@ def object_value(value: JsonValue) -> dict[str, JsonValue]:
 
 
 def _entry(stock_models: Mapping[str, CodexStockModel], instructions: str, slug: str) -> dict[str, JsonValue]:
-    body = codex_models_response_json(
+    body: Final = codex_models_response_json(
         (CodexCatalogRow(id=slug, mode="responses"),), stock=stock_models, instructions=instructions
     )
     entries: Final = JSON_OBJECT.validate_json(body.json)["models"]
@@ -107,9 +107,9 @@ def _entry(stock_models: Mapping[str, CodexStockModel], instructions: str, slug:
 
 def test_the_requesting_release_catalog_serves_its_entry_for_a_model_the_vendored_pair_lacks() -> None:
     assert FRESH_SLUG not in vendored_codex_stock().models
-    tree = _RawTree(_tree(RELEASE))
-    stock = asyncio.run(_source(tree).stock(RELEASE))
-    entry = _entry(stock.models, stock.instructions, FRESH_SLUG)
+    tree: Final = _RawTree(_tree(RELEASE))
+    stock: Final = asyncio.run(_source(tree).stock(RELEASE))
+    entry: Final = _entry(stock.models, stock.instructions, FRESH_SLUG)
     assert stock.source == f"github rust-v{RELEASE}"
     assert entry["shell_type"] == "shell_command" and entry["apply_patch_tool_type"] == "freeform", entry
     assert entry["supports_parallel_tool_calls"] is True, entry
@@ -117,8 +117,8 @@ def test_the_requesting_release_catalog_serves_its_entry_for_a_model_the_vendore
 
 
 def test_a_release_is_fetched_once_and_concurrent_requests_share_the_fetch() -> None:
-    tree = _RawTree(_tree(RELEASE))
-    source = _source(tree)
+    tree: Final = _RawTree(_tree(RELEASE))
+    source: Final = _source(tree)
 
     async def burst() -> list[str]:
         stocks = await asyncio.gather(*(source.stock(RELEASE) for _ in range(5)))
@@ -130,10 +130,10 @@ def test_a_release_is_fetched_once_and_concurrent_requests_share_the_fetch() -> 
 
 
 def test_a_release_without_a_tag_serves_the_vendored_pair_and_is_retried_after_the_window() -> None:
-    tree = _RawTree({})
-    clock = _Clock()
-    source = _source(tree, clock, retry_seconds=300)
-    first = asyncio.run(source.stock(RELEASE))
+    tree: Final = _RawTree({})
+    clock: Final = _Clock()
+    source: Final = _source(tree, clock, retry_seconds=300)
+    first: Final = asyncio.run(source.stock(RELEASE))
     assert first.source == vendored_codex_stock().source and first.models == vendored_codex_stock().models
     assert _entry(first.models, first.instructions, FRESH_SLUG)["shell_type"] == "unified_exec"
     calls_after_first = len(tree.calls)
@@ -159,7 +159,7 @@ def test_a_release_without_a_tag_serves_the_vendored_pair_and_is_retried_after_t
     ],
 )
 def test_a_release_whose_pair_does_not_parse_serves_the_vendored_pair(replies: Mapping[str, tuple[int, bytes]]) -> None:
-    stock = asyncio.run(_source(_RawTree(replies)).stock(RELEASE))
+    stock: Final = asyncio.run(_source(_RawTree(replies)).stock(RELEASE))
     assert stock.source == vendored_codex_stock().source
     assert FRESH_SLUG not in stock.models
 
@@ -176,7 +176,7 @@ def test_a_transport_error_serves_the_vendored_pair() -> None:
         ) -> httpx.Response:
             raise httpx.ConnectError("offline", request=httpx.Request("GET", url))
 
-    stock = asyncio.run(CodexCatalogSource(client=_Down(), clock=_Clock()).stock(RELEASE))
+    stock: Final = asyncio.run(CodexCatalogSource(client=_Down(), clock=_Clock()).stock(RELEASE))
     assert stock.source == vendored_codex_stock().source
 
 
@@ -184,7 +184,7 @@ def test_a_transport_error_serves_the_vendored_pair() -> None:
 def test_a_value_that_is_no_release_version_serves_the_vendored_pair_without_a_fetch(
     client_version: str | None,
 ) -> None:
-    tree = _RawTree(_tree(RELEASE))
+    tree: Final = _RawTree(_tree(RELEASE))
     assert codex_release_tag(client_version) is None
     assert asyncio.run(_source(tree).stock(client_version)).source == vendored_codex_stock().source
     assert tree.calls == []
@@ -200,7 +200,7 @@ def test_local_and_offline_settings_keep_the_vendored_pair_without_a_fetch(
     monkeypatch: pytest.MonkeyPatch, variable: str
 ) -> None:
     monkeypatch.setenv(variable, "true")
-    tree = _RawTree(_tree(RELEASE))
+    tree: Final = _RawTree(_tree(RELEASE))
     assert asyncio.run(_source(tree).stock(RELEASE)).source == vendored_codex_stock().source
     assert tree.calls == []
 
@@ -211,15 +211,15 @@ def test_the_base_url_setting_points_the_fetch_at_a_mirror(monkeypatch: pytest.M
         url.replace(CODEX_CATALOG_BASE_URL, "http://mirror.internal/codex"): reply
         for url, reply in _tree(RELEASE).items()
     }
-    tree = _RawTree(mirrored)
+    tree: Final = _RawTree(mirrored)
     assert asyncio.run(_source(tree).stock(RELEASE)).source == f"github rust-v{RELEASE}"
     assert sorted(tree.calls) == sorted(mirrored), tree.calls
 
 
 def test_the_cache_keeps_only_the_newest_releases() -> None:
     versions = ("0.164.0", "0.165.0", "0.166.0")
-    tree = _RawTree({url: reply for version in versions for url, reply in _tree(version).items()})
-    source = _source(tree, cached_versions=2)
+    tree: Final = _RawTree({url: reply for version in versions for url, reply in _tree(version).items()})
+    source: Final = _source(tree, cached_versions=2)
 
     async def walk() -> None:
         for version in versions:
@@ -244,9 +244,9 @@ def _openai_url(version: str) -> str:
 
 
 def test_an_openai_key_fetches_the_live_catalog_from_openai_with_that_key_and_skips_github() -> None:
-    tree = _RawTree({**_tree(RELEASE), _openai_url(RELEASE): (200, OPENAI_CATALOG)})
-    stock = asyncio.run(_source(tree).stock(RELEASE, openai_api_key=OPENAI_KEY))
-    entry = _entry(stock.models, stock.instructions, FRESH_SLUG)
+    tree: Final = _RawTree({**_tree(RELEASE), _openai_url(RELEASE): (200, OPENAI_CATALOG)})
+    stock: Final = asyncio.run(_source(tree).stock(RELEASE, openai_api_key=OPENAI_KEY))
+    entry: Final = _entry(stock.models, stock.instructions, FRESH_SLUG)
     assert stock.source == f"openai {RELEASE}" and stock.instructions == "# OpenAI live prompt", stock.source
     assert entry["shell_type"] == "unified_exec", entry
     assert tree.calls == [_openai_url(RELEASE)] and tree.headers == [{"Authorization": f"Bearer {OPENAI_KEY}"}]
@@ -254,21 +254,21 @@ def test_an_openai_key_fetches_the_live_catalog_from_openai_with_that_key_and_sk
 
 @pytest.mark.parametrize("status", [401, 500])
 def test_a_refused_openai_fetch_falls_back_to_the_release_tag_on_github(status: int) -> None:
-    tree = _RawTree({**_tree(RELEASE), _openai_url(RELEASE): (status, b"{}")})
-    stock = asyncio.run(_source(tree).stock(RELEASE, openai_api_key=OPENAI_KEY))
+    tree: Final = _RawTree({**_tree(RELEASE), _openai_url(RELEASE): (status, b"{}")})
+    stock: Final = asyncio.run(_source(tree).stock(RELEASE, openai_api_key=OPENAI_KEY))
     assert stock.source == f"github rust-v{RELEASE}" and FRESH_SLUG in stock.models
     assert tree.calls[0] == _openai_url(RELEASE) and sorted(tree.calls[1:]) == sorted(_tree(RELEASE)), tree.calls
 
 
 def test_without_an_openai_key_openai_is_never_asked() -> None:
-    tree = _RawTree({**_tree(RELEASE), _openai_url(RELEASE): (200, OPENAI_CATALOG)})
-    stock = asyncio.run(_source(tree).stock(RELEASE))
+    tree: Final = _RawTree({**_tree(RELEASE), _openai_url(RELEASE): (200, OPENAI_CATALOG)})
+    stock: Final = asyncio.run(_source(tree).stock(RELEASE))
     assert stock.source == f"github rust-v{RELEASE}"
     assert _openai_url(RELEASE) not in tree.calls and tree.headers == [None, None], tree.calls
 
 
 def test_every_fetch_caps_the_download_at_the_catalog_byte_limit_while_it_streams() -> None:
-    tree = _RawTree(_tree(RELEASE))
+    tree: Final = _RawTree(_tree(RELEASE))
     asyncio.run(_source(tree).stock(RELEASE))
     assert tree.byte_limits == [CODEX_CATALOG_MAX_BYTES] * len(tree.calls) and tree.calls, tree.byte_limits
 
@@ -290,11 +290,11 @@ def test_a_release_asked_for_while_the_in_flight_fetches_are_at_the_cap_gets_the
             raise AssertionError("unreachable")
 
     async def scenario() -> tuple[str, list[str]]:
-        tree = _Hanging({})
-        source = _source(tree, cached_versions=2)
-        hung = [asyncio.ensure_future(source.stock(f"0.{n}.0")) for n in (150, 151)]
+        tree: Final = _Hanging({})
+        source: Final = _source(tree, cached_versions=2)
+        hung: Final = [asyncio.ensure_future(source.stock(f"0.{n}.0")) for n in (150, 151)]
         await asyncio.sleep(0)
-        over_cap = await source.stock("0.152.0")
+        over_cap: Final = await source.stock("0.152.0")
         for task in hung:
             task.cancel()
         return over_cap.source, list(tree.calls)
@@ -318,16 +318,16 @@ def test_a_download_the_client_cuts_at_the_byte_limit_falls_through_to_the_next_
                 raise HTTPResponseLimitError(f"{url} exceeded {max_response_bytes} bytes")
             return await super().get(url, headers=headers, timeout=timeout, max_response_bytes=max_response_bytes)
 
-    tree = _CuttingTree(_tree(RELEASE))
-    stock = asyncio.run(_source(tree).stock(RELEASE, openai_api_key=OPENAI_KEY))
+    tree: Final = _CuttingTree(_tree(RELEASE))
+    stock: Final = asyncio.run(_source(tree).stock(RELEASE, openai_api_key=OPENAI_KEY))
     assert stock.source == f"github rust-v{RELEASE}" and tree.calls[0] == _openai_url(RELEASE), tree.calls
 
 
 def test_catalogs_fetched_with_different_openai_keys_are_cached_apart() -> None:
-    tree = _RawTree({**_tree(RELEASE), _openai_url(RELEASE): (200, OPENAI_CATALOG)})
+    tree: Final = _RawTree({**_tree(RELEASE), _openai_url(RELEASE): (200, OPENAI_CATALOG)})
 
     async def scenario() -> None:
-        source = _source(tree)
+        source: Final = _source(tree)
         await source.stock(RELEASE, openai_api_key=OPENAI_KEY)
         await source.stock(RELEASE, openai_api_key=OPENAI_KEY)
         await source.stock(RELEASE, openai_api_key="sk-unit-other-key")
