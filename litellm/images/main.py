@@ -999,7 +999,11 @@ def image_edit(
             image_edit_request_params.update(
                 flatten_form_field_values(
                     {key: value for key, value in non_default_params.items() if key not in dropped_form_params},
-                    extra_body if isinstance(extra_body, dict) else None,
+                    (
+                        {key: value for key, value in extra_body.items() if key not in dropped_form_params}
+                        if isinstance(extra_body, dict)
+                        else None
+                    ),
                 )
             )
 

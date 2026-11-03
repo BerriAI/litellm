@@ -392,7 +392,14 @@ PNG_BYTES: Final = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_image_edit_sends_the_entra_token_only_as_the_bearer_header(respx_mock: respx.MockRouter):
+@pytest.mark.parametrize(
+    "extra_kwargs",
+    [{}, {"extra_body": {"azure_ad_token": "entra-token", "client_secret": "entra-token"}}],
+    ids=["kwarg", "extra_body"],
+)
+def test_image_edit_sends_the_entra_token_only_as_the_bearer_header(
+    respx_mock: respx.MockRouter, extra_kwargs: dict[str, dict[str, str]]
+):
     route: Final = respx_mock.post(url__startswith="https://example-resource.services.ai.azure.com").mock(
         return_value=httpx.Response(200, json=IMAGE_RESPONSE)
     )
@@ -404,6 +411,7 @@ def test_image_edit_sends_the_entra_token_only_as_the_bearer_header(respx_mock: 
         azure_ad_token="entra-token",
         image=PNG_BYTES,
         prompt="add a hat",
+        **extra_kwargs,
     )
 
     request: Final = route.calls.last.request
