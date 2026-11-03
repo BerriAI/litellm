@@ -9,6 +9,8 @@ import pytest
 import respx
 
 import litellm
+from litellm.cost_calculator import cost_per_token, pricing_entry_for_cost_calc
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token, get_billed_token_rates
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
@@ -237,3 +239,62 @@ async def test_router_prices_balanced_columns_by_the_same_rules_as_flex(
     assert balanced_cost == pytest.approx(flex_cost)
     if not overridden_columns:
         assert balanced_cost == pytest.approx(_cost_at(PARITY_ROW, "_balanced"))
+
+
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+@pytest.mark.parametrize("registered", (False, True))
+@pytest.mark.parametrize("qualified", (False, True))
+def test_ollama_pricing_uses_registered_rates_without_contacting_the_server(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    provider: str,
+    registered: bool,
+    qualified: bool,
+) -> None:
+    model: Final = "test-ollama-pricing-registered" if registered else "test-ollama-pricing-unmapped"
+    monkeypatch.setenv("OLLAMA_API_BASE", "https://ambient-pricing.example")
+    metadata: Final = respx_mock.post("https://ambient-pricing.example/api/show").respond(
+        json={"model_info": {"test.context_length": 32768}}
+    )
+    if registered:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"{provider}/{model}",
+            {
+                "litellm_provider": provider,
+                "mode": "chat",
+                "input_cost_per_token": 2e-06,
+                "output_cost_per_token": 5e-06,
+                "input_cost_per_token_decisions": 3e-06,
+                "output_cost_per_token_decisions": 7e-06,
+            },
+        )
+    usage: Final = Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120)
+    cost_model: Final = f"{provider}/{model}" if qualified else model
+    cost_provider: Final = None if qualified else provider
+
+    assert cost_per_token(
+        model=cost_model, custom_llm_provider=cost_provider, usage_object=usage, call_type="systemone"
+    ) == pytest.approx((0.0003, 0.00014) if registered else (0.0, 0.0))
+    assert generic_cost_per_token(model=cost_model, custom_llm_provider=cost_provider, usage=usage) == pytest.approx(
+        (0.0002, 0.0001) if registered else (0.0, 0.0)
+    )
+    rates: Final = get_billed_token_rates(model=cost_model, custom_llm_provider=cost_provider, usage=usage)
+    assert rates is not None
+    assert (rates.input_cost_per_token, rates.output_cost_per_token) == (
+        (2e-06, 5e-06) if registered else (0.0, 0.0)
+    )
+    diagnostic: Final = pricing_entry_for_cost_calc(
+        model=cost_model,
+        completion_response=None,
+        custom_llm_provider=cost_provider,
+        custom_pricing=False,
+        base_model=None,
+        router_model_id=None,
+        region_name=None,
+        litellm_logging_obj=None,
+    )
+    assert diagnostic is not None
+    assert diagnostic[1]["input_cost_per_token"] == (2e-06 if registered else 0.0)
+    assert not metadata.called

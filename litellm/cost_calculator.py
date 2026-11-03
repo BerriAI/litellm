@@ -147,7 +147,8 @@ from litellm.utils import (
     ProviderConfigManager,
     TextCompletionResponse,
     TranscriptionResponse,
-    cached_get_model_info_helper,
+    get_model_info_for_pricing,
+    get_model_info_helper_for_pricing,
     model_info_with_pricing_overrides,
     runtime_model_cost_registrations,
     token_counter,
@@ -362,7 +363,7 @@ def _per_second_pricing_cost(
     audio_seconds: float = 0.0,
 ) -> tuple[float, float] | None:
     try:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = get_model_info_helper_for_pricing(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
         return None
     if _has_token_or_tiered_pricing(model_info) or not _bills_wall_clock_seconds(model_info):
@@ -583,7 +584,9 @@ def cost_per_token(
         model = model_without_prefix
 
     if is_decisions_call_type(call_type):
-        decisions_model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        decisions_model_info: Final = get_model_info_helper_for_pricing(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         decisions_overrides: Final = decisions_pricing_fields(
             litellm.model_cost.get(decisions_model_info["key"], {})  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
         )
@@ -787,7 +790,7 @@ def cost_per_token(
             service_tier=service_tier,
         )
     else:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = get_model_info_helper_for_pricing(model=model, custom_llm_provider=custom_llm_provider)
         if _has_token_or_tiered_pricing(model_info):
             return generic_cost_per_token(
                 model=model,
@@ -2353,7 +2356,7 @@ def _layered_ocr_pricing(*sources: Mapping[str, object] | None) -> OCRPricing:
 
 def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
     try:
-        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        return get_model_info_for_pricing(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
         return None
 
