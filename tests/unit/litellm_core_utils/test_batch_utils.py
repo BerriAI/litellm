@@ -5,14 +5,21 @@ from io import BytesIO
 from typing import Dict, Final, List
 
 import pytest
+from openai.types.batch import BatchRequestCounts
 
 import litellm
 from litellm.litellm_core_utils.batch_utils import (
+    POLLED_BATCH_COST_IS_FINAL_KWARG,
+    POLLED_BATCH_ID_KWARG,
+    ChargeOnceJob,
     InMemoryFile,
+    batch_cost_is_final,
+    defers_batch_cost,
     get_router_metadata_variable_name,
     parse_jsonl_with_embedded_newlines,
     replace_model_in_jsonl,
 )
+from litellm.types.utils import LiteLLMBatch
 from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG, encode_video_id_with_provider
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -383,17 +390,18 @@ def setup_and_teardown():
     asyncio.set_event_loop(None)
 
 
-def _batch(status: str):
+def _batch(status: str, output_file_id: str | None = None, counts: BatchRequestCounts | None = None):
     from openai.types import Batch
 
     return Batch(
         id="job-budget", completion_window="24h", created_at=1, endpoint="/v1/chat/completions",
-        input_file_id="file-budget", object="batch", status=status,
+        input_file_id="file-budget", object="batch", status=status, output_file_id=output_file_id,
+        request_counts=counts,
     )
 
 
 def _completed_batch():
-    return _batch("completed")
+    return _batch("completed", output_file_id="file-out")
 
 
 def _completed_video():
@@ -464,7 +472,21 @@ def test_a_finished_batch_that_cost_nothing_itself_is_still_charged_once_for_its
         "call_type": "aretrieve_batch",
         "standard_logging_object": {"guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}]},
     }
-    assert job_to_charge_once(kwargs, _batch(status), 0.01) == ChargeOnceJob(kind="batch", job_id="job-budget")
+    finished_batch: Final = _batch(status, output_file_id="file-out")
+    assert job_to_charge_once(kwargs, finished_batch, 0.01) == ChargeOnceJob(kind="batch", job_id="job-budget")
+
+
+def test_a_completed_batch_still_waiting_on_its_output_does_not_take_the_charge_its_real_cost_needs() -> None:
+    """Its first retrieve can report completed before the output file exists, and settling on that guardrail-only
+    retrieve would leave the batch's real cost nothing to charge once the output arrives."""
+    from litellm.litellm_core_utils.batch_utils import job_to_charge_once
+
+    kwargs: Final = {
+        "call_type": "aretrieve_batch",
+        "standard_logging_object": {"guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}]},
+    }
+    assert job_to_charge_once(kwargs, _batch("completed"), 0.01) is None
+    assert defers_batch_cost(kwargs, _batch("completed"))
 
 
 def test_a_video_is_charged_once_it_completes_under_the_id_the_client_polled() -> None:
@@ -496,6 +518,27 @@ def test_a_video_poll_is_judged_by_its_logged_status_when_redaction_replaced_the
     expected: Final = ChargeOnceJob(kind="video", job_id="video_deployment_a") if status == "completed" else None
 
     assert job_to_charge_once(kwargs, {"text": "redacted-by-litellm"}, 0.42) == expected
+
+
+@pytest.mark.parametrize(
+    ("cost_is_final", "deferred", "expected"),
+    [(False, True, None), (True, False, ChargeOnceJob(kind="batch", job_id="batch_abc"))],
+)
+def test_a_batch_retrieve_is_judged_by_its_logged_batch_when_redaction_replaced_it(
+    cost_is_final: bool, deferred: bool, expected: ChargeOnceJob | None
+) -> None:
+    from litellm.litellm_core_utils.batch_utils import job_to_charge_once
+
+    kwargs: Final = {
+        "call_type": "aretrieve_batch",
+        POLLED_BATCH_ID_KWARG: "batch_abc",
+        POLLED_BATCH_COST_IS_FINAL_KWARG: cost_is_final,
+        "standard_logging_object": {"guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}]},
+    }
+    redacted: Final = {"text": "redacted-by-litellm"}
+
+    assert defers_batch_cost(kwargs, redacted) is deferred
+    assert job_to_charge_once(kwargs, redacted, 0.01) == expected
 
 
 def test_a_video_polled_with_or_without_its_base64_padding_is_charged_as_one_job() -> None:
@@ -535,3 +578,53 @@ def test_batch_charge_marker_keeps_the_key_markers_already_written_use() -> None
     assert job_charged_once_marker_key("provider-spend", ChargeOnceJob("batch", "first-job")) == (
         "provider-spend:batch:first-job"
     )
+
+
+def _retrieved_batch(
+    status: str, output_file_id: str | None = None, counts: BatchRequestCounts | None = None
+) -> LiteLLMBatch:
+    return LiteLLMBatch(
+        id="batch_abc",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-in",
+        object="batch",
+        status="validating",
+        output_file_id=output_file_id,
+        request_counts=counts,
+    ).model_copy(update={"status": status})
+
+
+class TestBatchCostIsFinal:
+    """Every retrieve of one batch writes the same spend row, so the first retrieve
+    that prices it decides the row for good. A poll before the output exists must
+    therefore not count as final: pricing it recorded $0 and pinned it (LIT-7048)."""
+
+    @pytest.mark.parametrize("status", ["validating", "in_progress", "finalizing", "cancelling"])
+    def test_in_flight_batch_is_not_final(self, status):
+        assert batch_cost_is_final(_retrieved_batch(status)) is False
+
+    @pytest.mark.parametrize("status", ["completed", "complete"])
+    def test_completed_with_output_is_final(self, status):
+        assert batch_cost_is_final(_retrieved_batch(status, output_file_id="file-out")) is True
+
+    def test_completed_without_output_and_unknown_counts_is_not_final(self):
+        assert batch_cost_is_final(_retrieved_batch("completed")) is False
+
+    def test_completed_without_output_and_zero_counts_is_not_final(self):
+        counts = BatchRequestCounts(total=0, completed=0, failed=0)
+        assert batch_cost_is_final(_retrieved_batch("completed", counts=counts)) is False
+
+    def test_completed_without_output_but_successful_lines_is_not_final(self):
+        counts = BatchRequestCounts(total=2, completed=2, failed=0)
+        assert batch_cost_is_final(_retrieved_batch("completed", counts=counts)) is False
+
+    @pytest.mark.parametrize("status", ["completed", "complete"])
+    def test_completed_without_output_and_every_line_failed_is_final(self, status):
+        counts = BatchRequestCounts(total=2, completed=0, failed=2)
+        assert batch_cost_is_final(_retrieved_batch(status, counts=counts)) is True
+
+    @pytest.mark.parametrize("status", ["failed", "expired", "cancelled"])
+    def test_other_terminal_statuses_are_final(self, status):
+        assert batch_cost_is_final(_retrieved_batch(status)) is True

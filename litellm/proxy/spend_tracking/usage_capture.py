@@ -799,7 +799,7 @@ def capture_logging_usage(
     freeze_only: bool = False,
 ) -> CapturedUsage | UsageCaptureError | None:
     from litellm._internal_context import internal_parent_request_id, is_internal_call
-    from litellm.batches.batch_utils import batch_cost_is_final
+    from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.utils import LiteLLMBatch
 

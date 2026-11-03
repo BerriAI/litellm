@@ -375,27 +375,20 @@ def test_legacy_policy_keeps_trace_id_fallback():
 
 
 def test_batch_lifecycle_rows_derive_the_same_session_from_the_batch_id():
-    """The create row, the poller's cost row, a poll's own guardrail row and a redacted cost row
-    all land in one trace on the logs UI even though the poller builds a fresh logging context per cycle."""
+    """The create call's request id IS the batch id and the poller's cost row appends
+    _batch_cost to it, so deriving the session from the request id lands both rows in one
+    trace on the logs UI even though the poller builds a fresh logging context per cycle."""
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
 
-    sessions: Final = (
-        _get_batch_trace_session_id(call_type="acreate_batch", request_id="batch-uid-1", batch_id="batch-uid-1"),
-        _get_batch_trace_session_id(
-            call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost", batch_id="batch-uid-1"
-        ),
-        _get_batch_trace_session_id(
-            call_type="aretrieve_batch", request_id="poll-1_guardrail_cost", batch_id="batch-uid-1"
-        ),
-        _get_batch_trace_session_id(call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost", batch_id=None),
-    )
-    assert set(sessions) == {"batch-uid-1"}
+    create_session: Final = _get_batch_trace_session_id(call_type="acreate_batch", request_id="batch-uid-1")
+    cost_session: Final = _get_batch_trace_session_id(call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost")
+    assert create_session == cost_session == "batch-uid-1"
 
 
 def test_non_batch_call_types_derive_no_batch_session():
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
 
-    assert _get_batch_trace_session_id(call_type="acompletion", request_id="chatcmpl-1", batch_id="chatcmpl-1") is None
+    assert _get_batch_trace_session_id(call_type="acompletion", request_id="chatcmpl-1") is None
 
 
 def test_batch_session_outranks_the_per_request_trace_id():
@@ -5101,18 +5094,10 @@ def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(st
     assert status["request_id"] == status_id
 
 
-@pytest.mark.parametrize(
-    ("call_type", "job_id", "charged_id"),
-    [("avideo_status", "video_abc", "video_abc_video_cost"), ("aretrieve_batch", "batch_abc", "batch_abc_batch_cost")],
-)
 @pytest.mark.parametrize(("response_cost", "pays_the_job"), [(0.01, False), (0.43, True)])
-def test_a_job_poll_that_pays_only_its_guardrail_gets_a_row_of_its_own(
-    call_type, job_id, charged_id, response_cost, pays_the_job
-):
+def test_a_video_poll_that_pays_only_its_guardrail_gets_a_row_of_its_own(response_cost, pays_the_job):
     """A guardrail charges every poll, so a poll paying only that must neither land on the create row
-    nor take the row the job's own charge goes on, either of which the skip_duplicates insert drops. A batch
-    settles on its first finished retrieve, so its guardrail-only poll is a running one."""
-    polled_status = "completed" if pays_the_job or call_type == "avideo_status" else "in_progress"
+    nor take the row the video's own charge goes on, either of which the skip_duplicates insert drops."""
     kwargs = {
         "litellm_call_id": "poll-call-id",
         "response_cost": response_cost,
@@ -5123,12 +5108,17 @@ def test_a_job_poll_that_pays_only_its_guardrail_gets_a_row_of_its_own(
         },
     }
 
-    assert get_spend_logs_id(call_type, {"id": job_id, "status": polled_status}, kwargs) == (
-        charged_id if pays_the_job else "poll-call-id_guardrail_cost"
+    assert get_spend_logs_id("avideo_status", {"id": "video_abc", "status": "completed"}, kwargs) == (
+        "video_abc_video_cost" if pays_the_job else "poll-call-id_guardrail_cost"
     )
 
 
-def test_a_finished_batch_retrieve_paying_only_its_guardrail_settles_under_the_batch_row():
+@pytest.mark.parametrize("status", ["failed", "completed"])
+def test_a_finished_batch_retrieve_paying_only_its_guardrail_charges_under_the_batch_row(status):
+    """The retrieve that settles a batch charges its whole cost once, guardrails included, so a batch whose own
+    cost is $0 must still land on the row that makes its repeat retrieves free."""
+    from litellm.types.utils import LiteLLMBatch
+
     kwargs = {
         "litellm_call_id": "poll-call-id",
         "response_cost": 0.01,
@@ -5137,10 +5127,18 @@ def test_a_finished_batch_retrieve_paying_only_its_guardrail_settles_under_the_b
             "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}],
         },
     }
-
-    assert get_spend_logs_id("aretrieve_batch", {"id": "batch_abc", "status": "failed"}, kwargs) == (
-        "batch_abc_batch_cost"
+    polled_batch = LiteLLMBatch(
+        id="batch_abc",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-in",
+        object="batch",
+        status=status,
+        output_file_id="file-out",
     )
+
+    assert get_spend_logs_id("aretrieve_batch", polled_batch.model_dump(), kwargs) == "batch_abc_batch_cost"
 
 
 def test_a_video_polled_with_or_without_its_base64_padding_charges_one_row():

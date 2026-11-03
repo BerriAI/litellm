@@ -38,7 +38,6 @@ class BatchCostUsageResult:
     completion_cost: float = 0.0
 
 
-_COMPLETED_BATCH_STATUSES: Final = frozenset({"completed", "complete"})
 _DECODED_BATCH_LINE: Final = TypeAdapter(object)
 
 
@@ -52,26 +51,6 @@ def _uses_native_vertex_output(
     if model_name and litellm.disable_vertex_batch_output_transformation:
         return True
     return first_row is not None and is_native_vertex_batch_output_row(first_row)
-
-
-_TERMINAL_BATCH_STATUSES: Final = _COMPLETED_BATCH_STATUSES | frozenset({"failed", "cancelled", "expired"})
-
-
-def batch_cost_is_final(batch: Batch) -> bool:
-    """Whether this retrieve of the batch is the one to account its cost from.
-
-    A batch still in flight has nothing to price, and a "completed" batch can report
-    no output_file_id for a moment before the output populates; pricing either records
-    $0 under the batch's single spend row and pins it there. Final means a completed
-    batch whose output file has arrived or whose counts prove no line succeeded, or
-    any other terminal status (failed, cancelled, expired).
-    """
-    if batch.status not in _TERMINAL_BATCH_STATUSES:
-        return False
-    if batch.status not in _COMPLETED_BATCH_STATUSES or batch.output_file_id is not None:
-        return True
-    request_counts: Final = batch.request_counts
-    return request_counts is not None and request_counts.total > 0 and request_counts.completed == 0
 
 
 async def calculate_batch_cost_and_usage(

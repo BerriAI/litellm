@@ -26,7 +26,12 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_charged_once_marker_key, job_to_charge_once
+from litellm.litellm_core_utils.batch_utils import (
+    ChargeOnceJob,
+    defers_batch_cost,
+    job_charged_once_marker_key,
+    job_to_charge_once,
+)
 from litellm.litellm_core_utils.core_helpers import finite_cost
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -174,6 +179,9 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             callback_fields: Final = _CALLBACK_FIELDS.validate_python(kwargs)
             response_cost: Final = finite_cost(callback_fields.get("response_cost")) or 0.0
             if response_cost <= 0:
+                return
+
+            if defers_batch_cost(callback_fields, response_obj):
                 return
 
             cache_key: Final = self._make_cache_key(str(session_id))

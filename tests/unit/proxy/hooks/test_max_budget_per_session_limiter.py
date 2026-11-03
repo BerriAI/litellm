@@ -10,6 +10,7 @@ Tests that session-scoped budget tracking works correctly:
 
 from collections.abc import Mapping
 from types import MappingProxyType
+from typing import Final
 from unittest.mock import patch
 
 import logging
@@ -158,7 +159,7 @@ async def test_repeated_polls_of_a_finished_job_charge_the_session_once():
     video = VideoObject(id="job-1", object="video", status="completed")
     batch = Batch(
         id="job-1", completion_window="24h", created_at=1, endpoint="/v1/chat/completions",
-        input_file_id="file-1", object="batch", status="completed",
+        input_file_id="file-1", object="batch", status="completed", output_file_id="file-out",
     )
     polls = (("avideo_status", video, 0.4), ("aretrieve_batch", batch, 0.1), ("acompletion", None, 0.01))
 
@@ -181,6 +182,43 @@ async def test_repeated_polls_of_a_finished_job_charge_the_session_once():
 
     spend = await handler._get_current_spend(handler._make_cache_key("session-jobs"))
     assert spend == pytest.approx(0.4 + 0.1 + 3 * 0.01)
+
+
+@pytest.mark.asyncio
+async def test_a_batch_retrieve_before_its_cost_is_final_charges_the_session_nothing():
+    from openai.types import Batch
+
+    handler: Final = PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+
+    def polled(status: str, output_file_id: str | None = None) -> Batch:
+        return Batch(
+            id="batch-1", completion_window="24h", created_at=1, endpoint="/v1/chat/completions",
+            input_file_id="file-1", object="batch", status=status, output_file_id=output_file_id,
+        )
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
+    ) as mock_registry:
+        mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_budget_per_session=5.0)
+        for response_obj, cost in (
+            (polled("in_progress"), 0.01),
+            (polled("completed"), 0.01),
+            (polled("completed", "file-out"), 0.25),
+            (polled("completed", "file-out"), 0.25),
+        ):
+            await handler.async_log_success_event(
+                {
+                    "call_type": "aretrieve_batch",
+                    "response_cost": cost,
+                    "litellm_params": {"metadata": {"session_id": "session-batch", "agent_id": "agent-budget-123"}},
+                },
+                response_obj,
+                None,
+                None,
+            )
+
+    spend: Final = await handler._get_current_spend(handler._make_cache_key("session-batch"))
+    assert spend == pytest.approx(0.25)
 
 
 def _video_poll(

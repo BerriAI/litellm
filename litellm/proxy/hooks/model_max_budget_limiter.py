@@ -19,7 +19,12 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
-from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_charged_once_marker_key, job_to_charge_once
+from litellm.litellm_core_utils.batch_utils import (
+    ChargeOnceJob,
+    defers_batch_cost,
+    job_charged_once_marker_key,
+    job_to_charge_once,
+)
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model, get_bedrock_cross_region_inference_regions
@@ -1206,6 +1211,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 "no key, team, user or end-user model_max_budget covers model=%s",
                 model,
             )
+            return
+
+        if defers_batch_cost(kwargs, response_obj):
             return
 
         job: Final = job_to_charge_once(kwargs=kwargs, response_obj=response_obj, response_cost=response_cost)

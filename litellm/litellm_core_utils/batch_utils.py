@@ -23,7 +23,11 @@ _DEPLOYMENT_FIELD: Final = TypeAdapter(Mapping[str, object])
 _PAYLOAD_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _ENDPOINT_PATHS: Final = TypeAdapter(tuple[str, ...])
 
+_COMPLETED_BATCH_STATUSES: Final = frozenset({"completed", "complete"})
+_TERMINAL_BATCH_STATUSES: Final = _COMPLETED_BATCH_STATUSES | frozenset({"failed", "cancelled", "expired"})
 BATCH_ENDPOINT: Final = "/v1/batch"
+POLLED_BATCH_ID_KWARG: Final = "polled_batch_id"
+POLLED_BATCH_COST_IS_FINAL_KWARG: Final = "polled_batch_cost_is_final"
 BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 _AZURE_PROVIDERS: Final = frozenset({LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value})
 
@@ -341,22 +345,52 @@ def repeat_poll_cost(call_type: object, response_cost: object, standard_logging_
     return max(0.0, min(finite_cost(response_cost) or 0.0, _guardrail_cost_of_poll(standard_logging_payload)))
 
 
-FINISHED_BATCH_STATUSES: Final = frozenset({"completed", "complete", "failed", "cancelled", "expired"})
+def batch_cost_is_final(batch: Batch) -> bool:
+    """Whether this retrieve of the batch is the one to account its cost from.
 
-
-def is_finished_batch_poll(call_type: object, polled_status: object) -> bool:
-    """A finished batch reports the same result on every retrieve, so its first retrieve that costs anything settles
-    it, guardrails included, and its repeats are free."""
-    return is_batch_retrieve_call_type(call_type) and polled_status in FINISHED_BATCH_STATUSES
-
-
-def pays_only_its_guardrail(
-    call_type: object, kwargs: Mapping[str, object], response_cost: object, polled_status: object
-) -> bool:
-    """A running batch's or any video's poll whose whole cost is its guardrails', charged like any other request."""
-    if not is_batch_retrieve_call_type(call_type) and not is_video_status_call_type(call_type):
+    A batch still in flight has nothing to price, and a "completed" batch can report
+    no output_file_id for a moment before the output populates; pricing either records
+    $0 under the batch's single spend row and pins it there. Final means a completed
+    batch whose output file has arrived or whose counts prove no line succeeded, or
+    any other terminal status (failed, cancelled, expired).
+    """
+    if batch.status not in _TERMINAL_BATCH_STATUSES:
         return False
-    if is_finished_batch_poll(call_type, polled_status):
+    if batch.status not in _COMPLETED_BATCH_STATUSES or batch.output_file_id is not None:
+        return True
+    request_counts: Final = batch.request_counts
+    return request_counts is not None and request_counts.total > 0 and request_counts.completed == 0
+
+
+@dataclass(frozen=True, slots=True)
+class PolledBatch:
+    id: str
+    cost_is_final: bool
+
+
+def _polled_batch(kwargs: Mapping[str, object], response_obj: object) -> PolledBatch | None:
+    """The retrieved batch, read from the logging kwargs when message redaction replaced the logged response."""
+    if not is_batch_retrieve_call_type(kwargs.get("call_type")):
+        return None
+    if isinstance(response_obj, Batch):
+        return PolledBatch(id=response_obj.id, cost_is_final=batch_cost_is_final(response_obj))
+    stamped_id: Final = kwargs.get(POLLED_BATCH_ID_KWARG)
+    stamped_cost_is_final: Final = kwargs.get(POLLED_BATCH_COST_IS_FINAL_KWARG)
+    if not isinstance(stamped_id, str) or not stamped_id or not isinstance(stamped_cost_is_final, bool):
+        return None
+    return PolledBatch(id=stamped_id, cost_is_final=stamped_cost_is_final)
+
+
+def defers_batch_cost(kwargs: Mapping[str, object], response_obj: object) -> bool:
+    """A batch retrieve before the batch's cost is final charges nothing, guardrails included, since the retrieve
+    that settles the batch charges its whole cost once."""
+    polled: Final = _polled_batch(kwargs, response_obj)
+    return polled is not None and not polled.cost_is_final
+
+
+def pays_only_its_guardrail(call_type: object, kwargs: Mapping[str, object], response_cost: object) -> bool:
+    """A video poll whose whole cost is its guardrails', charged like any other request."""
+    if not is_video_status_call_type(call_type):
         return False
     return (
         job_cost_of_poll(response_cost, kwargs.get("standard_logging_object"))
@@ -391,16 +425,10 @@ def charged_video_id(
 
 
 def _charged_batch(kwargs: Mapping[str, object], response_obj: object, response_cost: float) -> ChargeOnceJob | None:
-    if not is_batch_retrieve_call_type(kwargs.get("call_type")) or not isinstance(response_obj, Batch):
+    polled: Final = _polled_batch(kwargs, response_obj)
+    if polled is None or not polled.cost_is_final or response_cost <= 0:
         return None
-    settled_cost: Final = (
-        finite_cost(response_cost) or 0.0
-        if is_finished_batch_poll(kwargs.get("call_type"), response_obj.status)
-        else job_cost_of_poll(response_cost, kwargs.get("standard_logging_object"))
-    )
-    if settled_cost <= 0:
-        return None
-    return ChargeOnceJob(kind="batch", job_id=response_obj.id)
+    return ChargeOnceJob(kind="batch", job_id=polled.id)
 
 
 def job_to_charge_once(

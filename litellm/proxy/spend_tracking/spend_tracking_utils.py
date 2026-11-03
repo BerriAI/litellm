@@ -383,11 +383,7 @@ def get_spend_logs_id(
     if charged_video is not None:
         return f"{charged_video}{VIDEO_COST_REQUEST_ID_SUFFIX}"
     call_id: Final = kwargs.get("litellm_call_id")
-    if (
-        pays_only_its_guardrail(call_type, kwargs, response_cost, response_obj.get("status"))
-        and isinstance(call_id, str)
-        and call_id
-    ):
+    if pays_only_its_guardrail(call_type, kwargs, response_cost) and isinstance(call_id, str) and call_id:
         return f"{call_id}{JOB_POLL_GUARDRAIL_COST_REQUEST_ID_SUFFIX}"
     return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, kwargs)}"
 
@@ -982,9 +978,7 @@ def get_logging_payload(
                 metadata=metadata,
                 standard_logging_payload=standard_logging_payload,
                 omit_when_missing=_omits_session_id_when_missing(metadata),
-                batch_trace_session_id=_get_batch_trace_session_id(
-                    call_type=call_type, request_id=id, batch_id=response_obj_dict.get("id")
-                ),
+                batch_trace_session_id=_get_batch_trace_session_id(call_type=call_type, request_id=id),
             ),
             request_duration_ms=_get_request_duration_ms(start_time, end_time),
             status=_get_status_for_spend_log(
@@ -1042,15 +1036,13 @@ _BATCH_TRACE_CALL_TYPES: Final = frozenset(
 )
 
 
-def _get_batch_trace_session_id(call_type: str | None, request_id: str | None, batch_id: object) -> str | None:
-    """A batch's create row, its poller-written cost row and a poll's own guardrail row all name the
-    same batch, so using its id as the session groups the batch lifecycle into one trace on the logs
-    UI. The poller builds its own logging context, so per-request trace ids can never link them. A
-    redacted response has no batch id, so the cost row's request id stands in for it."""
+def _get_batch_trace_session_id(call_type: str | None, request_id: str | None) -> str | None:
+    """A batch's create row and its poller-written cost row both derive their request id
+    from the same batch id (the cost row appends BATCH_COST_REQUEST_ID_SUFFIX), so using
+    that id as the session groups the batch lifecycle into one trace on the logs UI. The
+    poller builds its own logging context, so per-request trace ids can never link them."""
     if call_type not in _BATCH_TRACE_CALL_TYPES or not request_id:
         return None
-    if isinstance(batch_id, str) and batch_id:
-        return batch_id
     return request_id.removesuffix(BATCH_COST_REQUEST_ID_SUFFIX)
 
 

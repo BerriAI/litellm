@@ -12,11 +12,10 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.caching.redis_batch import flush_post_call_redis_batches
 from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED, BILLED_RETRY_ATTEMPT_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.batch_utils import repeat_poll_cost
+from litellm.litellm_core_utils.batch_utils import defers_batch_cost, repeat_poll_cost
 from litellm.litellm_core_utils.core_helpers import (
     budget_reservation_from_metadata,
     finite_cost,
@@ -79,7 +78,6 @@ from litellm.proxy.utils import (
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     CallTypes,
-    LiteLLMBatch,
     StandardLoggingPayload,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
@@ -906,16 +904,8 @@ class _ProxyDBLogger(CustomLogger):
             budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)
             if accounting is not None and (budget_reservation is not None or litellm.apply_search_free_tier):
                 accounting.write_started = True
-            if (
-                isinstance(completion_response, LiteLLMBatch)
-                and kwargs.get("call_type") == CallTypes.aretrieve_batch.value
-                and not batch_cost_is_final(completion_response)
-            ):
-                verbose_proxy_logger.debug(
-                    "Cost tracking deferred for batch %s still in status %s",
-                    completion_response.id,
-                    completion_response.status,
-                )
+            if defers_batch_cost(kwargs, completion_response):
+                verbose_proxy_logger.debug("Cost tracking deferred for a batch whose cost is not final yet")
                 await _release_budget_reservation(budget_reservation=budget_reservation)
                 return
             user_id: Final = cast(str | None, metadata.get("user_api_key_user_id", None))

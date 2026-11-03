@@ -36,7 +36,12 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache, RedisPipelineIncrementOperation, log_redis_failure
 from litellm.integrations.custom_logger import CustomLogger, Span
-from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_charged_once_marker_key, job_to_charge_once
+from litellm.litellm_core_utils.batch_utils import (
+    ChargeOnceJob,
+    defers_batch_cost,
+    job_charged_once_marker_key,
+    job_to_charge_once,
+)
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
@@ -550,6 +555,9 @@ class RouterBudgetLimiting(CustomLogger):
         )
         model_id: Final[str] = str(standard_logging_payload.get("model_id", ""))
         custom_llm_provider: Final[str | None] = standard_logging_payload.get("custom_llm_provider")
+
+        if defers_batch_cost(callback_fields, polled_response):
+            return
 
         job: Final = job_to_charge_once(callback_fields, polled_response, response_cost)
 

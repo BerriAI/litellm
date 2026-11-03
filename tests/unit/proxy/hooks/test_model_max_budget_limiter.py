@@ -49,6 +49,7 @@ def _batch(batch_id: str, status: str) -> LiteLLMBatch:
         input_file_id="file-batch",
         object="batch",
         status=status,
+        output_file_id="file-output",
         usage=Usage(prompt_tokens=20, completion_tokens=18, total_tokens=38),
     )
 
@@ -360,12 +361,14 @@ async def test_polls_of_a_finished_video_charge_each_per_model_budget_once():
     ("call_type", "polled", "guardrail_charges"),
     (
         ("avideo_status", lambda status: VideoObject(id="job_first", object="video", status=status), 4),
-        ("aretrieve_batch", lambda status: _batch("job_first", status), 2),
+        ("aretrieve_batch", lambda status: _batch("job_first", status), 1),
     ),
 )
 async def test_only_the_finished_poll_pays_the_job_and_only_a_video_repoll_pays_its_guardrail(
     call_type, polled, guardrail_charges
 ):
+    """A running video poll pays its guardrail like any request, while a batch retrieve before its cost is final
+    charges nothing, as key spend defers it, so the retrieve that settles the batch pays the only guardrail."""
     limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     guardrail_cost: Final = 0.01
     priced: Final = ({"guardrail_name": "priced", "guardrail_cost": guardrail_cost},)

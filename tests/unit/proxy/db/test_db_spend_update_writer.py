@@ -4811,6 +4811,7 @@ def _job_poll(
             input_file_id="f",
             object="batch",
             status=status,
+            output_file_id="file-out",
         )
     )
     kwargs: Final[dict[str, object]] = {
@@ -4899,15 +4900,12 @@ async def test_update_database_charges_the_completed_polls_cost_and_not_a_runnin
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("call_type", "charge_row_id"),
-    [("avideo_status", "video_abc_video_cost"), ("aretrieve_batch", "batch_abc_batch_cost")],
-)
-async def test_a_poll_paying_only_its_guardrail_cannot_take_the_jobs_charge_whatever_call_id_the_client_sent(
-    call_type, charge_row_id
-):
-    """A client picks its own x-litellm-call-id, so a guardrail-only poll naming the job's charge row, once or
-    twice, must still be charged each time and leave the finished job's charge to the poll that sees it done."""
+async def test_a_poll_paying_only_its_guardrail_cannot_take_the_jobs_charge_whatever_call_id_the_client_sent():
+    """A client picks its own x-litellm-call-id, so a guardrail-only video poll naming the job's charge row, once or
+    twice, must still be charged each time and leave the finished job's charge to the poll that sees it done. An
+    unfinished batch retrieve never reaches the writer, and its row is named by the batch id the provider sent."""
+    call_type: Final = "avideo_status"
+    charge_row_id: Final = "video_abc_video_cost"
     db_writer = DBSpendUpdateWriter()
     db_writer._batch_database_updates = AsyncMock()
     prisma = _spend_logs_table_prisma()
@@ -4964,7 +4962,7 @@ async def test_a_finished_batch_that_cost_nothing_itself_settles_its_retrieves_g
 
     charged = [
         await _update_database_for_video_poll(
-            db_writer, prisma, call_id, 0.01, guardrail_cost=0.01, call_type="aretrieve_batch"
+            db_writer, prisma, call_id, 0.01, status="failed", guardrail_cost=0.01, call_type="aretrieve_batch"
         )
         for call_id in ("poll-1", "poll-2", "poll-3")
     ]

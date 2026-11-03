@@ -1597,14 +1597,16 @@ def _retrieved_batch(status: str, output_file_id: str | None):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("call_type", "status", "output_file_id", "row_claimed", "spend_written", "charged"),
+    ("call_type", "status", "output_file_id", "row_claimed", "spend_written", "charged", "redacted"),
     [
-        ("aretrieve_batch", "in_progress", None, True, False, False),
-        ("aretrieve_batch", "completed", None, True, False, False),
-        ("aretrieve_batch", "completed", "file-out", False, True, False),
-        ("aretrieve_batch", "completed", "file-out", True, True, True),
-        ("aretrieve_batch", "failed", None, True, True, True),
-        ("acreate_batch", "validating", None, True, True, True),
+        ("aretrieve_batch", "in_progress", None, True, False, False, False),
+        ("aretrieve_batch", "completed", None, True, False, False, False),
+        ("aretrieve_batch", "completed", "file-out", False, True, False, False),
+        ("aretrieve_batch", "completed", "file-out", True, True, True, False),
+        ("aretrieve_batch", "failed", None, True, True, True, False),
+        ("acreate_batch", "validating", None, True, True, True, False),
+        ("aretrieve_batch", "in_progress", None, True, False, False, True),
+        ("aretrieve_batch", "completed", "file-out", True, True, True, True),
     ],
     ids=[
         "retrieve_before_final",
@@ -1613,20 +1615,31 @@ def _retrieved_batch(status: str, output_file_id: str | None):
         "retrieve_first_final",
         "retrieve_failed_batch",
         "create_before_final",
+        "redacted_retrieve_before_final",
+        "redacted_retrieve_first_final",
     ],
 )
 async def test_track_cost_callback_charges_a_batch_once_and_only_when_final(  # test-quality-ok: whether the spend writer runs, whether the counters move, and whether the poll's reservation is handed back is the whole observable contract of the gate
-    call_type, status, output_file_id, row_claimed, spend_written, charged
+    call_type, status, output_file_id, row_claimed, spend_written, charged, redacted
 ):
     """
     A poll before the batch is final used to pin its shared spend row at $0, and every
     completed retrieve after the first charged the key again (LIT-7048). Only retrieves
     are gated, since creating a batch is its own billable request, and a retrieve that
-    charges nothing hands its budget reservation back instead.
+    charges nothing hands its budget reservation back instead. Message redaction replaces
+    the logged batch, so the gate reads the batch logging stamped before redacting it.
     """
+    from litellm.litellm_core_utils.batch_utils import POLLED_BATCH_COST_IS_FINAL_KWARG, POLLED_BATCH_ID_KWARG
+
     logger = ProxyDBLogger()
     budget_reservation = None if charged else {"reserved_cost": 0.5, "entries": []}
-    kwargs = _batch_retrieve_kwargs(call_type, reservation=budget_reservation)
+    retrieved: Final = _retrieved_batch(status, output_file_id)
+    stamped: Final = (
+        {POLLED_BATCH_ID_KWARG: retrieved.id, POLLED_BATCH_COST_IS_FINAL_KWARG: status != "in_progress"}
+        if redacted
+        else {}
+    )
+    kwargs = {**_batch_retrieve_kwargs(call_type, reservation=budget_reservation), **stamped}
 
     with (
         patch(  # test-quality-ok: increment_spend_counters is a proxy_server global the callback reads lazily, no seam
@@ -1648,7 +1661,7 @@ async def test_track_cost_callback_charges_a_batch_once_and_only_when_final(  # 
 
         await logger._PROXY_track_cost_callback(
             kwargs=kwargs,
-            completion_response=_retrieved_batch(status, output_file_id),
+            completion_response={"text": "redacted-by-litellm"} if redacted else retrieved,
             start_time=datetime.now(),
             end_time=datetime.now(),
         )

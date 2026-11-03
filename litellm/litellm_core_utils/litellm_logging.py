@@ -38,7 +38,7 @@ from litellm._logging import (
     verbose_logger,
 )
 from litellm._uuid import uuid
-from litellm.batches.batch_utils import batch_cost_is_final, handle_completed_batch
+from litellm.batches.batch_utils import handle_completed_batch
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.caching.redis_batch import flush_post_call_redis_batches
@@ -74,6 +74,11 @@ from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.langtrace import langtrace_trace_endpoint
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
+from litellm.litellm_core_utils.batch_utils import (
+    POLLED_BATCH_COST_IS_FINAL_KWARG,
+    POLLED_BATCH_ID_KWARG,
+    batch_cost_is_final,
+)
 from litellm.litellm_core_utils.classifier_logging import (
     classifier_audit_fields,
     classifier_input_snapshot,
@@ -3364,6 +3369,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 result = self._as_served_response(result)  # rebind-ok: bridged chat calls log the served response
             if isinstance(result, VideoObject):
                 self.model_call_details[POLLED_VIDEO_STATUS_KWARG] = result.status
+            if isinstance(result, LiteLLMBatch):
+                self.model_call_details[POLLED_BATCH_ID_KWARG] = result.id
+                self.model_call_details[POLLED_BATCH_COST_IS_FINAL_KWARG] = batch_cost_is_final(result)
 
             logging_result: Final = self.normalize_logging_result(result=result)
             if cache_hit is None and _served_from_cache_at_no_charge(logging_result):
