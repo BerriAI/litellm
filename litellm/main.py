@@ -114,6 +114,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     messages_without_pdf_file_parts,
 )
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
+from litellm.litellm_core_utils.ptu_pricing import zeroed_ptu_pricing
 from litellm.litellm_core_utils.reasoning_effort_capability import (
     model_group_from_metadata,
     reasoning_effort_needs_allowing,
@@ -1426,27 +1427,34 @@ _METADATA_MODEL_INFO_ID: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO: Final = TypeAdapter(ModelInfo)
 
 
-def _is_router_call(kwargs: Mapping[str, object]) -> bool:
-    """A Router stamps ``model_info.id`` into the call's metadata and registers that deployment's full custom pricing
-    under that id when the deployment is added, so the cost calculator prices those calls from the registered entry."""
+def _router_deployment_model_info(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+    """A Router stamps the deployment's ``model_info`` (with its ``id``) into the call's metadata and registers that
+    deployment's full custom pricing under that id when the deployment is added."""
     for metadata_key in ("litellm_metadata", "metadata"):
         metadata = kwargs.get(metadata_key)
         if not isinstance(metadata, Mapping):
             continue
         model_info = _METADATA_MODEL_INFO_ID.validate_python(metadata).get("model_info")
-        if isinstance(model_info, Mapping) and model_info.get("id") is not None:
-            return True
-    return False
+        if isinstance(model_info, Mapping) and isinstance(model_info.get("id"), str):
+            return _METADATA_MODEL_INFO_ID.validate_python(model_info)
+    return None
 
 
 def _per_call_model_info(
     model: str, custom_llm_provider: str, kwargs: Mapping[str, object], mode: Literal["chat", "embedding"]
 ) -> ModelInfo | None:
-    """The full price entry for one call: the cost map row for the model, if any, overlaid with every custom pricing
-    field the caller put on the call. It travels on the logging object and is never written into ``litellm.model_cost``,
-    so the next call for the same model name is priced from the cost map again."""
+    """The full price entry for one call, or None when the cost map (or the Router's registered deployment entry)
+    already prices it. The cost map row for the model is overlaid with the registered deployment entry and then with
+    the custom pricing fields the request itself set, so a Router call pays request overrides over deployment prices.
+    The entry travels on the logging object and is never written into ``litellm.model_cost``, so the next call for the
+    same model name is priced from the cost map again. Flat token rates on the call replace an inherited
+    ``tiered_pricing`` table, which would otherwise win in the cost calculator."""
+    deployment: Final = _router_deployment_model_info(kwargs)
+    registered: Final = litellm.model_cost.get(str(deployment["id"])) if deployment is not None else None
     custom: Final = {
-        field: kwargs[field] for field in CustomPricingLiteLLMParams.model_fields if kwargs.get(field) is not None
+        field: kwargs[field]
+        for field in CustomPricingLiteLLMParams.model_fields
+        if kwargs.get(field) is not None and (registered is None or registered.get(field) != kwargs[field])
     }
     if not custom:
         return None
@@ -1461,8 +1469,16 @@ def _per_call_model_info(
         "mode": mode,
         "supported_openai_params": None,
     }
-    catalog: Final = _catalog_row(model, custom_llm_provider) or unmapped
-    return _MODEL_INFO.validate_python({**catalog, **custom})
+    row: Final = _catalog_row(model, custom_llm_provider) or unmapped
+    catalog: Final = (
+        {**row, **{key: value for key, value in registered.items() if value is not None}} if registered else row
+    )
+    flat_rates_changed: Final = any(
+        key in custom and custom[key] != catalog.get(key) for key in ("input_cost_per_token", "output_cost_per_token")
+    )
+    base: Final = {key: value for key, value in catalog.items() if not (flat_rates_changed and key == "tiered_pricing")}
+    zeroed: Final = zeroed_ptu_pricing(deployment, custom) if deployment is not None else None
+    return _MODEL_INFO.validate_python({**base, **custom, **(zeroed or {}), "mode": catalog.get("mode") or mode})
 
 
 def _catalog_row(model: str, custom_llm_provider: str) -> ModelInfo | None:
@@ -5936,8 +5952,7 @@ def completion(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
 
-        if not _is_router_call(kwargs):
-            logging.set_per_call_pricing(_per_call_model_info(model, custom_llm_provider, kwargs, "chat"))
+        logging.set_per_call_pricing(_per_call_model_info(model, custom_llm_provider, kwargs, "chat"))
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
         custom_prompt_dict = {}
         if initial_prompt_value or roles or final_prompt_value or bos_token or eos_token:
@@ -6991,8 +7006,7 @@ def embedding(
     )
 
     logging: Final[LiteLLMLoggingObj] = litellm_logging_obj
-    if not _is_router_call(kwargs):
-        logging.set_per_call_pricing(_per_call_model_info(model, custom_llm_provider, kwargs, "embedding"))
+    logging.set_per_call_pricing(_per_call_model_info(model, custom_llm_provider, kwargs, "embedding"))
     logging.update_environment_variables(
         model=model,
         user=user,

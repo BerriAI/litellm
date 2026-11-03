@@ -1560,3 +1560,70 @@ def test_direct_call_with_directional_per_second_rates_is_priced_from_them_witho
     finally:
         litellm.model_cost.pop(model_key, None)
         _invalidate_model_cost_lowercase_map()
+
+
+def test_router_call_with_request_prices_bills_them_over_the_deployment_rates():
+    from litellm import Router
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "lit-request-override",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake-key",
+                    "mock_response": "ok",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                    "input_cost_per_audio_token": 4e-05,
+                    "output_cost_per_audio_token": 8e-05,
+                },
+            }
+        ]
+    )
+    overridden: Final = router.completion(
+        model="lit-request-override",
+        messages=[{"role": "user", "content": "hello"}],
+        input_cost_per_token=5e-05,
+        output_cost_per_token=9e-05,
+    )
+    assert overridden._hidden_params["response_cost"] == pytest.approx(
+        overridden.usage.prompt_tokens * 5e-05 + overridden.usage.completion_tokens * 9e-05
+    )
+    plain: Final = router.completion(model="lit-request-override", messages=[{"role": "user", "content": "hello"}])
+    assert plain._hidden_params["response_cost"] == pytest.approx(
+        plain.usage.prompt_tokens * 1e-06 + plain.usage.completion_tokens * 2e-06
+    )
+
+
+def test_direct_call_flat_rates_beat_the_catalogs_tiered_pricing():
+    model_key: Final = "openai/lit-tiered-catalog-model"
+    litellm.register_model(
+        {
+            model_key: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 3e-07, "output_cost_per_token": 6e-07},
+                    {"range": [128000, 1000000], "input_cost_per_token": 6e-07, "output_cost_per_token": 1.2e-06},
+                ],
+            }
+        },
+        persist_across_reloads=False,
+    )
+    try:
+        response: Final = litellm.completion(
+            model=model_key,
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            mock_response="ok",
+            input_cost_per_token=1e-05,
+            output_cost_per_token=2e-05,
+        )
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            response.usage.prompt_tokens * 1e-05 + response.usage.completion_tokens * 2e-05
+        )
+        assert "input_cost_per_token" not in litellm.model_cost[model_key]
+    finally:
+        litellm.model_cost.pop(model_key, None)
+        _invalidate_model_cost_lowercase_map()
