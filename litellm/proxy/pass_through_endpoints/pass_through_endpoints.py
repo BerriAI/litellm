@@ -209,7 +209,12 @@ _FIELDS_GUARDRAILS_READ_BY_SHAPE: Final = (
     ("guardrail_config", (dict,)),
     ("proxy_server_request", (dict,)),
 )
-_POST_CALL_SELECTION_FIELDS: Final = ("_guardrail_pipelines", "_pipeline_managed_guardrails", "tags")
+_POST_CALL_SELECTION_FIELDS: Final = (
+    "_guardrail_pipelines",
+    "_pipeline_managed_guardrails",
+    "spend_logs_metadata",
+    "tags",
+)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
 
@@ -970,8 +975,9 @@ def _holds_resolved_pipelines(pipelines: object) -> bool:
 
 
 def _post_call_selection_metadata(kwargs: Mapping[str, object], inherited: bool) -> Mapping[str, object]:
-    """The policy pipelines resolved for a request that inherits auth guardrails, and the tags a tag-scoped guardrail
-    mode reads, from the logging metadata that request setup moved the body's ``metadata`` into"""
+    """The policy pipelines resolved for a request that inherits auth guardrails, the tags a tag-scoped guardrail mode
+    reads and the spend_logs_metadata a blocked response's row keeps, from the logging metadata that request setup moved
+    the body's ``metadata`` into"""
     if not inherited:
         return MappingProxyType({})
     litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
@@ -1100,10 +1106,19 @@ def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict[str, 
     ``standard_logging_guardrail_information`` there and not on the dict the
     failure handler forwards to ``post_call_failure_hook``. Without this the
     otel guardrail span is emitted on allow but missing on block. Carry the
-    entries over so the failure path matches the unified path.
+    entries over so the failure path matches the unified path. The failure row
+    reads its ``metadata`` here too, so it keeps the ``spend_logs_metadata`` a
+    built-in route's post-call pass was given, as its success row would.
     """
     if guardrail_data is None:
         return
+    spend_logs_metadata: Final = (as_str_mapping(guardrail_data.get("metadata")) or {}).get("spend_logs_metadata")
+    if spend_logs_metadata is not None:
+        request_fields: Final = cast("Mapping[str, object]", request_data)  # cast-ok: the JSON body plus logging kwargs
+        request_data["metadata"] = {  # rebind-ok: the failure path hands this dict to post_call_failure_hook
+            **(as_str_mapping(request_fields.get("metadata")) or {}),
+            "spend_logs_metadata": spend_logs_metadata,
+        }
     source_key: Final = get_metadata_variable_name_from_kwargs(guardrail_data)
     source_metadata: Final = as_str_mapping(guardrail_data.get(source_key)) or {}
     entries: Final = source_metadata.get("standard_logging_guardrail_information")
