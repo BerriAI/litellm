@@ -1142,3 +1142,42 @@ async def test_export_failure_does_not_change_committed_accounting(parity_databa
     finally:
         server.close()
         await server.wait_closed()
+
+
+@pytest.mark.parametrize("threshold", ["count", "bytes"])
+@pytest.mark.asyncio
+async def test_retained_batch_storage_threshold_alerts_without_deleting_receipts(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch, threshold: str
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from litellm.accounting.worker import flush_accounting_deliveries
+    from litellm.types.integrations.slack_alerting import AlertType
+
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    monkeypatch.setenv("LITELLM_ACCOUNTING_BATCH_DELIVERY_ALERT_COUNT", "1" if threshold == "count" else "1000000")
+    monkeypatch.setenv("LITELLM_ACCOUNTING_DELIVERY_ALERT_BYTES", "1" if threshold == "bytes" else "1073741824")
+    client = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    alerts = SimpleNamespace(alerting_handler=AsyncMock())
+    await client.db.connect()
+    try:
+        with psycopg.connect(parity_database, autocommit=True) as connection:
+            connection.execute(
+                'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, state, applied_at, accounting_payload, is_batch) '
+                "VALUES ('old-batch', 'applied', CURRENT_TIMESTAMP - INTERVAL '400 days', '{}', true)"
+            )
+        await flush_accounting_deliveries(DBSpendUpdateWriter(), client, alerts)
+        with psycopg.connect(parity_database) as connection:
+            assert connection.execute('SELECT request_id, state::text FROM "LiteLLM_SpendLogDelivery"').fetchall() == [
+                ("old-batch", "applied")
+            ]
+            table_bytes = connection.execute(
+                'SELECT pg_total_relation_size(\'"LiteLLM_SpendLogDelivery"\')'
+            ).fetchone()[0]
+        alerts.alerting_handler.assert_awaited_once_with(
+            message=f"Accounting delivery storage requires review. Retained batches=1, table bytes={table_bytes}.",
+            level="High", alert_type=AlertType.failed_tracking_spend,
+        )
+    finally:
+        await client.db.disconnect()

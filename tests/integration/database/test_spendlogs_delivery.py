@@ -598,3 +598,29 @@ async def test_batch_takeover_respects_current_request_log_retention(
     assert delivery_database.execute(
         'SELECT accounting_payload FROM "LiteLLM_SpendLogDelivery"'
     ).fetchone() == (replacement["accounting_payload"],)
+
+
+@pytest.mark.parametrize("setting", ["retention_days", "batch_size"])
+@pytest.mark.asyncio
+async def test_invalid_cleanup_settings_preserve_receipts(delivery_database, delivery_client, setting):
+    _insert(delivery_database, (_row("protected"),))
+    with pytest.raises(ValueError, match="positive"):
+        await AccountingDeliveryRepository(delivery_client).cleanup_applied(**{setting: 0})
+    assert delivery_database.execute('SELECT request_id, state::text FROM "LiteLLM_SpendLogDelivery"').fetchall() == [
+        ("protected", "pending")
+    ]
+
+
+@pytest.mark.parametrize("setting", ["max_attempts", "batch_size"])
+@pytest.mark.asyncio
+async def test_invalid_worker_settings_preserve_pending_work(delivery_database, delivery_client, setting):
+    from unittest.mock import AsyncMock
+
+    _insert(delivery_database, (_row("protected"),))
+    apply = AsyncMock()
+    with pytest.raises(ValueError, match="positive"):
+        await AccountingDeliveryRepository(delivery_client).apply_pending(apply, **{setting: 0})
+    apply.assert_not_awaited()
+    assert delivery_database.execute(
+        'SELECT request_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery"'
+    ).fetchall() == [("protected", "pending", 0)]
