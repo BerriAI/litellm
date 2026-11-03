@@ -1073,7 +1073,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "regional_endpoint_uplift_multiplier": {"type": "number"},
             "regional_processing_uplift_multiplier_eu": {"type": "number"},
             "regional_processing_uplift_multiplier_us": {"type": "number"},
-            "regional_processing_uplift_multiplier_fedramp": {"type": "number"},
+            "fedramp_uplift_multiplier": {"type": "number"},
             "input_cost_per_pixel": {"type": "number"},
             "input_cost_per_query": {"type": "number"},
             "input_cost_per_request": {"type": "number"},

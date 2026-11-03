@@ -1374,8 +1374,8 @@ def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | 
     data-residency region.
 
     OpenAI applies a flat percentage uplift (e.g. +10%) on all token costs for
-    requests served from eu.api.openai.com or us.api.openai.com, and on
-    FedRAMP requests served from gov.api.openai.com. The multiplier is stored on the model entry as
+    requests served from a regionalized hostname (eu./us.api.openai.com). The
+    multiplier is stored on the model entry as
     ``regional_processing_uplift_multiplier_<region>`` (e.g. 1.10).
 
     Returns 1.0 (no uplift) when ``data_residency`` is ``None`` or when the
@@ -1400,6 +1400,29 @@ def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | 
 
 
 _get_regional_uplift_multiplier = get_regional_uplift_multiplier
+
+
+def get_fedramp_uplift_multiplier(model_info: ModelInfo, data_residency: str | None) -> float:
+    """
+    Resolve the per-model uplift multiplier for the OpenAI FedRAMP endpoint.
+
+    OpenAI applies a flat percentage uplift (e.g. +10%) on all token costs for
+    requests served from gov.api.openai.com. The multiplier is stored on the
+    model entry as ``fedramp_uplift_multiplier`` (e.g. 1.10).
+
+    Returns 1.0 (no uplift) unless ``data_residency`` is ``"fedramp"`` and the
+    model has a multiplier configured.
+    """
+    if data_residency is None or data_residency.lower() != DataResidency.FEDRAMP.value:
+        return 1.0
+    multiplier: Final = model_info.get("fedramp_uplift_multiplier")
+    if multiplier is None:
+        return 1.0
+    try:
+        return float(multiplier)
+    except (TypeError, ValueError):
+        verbose_logger.exception("Invalid fedramp_uplift_multiplier for model; defaulting to 1.0")
+        return 1.0
 
 
 def get_vertex_regional_endpoint_uplift(model_info: ModelInfo, vertex_location: str | None) -> float:
@@ -1511,8 +1534,8 @@ def generic_cost_per_token(
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing anthropic caching information
-        - data_residency: optional OpenAI data-residency region (e.g. "eu", "us", "fedramp"),
-          used to apply the per-model regional-processing uplift multiplier.
+        - data_residency: optional OpenAI data-residency region (e.g. "eu", "us") or
+          "fedramp", used to apply the per-model regional-processing or FedRAMP uplift multiplier.
         - vertex_location: optional Vertex AI location the request was served from
           (e.g. "us-east5", "global"), used to apply the per-model
           regional-endpoint uplift multiplier when non-global.
@@ -1689,11 +1712,13 @@ def generic_cost_per_token(
         )
         completion_cost += float(video_tokens) * _output_cost_per_video_token
 
-    ## REGIONAL DATA-RESIDENCY UPLIFT
+    ## REGIONAL DATA-RESIDENCY / FEDRAMP ENDPOINT UPLIFT
     # Applied as a flat multiplier across all token costs for the request
-    # when the upstream is an OpenAI regional or FedRAMP host (eu.api.openai.com,
-    # us.api.openai.com, or gov.api.openai.com).
-    uplift: Final = get_regional_uplift_multiplier(resolved_model_info, data_residency)
+    # when the upstream is a regionalized or FedRAMP OpenAI host (eu./us./gov.api.openai.com).
+    # A request has one host, so at most one of the two multipliers is above 1.0.
+    uplift: Final = get_regional_uplift_multiplier(resolved_model_info, data_residency) * get_fedramp_uplift_multiplier(
+        resolved_model_info, data_residency
+    )
     if uplift != 1.0:
         prompt_cost *= uplift
         completion_cost *= uplift
@@ -1836,6 +1861,7 @@ def _cost_map_billed_rates(
     )
     multiplier: Final = (
         get_regional_uplift_multiplier(model_info, data_residency)
+        * get_fedramp_uplift_multiplier(model_info, data_residency)
         * get_vertex_regional_endpoint_uplift(model_info, vertex_location)
         * get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
         * get_provider_specific_speed_multiplier(model_info=model_info, usage=usage)
@@ -2021,8 +2047,10 @@ def calculate_prompt_caching_savings(
             {ttl: rate - prompt_base_cost for ttl, rate in base_costs.cache_creation_rates_by_ttl.items()}
         ),
     )
-    uplift: Final = get_regional_uplift_multiplier(model_info, data_residency) * get_vertex_regional_endpoint_uplift(
-        model_info, vertex_location
+    uplift: Final = (
+        get_regional_uplift_multiplier(model_info, data_residency)
+        * get_fedramp_uplift_multiplier(model_info, data_residency)
+        * get_vertex_regional_endpoint_uplift(model_info, vertex_location)
     )
     return (read_discount - write_premium) * uplift
 

@@ -2592,7 +2592,8 @@ def test_fedramp_data_residency_applies_configured_uplift() -> None:
         "litellm_provider": "openai",
         "mode": "chat",
         "supported_openai_params": None,
-        "regional_processing_uplift_multiplier_fedramp": 1.1,
+        "regional_processing_uplift_multiplier_us": 1.5,
+        "fedramp_uplift_multiplier": 1.1,
     }
 
     base: Final = generic_cost_per_token(
@@ -2609,9 +2610,19 @@ def test_fedramp_data_residency_applies_configured_uplift() -> None:
         model_info=model_info,
     )
 
+    us: Final = generic_cost_per_token(
+        model="fedramp-fixture",
+        usage=usage,
+        custom_llm_provider="openai",
+        data_residency=DataResidency.US.value,
+        model_info=model_info,
+    )
+
     assert sum(base) > 0
     assert fedramp[0] == pytest.approx(base[0] * 1.1)
     assert fedramp[1] == pytest.approx(base[1] * 1.1)
+    assert us[0] == pytest.approx(base[0] * 1.5)
+    assert us[1] == pytest.approx(base[1] * 1.5)
 
 
 @pytest.mark.parametrize("model", ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-pro", "gpt-4o", "gpt-4.1"])

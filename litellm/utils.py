@@ -7479,8 +7479,8 @@ def get_model_info_helper(
                 regional_processing_uplift_multiplier_us=_model_info.get(
                     "regional_processing_uplift_multiplier_us", None
                 ),
-                regional_processing_uplift_multiplier_fedramp=_model_info.get(
-                    "regional_processing_uplift_multiplier_fedramp", None
+                fedramp_uplift_multiplier=_model_info.get(
+                    "fedramp_uplift_multiplier", None
                 ),
                 regional_endpoint_uplift_multiplier=_model_info.get("regional_endpoint_uplift_multiplier", None),
                 output_cost_per_audio_token=_model_info.get("output_cost_per_audio_token", None),
