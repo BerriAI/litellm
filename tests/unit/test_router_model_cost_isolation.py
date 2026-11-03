@@ -2924,6 +2924,122 @@ def test_deleting_one_of_many_identical_deployments_rewrites_the_shared_row_once
     assert litellm.model_cost[row].get("max_output_tokens") == _catalog_field(row, "max_output_tokens")
 
 
+def _priced_cache_point_deployment(model_id: str, price: float, **model_info: object) -> DeploymentTypedDict:
+    return DeploymentTypedDict(
+        model_name=model_id,
+        litellm_params=LiteLLMParamsTypedDict(model=_CACHE_POINT_DEPLOYMENT_MODEL, input_cost_per_token=price),
+        model_info={"id": model_id, **model_info},
+    )
+
+
+def test_deleting_one_of_many_differently_priced_deployments_rewrites_the_shared_row_once() -> None:
+    row: Final = _shared_cache_point_row()
+    flag: Final = not bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)
+    host: Final = _CostMapWriteRecordingHost()
+    router: Final = Router.from_config(
+        build_router_config(
+            router_arguments(
+                model_list=[
+                    *(
+                        _priced_cache_point_deployment(f"sibling-{n}", (n + 1) * 1e-7, **{_CACHE_POINT_FLAG: flag})
+                        for n in range(50)
+                    ),
+                    _cache_point_deployment("doomed", max_output_tokens=_unseen_max_output_tokens(row)),
+                ]
+            )
+        ),
+        host=host,
+    )
+    host.cost_map_writes.reset_mock()
+
+    assert router.delete_deployment(id="doomed") is not None
+
+    assert host.cost_map_writes.call_count == 1
+    assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is flag
+    assert litellm.model_cost["sibling-7"].get("input_cost_per_token") == pytest.approx(8e-7)
+
+
+@pytest.mark.parametrize(
+    ("registered_before_the_router", "deleted", "saved_flag_wins"),
+    [(True, "plain", False), (False, "plain", True), (True, "flagged", True)],
+)
+def test_deleting_a_deployment_keeps_whichever_of_a_saved_registration_and_a_deployment_wrote_the_flag_last(
+    registered_before_the_router: bool, deleted: str, saved_flag_wins: bool
+) -> None:
+    catalog_answer: Final = bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)
+    saved_answer: Final = not catalog_answer
+
+    def register_saved_flag() -> None:
+        litellm.register_model({_CACHE_POINT_DEPLOYMENT_MODEL: {_CACHE_POINT_FLAG: saved_answer}})
+
+    if registered_before_the_router:
+        register_saved_flag()
+    router: Final = Router(
+        model_list=[
+            _cache_point_deployment("flagged", **{_CACHE_POINT_FLAG: catalog_answer}),
+            _cache_point_deployment("plain"),
+        ]
+    )
+    if not registered_before_the_router:
+        register_saved_flag()
+
+    assert router.delete_deployment(id=deleted) is not None
+
+    assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is (
+        saved_answer if saved_flag_wins else catalog_answer
+    )
+
+
+class _IdRowPriceRecordingHost(PythonHost):
+    __slots__ = ("id_row", "id_row_prices")
+
+    def __init__(self, id_row: str) -> None:
+        self.id_row: Final = id_row
+        self.id_row_prices: Final = Mock()
+
+    def invoke(self, op: str) -> Endpoint:
+        self.id_row_prices((litellm.model_cost.get(self.id_row) or {}).get("input_cost_per_token"))
+        return super().invoke(op)
+
+
+def test_editing_a_priced_deployment_keeps_its_price_on_its_row_throughout_the_edit() -> None:
+    host: Final = _IdRowPriceRecordingHost("edited")
+    router: Final = Router.from_config(
+        build_router_config(
+            router_arguments(
+                model_list=[_priced_cache_point_deployment("edited", 3e-6, **{_CACHE_POINT_FLAG: True})]
+            )
+        ),
+        host=host,
+    )
+    host.id_row_prices.reset_mock()
+
+    router.upsert_deployment(deployment=Deployment(**_priced_cache_point_deployment("edited", 3e-6)))
+
+    assert host.id_row_prices.call_args_list
+    assert all(call.args == (pytest.approx(3e-6),) for call in host.id_row_prices.call_args_list)
+    assert litellm.model_cost["edited"].get(_CACHE_POINT_FLAG) is None
+
+
+def test_deleting_a_flagged_deployment_gives_back_the_flag_set_on_the_row_before_the_router(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row: Final = _shared_cache_point_row()
+    set_before: Final = not bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)
+    monkeypatch.setitem(litellm.model_cost[row], _CACHE_POINT_FLAG, set_before)
+    router: Final = Router(
+        model_list=[
+            _cache_point_deployment("flagged", **{_CACHE_POINT_FLAG: not set_before}),
+            _cache_point_deployment("plain"),
+        ]
+    )
+    assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is not set_before
+
+    assert router.delete_deployment(id="flagged") is not None
+
+    assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is set_before
+
+
 def _refuse_cost_map_write(*_args: object, **_kwargs: object) -> None:
     raise RuntimeError("cost map write refused")
 

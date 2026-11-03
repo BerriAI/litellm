@@ -561,7 +561,16 @@ def get_model_cost_map_loaded_at() -> "datetime | None":
 
 
 class AliasedCostEntry(dict[str, object]):
-    __slots__ = ("created_by_registration", "names", "registered_by", "registered_fields", "written_fields")
+    __slots__ = (
+        "created_by_registration",
+        "displaced_values",
+        "latest_unsaved_write_fields",
+        "names",
+        "registered_by",
+        "registered_fields",
+        "saved_write_fields",
+        "written_fields",
+    )
 
     def __init__(
         self,
@@ -571,6 +580,9 @@ class AliasedCostEntry(dict[str, object]):
         created_by_registration: bool = False,
         registered_by: frozenset[str] = frozenset(),
         written_fields: frozenset[str] = frozenset(),
+        displaced_values: tuple[tuple[str, object], ...] = (),
+        saved_write_fields: frozenset[str] = frozenset(),
+        latest_unsaved_write_fields: frozenset[str] = frozenset(),
     ) -> None:
         super().__init__(entry)
         self.names: tuple[str, ...] = names
@@ -578,6 +590,9 @@ class AliasedCostEntry(dict[str, object]):
         self.created_by_registration: bool = created_by_registration
         self.registered_by: frozenset[str] = registered_by
         self.written_fields: frozenset[str] = written_fields
+        self.displaced_values: tuple[tuple[str, object], ...] = displaced_values
+        self.saved_write_fields: frozenset[str] = saved_write_fields
+        self.latest_unsaved_write_fields: frozenset[str] = latest_unsaved_write_fields
 
 
 def _alias_groups(alias_owners: Mapping[str, str]) -> Mapping[str, tuple[str, ...]]:
