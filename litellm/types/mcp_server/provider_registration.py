@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
 from typing import Final, Literal
@@ -12,6 +13,9 @@ from litellm.types.mcp import MCPExecutionMode
 _STR: Final = TypeAdapter(str)
 _MAP: Final = TypeAdapter(Mapping[str, object])
 _URL: Final = TypeAdapter(AnyHttpUrl)
+# Plain ASCII hosts only: IDNA2003, UTS-46 and WHATWG disagree on Unicode and percent-encoded
+# hostnames, so the host we authorize could differ from the host the provider connects to.
+_ASCII_HOST: Final = re.compile(r"[a-z0-9.\-:]+")
 
 
 def _is_neutral_registration_value(value: object) -> bool:
@@ -107,7 +111,11 @@ def canonical_provider_mcp_url(value: object) -> str:
     parsed: Final = urlsplit(url)
     if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username is not None or "#" in url:
         raise ValueError("Provider MCP url must use HTTPS without userinfo or a fragment")
-    host: Final = parsed.hostname.lower().encode("idna").decode("ascii")
+    host: Final = parsed.hostname.lower()
+    if not _ASCII_HOST.fullmatch(host):
+        raise ValueError(
+            "Provider MCP url hostname must be plain ASCII; register internationalized hosts in punycode (xn--) form"
+        )
     hostname: Final = f"[{host}]" if ":" in host else host
     port: Final = parsed.port
     authority: Final = f"{hostname}:{port}" if port is not None and port != 443 else hostname

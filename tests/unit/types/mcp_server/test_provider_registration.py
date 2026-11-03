@@ -13,6 +13,7 @@ from litellm.types.mcp_server.provider_registration import canonical_provider_mc
         ("https://DOCS.example:443/mcp/tenant?scope=a", "https://docs.example/mcp/tenant?scope=a"),
         ("https://docs.example:8443/mcp/", "https://docs.example:8443/mcp/"),
         ("https://[::1]:443/mcp", "https://[::1]/mcp"),
+        ("https://xn--fa-hia.example/mcp", "https://xn--fa-hia.example/mcp"),
     ],
 )
 def test_endpoint_identity_preserves_path_query_and_nondefault_port(url: str, expected: str) -> None:
@@ -26,6 +27,9 @@ def test_endpoint_identity_preserves_path_query_and_nondefault_port(url: str, ex
         "https://u:p@docs.example/mcp",
         "https://docs.example/mcp#x",
         "https://docs.example/mcp\n",
+        "https://faß.example/mcp",
+        "https://fa%C3%9F.example/mcp",
+        "https://docs\uff0eexample/mcp",
     ],
 )
 def test_unsafe_endpoint_identity_is_rejected(url: str) -> None:
