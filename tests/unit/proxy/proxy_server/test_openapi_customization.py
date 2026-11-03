@@ -291,14 +291,12 @@ def test_get_openapi_schema_missing_app_attribute_raises_error(monkeypatch):
         get_openapi_schema()
 
 
-def test_get_openapi_schema_documents_config_yaml(monkeypatch):
-    """The /config/yaml mock endpoint must stay in the spec so Swagger renders
-    its config.yaml tag section and the ConfigYAML component schema."""
+def test_get_openapi_schema_documents_config_yaml(monkeypatch: pytest.MonkeyPatch):
     import litellm.proxy.proxy_server as ps
 
     monkeypatch.setattr(ps.app, "openapi_schema", None, raising=True)
-    schema = get_openapi_schema()
-    observed = {
+    schema: Final = get_openapi_schema()
+    observed: Final = {
         "component_present": "ConfigYAML" in schema["components"]["schemas"],
         "tags": schema["paths"]["/config/yaml"]["get"]["tags"],
     }
