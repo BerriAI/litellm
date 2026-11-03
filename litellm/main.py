@@ -1097,13 +1097,13 @@ def mock_completion(
         raise Exception(f"Mock completion response failed - {e}")
 
 
-from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
-    _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
-)
 from litellm.responses.bridge_check import (
     RESPONSES_WEB_SEARCH_PROVIDERS,  # noqa: E402  # imported at the old definition site, same as its neighbours
     bridge_check_request_params,
     bridge_reasoning_effort,
+)
+from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
+    _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     responses_api_bridge_check as responses_api_bridge_check,  # pyright: ignore[reportUnknownVariableType]  # noqa: PLC0414  # re-export of moved function
