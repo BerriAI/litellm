@@ -288,7 +288,6 @@ ci = [
     "traceloop-sdk==0.34.0",
     "detect-secrets==1.5.0",
     "PyGithub==2.8.1",
-    "aiodynamo==24.7",
     "argon2-cffi==25.1.0",
     "assemblyai==0.52.4",
     "jsonlines==4.0.0",

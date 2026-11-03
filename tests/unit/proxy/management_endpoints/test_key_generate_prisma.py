@@ -95,7 +95,6 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.proxy._types import (
-    DynamoDBArgs,
     GenerateKeyRequest,
     KeyRequest,
     NewCustomerRequest,

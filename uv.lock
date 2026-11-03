@@ -63,18 +63,6 @@ wheels = [
 ]
 
 [[package]]
-name = "aiodynamo"
-version = "24.7"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "yarl" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/2a/31/c455ae437c1ed5a9e354e5aca2b616599fd0f9c36064529cecb40663a368/aiodynamo-24.7.tar.gz", hash = "sha256:6b34c1505a4aca372d60d140b9cbe7934650d1daa360e55a1e090d86af871dbb", size = 25431, upload-time = "2024-07-13T08:38:40.674Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/35/66/a08e633c33083fb6fe84745f5b3ab9833d356afa702e08a4136c0d615e0d/aiodynamo-24.7-py3-none-any.whl", hash = "sha256:4749855dad14e0fe96b09e2d3604582f4bad156b18da90f9612260fd06523913", size = 28718, upload-time = "2024-07-13T08:38:39.141Z" },
-]
-
-[[package]]
 name = "aiofiles"
 version = "24.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -5115,7 +5103,6 @@ benchmarks = [
     { name = "pytest-codspeed" },
 ]
 ci = [
-    { name = "aiodynamo" },
     { name = "anthropic" },
     { name = "argon2-cffi" },
     { name = "assemblyai" },
@@ -5344,7 +5331,6 @@ benchmarks = [
     { name = "pytest-codspeed", specifier = "==4.3.0" },
 ]
 ci = [
-    { name = "aiodynamo", specifier = "==24.7" },
     { name = "anthropic", specifier = "==0.84.0" },
     { name = "argon2-cffi", specifier = "==25.1.0" },
     { name = "assemblyai", specifier = "==0.52.4" },
