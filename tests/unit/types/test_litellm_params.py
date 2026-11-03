@@ -270,6 +270,7 @@ INTERNAL_STATE_NAMES: Final = (
     "github_copilot_user_session",
     "litellm_trusted_callback_vars",
     "_litellm_addressed_response_id",
+    "_litellm_addressed_comparison_response_id",
     "_litellm_strip_stream_usage",
     "_litellm_stream_usage_injected",
     "client_side_timeout",
