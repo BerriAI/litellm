@@ -69,6 +69,7 @@ async def test_daily_projection_matches_legacy_writer(status: str, origin: str |
     restored: Final = _FIELDS.validate_json(json.dumps(accounting, default=str))
     stored_daily: Final = next(item for item in project(restored) if item.table == "LiteLLM_DailyUserSpend")
     assert dict(stored_daily.increments) == {name: legacy[name] for name, _ in stored_daily.increments}
+    assert stored_daily.key == projected.key
     assert not {"messages", "response", "proxy_server_request", "requester_ip_address"}.intersection(accounting)
 
 

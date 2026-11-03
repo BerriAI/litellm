@@ -1,4 +1,5 @@
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
@@ -112,6 +113,10 @@ def build_accounting_payload(
         )
     )
     return {
-        **{key: value for key, value in payload.items() if key in _ACCOUNTING_FIELDS},
+        **{
+            key: value.isoformat() if isinstance(value, datetime) else value
+            for key, value in payload.items()
+            if key in _ACCOUNTING_FIELDS
+        },
         "metadata": {key: value for key, value in metadata.items() if key in ACCOUNTING_METADATA_FIELDS},
     }
