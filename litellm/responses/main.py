@@ -57,7 +57,11 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
-from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
+from litellm.responses.litellm_completion_transformation.session_handler import (
+    ResponsesSessionHandler,
+    StoredTurnsSource,
+    prefetched_stored_turns,
+)
 from litellm.responses.litellm_completion_transformation.transformation import (
     with_compaction_items_as_params,
 )
@@ -309,6 +313,7 @@ async def aresponses_api_with_mcp(
     custom_llm_provider: str | None = None,
     hosted_mcp_claims: "HostedMCPClaims | None" = None,
     direct_client_factory: "DirectClientFactory | None" = None,
+    stored_turns_source: StoredTurnsSource = ResponsesSessionHandler.get_stored_turns_for_previous_response_id,
     **kwargs,
 ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
     """
@@ -373,6 +378,12 @@ async def aresponses_api_with_mcp(
         raw_headers=discovery_raw_headers,
     )
     direct_listing: Final = await _direct_listing(hosted_mcp_claims, direct_client_factory)
+    client_ids: Final = previous_response_client_ids(previous_response_id, request_kwargs)
+    turns_source: Final = (
+        stored_turns_source
+        if hosted_mcp_claims is None
+        else await _stored_turns_read_once(stored_turns_source, previous_response_id, client_ids)
+    )
     openai_tools: Final = LiteLLM_Proxy_MCP_Handler.transform_mcp_tools_to_openai(
         [*original_mcp_tools, *direct_listing.tools]
     )
@@ -385,7 +396,7 @@ async def aresponses_api_with_mcp(
             tool_server_map,
             direct_listing,
             mcp_tools_with_litellm_proxy,
-            await _conversation_items(input, previous_response_id, request_kwargs),
+            await _conversation_items(input, previous_response_id, client_ids, turns_source),
         )
     )
 
@@ -417,6 +428,7 @@ async def aresponses_api_with_mcp(
         "custom_llm_provider": custom_llm_provider,
         **kwargs,
         "_skip_mcp_handler": True,
+        "stored_turns_source": turns_source,
     }
 
     # Handle MCP streaming if requested
@@ -747,18 +759,26 @@ async def _direct_listing(
     )
 
 
+async def _stored_turns_read_once(
+    source: StoredTurnsSource, previous_response_id: str | None, client_ids: tuple[str, ...]
+) -> StoredTurnsSource:
+    return (
+        source if not previous_response_id else await prefetched_stored_turns(source, previous_response_id, client_ids)
+    )
+
+
 async def _conversation_items(
-    input: str | ResponseInputParam, previous_response_id: str | None, kwargs: Mapping[str, object]
+    input: str | ResponseInputParam,
+    previous_response_id: str | None,
+    client_ids: tuple[str, ...],
+    stored_turns_source: StoredTurnsSource,
 ) -> tuple[object, ...]:
     """The items the conversation already holds: the stored turns up to the previous response, then the input."""
-    client_ids: Final = previous_response_client_ids(previous_response_id, kwargs)
     stored: Final = (
         ()
         if not previous_response_id
         else ResponsesSessionHandler.items_through_previous_response(
-            await ResponsesSessionHandler.get_stored_turns_for_previous_response_id(previous_response_id, client_ids),
-            previous_response_id,
-            client_ids,
+            await stored_turns_source(previous_response_id, client_ids), previous_response_id, client_ids
         )
     )
     return (*stored, *(() if isinstance(input, str) else input))
@@ -1586,6 +1606,7 @@ def _responses_try_dispatch_mcp_gateway(
     skip_mcp_handler: bool,
     hosted_mcp_claims: "HostedMCPClaims | None" = None,
     direct_client_factory: "DirectClientFactory | None" = None,
+    stored_turns_source: StoredTurnsSource = ResponsesSessionHandler.get_stored_turns_for_previous_response_id,
 ) -> (
     ResponsesAPIResponse
     | BaseResponsesAPIStreamingIterator
@@ -1624,6 +1645,7 @@ def _responses_try_dispatch_mcp_gateway(
         custom_llm_provider=custom_llm_provider,
         hosted_mcp_claims=hosted_mcp_claims,
         direct_client_factory=direct_client_factory,
+        stored_turns_source=stored_turns_source,
         **{key: value for key, value in kwargs.items() if key not in _GATEWAY_OWNED_MCP_KWARGS},
     )
     return gateway_call() if _is_async else run_async_function(gateway_call)
@@ -1753,6 +1775,7 @@ def responses(
     allowed_openai_params: list[str] | None = None,
     custom_llm_provider: str | None = None,
     direct_client_factory: "DirectClientFactory | None" = None,
+    stored_turns_source: StoredTurnsSource = ResponsesSessionHandler.get_stored_turns_for_previous_response_id,
     **kwargs,
 ):
     """
@@ -1911,6 +1934,7 @@ def responses(
                 tools, model, custom_llm_provider, use_chat_completions_api, deployment_model_info, litellm_params
             ),
             direct_client_factory=direct_client_factory,
+            stored_turns_source=stored_turns_source,
         )
         if _mcp_dispatch is not None:
             return _mcp_dispatch
@@ -2019,6 +2043,7 @@ def responses(
                 extra_body=extra_body,
                 timeout=timeout if timeout is not None else request_timeout,
                 allowed_openai_params=allowed_openai_params,
+                stored_turns_source=stored_turns_source,
                 **bridge_kwargs,
             )
 

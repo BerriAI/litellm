@@ -1,10 +1,10 @@
 import asyncio
 import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -187,6 +187,35 @@ class _ReplayStart:
 class StoredTurns:
     spend_logs: tuple["SpendLogsPayload", ...]
     proxy_server_requests: tuple[Mapping[str, object] | None, ...]
+
+
+StoredTurnsSource: TypeAlias = Callable[[str, tuple[str, ...]], Awaitable[StoredTurns]]
+
+
+@dataclass(frozen=True, slots=True)
+class PrefetchedStoredTurns:
+    """The stored turns a request already read for its previous response. A later read that queries the same spend
+    log request ids, whether it names the response by its encoded or its decoded id, gets them again without another
+    query, and a read for any other response goes to the source."""
+
+    request_ids: tuple[str, ...]
+    stored_turns: StoredTurns
+    source: StoredTurnsSource
+
+    async def __call__(self, previous_response_id: str, client_response_ids: tuple[str, ...]) -> StoredTurns:
+        if _referenced_request_ids(previous_response_id, client_response_ids) == self.request_ids:
+            return self.stored_turns
+        return await self.source(previous_response_id, client_response_ids)
+
+
+async def prefetched_stored_turns(
+    source: StoredTurnsSource, previous_response_id: str, client_response_ids: tuple[str, ...]
+) -> PrefetchedStoredTurns:
+    return PrefetchedStoredTurns(
+        request_ids=_referenced_request_ids(previous_response_id, client_response_ids),
+        stored_turns=await source(previous_response_id, client_response_ids),
+        source=source,
+    )
 
 
 def _compaction_point(

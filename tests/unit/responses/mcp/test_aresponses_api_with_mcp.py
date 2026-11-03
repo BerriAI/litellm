@@ -27,6 +27,7 @@ from litellm.llms.xai.common_utils import xai_reported_cost_in_usd
 from litellm.proxy.mcp_server import mcp_server_manager
 from litellm.proxy.mcp_server.faults.list_outcomes import ServerListOk
 from litellm.proxy.utils import _estimate_dispatched_failure_usage, _failure_fields_to_lift
+from litellm.responses.litellm_completion_transformation.session_handler import StoredTurns
 from litellm.responses.mcp.direct_url_claims import DirectMCPServer
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
@@ -4571,3 +4572,49 @@ async def test_a_follow_up_lists_a_server_again_when_its_tools_changed_since_the
     assert _item(follow_up.output[0])["id"] != deepwiki_listing["id"]
     assert len(server.opened) == 2
 
+
+class _StoredTurnReads:
+    def __init__(self, stored_turns: StoredTurns) -> None:
+        self.stored_turns: Final = stored_turns
+        self.asked: tuple[tuple[str, tuple[str, ...]], ...] = ()
+
+    async def __call__(self, previous_response_id: str, client_response_ids: tuple[str, ...]) -> StoredTurns:
+        self.asked = (*self.asked, (previous_response_id, client_response_ids))
+        return self.stored_turns
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_reads_its_stored_turn_once_for_both_its_listings_and_its_history(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    server: Final = _ScriptedMCPServer()
+    first, provider, stored_response = await _first_turn_with_both_listings(respx_mock, monkeypatch, server)
+    stored_turn: Final = {
+        "request_id": first.id,
+        "session_id": "listed-session",
+        "proxy_server_request": {"input": "Which servers can you use?"},
+        "response": stored_response,
+    }
+    reads: Final = _StoredTurnReads(
+        StoredTurns(spend_logs=(stored_turn,), proxy_server_requests=(stored_turn["proxy_server_request"],))
+    )
+
+    follow_up: Final = await litellm.aresponses(
+        model=_DEEPSEEK_MODEL,
+        input=[{"type": "message", "role": "user", "content": "Ask again"}],
+        previous_response_id=first.id,
+        tools=[dict(_GITMCP_TOOL), dict(_deepwiki_reference("never"))],
+        direct_client_factory=server.client_for,
+        stored_turns_source=reads,
+        litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
+        **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+    )
+
+    assert reads.asked == ((first.id, (first.id,)),)
+    assert isinstance(follow_up, ResponsesAPIResponse)
+    assert _output_types(follow_up.output) == ("message",)
+    replayed: Final = _sent_body(provider, 1)["messages"]
+    assert [message["content"] for message in replayed if message["role"] == "user"] == [
+        "Which servers can you use?",
+        "Ask again",
+    ]
