@@ -42,7 +42,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.llms.openai import REASONING_EFFORT, ResponsesAPIResponse
 from litellm.types.utils import CountContextManagement
-from litellm.utils import ProviderConfigManager, supports_none_reasoning_effort, supports_reasoning
+from litellm.utils import ProviderConfigManager
 
 from ..adapters.handler import context_management_explicitly_dropped, request_safeguards_evaluator
 from ..context_management import AnthropicContextManagementError, PolyfillResult, apply_context_management
@@ -54,10 +54,10 @@ from ..utils import (
     REASONING_EFFORT_OFF,
     litellm_logging_obj_from_kwargs,
     local_model_name,
-    lowest_tier_instead_of_off,
     maps_bare_output_effort,
     model_reasoning_efforts,
     normalize_reasoning_effort_value,
+    reasoning_off_level,
 )
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
@@ -262,33 +262,6 @@ def _rewritten_blocks(content: object, rewrite: BlockRewrite) -> Sequence[Mappin
         return ()
 
 
-def _reasoning_off_for_target(
-    reasoning: Mapping[str, object],
-    *,
-    model: str,
-    custom_llm_provider: str | None,
-    drop_params: bool,
-) -> Mapping[str, object] | None:
-    levels: Final = model_reasoning_efforts(model, custom_llm_provider)
-    if levels == ():
-        return None
-    lowest_tier: Final = lowest_tier_instead_of_off(levels)
-    if lowest_tier is not None:
-        return {**reasoning, "effort": lowest_tier}
-    if (
-        not drop_params
-        or not supports_reasoning(model, custom_llm_provider)
-        or supports_none_reasoning_effort(model, custom_llm_provider)
-    ):
-        return reasoning
-    verbose_logger.warning(
-        "Dropping reasoning.effort=none for %s, its model cost map entry does not set "
-        "supports_none_reasoning_effort, because drop_params is set",
-        model,
-    )
-    return None
-
-
 def _reasoning_for_target(
     reasoning: object,
     *,
@@ -302,9 +275,8 @@ def _reasoning_for_target(
     if reasoning_params is None or not isinstance(effort, str):
         return reasoning
     if effort == REASONING_EFFORT_OFF:
-        return _reasoning_off_for_target(
-            reasoning_params, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
-        )
+        off_level: Final = reasoning_off_level(model, custom_llm_provider, drop_params=drop_params)
+        return None if off_level is None else {**reasoning_params, "effort": off_level}
     if drop_params and effort not in _KNOWN_REASONING_EFFORTS:
         verbose_logger.warning(
             "Dropping reasoning.effort=%r for %s, no reasoning API defines it, because drop_params is set",

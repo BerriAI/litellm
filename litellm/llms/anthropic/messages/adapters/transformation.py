@@ -17,10 +17,9 @@ from litellm.llms.anthropic.messages.utils import (
     is_between_tool_calls,
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
-    lowest_tier_instead_of_off,
     maps_bare_output_effort,
-    model_reasoning_efforts,
     prompt_cache_key_from_user_id,
+    reasoning_off_level,
 )
 from litellm.responses.utils import auto_reasoning_summary
 
@@ -1175,13 +1174,6 @@ class LiteLLMAnthropicMessagesAdapter:
         )
 
     @staticmethod
-    def _reasoning_off_for_target(model: str, custom_llm_provider: str | None) -> str | None:
-        levels: Final = model_reasoning_efforts(model, custom_llm_provider)
-        if levels == ():
-            return None
-        return lowest_tier_instead_of_off(levels) or REASONING_EFFORT_OFF
-
-    @staticmethod
     def _between_tools_reasoning_effort(anthropic_message_request: Mapping[str, object], output_effort: object) -> str:
         if not is_between_tool_calls(anthropic_message_request):
             return REASONING_EFFORT_OFF
@@ -1272,7 +1264,7 @@ class LiteLLMAnthropicMessagesAdapter:
             )
         )
         target_effort: Final = (
-            self._reasoning_off_for_target(model, custom_llm_provider)
+            reasoning_off_level(model, custom_llm_provider, drop_params=drop_params)
             if mirrors_responses_bridge and effort_sent == REASONING_EFFORT_OFF
             else effort_sent
         )

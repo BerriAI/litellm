@@ -23,7 +23,7 @@ from litellm.llms.anthropic.messages.adapters.handler import (
 from litellm.llms.anthropic.messages.utils import maps_bare_output_effort, model_reasoning_efforts
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 from litellm.router import Router
-from litellm.utils import reasoning_effort_with_summary_alias
+from litellm.utils import reasoning_effort_with_summary_alias, supports_none_reasoning_effort, supports_reasoning
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 
@@ -610,6 +610,7 @@ def _chat_completion_kwargs(
     messages: list[dict[str, object]],
     output_config: dict[str, str] | None = None,
     reasoning_effort: str | None = None,
+    drop_params: bool | None = None,
 ) -> Mapping[str, object]:
     extra_kwargs: Final = {
         key: value
@@ -617,6 +618,7 @@ def _chat_completion_kwargs(
             ("custom_llm_provider", provider),
             ("output_config", output_config),
             ("reasoning_effort", reasoning_effort),
+            ("drop_params", drop_params),
         )
         if value is not None
     }
@@ -631,10 +633,14 @@ def _chat_completion_kwargs(
     return completion_kwargs
 
 
-def _lowest_accepted_level(levels: tuple[str, ...] | None) -> str | None:
-    if levels is None:
-        return "none"
-    return levels[0] if levels else None
+def _lowest_accepted_level(model: str, *, drop_params: bool) -> str | None:
+    levels: Final = model_reasoning_efforts(model, "openai")
+    if levels is not None:
+        return levels[0] if levels else None
+    drops_unconfirmed_off: Final = (
+        drop_params and supports_reasoning(model, "openai") and not supports_none_reasoning_effort(model, "openai")
+    )
+    return None if drops_unconfirmed_off else "none"
 
 
 class TestAnOpenAIChatRouteRequestGetsTheResponsesBridgeThinkingControls:
@@ -657,14 +663,20 @@ class TestAnOpenAIChatRouteRequestGetsTheResponsesBridgeThinkingControls:
         [{"type": "disabled"}, {"type": "between_tools", "summary": "concise"}],
         ids=["disabled", "between_tools-first-turn"],
     )
+    @pytest.mark.parametrize("drop_params", [False, True], ids=["no-drop_params", "drop_params"])
     def test_reasoning_off_is_the_lowest_level_the_model_accepts(
-        self, local_model_cost_map: None, model: str, thinking: dict[str, object]
+        self, local_model_cost_map: None, model: str, thinking: dict[str, object], drop_params: bool
     ) -> None:
         sent: Final = _chat_completion_kwargs(
-            model, "openai", thinking=thinking, messages=MESSAGES, output_config={"effort": "high"}
+            model,
+            "openai",
+            thinking=thinking,
+            messages=MESSAGES,
+            output_config={"effort": "high"},
+            drop_params=drop_params,
         )
 
-        assert sent.get("reasoning_effort") == _lowest_accepted_level(model_reasoning_efforts(model, "openai"))
+        assert sent.get("reasoning_effort") == _lowest_accepted_level(model, drop_params=drop_params)
 
     @pytest.mark.parametrize("model", [*OPENAI_CHAT_TARGETS, "openai/gpt-4.1", "openai/o3"])
     def test_a_bare_output_effort_is_the_tier_when_the_model_reasons_unasked(
