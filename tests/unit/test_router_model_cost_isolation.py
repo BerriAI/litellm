@@ -3155,6 +3155,18 @@ def test_deleting_a_deployment_keeps_whichever_of_a_saved_registration_and_a_dep
     )
 
 
+def test_deleting_a_deployment_keeps_the_saved_registration_made_last_under_another_name_for_the_row() -> None:
+    row: Final = _shared_cache_point_row()
+    router: Final = Router(model_list=[_cache_point_deployment("doomed"), _cache_point_deployment("kept")])
+    for name, flag in ((_CACHE_POINT_MODEL, True), (_CACHE_POINT_DEPLOYMENT_MODEL, False), (_CACHE_POINT_MODEL, True)):
+        litellm.register_model({name: {_CACHE_POINT_FLAG: flag}})
+    assert litellm.model_cost[row].get(_CACHE_POINT_FLAG) is True
+
+    assert router.delete_deployment(id="doomed") is not None
+
+    assert litellm.model_cost[row].get(_CACHE_POINT_FLAG) is True
+
+
 class _IdRowPriceRecordingHost(PythonHost):
     __slots__ = ("id_row", "id_row_prices")
 

@@ -171,6 +171,8 @@ def _redact_streaming_response(streaming_response):
             _redact_bedrock_guardrail_trace(streaming_response)
     elif isinstance(streaming_response, litellm.ResponsesAPIResponse):
         return perform_redaction({}, streaming_response)
+    elif isinstance(streaming_response, litellm.TranscriptionResponse):
+        streaming_response.text = REDACTED_BY_LITELLM
     elif hasattr(streaming_response, "output"):
         _redact_responses_api_output(streaming_response.output)
         if hasattr(streaming_response, "reasoning") and streaming_response.reasoning is not None:
