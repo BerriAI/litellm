@@ -105,6 +105,17 @@ class _LoadedImage:
 
 
 @dataclass(frozen=True, slots=True)
+class _HandledImage:
+    """What is left of one image once it is handled: no image data, so the next image can be fetched"""
+
+    text: str
+    fetch_seconds: float = 0.0
+    key: str | None = None
+    outcome: DescriptionResult | None = None
+    started_description: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class _ImagePart:
     message_index: int
     part_index: int
@@ -424,34 +435,57 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
         # One outcome per distinct image: a repeated image is described, or fails, once per request
         outcomes: Final[dict[str, DescriptionResult]] = {}  # mutable-ok: filled as the images are handled
         texts: Final[list[str]] = []  # mutable-ok: one replacement text per image part, in order
-        # One image at a time: an image is fetched, described and released before the next fetch, so a request holds
-        # at most one image. The remote fetches of the request share `timeout`, and describing does not use it
+        # One image at a time: _handle_image releases an image before the next fetch starts, so a request holds at
+        # most one image. The remote fetches of the request share `timeout`, and describing does not use it
         for number, part in enumerate(image_parts, 1):
-            if part.url is None:
-                texts.append(self._replacement_text(number, DescriptionFailed("the image part has no url"), None))
-                continue
-            fetch_started = time.monotonic()
-            image = await _load_image(part.url, fetch_time_left, self.timeout)
-            if not part.url.startswith("data:"):
-                fetch_time_left -= time.monotonic() - fetch_started
-            if not isinstance(image, _LoadedImage):
-                texts.append(self._replacement_text(number, image, None))
-                continue
-            key = self._cache_key(scope, image)
-            if key not in outcomes:
-                may_start = new_descriptions < self.max_descriptions_per_request and (
-                    scope is None or await self._needs_description(key)
-                )
-                if may_start:
-                    new_descriptions += 1
-                outcomes[key] = await self._describe(
-                    key, replace(template, image_data_uri=image.data_uri), may_start, shared=scope is not None
-                )
-            texts.append(self._replacement_text(number, image, outcomes[key]))
+            handled = await self._handle_image(
+                number,
+                part.url,
+                template,
+                scope,
+                fetch_time_left,
+                new_descriptions < self.max_descriptions_per_request,
+                outcomes,
+            )
+            fetch_time_left -= handled.fetch_seconds
+            if handled.started_description:
+                new_descriptions += 1
+            if handled.key is not None and handled.outcome is not None:
+                outcomes[handled.key] = handled.outcome
+            texts.append(handled.text)
         replacements: Final = {
             (part.message_index, part.part_index): text for part, text in zip(image_parts, texts, strict=True)
         }
         return self._with_replacements(kwargs, messages, replacements)
+
+    async def _handle_image(
+        self,
+        number: int,
+        url: str | None,
+        template: DescriptionRequest,
+        scope: str | None,
+        fetch_time_left: float,
+        may_start_new: bool,
+        outcomes: Mapping[str, DescriptionResult],
+    ) -> _HandledImage:
+        """Fetch, describe and release one image. Its data lives only in this call, so it is released before the
+        caller fetches the next image"""
+        if url is None:
+            return _HandledImage(self._replacement_text(number, DescriptionFailed("the image part has no url"), None))
+        fetch_started: Final = time.monotonic()
+        image: Final = await _load_image(url, fetch_time_left, self.timeout)
+        fetch_seconds: Final = 0.0 if url.startswith("data:") else time.monotonic() - fetch_started
+        if not isinstance(image, _LoadedImage):
+            return _HandledImage(self._replacement_text(number, image, None), fetch_seconds)
+        key: Final = self._cache_key(scope, image)
+        known: Final = outcomes.get(key)
+        if known is not None:
+            return _HandledImage(self._replacement_text(number, image, known), fetch_seconds, key, known)
+        may_start: Final = may_start_new and (scope is None or await self._needs_description(key))
+        outcome: Final = await self._describe(
+            key, replace(template, image_data_uri=image.data_uri), may_start, shared=scope is not None
+        )
+        return _HandledImage(self._replacement_text(number, image, outcome), fetch_seconds, key, outcome, may_start)
 
     def _with_replacements(
         self,

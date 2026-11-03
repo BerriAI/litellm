@@ -461,7 +461,10 @@ async def _peak_bytes_for(image_count: int, size: int, monkeypatch: pytest.Monke
     monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.MockTransport(serve)))
     # The shared fetch helper keeps recent images for every caller; one entry keeps it out of this measurement
     monkeypatch.setattr(image_handling, "in_memory_cache", InMemoryCache(max_size_in_memory=1))
-    describer: Final = _RecordingDescriber([Described("a cat")])
+
+    async def describer(request: DescriptionRequest) -> DescriptionResult:  # keeps no image data
+        return Described("a cat")
+
     logger: Final = ImageDescriptionInterceptionLogger(
         image_model="vision-describer", describer=describer, max_descriptions_per_request=1
     )
@@ -481,11 +484,11 @@ async def test_a_request_holds_one_downloaded_image_at_a_time(monkeypatch: pytes
     size: Final = 1024 * 1024
     await _peak_bytes_for(1, size, monkeypatch)  # first use allocates the import and client state
 
+    one: Final = await _peak_bytes_for(1, size, monkeypatch)
     many: Final = await _peak_bytes_for(12, size, monkeypatch)
-    twice_as_many: Final = await _peak_bytes_for(24, size, monkeypatch)
 
-    # Twelve more images past the description limit must not add to the peak
-    assert twice_as_many - many < size
+    # Eleven more images past the description limit must not add even one encoded image (4/3 of `size`) to the peak
+    assert many - one < size // 2
 
 
 def _child_payload_text(payload: Mapping[str, object]) -> str:
