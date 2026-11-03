@@ -2631,11 +2631,8 @@ def test_get_config_with_model_uses_dynamic_max_tokens():
         assert config_claude37["max_tokens"] == 64000
 
 
-def test_transform_request_uses_deployment_max_output_tokens_before_catalog(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_transform_request_uses_deployment_max_output_tokens_before_catalog() -> None:
     model: Final = "claude-sonnet-4-6"
-    monkeypatch.setattr(AnthropicConfig, "max_tokens", None)
     catalog_max_output_tokens: Final = litellm.get_model_info(model)["max_output_tokens"]
     config: Final = AnthropicConfig()
 
