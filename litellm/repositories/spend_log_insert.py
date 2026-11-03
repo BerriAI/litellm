@@ -72,15 +72,12 @@ def spend_log_insert_statement(rows: Sequence[Mapping[str, object]]) -> tuple[Li
         for row in rows
     )
     sql: Final = (
-        'WITH inserted AS (INSERT INTO "LiteLLM_SpendLogs" ('
+        'INSERT INTO "LiteLLM_SpendLogs" ('
         + columns
         + ") SELECT "
         + columns
         + ' FROM jsonb_populate_recordset(NULL::"LiteLLM_SpendLogs", $1::jsonb) '
-        "ON CONFLICT (request_id) DO NOTHING RETURNING request_id, accounting_path), "
-        'deliveries AS (INSERT INTO "LiteLLM_AccountingDelivery" (request_id) '
-        "SELECT request_id FROM inserted WHERE accounting_path = 'ledger' RETURNING request_id) "
-        "SELECT request_id FROM inserted"
+        "ON CONFLICT DO NOTHING RETURNING request_id"
     )
     return sql, safe_dumps(values, non_finite_as_null=True)
 

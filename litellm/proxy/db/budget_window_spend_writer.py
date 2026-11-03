@@ -76,7 +76,7 @@ _OPEN_WINDOW_SPEND_SQL: Final = (
 )
 
 _SETTLED_SPEND_LOG_FILTER: Final = (
-    ' AND NOT EXISTS (SELECT 1 FROM "LiteLLM_AccountingDelivery" delivery '
+    ' AND NOT EXISTS (SELECT 1 FROM "LiteLLM_SpendLogDelivery" delivery '
     'WHERE delivery.request_id = "LiteLLM_SpendLogs".request_id '
     "AND delivery.state IN ('pending', 'parked'))"
 )

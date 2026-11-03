@@ -4466,6 +4466,8 @@ def _batch_cost_payload() -> dict:
 def _spend_logs_prisma(inserted: int, existing: object, taken_over: int = 1) -> MagicMock:
     prisma = _tool_usage_prisma()
     prisma.jsonify_object = lambda data: dict(data)
+    prisma.writer_db = prisma.db
+    prisma.db.query_raw = AsyncMock(return_value=[])
     prisma.db.litellm_spendlogs.create_many = AsyncMock(return_value=inserted)
     prisma.db.litellm_spendlogs.find_unique = AsyncMock(return_value=existing)
     prisma.db.litellm_spendlogs.update_many = AsyncMock(return_value=taken_over)

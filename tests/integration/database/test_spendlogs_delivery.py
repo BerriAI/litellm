@@ -15,7 +15,6 @@ from litellm.repositories.accounting_delivery_repository import (
     DeliveryProjection,
     LedgerTransaction,
 )
-
 from litellm.repositories.spend_log_insert import spend_log_insert_statement
 from tests.integration._support.database import scratch_database
 
@@ -29,7 +28,6 @@ def delivery_database(request: pytest.FixtureRequest) -> Iterator[psycopg.Connec
             connection.execute("CREATE SCHEMA ledger_tenant")
             connection.execute("SET search_path TO ledger_tenant")
         connection.execute((_MIGRATIONS / "20261027000000_add_accounting_ledger_tables/migration.sql").read_text())
-        connection.execute((_MIGRATIONS / "20261103000000_remove_accounting_events/migration.sql").read_text())
         connection.execute("""CREATE TABLE "LiteLLM_SpendLogs" (
             request_id text PRIMARY KEY, call_type text NOT NULL, spend float8 NOT NULL DEFAULT 0,
             status text,
@@ -42,8 +40,23 @@ def delivery_database(request: pytest.FixtureRequest) -> Iterator[psycopg.Connec
 
 
 def _insert(connection: psycopg.Connection[tuple[object, ...]], rows: Sequence[Mapping[str, object]]) -> None:
+    from psycopg.types.json import Jsonb
+
     statement: Final = spend_log_insert_statement(rows)
-    connection.execute(statement[0].replace("$1", "%s"), (statement[1],))
+    with connection.transaction():
+        inserted: Final = {
+            row[0] for row in connection.execute(statement[0].replace("$1", "%s"), (statement[1],)).fetchall()
+        }
+        for row in rows:
+            if row["request_id"] in inserted and row.get("accounting_path") == "ledger":
+                connection.execute(
+                    'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch) VALUES (%s, %s, %s)',
+                    (row["request_id"], Jsonb(dict(row)), row.get("call_type") == "aretrieve_batch"),
+                )
+
+
+def _with_payload(row: Mapping[str, object]) -> Mapping[str, object]:
+    return {**row, "accounting_payload": dict(row)}
 
 
 def _row(request_id: str, path: str = "ledger") -> Mapping[str, object]:
@@ -57,38 +70,84 @@ def _row(request_id: str, path: str = "ledger") -> Mapping[str, object]:
     }
 
 
-def test_insert_creates_only_new_ledger_deliveries(delivery_database: psycopg.Connection[tuple[object, ...]]) -> None:
-    _insert(delivery_database, (_row("ledger"), _row("legacy", "legacy")))
-    _insert(delivery_database, (_row("ledger"), _row("legacy")))
-    assert delivery_database.execute('SELECT request_id, state::text FROM "LiteLLM_AccountingDelivery"').fetchall() == [
-        ("ledger", "pending")
+@pytest.mark.parametrize("mode", ["local", "url", "disabled"])
+@pytest.mark.parametrize("partitioned", [False, True])
+@pytest.mark.asyncio
+async def test_delivery_first_acceptance_deduplicates_all_storage_modes(
+    delivery_database, delivery_client, mode, partitioned
+):
+    from types import SimpleNamespace
+
+    from litellm.repositories.table_repositories import SpendLogsRepository
+
+    if partitioned:
+        delivery_database.execute('ALTER TABLE "LiteLLM_SpendLogs" RENAME TO spend_template')
+        delivery_database.execute(
+            'CREATE TABLE "LiteLLM_SpendLogs" (LIKE spend_template INCLUDING DEFAULTS INCLUDING CONSTRAINTS, PRIMARY KEY(request_id, "startTime")) PARTITION BY RANGE ("startTime")'
+        )
+        delivery_database.execute('CREATE TABLE "LiteLLM_SpendLogs_p20261102" PARTITION OF "LiteLLM_SpendLogs" DEFAULT')
+        delivery_database.execute("DROP TABLE spend_template")
+    repository = SpendLogsRepository(SimpleNamespace(db=delivery_client, writer_db=delivery_client))
+    row = {**_with_payload(_row("shared")), "accounting_log_disabled": mode == "disabled"}
+    results = await asyncio.gather(
+        repository.insert_with_deliveries((row,), write_spend_logs=mode != "url"),
+        repository.insert_with_deliveries(
+            ({**row, "startTime": "2026-11-03T12:00:00"},), write_spend_logs=mode != "url"
+        ),
+    )
+    assert sorted(results) == [0, 1]
+    assert delivery_database.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogs"').fetchone() == (int(mode == "local"),)
+    assert delivery_database.execute(
+        "SELECT accounting_payload->>'spend', state::text FROM \"LiteLLM_SpendLogDelivery\""
+    ).fetchall() == [("0.5", "pending")]
+    if partitioned:
+        delivery_database.execute('DROP TABLE "LiteLLM_SpendLogs_p20261102"')
+    else:
+        delivery_database.execute('DELETE FROM "LiteLLM_SpendLogs"')
+
+    async def apply(transaction, deliveries):
+        await transaction.execute_raw("UPDATE totals SET spend = spend + $1::float8", float(deliveries[0].row["spend"]))
+
+    worker = AccountingDeliveryRepository(delivery_client)
+    assert (await worker.apply_pending(apply)).applied == 1
+    assert (await worker.apply_pending(apply)).applied == 0
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+
+
+@pytest.mark.asyncio
+async def test_existing_local_charge_rolls_back_new_delivery(delivery_database, delivery_client):
+    from types import SimpleNamespace
+
+    from litellm.repositories.table_repositories import SpendLogsRepository
+
+    _insert(delivery_database, (_row("legacy", "legacy"),))
+    repository = SpendLogsRepository(SimpleNamespace(db=delivery_client, writer_db=delivery_client))
+    assert await repository.insert_with_deliveries((_with_payload(_row("legacy")),)) == 0
+    assert delivery_database.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery"').fetchone() == (0,)
+    assert delivery_database.execute('SELECT spend, accounting_path FROM "LiteLLM_SpendLogs"').fetchall() == [
+        (0.5, "legacy")
     ]
-    assert delivery_database.execute(
-        'SELECT request_id, spend, accounting_path FROM "LiteLLM_SpendLogs" ORDER BY request_id'
-    ).fetchall() == [("ledger", 0.5, "ledger"), ("legacy", 0.5, "legacy")]
-    assert delivery_database.execute(
-        "SELECT metadata->'accounting_savings'->>'compression' FROM \"LiteLLM_SpendLogs\" WHERE request_id='ledger'"
-    ).fetchone() == ("0.2",)
 
 
-def test_duplicate_after_receipt_cleanup_does_not_recreate_delivery(
-    delivery_database: psycopg.Connection[tuple[object, ...]],
-) -> None:
-    _insert(delivery_database, (_row("request"),))
-    delivery_database.execute('DELETE FROM "LiteLLM_AccountingDelivery"')
-    _insert(delivery_database, (_row("request"),))
-    assert delivery_database.execute('SELECT COUNT(*) FROM "LiteLLM_AccountingDelivery"').fetchone() == (0,)
-    assert delivery_database.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogs"').fetchone() == (1,)
+@pytest.mark.parametrize("table", ["LiteLLM_SpendLogs", "LiteLLM_SpendLogDelivery"])
+@pytest.mark.asyncio
+async def test_transaction_a_rolls_back_payload_and_log_on_failure(delivery_database, delivery_client, table):
+    from types import SimpleNamespace
 
+    from prisma.errors import PrismaError
+    from psycopg import sql
 
-def test_delivery_failure_rolls_back_every_inserted_spend_row(
-    delivery_database: psycopg.Connection[tuple[object, ...]],
-) -> None:
-    delivery_database.execute("""ALTER TABLE "LiteLLM_AccountingDelivery"
-        ADD CONSTRAINT reject_poison CHECK (request_id <> 'poison')""")
-    with pytest.raises(psycopg.errors.CheckViolation):
-        _insert(delivery_database, (_row("good"), _row("poison")))
-    assert delivery_database.execute('SELECT COUNT(*) FROM "LiteLLM_AccountingDelivery"').fetchone() == (0,)
+    from litellm.repositories.table_repositories import SpendLogsRepository
+
+    delivery_database.execute(
+        sql.SQL("ALTER TABLE {} ADD CONSTRAINT reject_poison CHECK (request_id <> 'poison')").format(
+            sql.Identifier(table)
+        )
+    )
+    repository = SpendLogsRepository(SimpleNamespace(db=delivery_client, writer_db=delivery_client))
+    with pytest.raises(PrismaError):
+        await repository.insert_with_deliveries(tuple(_with_payload(_row(name)) for name in ("good", "poison")))
+    assert delivery_database.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery"').fetchone() == (0,)
     assert delivery_database.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogs"').fetchone() == (0,)
 
 
@@ -117,16 +176,16 @@ async def test_worker_rolls_back_destinations_and_parks_only_isolated_failure(
         assert failed.parked == ()
         assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.0,)
         assert delivery_database.execute(
-            'SELECT DISTINCT state::text, attempts FROM "LiteLLM_AccountingDelivery"'
+            'SELECT DISTINCT state::text, attempts FROM "LiteLLM_SpendLogDelivery"'
         ).fetchall() == [("pending", 1)]
-        delivery_database.execute('UPDATE "LiteLLM_AccountingDelivery" SET next_attempt_at = CURRENT_TIMESTAMP')
+        delivery_database.execute('UPDATE "LiteLLM_SpendLogDelivery" SET next_attempt_at = CURRENT_TIMESTAMP')
         isolated: Final = await repository.apply_pending(apply, max_attempts=2)
         assert isolated.parked == ("bad",)
         applied: Final = await repository.apply_pending(apply, max_attempts=2)
         assert applied.applied == 1
         assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
         assert delivery_database.execute(
-            'SELECT request_id, state::text FROM "LiteLLM_AccountingDelivery" ORDER BY request_id'
+            'SELECT request_id, state::text FROM "LiteLLM_SpendLogDelivery" ORDER BY request_id'
         ).fetchall() == [("bad", "parked"), ("good", "applied")]
         assert (await repository.apply_pending(apply)).applied == 0
     finally:
@@ -174,7 +233,7 @@ async def test_two_workers_claim_disjoint_rows_and_apply_once(
     assert sum(result.applied for result in results) == 2
     assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (1.0,)
     assert delivery_database.execute(
-        "SELECT COUNT(*) FROM \"LiteLLM_AccountingDelivery\" WHERE state = 'applied'"
+        "SELECT COUNT(*) FROM \"LiteLLM_SpendLogDelivery\" WHERE state = 'applied'"
     ).fetchone() == (2,)
 
 
@@ -199,7 +258,7 @@ async def test_cancelled_worker_rolls_back_and_restart_applies_once(
     with pytest.raises(asyncio.CancelledError):
         await task
     assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.0,)
-    assert delivery_database.execute('SELECT state::text, attempts FROM "LiteLLM_AccountingDelivery"').fetchone() == (
+    assert delivery_database.execute('SELECT state::text, attempts FROM "LiteLLM_SpendLogDelivery"').fetchone() == (
         "pending",
         0,
     )
@@ -212,7 +271,7 @@ async def test_cancelled_worker_rolls_back_and_restart_applies_once(
     assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
 
 
-@pytest.mark.parametrize("state", ["pending", "parked", "applied", "missing"])
+@pytest.mark.parametrize("state", ["pending", "parked", "applied"])
 @pytest.mark.asyncio
 async def test_batch_takeover_preserves_pending_work_or_queues_difference(
     delivery_database: psycopg.Connection[tuple[object, ...]],
@@ -226,13 +285,15 @@ async def test_batch_takeover_preserves_pending_work_or_queues_difference(
     initial: Final = {**_row("batch"), "spend": 0.0, "call_type": "aretrieve_batch", "status": "success"}
     _insert(delivery_database, (initial,))
     if state == "missing":
-        delivery_database.execute('DELETE FROM "LiteLLM_AccountingDelivery"')
+        delivery_database.execute('DELETE FROM "LiteLLM_SpendLogDelivery"')
     else:
         delivery_database.execute(
-            'UPDATE "LiteLLM_AccountingDelivery" SET state = %s::"AccountingDeliveryState"', (state,)
+            'UPDATE "LiteLLM_SpendLogDelivery" SET state = %s::"AccountingDeliveryState"', (state,)
         )
     repository: Final = SpendLogsRepository(SimpleNamespace(db=delivery_client, writer_db=delivery_client))
-    taken: Final = await repository.take_over_batch({**initial, "spend": 1.0, "accounting_path": "legacy"})
+    taken: Final = await repository.take_over_batch(
+        _with_payload({**initial, "spend": 1.0, "accounting_path": "legacy"})
+    )
     assert taken.charged
     assert taken.accounting_path == "ledger"
     assert delivery_database.execute('SELECT spend, accounting_path FROM "LiteLLM_SpendLogs"').fetchone() == (
@@ -240,7 +301,7 @@ async def test_batch_takeover_preserves_pending_work_or_queues_difference(
         "ledger",
     )
     receipt: Final = delivery_database.execute(
-        'SELECT state::text, previous_row FROM "LiteLLM_AccountingDelivery"'
+        'SELECT state::text, previous_payload FROM "LiteLLM_SpendLogDelivery"'
     ).fetchone()
     assert receipt is not None
     assert receipt[0] == ("parked" if state == "parked" else "pending")
@@ -250,7 +311,7 @@ async def test_batch_takeover_preserves_pending_work_or_queues_difference(
         assert receipt[1]["accounting_path"] == "ledger"
     else:
         assert receipt[1] is None
-    assert not (await repository.take_over_batch({**initial, "spend": 1.0})).charged
+    assert not (await repository.take_over_batch(_with_payload({**initial, "spend": 1.0}))).charged
 
 
 @pytest.mark.asyncio
@@ -270,75 +331,32 @@ async def test_legacy_batch_takeover_stays_legacy_across_flag_change(
     }
     _insert(delivery_database, (initial,))
     repository: Final = SpendLogsRepository(SimpleNamespace(db=delivery_client, writer_db=delivery_client))
-    result: Final = await repository.take_over_batch({**initial, "spend": 0.5, "accounting_path": "ledger"})
-    assert result.charged
+    result: Final = await repository.take_over_batch(
+        _with_payload({**initial, "spend": 0.5, "accounting_path": "ledger"})
+    )
+    assert not result.charged
     assert result.accounting_path == "legacy"
-    assert delivery_database.execute('SELECT COUNT(*) FROM "LiteLLM_AccountingDelivery"').fetchone() == (0,)
+    assert delivery_database.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery"').fetchone() == (0,)
     assert delivery_database.execute('SELECT spend, accounting_path FROM "LiteLLM_SpendLogs"').fetchone() == (
-        0.5,
+        0.0,
         "legacy",
     )
 
 
 @pytest.mark.asyncio
-async def test_retention_preserves_unfinished_rows_and_deletes_settled_rows(
+async def test_worker_applies_accounting_after_spend_logs_are_deleted(
     delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
 ) -> None:
-    from datetime import datetime
+    _insert(delivery_database, (_row("removed"),))
+    delivery_database.execute('DELETE FROM "LiteLLM_SpendLogs"')
 
-    from litellm.repositories.table_repositories import SpendLogsRepository
+    async def apply(transaction: LedgerTransaction, rows: tuple[DeliveryProjection, ...]) -> None:
+        await transaction.execute_raw("UPDATE totals SET spend = spend + $1::float8", float(str(rows[0].row["spend"])))
 
-    _insert(delivery_database, tuple(_row(state) for state in ("pending", "parked", "applied")))
-    _insert(delivery_database, (_row("legacy", "legacy"),))
-    delivery_database.execute('UPDATE "LiteLLM_AccountingDelivery" SET state = request_id::"AccountingDeliveryState"')
-    async with delivery_client.tx() as transaction:
-        result = await SpendLogsRepository.delete_settled_before(transaction, datetime(2026, 11, 3), 100)
-    assert result.deleted == 2
-    assert result.postponed
-    assert delivery_database.execute('SELECT request_id FROM "LiteLLM_SpendLogs" ORDER BY request_id').fetchall() == [
-        ("parked",),
-        ("pending",),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_partition_drop_waits_for_all_deliveries_to_settle(
-    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
-) -> None:
-    from litellm.repositories.table_repositories import SpendLogsRepository
-
-    _insert(delivery_database, (_row("pending"),))
-    delivery_database.execute('CREATE TABLE "LiteLLM_SpendLogs_p20261102" AS SELECT * FROM "LiteLLM_SpendLogs"')
-    async with delivery_client.tx() as transaction:
-        assert not await SpendLogsRepository.drop_settled_partition(transaction, "LiteLLM_SpendLogs_p20261102")
-    assert delivery_database.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogs_p20261102"').fetchone() == (1,)
-    delivery_database.execute("UPDATE \"LiteLLM_AccountingDelivery\" SET state = 'applied'")
-    async with delivery_client.tx() as transaction:
-        assert await SpendLogsRepository.drop_settled_partition(transaction, "LiteLLM_SpendLogs_p20261102")
-    assert delivery_database.execute("SELECT to_regclass('\"LiteLLM_SpendLogs_p20261102\"')").fetchone() == (None,)
-
-
-@pytest.mark.asyncio
-async def test_cleanup_skips_a_batch_takeover_holding_the_spend_row_lock(
-    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
-) -> None:
-    from datetime import datetime
-
-    from litellm.repositories.table_repositories import SpendLogsRepository
-
-    _insert(delivery_database, (_row("takeover"),))
-    delivery_database.execute("UPDATE \"LiteLLM_AccountingDelivery\" SET state = 'applied'")
-    async with delivery_client.tx() as takeover:
-        await takeover.query_raw('SELECT request_id FROM "LiteLLM_SpendLogs" FOR UPDATE')
-        async with delivery_client.tx() as cleanup:
-            result = await SpendLogsRepository.delete_settled_before(cleanup, datetime(2026, 11, 3), 100)
-        assert result.deleted == 0
-        await takeover.execute_raw("UPDATE \"LiteLLM_AccountingDelivery\" SET state = 'pending'")
-    async with delivery_client.tx() as cleanup:
-        result = await SpendLogsRepository.delete_settled_before(cleanup, datetime(2026, 11, 3), 100)
-    assert result.deleted == 0
-    assert result.postponed
-    assert delivery_database.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogs"').fetchone() == (1,)
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+    assert (await repository.apply_pending(apply)).applied == 1
+    assert (await repository.apply_pending(apply)).applied == 0
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
 
 
 @pytest.mark.asyncio
@@ -347,7 +365,7 @@ async def test_receipt_cleanup_keeps_pending_and_parked_rows_and_reports_lag(
 ) -> None:
     _insert(delivery_database, tuple(_row(state) for state in ("pending", "parked", "applied")))
     delivery_database.execute(
-        'UPDATE "LiteLLM_AccountingDelivery" '
+        'UPDATE "LiteLLM_SpendLogDelivery" '
         'SET state = request_id::"AccountingDeliveryState", '
         "created_at = CURRENT_TIMESTAMP - INTERVAL '40 days', "
         "applied_at = CURRENT_TIMESTAMP - INTERVAL '40 days'"
@@ -359,7 +377,7 @@ async def test_receipt_cleanup_keeps_pending_and_parked_rows_and_reports_lag(
     assert metrics.parked_count == 1
     assert metrics.oldest_pending_seconds >= 40 * 86400
     assert delivery_database.execute(
-        'SELECT request_id FROM "LiteLLM_AccountingDelivery" ORDER BY request_id'
+        'SELECT request_id FROM "LiteLLM_SpendLogDelivery" ORDER BY request_id'
     ).fetchall() == [("parked",), ("pending",)]
 
 
@@ -369,6 +387,7 @@ async def test_batch_takeover_waits_for_worker_then_applies_only_difference(
     delivery_client: Prisma,
 ) -> None:
     from types import SimpleNamespace
+
     from litellm.repositories.table_repositories import SpendLogsRepository
 
     initial = {**_row("batch-race"), "spend": 0.0, "call_type": "aretrieve_batch", "status": "success"}
@@ -381,14 +400,16 @@ async def test_batch_takeover_waits_for_worker_then_applies_only_difference(
         await release.wait()
         await transaction.execute_raw(
             "UPDATE totals SET spend = spend + $1::float8",
-            sum(float(str(row.row["spend"])) - float(str((row.previous_row or {}).get("spend", 0))) for row in rows),
+            sum(
+                float(str(row.row["spend"])) - float(str((row.previous_payload or {}).get("spend", 0))) for row in rows
+            ),
         )
 
     worker = AccountingDeliveryRepository(delivery_client)
     repository = SpendLogsRepository(SimpleNamespace(db=delivery_client, writer_db=delivery_client))
     applying = asyncio.create_task(worker.apply_pending(apply))
     await asyncio.wait_for(loaded.wait(), 10)
-    takeover = asyncio.create_task(repository.take_over_batch({**initial, "spend": 1.0}))
+    takeover = asyncio.create_task(repository.take_over_batch(_with_payload({**initial, "spend": 1.0})))
     try:
         await asyncio.sleep(0.1)
         assert not takeover.done()
@@ -397,7 +418,7 @@ async def test_batch_takeover_waits_for_worker_then_applies_only_difference(
         result, taken = await asyncio.gather(applying, takeover)
     assert result.applied == 1 and taken.charged
     assert (await worker.apply_pending(apply)).applied == 1
-    assert not (await repository.take_over_batch({**initial, "spend": 1.0})).charged
+    assert not (await repository.take_over_batch(_with_payload({**initial, "spend": 1.0}))).charged
     assert (await worker.apply_pending(apply)).applied == 0
     assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (1.0,)
 
@@ -418,10 +439,10 @@ def test_downgrade_requires_drained_buffers_disabled_writers_and_no_unsettled_ro
     )
     confirmed = command + ["--all-writers-ledger-disabled", "--ledger-buffers-drained"]
     _insert(delivery_database, (_row("pending"), _row("parked")))
-    delivery_database.execute("UPDATE \"LiteLLM_AccountingDelivery\" SET state='parked' WHERE request_id='parked'")
+    delivery_database.execute("UPDATE \"LiteLLM_SpendLogDelivery\" SET state='parked' WHERE request_id='parked'")
     blocked = subprocess.run(confirmed, env=environment, capture_output=True, text=True)
     assert blocked.returncode == 1 and "1 pending and 1 parked" in blocked.stdout, blocked.stderr
-    delivery_database.execute("UPDATE \"LiteLLM_AccountingDelivery\" SET state='applied'")
+    delivery_database.execute("UPDATE \"LiteLLM_SpendLogDelivery\" SET state='applied'")
     passed = subprocess.run(confirmed, env=environment, capture_output=True, text=True)
     assert passed.returncode == 0 and "no pending or parked" in passed.stdout, passed.stderr
 
@@ -432,31 +453,88 @@ def test_delivery_migration_replay_preserves_ledger_receipts(delivery_database, 
     if state is not None:
         _insert(delivery_database, (_row("replay"),))
         delivery_database.execute(
-            'UPDATE "LiteLLM_AccountingDelivery" SET state=%s, attempts=3, last_error=%s, previous_row=%s',
+            'UPDATE "LiteLLM_SpendLogDelivery" SET state=%s, attempts=3, last_error=%s, previous_payload=%s',
             (state, "retained failure", '{"spend": 0}'),
         )
-    before = delivery_database.execute('SELECT * FROM "LiteLLM_AccountingDelivery"').fetchall()
+    before = delivery_database.execute('SELECT * FROM "LiteLLM_SpendLogDelivery"').fetchall()
     migration = (_MIGRATIONS / "20261103010000_spendlogs_accounting_delivery/migration.sql").read_text()
     delivery_database.execute(migration)
     delivery_database.execute(migration)
-    assert delivery_database.execute('SELECT * FROM "LiteLLM_AccountingDelivery"').fetchall() == before
+    assert delivery_database.execute('SELECT * FROM "LiteLLM_SpendLogDelivery"').fetchall() == before
     assert delivery_database.execute('SELECT count(*) FROM "LiteLLM_SpendLogs"').fetchone() == (int(state is not None),)
     with pytest.raises(psycopg.errors.CheckViolation):
         _insert(delivery_database, (_row("invalid", "invalid"),))
 
 
 @pytest.mark.parametrize("state", ["pending", "parked"])
-def test_delivery_migration_rejects_unsettled_old_receipts(state):
+def test_delivery_migration_preserves_unused_old_receipts(state):
     with scratch_database("spendlogs_old_delivery") as url, psycopg.connect(url, autocommit=True) as connection:
         connection.execute((_MIGRATIONS / "20261027000000_add_accounting_ledger_tables/migration.sql").read_text())
-        connection.execute((_MIGRATIONS / "20261103000000_remove_accounting_events/migration.sql").read_text())
         connection.execute('CREATE TABLE "LiteLLM_SpendLogs" (request_id text PRIMARY KEY)')
         connection.execute(
             'INSERT INTO "LiteLLM_AccountingDelivery" (event_id, target, version, state) VALUES (%s, %s, 1, %s)',
             ("old-event", "LiteLLM_UserTable", state),
         )
-        with pytest.raises(psycopg.errors.RaiseException, match="Drain pending and parked"):
-            connection.execute((_MIGRATIONS / "20261103010000_spendlogs_accounting_delivery/migration.sql").read_text())
-        connection.execute("ROLLBACK")
-        assert connection.execute('SELECT event_id, state::text FROM "LiteLLM_AccountingDelivery"').fetchall() == [("old-event", state)]
-        assert connection.execute("SELECT count(*) FROM information_schema.columns WHERE table_name='LiteLLM_SpendLogs' AND column_name='accounting_path'").fetchone() == (0,)
+        connection.execute((_MIGRATIONS / "20261103010000_spendlogs_accounting_delivery/migration.sql").read_text())
+        assert connection.execute('SELECT event_id, state::text FROM "LiteLLM_AccountingDelivery"').fetchall() == [
+            ("old-event", state)
+        ]
+        assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery"').fetchone() == (0,)
+
+
+@pytest.mark.parametrize("column", ["accounting_payload", "previous_payload"])
+@pytest.mark.asyncio
+async def test_malformed_payload_is_parked_without_losing_other_deliveries(delivery_database, delivery_client, column):
+    _insert(delivery_database, (_row("bad"), _row("good")))
+    from psycopg import sql
+
+    delivery_database.execute(
+        sql.SQL('UPDATE "LiteLLM_SpendLogDelivery" SET {}=$$ [] $$::jsonb WHERE request_id=$$bad$$').format(
+            sql.Identifier(column)
+        )
+    )
+
+    async def apply(transaction, deliveries):
+        await transaction.execute_raw(
+            "UPDATE totals SET spend = spend + $1::float8", sum(float(row.row["spend"]) for row in deliveries)
+        )
+
+    repository = AccountingDeliveryRepository(delivery_client)
+    assert (await repository.apply_pending(apply, max_attempts=2)).failed == 2
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.0,)
+    delivery_database.execute('UPDATE "LiteLLM_SpendLogDelivery" SET next_attempt_at=CURRENT_TIMESTAMP')
+    assert (await repository.apply_pending(apply, max_attempts=2)).parked == ("bad",)
+    assert (await repository.apply_pending(apply, max_attempts=2)).applied == 1
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+
+
+@pytest.mark.asyncio
+async def test_retention_keeps_batch_receipts_indefinitely(delivery_database, delivery_client):
+    _insert(delivery_database, (_row("normal"), {**_row("batch"), "call_type": "aretrieve_batch"}))
+    delivery_database.execute(
+        "UPDATE \"LiteLLM_SpendLogDelivery\" SET state='applied', applied_at=CURRENT_TIMESTAMP - INTERVAL '400 days'"
+    )
+    repository = AccountingDeliveryRepository(delivery_client)
+    assert await repository.cleanup_applied() == 1
+    assert await repository.cleanup_applied() == 0
+    assert delivery_database.execute('SELECT request_id FROM "LiteLLM_SpendLogDelivery"').fetchall() == [("batch",)]
+    metrics = await repository.metrics()
+    assert metrics.batch_count == 1
+    assert metrics.table_bytes > 0
+
+
+@pytest.mark.parametrize("call_type,status", [("acompletion", "success"), ("aretrieve_batch", "failure")])
+@pytest.mark.asyncio
+async def test_batch_takeover_preserves_another_request_receipt(delivery_database, delivery_client, call_type, status):
+    from types import SimpleNamespace
+
+    from litellm.repositories.table_repositories import SpendLogsRepository
+
+    initial = {**_row("collision"), "call_type": call_type, "status": status, "spend": 0.0}
+    _insert(delivery_database, (initial,))
+    before = delivery_database.execute('SELECT accounting_payload FROM "LiteLLM_SpendLogDelivery"').fetchone()
+    repository = SpendLogsRepository(SimpleNamespace(db=delivery_client, writer_db=delivery_client))
+    replacement = {**initial, "call_type": "aretrieve_batch", "status": "success", "spend": 1.0}
+    assert not (await repository.take_over_batch(_with_payload(replacement))).charged
+    assert delivery_database.execute('SELECT accounting_payload FROM "LiteLLM_SpendLogDelivery"').fetchone() == before
+    assert delivery_database.execute('SELECT spend FROM "LiteLLM_SpendLogs"').fetchone() == (0.0,)

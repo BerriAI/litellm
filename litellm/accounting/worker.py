@@ -10,7 +10,7 @@ from typing import (
 
 from litellm._logging import verbose_proxy_logger
 from litellm.accounting.application import apply_deliveries
-from litellm.accounting.metrics import record_deliveries, record_postponed_cleanup
+from litellm.accounting.metrics import record_deliveries
 from litellm.accounting.projection import Contribution
 from litellm.repositories.accounting_delivery_repository import (
     AccountingDeliveryRepository,
@@ -67,9 +67,18 @@ async def flush_accounting_deliveries(
                 proxy_logging_obj,
                 message=f"Accounting delivery parked {len(result.parked)} requests. Included spend totals require repair.",
             )
-        await repository.cleanup_applied()
+        await repository.cleanup_applied(
+            retention_days=int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_RETENTION_DAYS", "1"))
+        )
         metrics: Final = await repository.metrics()
         record_deliveries(metrics, time.monotonic() - started)
+        if metrics.batch_count >= int(
+            os.environ.get("LITELLM_ACCOUNTING_BATCH_DELIVERY_ALERT_COUNT", "1000000")
+        ) or metrics.table_bytes >= int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_ALERT_BYTES", "1073741824")):
+            await _alert(
+                proxy_logging_obj,
+                message=f"Accounting delivery storage requires review. Retained batches={metrics.batch_count}, table bytes={metrics.table_bytes}.",
+            )
         if metrics.oldest_pending_seconds > 300:
             await _alert(
                 proxy_logging_obj,
@@ -82,10 +91,3 @@ async def flush_accounting_deliveries(
 
 async def _alert(alerts: _AccountingAlerts, message: str) -> None:
     await alerts.alerting_handler(message=message, level="High", alert_type=AlertType.failed_tracking_spend)
-
-
-async def alert_postponed_cleanup(kind: Literal["rows", "partition"]) -> None:
-    from litellm.proxy.proxy_server import proxy_logging_obj
-
-    record_postponed_cleanup(kind)
-    await _alert(proxy_logging_obj, f"SpendLogs {kind} cleanup postponed for pending or parked accounting deliveries.")

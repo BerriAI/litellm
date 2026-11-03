@@ -7,34 +7,26 @@ These are thin wrappers for tables that do not (yet) need domain-specific query
 methods; richer repositories live in their own modules.
 """
 
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from itertools import groupby
+from datetime import timedelta
+from itertools import chain, groupby
 from typing import (
     TYPE_CHECKING,
     Any,
     Final,
     Generic,
     Literal,
-    Protocol,
-    cast,  # noqa: TID251  # validated partition identifiers cross the LiteralString SQL boundary
 )
 
 from pydantic import TypeAdapter
-from typing_extensions import LiteralString
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.repositories.accounting_delivery_repository import LedgerDatabase
+from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models  # noqa: F401  # used by quoted base-class subscripts
-
-
-class _SpendLogInsertDatabase(Protocol):
-    async def query_raw(self, query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]: ...
 
 
 class PrismaTableRepository(Generic[RowT_co]):
@@ -112,134 +104,115 @@ _SPEND_LOG_ROWS: Final = TypeAdapter(tuple[dict[str, object], ...])
 _SPEND_LOG_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
-class SpendLogCleanupTransaction(Protocol):
-    async def query_raw(self, query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]: ...
-
-    async def execute_raw(self, query: LiteralString, *args: object) -> int: ...
-
-
-@dataclass(frozen=True, slots=True)
-class SpendLogDeletion:
-    deleted: int
-    postponed: bool
+def _accounting_payload(value: object) -> Mapping[str, object]:
+    return (
+        _SPEND_LOG_FIELDS.validate_json(value) if isinstance(value, str) else _SPEND_LOG_FIELDS.validate_python(value)
+    )
 
 
 class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs"]):
     table_name = "litellm_spendlogs"
 
-    @staticmethod
-    async def delete_settled_before(
-        transaction: SpendLogCleanupTransaction, cutoff: datetime, batch_size: int
-    ) -> SpendLogDeletion:
-        candidates: Final = await transaction.query_raw(
-            'SELECT request_id, "startTime" FROM "LiteLLM_SpendLogs" logs '
-            'WHERE "startTime" < $1::timestamp AND NOT EXISTS ('
-            'SELECT 1 FROM "LiteLLM_AccountingDelivery" delivery WHERE delivery.request_id = logs.request_id '
-            "AND delivery.state IN ('pending', 'parked')) "
-            'ORDER BY "startTime", request_id LIMIT $2::integer FOR UPDATE OF logs SKIP LOCKED',
-            cutoff,
-            batch_size,
+    async def insert_with_deliveries(
+        self, rows: Sequence[Mapping[str, object]], *, write_spend_logs: bool = True
+    ) -> int:
+        legacy: Final = tuple(row for row in rows if row.get("accounting_path") != "ledger")
+        legacy_count: Final = await self.table.create_many(data=legacy, skip_duplicates=True) if legacy else 0
+        ledger: Final = tuple(
+            {str(row["request_id"]): row for row in rows if row.get("accounting_path") == "ledger"}.values()
         )
-        serialized: Final = safe_dumps(
-            tuple(
-                {
-                    "request_id": row["request_id"],
-                    "startTime": value.isoformat() if isinstance(value := row["startTime"], datetime) else value,
-                }
-                for row in candidates
-            )
-        )
-        deleted: Final = await transaction.execute_raw(
-            'DELETE FROM "LiteLLM_SpendLogs" logs USING jsonb_to_recordset($1::jsonb) '
-            'AS candidate(request_id text, "startTime" timestamp) '
-            'WHERE logs.request_id = candidate.request_id AND logs."startTime" = candidate."startTime" '
-            'AND NOT EXISTS (SELECT 1 FROM "LiteLLM_AccountingDelivery" delivery '
-            "WHERE delivery.request_id = logs.request_id AND delivery.state IN ('pending', 'parked'))",
-            serialized,
-        )
-        protected: Final = await transaction.query_raw(
-            'SELECT EXISTS(SELECT 1 FROM "LiteLLM_SpendLogs" logs JOIN "LiteLLM_AccountingDelivery" delivery '
-            'ON delivery.request_id = logs.request_id WHERE logs."startTime" < $1::timestamp '
-            "AND delivery.state IN ('pending', 'parked')) AS protected",
-            cutoff,
-        )
-        return SpendLogDeletion(deleted, bool(protected and protected[0]["protected"]))
+        if not ledger:
+            return legacy_count
+        database: Final[LedgerDatabase] = self.prisma_client.writer_db
+        async with database.tx(timeout=timedelta(seconds=60)) as transaction:
+            accepted: Final = await self._insert_ledger(transaction, ledger, write_spend_logs=write_spend_logs)
+        return legacy_count + accepted
 
     @staticmethod
-    async def drop_settled_partition(transaction: SpendLogCleanupTransaction, name: str) -> bool:
-        if re.fullmatch(r"LiteLLM_SpendLogs_p[0-9]{8}", name) is None:
-            raise ValueError("Unexpected SpendLogs partition name")
-        partition: Final = cast(  # cast-ok: the strict partition-name allowlist above excludes SQL syntax
-            LiteralString, name
-        )
-        await transaction.execute_raw(f'LOCK TABLE "{partition}" IN ACCESS EXCLUSIVE MODE')
-        protected: Final = await transaction.query_raw(
-            f'SELECT EXISTS(SELECT 1 FROM "{partition}" logs JOIN "LiteLLM_AccountingDelivery" delivery '
-            "ON delivery.request_id = logs.request_id "
-            "WHERE delivery.state IN ('pending', 'parked')) AS protected"
-        )
-        if protected and protected[0]["protected"]:
-            return False
-        await transaction.execute_raw(f'DROP TABLE "{partition}"')
-        return True
-
-    async def insert_with_deliveries(self, rows: Sequence[Mapping[str, object]]) -> int:
-        from litellm.proxy.db.db_span import db_span
+    async def _insert_ledger(
+        transaction: LedgerTransaction, rows: Sequence[Mapping[str, object]], *, write_spend_logs: bool
+    ) -> int:
         from litellm.repositories.spend_log_insert import spend_log_insert_statement
 
-        if not any(row.get("accounting_path") == "ledger" for row in rows):
-            return await self.table.create_many(data=rows, skip_duplicates=True)
-        database: Final[_SpendLogInsertDatabase] = self.prisma_client.writer_db
-        async with db_span("insert_spend_logs", "LiteLLM_SpendLogs"):
-            counts: Final = tuple(
-                [
-                    len(await database.query_raw(*spend_log_insert_statement(tuple(group))))
-                    for _, group in groupby(
-                        sorted(rows, key=lambda row: tuple(sorted(row))), key=lambda row: tuple(sorted(row))
-                    )
-                ]
+        payloads: Final = tuple(
+            {
+                "request_id": row["request_id"],
+                "accounting_payload": _accounting_payload(row["accounting_payload"]),
+                "is_batch": row.get("call_type") == "aretrieve_batch",
+            }
+            for row in rows
+        )
+        inserted_deliveries: Final = await transaction.query_raw(
+            'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch) '
+            "SELECT request_id, accounting_payload, is_batch FROM jsonb_to_recordset($1::jsonb) "
+            "AS inputs(request_id text, accounting_payload jsonb, is_batch boolean) "
+            "ON CONFLICT (request_id) DO NOTHING RETURNING request_id",
+            safe_dumps(payloads, non_finite_as_null=True),
+        )
+        accepted: Final = frozenset(str(row["request_id"]) for row in inserted_deliveries)
+        if not accepted or not write_spend_logs:
+            return len(accepted)
+        local_rows: Final = tuple(
+            {key: value for key, value in row.items() if key not in {"accounting_payload", "accounting_log_disabled"}}
+            for row in rows
+            if row["request_id"] in accepted and row.get("accounting_log_disabled") is not True
+        )
+        groups: Final = tuple(
+            tuple(group)
+            for _, group in groupby(
+                sorted(local_rows, key=lambda row: tuple(sorted(row))), key=lambda row: tuple(sorted(row))
             )
-        return sum(counts)
+        )
+        inserted_groups: Final = tuple(
+            [await transaction.query_raw(*spend_log_insert_statement(group)) for group in groups]
+        )
+        inserted: Final = frozenset(str(row["request_id"]) for row in chain.from_iterable(inserted_groups))
+        conflicts: Final = tuple(str(row["request_id"]) for row in local_rows if row["request_id"] not in inserted)
+        if conflicts:
+            await transaction.execute_raw(
+                'DELETE FROM "LiteLLM_SpendLogDelivery" WHERE request_id = ANY($1::text[])', conflicts
+            )
+        return len(accepted) - len(conflicts)
+
+    async def batch_delivery(self, request_id: str) -> Mapping[str, object] | None:
+        database: Final[LedgerTransaction] = self.prisma_client.writer_db
+        rows: Final = await database.query_raw(
+            'SELECT accounting_payload FROM "LiteLLM_SpendLogDelivery" WHERE request_id = $1', request_id
+        )
+        return _SPEND_LOG_FIELDS.validate_python(rows[0]["accounting_payload"]) if rows else None
 
     async def take_over_batch(self, row: Mapping[str, object]) -> BatchTakeover:
-        from litellm.proxy.db.db_span import db_span
         from litellm.repositories.spend_log_insert import spend_log_takeover_statement
 
         database: Final[LedgerDatabase] = self.prisma_client.writer_db
         async with database.tx(timeout=timedelta(seconds=60)) as transaction:
-            existing: Final = _SPEND_LOG_ROWS.validate_python(
-                await transaction.query_raw(
-                    'SELECT to_jsonb(stored) AS row FROM "LiteLLM_SpendLogs" stored WHERE request_id = $1 FOR UPDATE',
-                    row["request_id"],
-                )
+            receipts: Final = await transaction.query_raw(
+                'SELECT state::text, accounting_payload FROM "LiteLLM_SpendLogDelivery" WHERE request_id = $1 FOR UPDATE',
+                row["request_id"],
             )
-            if not existing:
+            if not receipts:
                 return BatchTakeover(False, "legacy")
-            old: Final = _SPEND_LOG_FIELDS.validate_python(existing[0]["row"])
-            path: Final = "ledger" if old.get("accounting_path") == "ledger" else "legacy"
-            receipts: Final = (
-                _SPEND_LOG_ROWS.validate_python(
-                    await transaction.query_raw(
-                        'SELECT state::text FROM "LiteLLM_AccountingDelivery" WHERE request_id = $1 FOR UPDATE',
-                        row["request_id"],
-                    )
-                )
-                if path == "ledger"
-                else ()
+            old: Final = _SPEND_LOG_FIELDS.validate_python(receipts[0]["accounting_payload"])
+            new: Final = _accounting_payload(row["accounting_payload"])
+            if old.get("call_type") != "aretrieve_batch" or old.get("status") != "success":
+                return BatchTakeover(False, "ledger")
+            spend: Final = new.get("spend")
+            if old.get("spend") != 0 or not isinstance(spend, (int, float)) or spend <= 0:
+                return BatchTakeover(False, "ledger")
+            local_row: Final = {
+                key: value for key, value in row.items() if key not in {"accounting_payload", "accounting_log_disabled"}
+            }
+            await transaction.query_raw(*spend_log_takeover_statement(local_row))
+            await transaction.execute_raw(
+                'UPDATE "LiteLLM_SpendLogDelivery" SET accounting_payload = $2::jsonb, '
+                "previous_payload = CASE WHEN state = 'applied' THEN accounting_payload ELSE previous_payload END, "
+                "state = CASE WHEN state = 'applied' THEN 'pending'::\"AccountingDeliveryState\" ELSE state END, "
+                "applied_at = CASE WHEN state = 'applied' THEN NULL ELSE applied_at END "
+                "WHERE request_id = $1",
+                row["request_id"],
+                safe_dumps(new, non_finite_as_null=True),
             )
-            async with db_span("update", "LiteLLM_SpendLogs"):
-                changed: Final = await transaction.query_raw(*spend_log_takeover_statement(row))
-            if not changed:
-                return BatchTakeover(False, path)
-            if path == "ledger" and (not receipts or receipts[0]["state"] == "applied"):
-                await transaction.execute_raw(
-                    'INSERT INTO "LiteLLM_AccountingDelivery" (request_id, previous_row) VALUES ($1, $2::jsonb) '
-                    "ON CONFLICT (request_id) DO UPDATE SET state = 'pending', previous_row = EXCLUDED.previous_row, "
-                    "attempts = 0, next_attempt_at = CURRENT_TIMESTAMP, applied_at = NULL, last_error = NULL",
-                    row["request_id"],
-                    safe_dumps(old, non_finite_as_null=True),
-                )
-            return BatchTakeover(True, path)
+            return BatchTakeover(True, "ledger")
 
 
 class BudgetWindowSpendRepository(PrismaTableRepository["prisma_models.LiteLLM_BudgetWindowSpend"]):

@@ -5,7 +5,7 @@ from itertools import chain
 from types import TracebackType
 from typing import TYPE_CHECKING, Final, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm.repositories.prisma_protocols import TableActions
 
@@ -41,19 +41,14 @@ class _Delivery(BaseModel):
 
     request_id: str
     attempts: int
-    previous_row: Mapping[str, object] | None = None
-
-
-class _StoredRow(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    row: Mapping[str, object]
+    accounting_payload: JsonValue
+    previous_payload: JsonValue = None
 
 
 @dataclass(frozen=True, slots=True)
 class DeliveryProjection:
     row: Mapping[str, object]
-    previous_row: Mapping[str, object] | None
+    previous_payload: Mapping[str, object] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,26 +65,26 @@ class DeliveryMetrics(BaseModel):
     pending_count: int
     parked_count: int
     oldest_pending_seconds: float
+    batch_count: int
+    table_bytes: int
 
 
 _DELIVERIES: Final = TypeAdapter(tuple[_Delivery, ...])
-_ROWS: Final = TypeAdapter(tuple[_StoredRow, ...])
+_PAYLOAD: Final = TypeAdapter(dict[str, object])
 _TIMEOUT: Final = timedelta(seconds=60)
-_CLAIM: Final = """SELECT request_id, attempts, previous_row FROM "LiteLLM_AccountingDelivery"
+_CLAIM: Final = """SELECT request_id, attempts, accounting_payload, previous_payload FROM "LiteLLM_SpendLogDelivery"
 WHERE state = 'pending' AND next_attempt_at <= CURRENT_TIMESTAMP
   AND (attempts > 0) = $2::boolean
 ORDER BY next_attempt_at, request_id LIMIT $1::integer FOR UPDATE SKIP LOCKED"""
-_LOAD: Final = """SELECT to_jsonb(spend_row) AS row FROM "LiteLLM_SpendLogs" spend_row
-WHERE request_id = ANY($1::text[]) ORDER BY request_id"""
-_APPLIED: Final = """UPDATE "LiteLLM_AccountingDelivery"
-SET state = 'applied', applied_at = CURRENT_TIMESTAMP, previous_row = NULL, last_error = NULL
+_APPLIED: Final = """UPDATE "LiteLLM_SpendLogDelivery"
+SET state = 'applied', applied_at = CURRENT_TIMESTAMP, previous_payload = NULL, last_error = NULL
 WHERE request_id = ANY($1::text[]) AND state = 'pending' """
-_FAILED: Final = """UPDATE "LiteLLM_AccountingDelivery"
+_FAILED: Final = """UPDATE "LiteLLM_SpendLogDelivery"
 SET attempts = attempts + 1, last_error = $3,
     next_attempt_at = CURRENT_TIMESTAMP + make_interval(secs => LEAST(300, power(2, LEAST(attempts, 8)))::integer),
     state = $4::"AccountingDeliveryState"
 WHERE request_id = $1 AND state = 'pending' AND attempts = $2::integer
-RETURNING request_id, attempts, previous_row"""
+RETURNING request_id, attempts, accounting_payload, previous_payload"""
 
 
 class AccountingDeliveryRepository:
@@ -102,18 +97,20 @@ class AccountingDeliveryRepository:
                 "SELECT COUNT(*) FILTER (WHERE state = 'pending') AS pending_count, "
                 "COUNT(*) FILTER (WHERE state = 'parked') AS parked_count, "
                 "COALESCE(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP - MIN(created_at) FILTER (WHERE state = 'pending')), 0) "
-                "AS oldest_pending_seconds FROM \"LiteLLM_AccountingDelivery\" WHERE state IN ('pending', 'parked')"
+                "AS oldest_pending_seconds, COUNT(*) FILTER (WHERE is_batch) AS batch_count, "
+                "pg_total_relation_size('\"LiteLLM_SpendLogDelivery\"') AS table_bytes "
+                'FROM "LiteLLM_SpendLogDelivery"'
             )
             return DeliveryMetrics.model_validate(rows[0])
 
-    async def cleanup_applied(self, *, retention_days: int = 30, batch_size: int = 1000) -> int:
+    async def cleanup_applied(self, *, retention_days: int = 1, batch_size: int = 1000) -> int:
         if retention_days < 1 or batch_size < 1:
             raise ValueError("Delivery retention and cleanup batch size must be positive")
         async with self._database.tx(timeout=_TIMEOUT) as transaction:
             return await transaction.execute_raw(
-                'DELETE FROM "LiteLLM_AccountingDelivery" WHERE request_id IN ('
-                'SELECT request_id FROM "LiteLLM_AccountingDelivery" '
-                "WHERE state = 'applied' AND applied_at < CURRENT_TIMESTAMP - make_interval(days => $1::integer) "
+                'DELETE FROM "LiteLLM_SpendLogDelivery" WHERE request_id IN ('
+                'SELECT request_id FROM "LiteLLM_SpendLogDelivery" '
+                "WHERE state = 'applied' AND NOT is_batch AND applied_at < CURRENT_TIMESTAMP - make_interval(days => $1::integer) "
                 "ORDER BY applied_at, request_id LIMIT $2::integer FOR UPDATE SKIP LOCKED)",
                 retention_days,
                 batch_size,
@@ -137,15 +134,17 @@ class AccountingDeliveryRepository:
                 )
                 if not claimed:
                     return DeliveryBatchResult()
-                stored: Final = _ROWS.validate_python(
-                    await transaction.query_raw(_LOAD, tuple(delivery.request_id for delivery in claimed))
-                )
-                rows: Final = {entry.row["request_id"]: entry.row for entry in stored}
-                if len(rows) != len(claimed):
-                    raise ValueError("Pending delivery has no stored SpendLogs row")
                 await apply(
                     transaction,
-                    tuple(DeliveryProjection(rows[delivery.request_id], delivery.previous_row) for delivery in claimed),
+                    tuple(
+                        DeliveryProjection(
+                            _PAYLOAD.validate_python(delivery.accounting_payload),
+                            None
+                            if delivery.previous_payload is None
+                            else _PAYLOAD.validate_python(delivery.previous_payload),
+                        )
+                        for delivery in claimed
+                    ),
                 )
                 await transaction.execute_raw(_APPLIED, tuple(delivery.request_id for delivery in claimed))
             return DeliveryBatchResult(applied=len(claimed))

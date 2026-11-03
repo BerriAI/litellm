@@ -657,11 +657,11 @@ async def test_one_failing_index_statement_does_not_drop_the_others_or_the_rollu
 
 
 @pytest.mark.asyncio
-async def test_lean_ledger_rows_do_not_enable_guardrail_analytics():
+async def test_disabled_log_deliveries_do_not_enable_guardrail_analytics():
     prisma = _prisma()
     row = _payload("lean", usage={"topicPolicyUnits": 2})
     row["accounting_path"] = "ledger"
-    row["metadata"] = json.dumps({**json.loads(row["metadata"]), "accounting_lean": True})
+    row["accounting_log_disabled"] = True
     await process_spend_logs_guardrail_usage(prisma, [row], pending=PendingRollups())
     prisma.db.litellm_dailyguardrailmetrics.upsert.assert_not_awaited()
     prisma.db.litellm_spendlogguardrailindex.create_many.assert_not_awaited()

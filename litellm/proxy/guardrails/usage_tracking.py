@@ -377,9 +377,7 @@ async def process_spend_logs_guardrail_usage(
     )
     index_rows_by_key: Final[dict[tuple[str, str], dict[str, object]]] = {}
 
-    from litellm.accounting.snapshot import is_lean_accounting_payload
-
-    for payload in (row for row in logs_to_process if not is_lean_accounting_payload(row)):
+    for payload in (row for row in logs_to_process if row.get("accounting_log_disabled") is not True):
         request_id = payload.get("request_id")
         start_time = _parse_payload_start_time(payload)
         if not isinstance(request_id, str) or not request_id or start_time is None:

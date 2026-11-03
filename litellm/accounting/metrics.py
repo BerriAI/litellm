@@ -1,6 +1,6 @@
-from typing import Final, Literal
+from typing import Final
 
-from prometheus_client import Counter, Gauge, Histogram
+from prometheus_client import Gauge, Histogram
 
 from litellm.repositories.accounting_delivery_repository import DeliveryMetrics
 
@@ -12,8 +12,11 @@ _OLDEST: Final = Gauge(
     multiprocess_mode="livemax",
 )
 _BATCH_TIME: Final = Histogram("litellm_accounting_batch_seconds", "SpendLogs delivery worker batch time")
-_POSTPONED: Final = Counter(
-    "litellm_accounting_cleanup_postponed", "Cleanup deferred for unfinished accounting deliveries", ("kind",)
+_BATCH_COUNT: Final = Gauge(
+    "litellm_accounting_batch_deliveries", "Retained batch deliveries", multiprocess_mode="livemax"
+)
+_TABLE_BYTES: Final = Gauge(
+    "litellm_accounting_delivery_table_bytes", "Delivery table size in bytes", multiprocess_mode="livemax"
 )
 
 
@@ -23,6 +26,5 @@ def record_deliveries(metrics: DeliveryMetrics, seconds: float) -> None:
     _OLDEST.set(max(0.0, metrics.oldest_pending_seconds))
     _BATCH_TIME.observe(seconds)
 
-
-def record_postponed_cleanup(kind: Literal["rows", "partition"]) -> None:
-    _POSTPONED.labels(kind=kind).inc()
+    _BATCH_COUNT.set(metrics.batch_count)
+    _TABLE_BYTES.set(metrics.table_bytes)

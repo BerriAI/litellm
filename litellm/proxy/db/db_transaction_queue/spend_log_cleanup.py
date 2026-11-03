@@ -770,25 +770,11 @@ class SpendLogCleanup:
         is not a row count. That is a contract violation rather than a transient
         fault, so the caller stops instead of retrying.
         """
-        from litellm.accounting.worker import alert_postponed_cleanup
-        from litellm.repositories.table_repositories import SpendLogsRepository
-
         timeout_ms: Final = self._timeout_ms(deadline)
         async with db_span("cleanup_expired_rows", table_name), bounded_tx(prisma_client, timeout_ms) as tx:
             await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
             await tx.execute_raw(trusted_sql(f"SET LOCAL lock_timeout = {timeout_ms}"))
-            deletion: Final = (
-                await SpendLogsRepository.delete_settled_before(tx, cutoff_date, self.batch_size)
-                if table_name == "LiteLLM_SpendLogs" and isinstance(cutoff_date, datetime)
-                else None
-            )
-            deleted_result: Final = (
-                deletion.deleted
-                if deletion is not None
-                else await tx.execute_raw(trusted_sql(delete_sql), cutoff_date, self.batch_size)
-            )
-        if deletion is not None and deletion.postponed:
-            await alert_postponed_cleanup("rows")
+            deleted_result: Final = await tx.execute_raw(trusted_sql(delete_sql), cutoff_date, self.batch_size)
         return (
             deleted_result
             if isinstance(deleted_result, int)  # pyright: ignore[reportUnnecessaryIsInstance]  # driver may return None

@@ -64,8 +64,6 @@ def _wire_tx(db, rejected_timeout=None):
     execute_raw.
     """
 
-    db.retention_queries = []
-
     @asynccontextmanager
     async def _tx(**kwargs):
         if kwargs.get("timeout") == rejected_timeout:
@@ -78,11 +76,6 @@ def _wire_tx(db, rejected_timeout=None):
             return await db.execute_raw(sql, *args)
 
         async def _query_raw(sql, *args):
-            if sql.startswith('SELECT request_id, "startTime"'):
-                db.retention_queries.append((sql, args))
-                return []
-            if sql.startswith("SELECT EXISTS("):
-                return [{"protected": False}]
             return await db.query_raw(sql, *args)
 
         tx.execute_raw = _execute_raw
@@ -226,7 +219,6 @@ async def test_should_delete_spend_logs():
 async def test_delete_batch_transaction_timeout_covers_statement_timeout() -> None:
     transaction: Final = MagicMock()
     transaction.execute_raw = AsyncMock(side_effect=[0, 0, 3])
-    transaction.query_raw = AsyncMock(side_effect=[[], [{"protected": False}]])
 
     @asynccontextmanager
     async def tx(timeout: timedelta):
@@ -307,8 +299,7 @@ async def test_cleanup_old_spend_logs_batch_deletion():
     # must match on the full composite identity: on a partitioned table
     # request_id alone is not unique, and deleting by it would let a client
     # reusing x-litellm-call-id take out a fresh row alongside the expired one
-    assert 'logs.request_id = candidate.request_id AND logs."startTime" = candidate."startTime"' in call_args_sql
-    assert mock_db.retention_queries[0][1][1] == cleaner.batch_size
+    assert 'WHERE ("request_id", "startTime") IN' in call_args_sql
 
     # After spend logs, the derived tool index rows expire on the same cutoff
     tool_index_sql = mock_db.execute_raw.call_args_list[3][0][0]
@@ -1055,7 +1046,6 @@ async def test_each_batch_carries_a_statement_and_lock_timeout():
             return 0
 
         tx.execute_raw = _execute_raw
-        tx.query_raw = AsyncMock(side_effect=[[], [{"protected": False}], [{"remaining": 0}]])
         yield tx
 
     mock_db.tx = _tx
@@ -1262,10 +1252,6 @@ async def test_the_outstanding_rows_probe_carries_a_statement_timeout():
 
         async def _query_raw(sql, *args):
             recorded.append(sql.strip())
-            if sql.startswith('SELECT request_id, "startTime"'):
-                return []
-            if sql.startswith("SELECT EXISTS("):
-                return [{"protected": False}]
             return [{"remaining": 7}]
 
         tx.execute_raw = _execute_raw
@@ -1317,7 +1303,7 @@ async def test_a_statement_timeout_is_clamped_to_the_budget_that_is_left():
             return 0
 
         tx.execute_raw = _execute_raw
-        tx.query_raw = AsyncMock(side_effect=[[], [{"protected": False}]])
+        tx.query_raw = AsyncMock(return_value=[{"remaining": 0}])
         yield tx
 
     client.db.tx = _tx
@@ -1870,8 +1856,8 @@ async def test_size_pass_deletes_oldest_first_in_steps_until_the_live_estimate_i
     deletes = [(call[0][0], call[0][1:]) for call in db.deletes.call_args_list]
     assert len(deletes) == 5
     assert 'DELETE FROM "LiteLLM_SpendLogs"' in deletes[0][0]
-    assert 'WHERE "startTime" < $1' in db.retention_queries[0][0]
-    assert db.retention_queries[0][1][0] == step_cutoff
+    assert 'WHERE "startTime" < $1' in deletes[0][0]
+    assert deletes[0][1][0] == step_cutoff
     assert 'DELETE FROM "LiteLLM_SpendLogToolIndex"' in deletes[3][0]
     assert deletes[3][1][0] == step_cutoff
     offset_query = next(call for call in db.query_raw.call_args_list if "OFFSET" in call[0][0])
@@ -2176,11 +2162,10 @@ def test_drop_oldest_partitions_while_only_drops_fully_elapsed_partitions_oldest
     )
     dropped_sql: list[str] = []
 
-    async def _drop(prisma_client, name, timeout_ms):
-        dropped_sql.append(name)
-        return True
+    async def _ddl(prisma_client, statement, timeout_ms):
+        dropped_sql.append(statement)
 
-    manager._drop_settled_partition = _drop
+    manager._execute_bounded_ddl = _ddl
     verdicts = iter([True, False])
 
     async def still_over_target():
@@ -2190,8 +2175,8 @@ def test_drop_oldest_partitions_while_only_drops_fully_elapsed_partitions_oldest
 
     assert dropped == ("LiteLLM_SpendLogs_p20261014", "LiteLLM_SpendLogs_p20261015")
     assert dropped_sql == [
-        "LiteLLM_SpendLogs_p20261014",
-        "LiteLLM_SpendLogs_p20261015",
+        'DROP TABLE IF EXISTS "LiteLLM_SpendLogs_p20261014"',
+        'DROP TABLE IF EXISTS "LiteLLM_SpendLogs_p20261015"',
     ]
 
 

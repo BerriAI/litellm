@@ -178,9 +178,8 @@ def _batch_cost_row_to_write(payload: SpendLogsPayload, disable_spend_logs: bool
     if disable_spend_logs is False:
         return payload
     if "accounting_path" in payload and payload["accounting_path"] == "ledger":
-        from litellm.accounting.snapshot import lean_accounting_payload
-
-        return lean_accounting_payload(payload)
+        disabled: Final[SpendLogsPayload] = {**payload, "accounting_log_disabled": True}
+        return disabled
     return MappingProxyType({field: value for field, value in payload.items() if field in _BATCH_COST_CLAIM_FIELDS})
 
 
@@ -706,12 +705,12 @@ class DBSpendUpdateWriter:
             if team_id is not None and team_id != "":
                 payload["team_id"] = team_id
 
-            from litellm.accounting.snapshot import accounting_metadata
+            from litellm.accounting.snapshot import build_accounting_payload
 
             payload["accounting_path"] = accounting_path
 
             async def prepare_ledger() -> None:
-                payload["metadata"] = accounting_metadata(
+                payload["accounting_payload"] = build_accounting_payload(
                     payload,
                     entities={
                         "api_key": hashed_token,
@@ -829,7 +828,7 @@ class DBSpendUpdateWriter:
         if (
             accounting_path == "legacy"
             and not queued
-            and (payload is None or payload.get("accounting_path") != "ledger")
+            and (payload is None or ("accounting_path" not in payload or payload["accounting_path"] != "ledger"))
         ):
             await self._queue_model_windows_safely(windows)
 
@@ -855,9 +854,11 @@ class DBSpendUpdateWriter:
                 prepare_ledger=prepare_ledger,
             )
         if disable_spend_logs is False or ("accounting_path" in payload and payload["accounting_path"] == "ledger"):
-            from litellm.accounting.snapshot import lean_accounting_payload
-
-            stored: Final = lean_accounting_payload(payload) if disable_spend_logs else payload
+            stored: Final[SpendLogsPayload] = (
+                {**payload, "accounting_log_disabled": disable_spend_logs}
+                if ("accounting_path" in payload and payload["accounting_path"] == "ledger")
+                else payload
+            )
             await self._insert_spend_log_to_db(payload=stored, prisma_client=prisma_client, llm_router=llm_router)
         return True
 
@@ -876,53 +877,58 @@ class DBSpendUpdateWriter:
         picked the batch id as its call id, and the $0 row an older proxy left behind
         while the batch was still running all leave the charge to be made.
         """
-        from litellm.repositories.table_repositories import SpendLogsRepository
-
-        request_id: Final = payload["request_id"]
         from litellm.proxy.spend_tracking.spend_tracking_utils import (
             configured_spend_logs_metadata_fields,
             spend_log_row_with_retained_metadata,
         )
+        from litellm.repositories.table_repositories import SpendLogsRepository
 
-        row: Final = spend_log_row_with_retained_metadata(
-            _batch_cost_row_to_write(payload, disable_spend_logs), configured_spend_logs_metadata_fields()
-        )
-        spend_logs: Final = SpendLogsRepository(prisma_client).table
+        request_id: Final = payload["request_id"]
+        repository: Final = SpendLogsRepository(prisma_client)
         try:
-            claimed: Final = await SpendLogsRepository(prisma_client).insert_with_deliveries(
-                [prisma_client.jsonify_object(row)]
-            )
-            if claimed == 1:
+            delivery: Final = await repository.batch_delivery(request_id)
+            if delivery is not None:
+                payload["accounting_path"] = "ledger"  # rebind-ok: persisted ownership survives flag changes
+                if prepare_ledger is not None:
+                    await prepare_ledger()
+                return await self._take_over_uncharged_batch_cost_row(
+                    payload, prisma_client, _batch_cost_row_to_write(payload, disable_spend_logs)
+                )
+            if "accounting_path" not in payload or payload["accounting_path"] != "ledger":
+                legacy_claim: Final = spend_log_row_with_retained_metadata(
+                    _batch_cost_row_to_write(payload, disable_spend_logs), configured_spend_logs_metadata_fields()
+                )
+                if await repository.insert_with_deliveries([prisma_client.jsonify_object(legacy_claim)]) == 1:
+                    return True
+            existing: Final = await repository.table.find_unique(where={"request_id": request_id})
+            if existing is None and ("accounting_path" not in payload or payload["accounting_path"] != "ledger"):
                 return True
-            existing: Final = await spend_logs.find_unique(where={"request_id": request_id})
-        except Exception as e:  # noqa: BLE001  # prisma raises its own hierarchy; an unreachable DB queues the row like any other spend log
-            verbose_proxy_logger.warning(
-                "Could not claim spend row %s for a batch's cost, queueing it: %s", request_id, e
+            if existing is not None:
+                if existing.call_type != CallTypes.aretrieve_batch.value or existing.status != "success":
+                    return "accounting_path" not in payload or payload["accounting_path"] != "ledger"
+                if existing.spend > 0:
+                    return False
+                payload["accounting_path"] = "legacy"  # rebind-ok: legacy migration rows keep their original writer
+                legacy_row: Final = {
+                    key: value
+                    for key, value in _batch_cost_row_to_write(payload, disable_spend_logs).items()
+                    if key not in {"accounting_payload", "accounting_log_disabled"}
+                }
+                return await self._take_over_uncharged_batch_cost_row(payload, prisma_client, legacy_row)
+            row: Final = spend_log_row_with_retained_metadata(
+                _batch_cost_row_to_write(payload, disable_spend_logs), configured_spend_logs_metadata_fields()
             )
-            await self._insert_spend_log_to_db(payload=prisma_client.jsonify_object(row), prisma_client=prisma_client)
-            return True
-        if existing is None or existing.call_type != CallTypes.aretrieve_batch.value or existing.status != "success":
-            verbose_proxy_logger.warning(
-                "Spend row %s belongs to a %s request, so this batch's cost is charged without a row of its own",
-                request_id,
-                getattr(existing, "call_type", None),
+            claimed: Final = await repository.insert_with_deliveries(
+                [prisma_client.jsonify_object(row)], write_spend_logs=os.getenv("SPEND_LOGS_URL") is None
+            )
+            return claimed == 1 or await self._take_over_uncharged_batch_cost_row(payload, prisma_client, row)
+        except Exception as error:  # noqa: BLE001  # retry buffered work after database failures
+            verbose_proxy_logger.warning("Could not claim batch spend row %s: %s", request_id, error)
+            queued: Final = _batch_cost_row_to_write(payload, disable_spend_logs)
+            await self._insert_spend_log_to_db(
+                payload=prisma_client.jsonify_object(queued), prisma_client=prisma_client
             )
             return True
-        if existing.spend > 0:
-            verbose_proxy_logger.debug("Cost tracking skipped: spend row %s already charged this batch", request_id)
-            return False
-        was_ledger: Final = "accounting_path" in payload and payload["accounting_path"] == "ledger"
-        payload["accounting_path"] = (  # rebind-ok: adopt persisted stamp on takeover
-            "ledger" if getattr(existing, "accounting_path", None) == "ledger" else "legacy"
-        )
-        if payload["accounting_path"] == "ledger" and not was_ledger and prepare_ledger is not None:
-            await prepare_ledger()
-        takeover_row: Final = spend_log_row_with_retained_metadata(
-            _batch_cost_row_to_write(payload, disable_spend_logs), configured_spend_logs_metadata_fields()
-        )
-        return await self._take_over_uncharged_batch_cost_row(
-            payload=payload, prisma_client=prisma_client, row=takeover_row
-        )
 
     async def _take_over_uncharged_batch_cost_row(
         self, payload: SpendLogsPayload, prisma_client: "PrismaClient", row: Mapping[str, object]
