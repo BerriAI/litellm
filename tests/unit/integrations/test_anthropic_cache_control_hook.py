@@ -1405,10 +1405,10 @@ _CLIENT_MARKED_CONVERSATION: Final = (
 )
 
 
-def _hook_output(
+def _hook_result(
     model: str, points: tuple[Mapping[str, object], ...] = ({"location": "message", "index": -1},), **params: object
-) -> list[AllMessageValues]:
-    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+) -> tuple[list[AllMessageValues], Mapping[str, object]]:
+    _, processed, returned_params = AnthropicCacheControlHook().get_chat_completion_prompt(
         model=model,
         messages=cast(list[AllMessageValues], copy.deepcopy(list(_CLIENT_MARKED_CONVERSATION))),
         non_default_params={"cache_control_injection_points": list(points), **params},
@@ -1416,7 +1416,13 @@ def _hook_output(
         prompt_variables=None,
         dynamic_callback_params={},
     )
-    return processed
+    return processed, returned_params
+
+
+def _hook_output(
+    model: str, points: tuple[Mapping[str, object], ...] = ({"location": "message", "index": -1},), **params: object
+) -> list[AllMessageValues]:
+    return _hook_result(model, points, **params)[0]
 
 
 def test_cache_control_injection_points_replace_client_prompt_cache_breakpoints_on_claude():
@@ -1433,23 +1439,38 @@ def test_cache_control_injection_points_replace_client_prompt_cache_breakpoints_
     assert "prompt_cache_breakpoint" not in json.dumps(request)
 
 
+@pytest.mark.parametrize(
+    "sibling_model_infos",
+    [
+        pytest.param((), id="one-deployment"),
+        pytest.param(
+            ({"supports_prompt_cache_breakpoint": True, "base_model": "anthropic.claude-unmapped-v1:0"},),
+            id="beside-a-deployment-of-the-same-profile-with-a-base-model",
+        ),
+    ],
+)
+@pytest.mark.parametrize("route", ["bedrock", "bedrock/converse"])
 def test_cache_control_injection_points_replace_client_prompt_cache_breakpoints_on_a_flagged_bedrock_profile(
-    local_model_cost_map,
+    local_model_cost_map, sibling_model_infos: tuple[Mapping[str, object], ...], route: str
 ):
     from litellm import Router
 
-    arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-flagged"
+    model: Final = f"{route}/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-flagged"
     Router(
         model_list=[
             {
-                "model_name": "claude-profile",
-                "litellm_params": {"model": f"bedrock/{arn}", "aws_region_name": "us-east-1"},
-                "model_info": {"supports_prompt_cache_breakpoint": True},
+                "model_name": f"claude-profile-{position}",
+                "litellm_params": {"model": model, "aws_region_name": "us-east-1"},
+                "model_info": model_info,
             }
+            for position, model_info in enumerate(({"supports_prompt_cache_breakpoint": True}, *sibling_model_infos))
         ]
     )
+    processed, params = _hook_result(model)
 
-    assert "prompt_cache_breakpoint" not in json.dumps(_hook_output(f"bedrock/{arn}"))
+    assert "prompt_cache_breakpoint" not in json.dumps(processed)
+    assert "prompt_cache_options" not in params
+    assert [_marks_in(message) for message in processed] == [0, 0, 0, 1]
 
 
 def test_tool_config_injection_point_leaves_client_prompt_cache_breakpoints_on_claude():

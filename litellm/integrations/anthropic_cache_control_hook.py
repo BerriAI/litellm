@@ -550,12 +550,16 @@ def _builds_anthropic_messages(model: str, custom_llm_provider: str | None) -> b
     return isinstance(chat_config, AnthropicConfig) and not isinstance(chat_config, OpenAIGPTConfig)
 
 
-def _reads_prompt_cache_breakpoint_natively(model: str, custom_llm_provider: str | None) -> bool:
-    return (
-        supports_openai_prompt_cache_breakpoint(model, custom_llm_provider)
-        and (custom_llm_provider or _served_provider_for_model(model)) != "bedrock"
-        and not _builds_anthropic_messages(model, custom_llm_provider)
+def _translates_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None) -> bool:
+    return (custom_llm_provider or _served_provider_for_model(model)) == "bedrock" or _builds_anthropic_messages(
+        model, custom_llm_provider
     )
+
+
+def _reads_prompt_cache_breakpoint_natively(model: str, custom_llm_provider: str | None) -> bool:
+    return supports_openai_prompt_cache_breakpoint(
+        model, custom_llm_provider
+    ) and not _translates_prompt_cache_breakpoint(model, custom_llm_provider)
 
 
 def _custom_llm_provider(non_default_params: Mapping[str, object], point: Mapping[str, object]) -> str | None:
@@ -860,7 +864,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             model, custom_llm_provider, lambda name: AnthropicCacheControlHook._resolve_provider(name, api_base)
         )
         if hosted_flag is not None:
-            return hosted_flag
+            return hosted_flag and not _translates_prompt_cache_breakpoint(model, custom_llm_provider)
         if not supports_openai_prompt_cache_breakpoint(model):
             return False
         if (custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model)) != "openai":
