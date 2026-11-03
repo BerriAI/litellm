@@ -72,6 +72,72 @@ def test_search_sends_max_results_in_request_body(respx_mock: respx.MockRouter) 
     assert [result.url for result in response.results] == ["https://example.com/ml"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_search_forwards_provider_filters_without_internal_params(
+    respx_mock: respx.MockRouter, httpx_transport: None, is_async: bool
+) -> None:
+    route: Final = respx_mock.post(PERPLEXITY_SEARCH_URL).respond(json={"results": []})
+    filters: Final = {
+        "search_recency_filter": "week",
+        "search_after_date_filter": "01/01/2026",
+        "search_before_date_filter": "10/01/2026",
+        "last_updated_after_filter": "01/01/2026",
+        "last_updated_before_filter": "10/01/2026",
+        "search_language_filter": ["en"],
+        "search_mode": "academic",
+        "max_tokens": 2048,
+        "search_domain_filter": ["europa.eu"],
+    }
+    params: Final = {
+        "query": "AI Act obligations for model providers",
+        "search_provider": "perplexity",
+        "metadata": {"private": "local-only"},
+        "input_cost_per_query": 0.01,
+        "_litellm_private_marker": "local-only",
+        **filters,
+    }
+
+    if is_async:
+        response = await litellm.asearch(**params)
+    else:
+        response = litellm.search(**params)
+
+    assert response.object == "search"
+    assert json.loads(route.calls.last.request.content) == {
+        "query": "AI Act obligations for model providers",
+        **filters,
+    }
+
+
+@pytest.mark.parametrize("query", ["original query", ["first query", "second query"]])
+def test_search_request_preserves_query_and_present_values_without_mutating_options(query: str | list[str]) -> None:
+    optional_params: Final[dict[str, object]] = {
+        "query": "replacement query",
+        "search_recency_filter": None,
+        "search_language_filter": [],
+        "max_tokens": 0,
+        "provider_option": {"enabled": False},
+    }
+    original: Final = dict(optional_params)
+
+    body: Final = PerplexitySearchConfig().transform_search_request(
+        query=query,
+        optional_params=optional_params,
+        api_key="transport-only",
+        api_base="https://transport.invalid",
+        headers={"Authorization": "transport-only"},
+    )
+
+    assert body == {
+        "query": query,
+        "search_language_filter": [],
+        "max_tokens": 0,
+        "provider_option": {"enabled": False},
+    }
+    assert optional_params == original
+
+
 def _transform(payload: object) -> SearchResponse:
     logging_obj = Logging(
         model="perplexity/search",
@@ -213,11 +279,15 @@ async def test_router_search_with_search_tools(
         query="latest AI developments",
         search_tool_name="litellm-search",
         max_results=3,
+        search_recency_filter="week",
+        search_language_filter=["en"],
     )
 
     assert json.loads(route.calls.last.request.content) == {
         "query": "latest AI developments",
         "max_results": 3,
+        "search_recency_filter": "week",
+        "search_language_filter": ["en"],
     }
     assert response.object == "search"
     assert [(result.title, result.url, result.snippet) for result in response.results] == [

@@ -690,7 +690,7 @@ mod tests {
     #[test]
     fn explicit_key_precedes_environment_key() {
         let connection = OcrConnection {
-            api_key: Some(litellm_auth::SecretValue::new("passed-key")),
+            api_key: Some(litellm_secret_value::SecretValue::new("passed-key")),
             ..Default::default()
         };
         let headers = resolve_headers(&connection, &|_| Some("env-key".into())).unwrap();
@@ -700,7 +700,7 @@ mod tests {
     #[test]
     fn blank_explicit_key_uses_environment_key() {
         let connection = OcrConnection {
-            api_key: Some(litellm_auth::SecretValue::new(" ")),
+            api_key: Some(litellm_secret_value::SecretValue::new(" ")),
             ..Default::default()
         };
         let headers = resolve_headers(&connection, &|_| Some(" env-key ".into())).unwrap();

@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from datetime import datetime
 from types import MappingProxyType
@@ -13,7 +14,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER
 from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import PassThroughEndpointLoggingResultValues
+from litellm.proxy._types import PassThroughEndpointLoggingResultValues, PassThroughEndpointLoggingTypedDict
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
@@ -70,6 +71,14 @@ def _safe_response_text(httpx_response: httpx.Response) -> str:
         return ""
 
 
+def _websocket_frames(
+    response_body: Mapping[str, object] | Sequence[Mapping[str, object]] | None,
+) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        message for message in (response_body if isinstance(response_body, list) else ()) if isinstance(message, dict)
+    )
+
+
 class PassThroughEndpointLogging:
     def __init__(
         self,
@@ -120,6 +129,7 @@ class PassThroughEndpointLogging:
 
         # Vertex AI Live API WebSocket
         self.TRACKED_VERTEX_AI_LIVE_ROUTES = ["/vertex_ai/live"]
+        self.TRACKED_OPENAI_WEBSOCKET_ROUTES: Final = ("/openai/", "/openai_passthrough/")
 
     @property
     def _log_dispatch(self) -> PassThroughLogDispatch:
@@ -422,21 +432,18 @@ class PassThroughEndpointLogging:
 
             standard_logging_response_object = vertex_ai_live_handler_result["result"]
             kwargs = vertex_ai_live_handler_result["kwargs"]
-        elif DeepgramListenPassthroughLoggingHandler.is_deepgram_listen_route(url_route):
-            deepgram_handler_result: Final = (
-                DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
-                    websocket_messages=tuple(
-                        message
-                        for message in (response_body if isinstance(response_body, list) else ())
-                        if isinstance(message, dict)
-                    ),
-                    logging_obj=logging_obj,
-                    upstream_url=str(httpx_response.request.url),
-                    kwargs=kwargs,
-                )
+        elif (
+            websocket_relay_result := self._websocket_relay_logging_result(
+                url_route=url_route,
+                websocket_frames=_websocket_frames(response_body),
+                logging_obj=logging_obj,
+                httpx_response=httpx_response,
+                start_time=start_time,
+                kwargs=kwargs,
             )
-            standard_logging_response_object = deepgram_handler_result["result"]  # rebind-ok: elif-chain
-            kwargs = deepgram_handler_result["kwargs"]  # rebind-ok: elif-chain contract
+        ) is not None:
+            standard_logging_response_object = websocket_relay_result["result"]  # rebind-ok: elif-chain
+            kwargs = websocket_relay_result["kwargs"]  # rebind-ok: elif-chain contract
         elif FalAIPassthroughLoggingHandler.is_fal_ai_route(url_route, custom_llm_provider):
             fal_ai_handler_result: Final = FalAIPassthroughLoggingHandler().fal_ai_passthrough_handler(
                 response_body=response_body if isinstance(response_body, dict) else MappingProxyType({}),
@@ -451,6 +458,36 @@ class PassThroughEndpointLogging:
 
         return_dict["kwargs"] = kwargs
         return return_dict
+
+    def _websocket_relay_logging_result(
+        self,
+        url_route: str,
+        websocket_frames: tuple[Mapping[str, object], ...],
+        logging_obj: LiteLLMLoggingObj,
+        httpx_response: httpx.Response,
+        start_time: datetime,
+        kwargs: Mapping[str, object],
+    ) -> PassThroughEndpointLoggingTypedDict | None:
+        if self.is_openai_websocket_route(url_route):
+            from .llm_provider_handlers.openai_websocket_passthrough_logging_handler import (
+                OpenAIWebsocketPassthroughLoggingHandler,
+            )
+
+            return OpenAIWebsocketPassthroughLoggingHandler().openai_websocket_passthrough_handler(
+                websocket_messages=websocket_frames,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                start_time=start_time,
+                kwargs=kwargs,
+            )
+        if DeepgramListenPassthroughLoggingHandler.is_deepgram_listen_route(url_route):
+            return DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
+                websocket_messages=websocket_frames,
+                logging_obj=logging_obj,
+                upstream_url=str(httpx_response.request.url),
+                kwargs=kwargs,
+            )
+        return None
 
     async def pass_through_async_success_handler(
         self,
@@ -625,6 +662,9 @@ class PassThroughEndpointLogging:
                 return True
         return False
 
+    def is_openai_websocket_route(self, url_route: str) -> bool:
+        return url_route.startswith(self.TRACKED_OPENAI_WEBSOCKET_ROUTES)
+
     def is_cursor_route(self, url_route: str, custom_llm_provider: str | None = None):
         """Check if the URL route is a Cursor Cloud Agents API route."""
         if custom_llm_provider == "cursor":
@@ -666,28 +706,11 @@ class PassThroughEndpointLogging:
         return False
 
     def _is_supported_openai_endpoint(self, url_route: str) -> bool:
-        """Check if the OpenAI endpoint is supported by the passthrough logging handler.
-
-        The Responses API route is included because
-        `openai_passthrough_handler` has a dedicated `elif is_responses:`
-        branch that knows how to extract usage + cost from the
-        Responses-API on-the-wire shape. Without including it here, the
-        outer dispatch filters Responses calls out before reaching the
-        handler — the inner branch is then unreachable and Responses
-        calls land in `LiteLLM_SpendLogs` with zero tokens / zero spend.
-        """
         from .llm_provider_handlers.openai_passthrough_logging_handler import (
             OpenAIPassthroughLoggingHandler,
         )
 
-        return (
-            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_embeddings_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_agents_route(url_route)
-        )
+        return OpenAIPassthroughLoggingHandler.handles_route(url_route)
 
     def _set_cost_per_request(
         self,

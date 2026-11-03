@@ -5884,7 +5884,7 @@ async def test_team_member_budget_check_reads_from_spend_counter():
 
 
 class TestGuardrailModificationCheck:
-    """Defense-in-depth: `_guardrail_modification_check` must 403 when the
+    """Defense-in-depth: `guardrail_modification_check` must 403 when the
     caller's metadata attempts to modify any guardrail-related key and the
     team lacks the `modify_guardrails` permission. Checks both the
     historically-covered `guardrails` list and the bypass toggles that
@@ -5892,11 +5892,11 @@ class TestGuardrailModificationCheck:
     """
 
     def _call(self, request_body):
-        from litellm.proxy.auth.auth_checks import _guardrail_modification_check
+        from litellm.proxy.auth.auth_checks import guardrail_modification_check
 
         team_object = MagicMock()
         team_object.metadata = {}  # no permission
-        return _guardrail_modification_check(request_body=request_body, team_object=team_object)
+        return guardrail_modification_check(request_body=request_body, team_object=team_object)
 
     def test_noop_when_no_guardrail_keys_present(self):
         # no-op — should return silently
@@ -10998,139 +10998,6 @@ async def test_key_budget_error_keeps_the_masked_key_name(key_name):
     assert f"Key=prod-key ({key_name}) Current cost" in message
 
 
-class _UntouchedPrisma:
-    def __getattr__(self, name: str) -> object:
-        raise AssertionError(f"database reached through {name}")
-
-
-class _MissingUserPrisma:
-    class db:
-        class litellm_usertable:
-            @staticmethod
-            async def find_unique(where: dict[str, str], include: dict[str, bool]) -> None:
-                return None
-
-
-@pytest.mark.asyncio
-async def test_enforced_model_allowlists_treats_a_missing_user_row_as_unrestricted():
-    from litellm.proxy.auth.auth_checks import enforced_model_allowlists
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.proxy.utils import ProxyLogging
-
-    cache = UserApiKeyCache()
-    scopes = await enforced_model_allowlists(
-        valid_token=UserAPIKeyAuth(token="hashed-fake", user_id="default_user_id"),
-        prisma_client=_MissingUserPrisma(),
-        user_api_key_cache=cache,
-        proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
-    )
-
-    assert [list(scope) for scope in scopes] == [[], [], [], [], []]
-
-
-class _UnreachableUserPrisma:
-    class db:
-        class litellm_usertable:
-            @staticmethod
-            async def find_unique(where: dict[str, str], include: dict[str, bool]) -> None:
-                raise RuntimeError("database gone")
-
-
-@pytest.mark.asyncio
-async def test_enforced_model_allowlists_surfaces_a_failed_user_lookup():
-    from litellm.proxy.auth.auth_checks import enforced_model_allowlists
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.proxy.utils import ProxyLogging
-
-    cache = UserApiKeyCache()
-    with pytest.raises(ValueError, match="database gone"):
-        await enforced_model_allowlists(
-            valid_token=UserAPIKeyAuth(token="hashed-fake", user_id="user-fake"),
-            prisma_client=_UnreachableUserPrisma(),
-            user_api_key_cache=cache,
-            proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
-        )
-
-
-@pytest.mark.asyncio
-async def test_enforced_model_allowlists_reads_every_level_from_cache():
-    from litellm.proxy._types import (
-        LiteLLM_BudgetTable,
-        LiteLLM_ProjectTableCachedObj,
-        LiteLLM_TeamMembership,
-        LiteLLM_TeamTableCachedObj,
-        LiteLLM_UserTable,
-    )
-    from litellm.proxy.auth.auth_checks import enforced_model_allowlists
-    from litellm.proxy.common_utils.user_api_key_cache import (
-        UserApiKeyCache,
-        team_membership_reservation_cache_key,
-    )
-    from litellm.proxy.utils import ProxyLogging
-
-    cache = UserApiKeyCache()
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=cache)
-    await cache.async_set_cache(
-        key="team_id:team-fake", value=LiteLLM_TeamTableCachedObj(team_id="team-fake", models=["gpt-4o"])
-    )
-    await cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id="user-fake", team_id="team-fake"),
-        value=LiteLLM_TeamMembership(
-            user_id="user-fake",
-            team_id="team-fake",
-            litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["gpt-4o-mini"]),
-        ),
-    )
-    await cache.async_set_cache(
-        key="project_id:project-fake",
-        value=LiteLLM_ProjectTableCachedObj(project_id="project-fake", models=["gpt-4.1"]),
-    )
-    await cache.async_set_cache(key="user-fake", value=LiteLLM_UserTable(user_id="user-fake", models=["o3"]))
-    prisma_client = _UntouchedPrisma()
-
-    team_scoped = await enforced_model_allowlists(
-        valid_token=UserAPIKeyAuth(
-            token="hashed-fake",
-            models=["all-team-models"],
-            team_models=["gpt-4o", "gpt-4o-mini"],
-            user_id="user-fake",
-            team_id="team-fake",
-            project_id="project-fake",
-        ),
-        prisma_client=prisma_client,
-        user_api_key_cache=cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-    personal = await enforced_model_allowlists(
-        valid_token=UserAPIKeyAuth(token="hashed-fake", user_id="user-fake"),
-        prisma_client=prisma_client,
-        user_api_key_cache=cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-    without_database = await enforced_model_allowlists(
-        valid_token=UserAPIKeyAuth(
-            token="hashed-fake",
-            models=["gpt-4o"],
-            team_models=["gpt-4o-mini"],
-            user_id="user-fake",
-            team_id="team-fake",
-        ),
-        prisma_client=None,
-        user_api_key_cache=cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-
-    assert [list(scope) for scope in team_scoped] == [
-        ["gpt-4o", "gpt-4o-mini"],
-        ["gpt-4o"],
-        ["gpt-4o-mini"],
-        [],
-        ["gpt-4.1"],
-    ]
-    assert [list(scope) for scope in personal] == [[], [], [], ["o3"], []]
-    assert [list(scope) for scope in without_database] == [["gpt-4o"], ["gpt-4o-mini"]]
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("channel", ["team", "key"])
 async def test_access_group_model_fallback_uses_the_injected_database(channel: str) -> None:
@@ -11202,9 +11069,47 @@ def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
     assert route_skips_budget_checks(route="/v1/chat/completions") is False
 
 
-def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() -> None:
-    assert request_skips_budget_checks(route="/v1/models", model=None, llm_router=None) is True
-    assert request_skips_budget_checks(route="/v1/chat/completions", model=None, llm_router=None) is False
+@pytest.mark.parametrize(
+    "route, request_body, model, expected",
+    [
+        ("/v1/models", None, None, True),
+        ("/v1/models", None, "paid", True),
+        ("/v1/chat/completions", None, None, False),
+        ("/v1/chat/completions", None, "free", True),
+        ("/v1/chat/completions", None, "paid", False),
+        ("/mcp", {"method": "tools/list"}, "paid", True),
+        ("/mcp", {"method": "tools/call"}, "paid", False),
+        ("/mcp", None, "paid", False),
+        ("/mcp/tools/call", {"method": "initialize"}, "paid", False),
+        ("/health/services", None, "paid", False),
+    ],
+)
+def test_request_skips_budget_checks_for_non_spending_requests(
+    route: str, request_body: Mapping[str, object] | None, model: str | None, expected: bool
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "free",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                },
+            },
+            {
+                "model_name": "paid",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "input_cost_per_token": 1,
+                    "output_cost_per_token": 1,
+                },
+            },
+        ]
+    )
+    assert (
+        request_skips_budget_checks(route=route, model=model, llm_router=router, request_body=request_body) is expected
+    )
 
 
 def _agent_model_ceiling_resolver(
