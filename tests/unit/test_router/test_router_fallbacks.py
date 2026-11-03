@@ -1321,3 +1321,42 @@ async def test_context_fallback_exhaustion_preserves_the_selected_chain(
     response: Final = await router.acompletion(model="primary", messages=[{"role": "user", "content": "long prompt"}])
     assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("primary", "ordered", "generic")
     assert response.choices[0].message.content == "generic answer"
+
+
+@pytest.mark.parametrize("sync_mode", (False, True))
+@pytest.mark.parametrize("context_error", (False, True))
+@pytest.mark.parametrize("backup_status", (429, 503))
+@pytest.mark.asyncio
+async def test_ordered_fallback_failures_preserve_the_original_context_error(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+    context_error: bool,
+    backup_status: int,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _context_fallback_precedence_router("unrelated", True)
+    original_message: Final = (
+        "This model's maximum context length is 10 tokens" if context_error else "primary unavailable"
+    )
+    backup_error: Final = litellm.RateLimitError if backup_status == 429 else litellm.ServiceUnavailableError
+    expected_error: Final = litellm.ContextWindowExceededError if context_error else backup_error
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(400 if context_error else 503, json={"error": {"message": original_message}}),
+            httpx.Response(backup_status, json={"error": {"message": "ordered deployment unavailable"}}),
+            httpx.Response(backup_status, json={"error": {"message": "generic deployment unavailable"}}),
+        )
+    )
+
+    request: Final = (
+        asyncio.to_thread(router.completion, model="primary", messages=[{"role": "user", "content": "long prompt"}])
+        if sync_mode
+        else router.acompletion(model="primary", messages=[{"role": "user", "content": "long prompt"}])
+    )
+    with pytest.raises(expected_error) as raised:
+        await request
+
+    assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("primary", "ordered", "generic")
+    assert raised.value.status_code == (400 if context_error else backup_status)
+    assert (original_message if context_error else "generic deployment unavailable") in str(raised.value)

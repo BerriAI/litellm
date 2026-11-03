@@ -9208,11 +9208,15 @@ class PythonCore(DeprecatedRouterMembers):
                         "original_model_group": original_model_group,
                     }
                 )
-                response = await run_async_fallback(
-                    *args,
-                    **input_kwargs,
-                )
-                return response
+                try:
+                    return await run_async_fallback(
+                        *args,
+                        **input_kwargs,
+                    )
+                except Exception:
+                    if isinstance(original_exception, litellm_exceptions.ContextWindowExceededError):
+                        raise original_exception
+                    raise
 
         # Weighted intra-group failover (simple-shuffle only); see _maybe_run_weighted_failover.
         if (
