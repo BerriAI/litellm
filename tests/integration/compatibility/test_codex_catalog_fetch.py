@@ -136,7 +136,7 @@ def test_a_release_openai_serves_is_fetched_from_openai_with_the_deployment_key_
 ) -> None:
     assert OPENAI_SLUG not in _vendored_slugs()
     with gateway.scenario() as scenario:
-        scenario.model(name=OPENAI_SLUG)
+        scenario.model(name=OPENAI_SLUG, api_base="https://api.openai.com/v1")
         listing: Final = _catalog_listing(gateway, OPENAI_VERSION, OPENAI_SLUG)
         expected: Final = {
             **_openai_entry(),
