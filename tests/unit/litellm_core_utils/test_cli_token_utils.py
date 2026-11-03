@@ -474,6 +474,21 @@ class TestGetLitellmGatewayApiKey:
         assert get_litellm_gateway_api_key(vault=secret_vault_factory(blob=_blob())) is None
 
 
+def test_sdk_read_does_not_migrate_credentials_when_the_store_cannot_be_locked(
+    isolated_home: Path,
+    secret_vault_factory: type[FakeSecretVault],
+) -> None:
+    path: Final = _write_legacy_file(isolated_home, timestamp=1000.0)
+    original: Final = path.read_bytes()
+    vault: Final = secret_vault_factory()
+    Path(cli_token_lock().lock_file).mkdir()
+
+    assert get_litellm_gateway_api_key(expected_base_url=SERVER, vault=vault) is None
+    assert path.read_bytes() == original
+    assert vault.reads == 0
+    assert vault.writes == []
+
+
 class TestSaveCliToken:
     def test_secret_goes_to_the_keychain_and_never_to_the_file(self, isolated_home, secret_vault_factory):
         vault = secret_vault_factory()

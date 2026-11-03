@@ -146,10 +146,7 @@ def get_cli_token_file_path() -> str:
 
 
 def cli_token_lock() -> FileLock:
-    """One reentrant process lock for the metadata file and shared keychain entry.
-
-    Keep it beside the credential directory so a read-only directory still permits logout.
-    """
+    """Lock metadata and keychain operations beside the directory so read-only stores still allow logout."""
     directory: Final = Path(get_cli_token_file_path()).parent
     directory.parent.mkdir(parents=True, exist_ok=True)
     path: Final = directory.with_name(f"{directory.name}-token.lock")
@@ -395,13 +392,17 @@ def get_litellm_gateway_api_key(
         >>>         base_url="https://your-proxy.com/v1"
         >>>     )
     """
-    record: Final = _read_token_file()
-    if record is None:
+    try:
+        with cli_token_lock():
+            record: Final = _read_token_file()
+            if record is None:
+                return None
+            if expected_base_url is not None and record.base_url != expected_base_url.rstrip("/"):
+                return None
+            resolved: Final = _resolve_secret(record, vault)
+            return None if resolved is None else resolved.key
+    except (OSError, Timeout):
         return None
-    if expected_base_url is not None and record.base_url != expected_base_url.rstrip("/"):
-        return None
-    resolved: Final = _resolve_secret(record, vault)
-    return None if resolved is None else resolved.key
 
 
 def is_cli_token_fresh(
