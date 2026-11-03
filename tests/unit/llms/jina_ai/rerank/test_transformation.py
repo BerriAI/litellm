@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -112,3 +113,29 @@ def test_transform_rerank_response_shape_errors_do_not_echo_the_payload():
         _transform({"results": [["leaked document text"]]})
 
     assert "leaked document text" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("base_path", "expected_path"),
+    (
+        ("/gateway", "/gateway/v1/rerank"),
+        ("/gateway/", "/gateway/v1/rerank"),
+        ("/gateway/v1", "/gateway/v1/rerank"),
+        ("/gateway/v1/", "/gateway/v1/rerank"),
+        ("/gateway/v1/rerank", "/gateway/v1/rerank"),
+        ("/gateway/v1/rerank/", "/gateway/v1/rerank"),
+        ("", "/v1/rerank"),
+    ),
+)
+def test_custom_rerank_base_preserves_gateway_path_and_query(base_path: str, expected_path: str) -> None:
+    base: Final = httpx.URL("https://gateway.example").copy_with(path=base_path, query=b"tenant=test")
+    result: Final = httpx.URL(JinaAIRerankConfig().get_complete_url(str(base), model="test-model"))
+    assert result.path == expected_path
+    assert result.query == base.query
+    assert result.host == base.host
+
+
+def test_custom_rerank_base_keeps_encoded_gateway_path_segments() -> None:
+    base: Final = "https://gateway.example/gateway%2Ftenant?tenant=a%2Fb"
+    result: Final = httpx.URL(JinaAIRerankConfig().get_complete_url(base, model="test-model"))
+    assert result.raw_path == b"/gateway%2Ftenant/v1/rerank?tenant=a%2Fb"
