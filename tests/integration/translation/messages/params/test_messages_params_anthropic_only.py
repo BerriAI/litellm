@@ -33,7 +33,17 @@ GPT_5_4_ANTHROPIC_ONLY_PARAMS_REFUSED_TEST_CASE: Final = replace(
     mock_provider_status_code=400,
     mock_provider_response=AZURE_UNRECOGNIZED_ARGUMENT,
     expected_litellm_status_code=400,
-    expected_litellm_response={},
+    expected_litellm_response={
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": (
+                "litellm.BadRequestError: AzureException BadRequestError - "
+                "Unrecognized request argument supplied: inference_geo\n\n"
+                "LiteLLM: model group 'azure/gpt-5.4' failed with the error above. No fallback was attempted."
+            ),
+        },
+    },
 )
 
 CASES: Final = (
