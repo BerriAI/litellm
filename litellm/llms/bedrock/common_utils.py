@@ -13,7 +13,7 @@ import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, get_args
 
 from typing_extensions import (
     ReadOnly,
@@ -32,6 +32,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
+from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.common_utils import schema_property_count
@@ -1488,6 +1489,14 @@ def get_bedrock_base_model(model: str) -> str:
         return model.split("/", 1)[1]
 
     return model
+
+
+def bedrock_vendor_model_name(model: str) -> str:
+    """The name the model's vendor publishes it under, without Bedrock's routing, region and vendor
+    prefixes: ``bedrock/us.openai.gpt-6.1-sol`` and ``us-east-1/openai.gpt-6.1-sol`` are ``gpt-6.1-sol``."""
+    base: Final = get_bedrock_base_model(model)
+    vendor, separator, name = base.partition(".")
+    return name if separator and vendor in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL) else base
 
 
 def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | None) -> bool:

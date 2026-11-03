@@ -1,5 +1,6 @@
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -7,10 +8,10 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.llm_cost_calc.utils import get_service_tier_cost_key
 from litellm.proxy.common_utils.codex_model_catalog import (
     CODEX_CATALOG_BYTE_LIMIT,
     CodexCatalogRow,
-    CodexServiceTier,
     CodexStockModel,
     CodexStockUpgrade,
     bundled_codex_models,
@@ -18,7 +19,9 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     codex_model_list_body,
     codex_models_response_json,
     configured_service_tiers,
+    deployment_capabilities,
 )
+from litellm.proxy.common_utils.codex_model_translation import CodexDeploymentCapabilities, CodexServiceTier
 
 _PROMPT = "base prompt"
 _FAST = {"id": "priority", "name": "Fast", "description": "2x speed, increased usage"}
@@ -85,8 +88,8 @@ def test_body_is_exactly_codex_models_response():
 
 
 def test_unknown_model_entry_carries_every_field_codex_deserializes_without_a_default():
-    """Codex 0.159.3 `codex-rs/protocol/src/openai_models.rs` ModelInfo, the fields with no
-    `#[serde(default)]`, read on 2026-10-01; `base_instructions` because its `ModelsResponse`
+    """Codex 0.166.0 `codex-rs/protocol/src/openai_models.rs` ModelInfo, the fields with no
+    `#[serde(default)]`, read on 2026-11-02; `base_instructions` because its `ModelsResponse`
     decoder rejects an entry with neither it nor `model_messages.instructions_template`."""
     (entry,) = _models(_row("gpt-6-astra"))
 
@@ -116,25 +119,14 @@ def test_unknown_model_entry_carries_every_field_codex_deserializes_without_a_de
     assert (entry["context_window"], entry["base_instructions"], entry["service_tiers"]) == (272000, _PROMPT, [])
 
 
-_NO_REASONING_BODY = (
-    '{"models":[{"slug":"gpt-6-astra","display_name":"gpt-6-astra","description":null,'
-    '"supported_reasoning_levels":[],"shell_type":"unified_exec","visibility":"list","supported_in_api":true,'
-    '"priority":0,"service_tiers":[],"availability_nux":null,"upgrade":null,"support_verbosity":false,'
-    '"supports_reasoning_summaries":false,"supports_parallel_tool_calls":false,"default_verbosity":null,'
-    '"apply_patch_tool_type":null,"truncation_policy":{"mode":"bytes","limit":10000},'
-    '"experimental_supported_tools":[],"context_window":272000,"base_instructions":"base prompt",'
-    '"supports_search_tool":false}]}'
-)
-
-
 @pytest.mark.parametrize("efforts", [None, ()], ids=["unknown", "non-reasoning"])
 @pytest.mark.parametrize("client_version", ["0.165.0", "0.120.0", None])
-def test_unknown_or_no_reasoning_efforts_keep_the_fallback_entry_byte_for_byte(efforts, client_version):
-    """The body an unknown model got before reasoning efforts reached the catalog."""
-    assert (
-        _body(_row("gpt-6-astra", supported_reasoning_efforts=efforts), client_version=client_version).json
-        == _NO_REASONING_BODY
-    )
+def test_unknown_or_no_reasoning_efforts_offer_no_reasoning_level(efforts, client_version):
+    """Codex reads a missing default level as `none`, so an entry offering no level sends no effort."""
+    (entry,) = _models(_row("mystery", supported_reasoning_efforts=efforts), client_version=client_version)
+
+    assert entry["supported_reasoning_levels"] == []
+    assert "default_reasoning_level" not in entry
 
 
 _ABSENT = object()
@@ -724,7 +716,7 @@ def test_catalog_rows_read_the_router_by_each_entry_lookup_id():
 
     rows = codex_catalog_rows(listing, (("gpt-5.5-team", "model_name_team-1_c0ffee"), ("plain", "plain")), router)
 
-    assert rows == (
+    assert tuple(replace(row, deployment_capabilities=()) for row in rows) == (
         CodexCatalogRow(
             id="gpt-5.5-team",
             mode="chat",
@@ -746,6 +738,9 @@ def test_catalog_rows_read_the_router_by_each_entry_lookup_id():
             configured_max_input_tokens=(None,),
         ),
     )
+    catalog_window = GetModelCostMap.loaded_model_cost_map()["gpt-5.5"]["max_input_tokens"]
+    assert [deployment.max_input_tokens for deployment in rows[0].deployment_capabilities] == [catalog_window] * 2
+    assert rows[1].deployment_capabilities == (CodexDeploymentCapabilities(),)
 
 
 def test_catalog_rows_read_an_alias_off_its_target_under_the_alias_name():
@@ -765,7 +760,8 @@ def test_catalog_rows_read_an_alias_off_its_target_under_the_alias_name():
 
     (row,) = codex_catalog_rows(listing, (("gpt-6", "gpt-6"),), router)
 
-    assert row == CodexCatalogRow(
+    assert len(row.deployment_capabilities) == 1
+    assert replace(row, deployment_capabilities=()) == CodexCatalogRow(
         id="gpt-6",
         mode="chat",
         max_input_tokens=9,
@@ -944,3 +940,211 @@ def test_codex_tool_search_is_offered_off_the_route_and_model_info_and_only_when
         "mixed": False,
     }
     assert models[0]["context_window"] == 1000000
+
+
+_SOL_SLUG: Final = next(
+    slug for slug, model in bundled_codex_models().items() if model.default_service_tier is not None
+)
+
+
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        "bedrock/us.openai.{slug}",
+        "bedrock/global.openai.{slug}",
+        "bedrock/converse/us.openai.{slug}",
+        "bedrock/openai.{slug}",
+        "bedrock_mantle/openai.{slug}",
+        "bedrock_mantle/us-east-1/openai.{slug}",
+        "openai/{slug}",
+        "{slug}",
+    ],
+)
+@pytest.mark.parametrize("slug", sorted(bundled_codex_models()))
+def test_a_model_codex_knows_keeps_codexs_entry_under_any_provider_prefix(upstream: str, slug: str) -> None:
+    stock: Final = bundled_codex_models()[slug].model_dump(mode="json")
+
+    (entry,) = json.loads(
+        codex_models_response_json(
+            (_row("team-model", upstream_model=upstream.format(slug=slug)),), byte_limit=None
+        ).json
+    )["models"]
+
+    assert entry["model_messages"] == stock["model_messages"]
+    assert entry["supported_reasoning_levels"] == stock["supported_reasoning_levels"]
+
+
+@pytest.mark.parametrize(
+    "upstream",
+    ["bedrock/us.openai.{slug}-mini", "bedrock/us.meta.{slug}x", "bedrock_mantle/openai.{slug}.1", "{slug}-0"],
+)
+def test_a_model_whose_name_only_starts_like_one_codex_knows_gets_a_translated_entry(upstream: str) -> None:
+    (entry,) = json.loads(
+        codex_models_response_json(
+            (_row("team-model", upstream_model=upstream.format(slug=_SOL_SLUG)),), instructions=_PROMPT
+        ).json
+    )["models"]
+
+    assert "model_messages" not in entry and entry["base_instructions"] == _PROMPT
+
+
+def _listing(*names: str, max_input_tokens: int | None = None) -> tuple[dict[str, object], ...]:
+    return tuple(
+        {
+            "id": name,
+            "object": "model",
+            "created": 0,
+            "owned_by": "x",
+            "mode": "chat",
+            "max_input_tokens": max_input_tokens,
+        }
+        for name in names
+    )
+
+
+def _served(router: litellm.Router, *names: str, team_id: str | None = None, **listing: int) -> dict[str, dict]:
+    body: Final = codex_model_list_body(
+        _listing(*names, **listing), tuple((name, name) for name in names), router, team_id, client_version="0.166.0"
+    )
+    return {entry["slug"]: entry for entry in json.loads(body)["models"]}
+
+
+def _vllm(name: str, host: str, **model_info: object) -> dict[str, object]:
+    return {
+        "model_name": name,
+        "litellm_params": {"model": f"hosted_vllm/coder-{host}", "api_base": f"https://{host}.example/v1"},
+        "model_info": model_info,
+    }
+
+
+def test_a_text_only_deployment_takes_images_off_the_name_and_a_silent_one_does_not() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            _vllm("mixed", "h0", supports_vision=True),
+            _vllm("mixed", "h1", supports_vision=False),
+            _vllm("vision-and-silent", "h2", supports_vision=True),
+            _vllm("vision-and-silent", "h3"),
+        ]
+    )
+
+    served: Final = _served(router, "mixed", "vision-and-silent")
+
+    assert served["mixed"]["input_modalities"] == ["text"]
+    assert served["vision-and-silent"]["input_modalities"] == ["text", "image"]
+
+
+def test_a_silent_deployment_does_not_vote_against_tool_calls_but_one_without_them_does() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            _vllm("tools-and-silent", "h4", supports_function_calling=True),
+            _vllm("tools-and-silent", "h5"),
+            _vllm("tools-and-none", "h6", supports_function_calling=True),
+            _vllm("tools-and-none", "h7", supports_function_calling=False),
+        ]
+    )
+
+    served: Final = _served(router, "tools-and-silent", "tools-and-none")
+
+    assert served["tools-and-silent"]["apply_patch_tool_type"] == "freeform"
+    assert served["tools-and-none"]["apply_patch_tool_type"] is None
+
+
+def test_a_mixed_group_takes_the_smallest_window_any_deployment_declares() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            _vllm("mixed", "h8", max_input_tokens=200_000),
+            _vllm("mixed", "h9", max_input_tokens=128_000, supports_vision=True),
+            _vllm("mixed", "h10"),
+            _vllm("undeclared", "h11"),
+        ]
+    )
+
+    served: Final = _served(router, "mixed", "undeclared", max_input_tokens=200_000)
+
+    assert served["mixed"]["context_window"] == 128_000
+    assert served["undeclared"]["context_window"] == 200_000
+
+
+def test_a_claude_like_deployment_gets_codexs_coding_setup() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            _vllm(
+                "claude-like",
+                "h-claude",
+                max_input_tokens=1_000_000,
+                supports_vision=True,
+                supports_function_calling=True,
+                supports_reasoning=True,
+            ),
+            _vllm("plain", "h12"),
+        ]
+    )
+
+    served: Final = _served(router, "claude-like", "plain")
+
+    claude_like: Final = served["claude-like"]
+    assert claude_like["apply_patch_tool_type"] == "freeform"
+    assert claude_like["truncation_policy"] == {"mode": "tokens", "limit": 10000}
+    assert claude_like["supports_reasoning_summary_parameter"] is True
+    assert claude_like["context_window"] == 1_000_000
+    assert (served["plain"]["apply_patch_tool_type"], served["plain"]["supports_reasoning_summary_parameter"]) == (
+        None,
+        False,
+    )
+
+
+def test_capabilities_are_read_only_off_the_deployments_the_key_team_routes_to() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            _vllm("coder", "h13", supports_vision=True),
+            _vllm("coder", "h14", supports_vision=False, team_id="team-2"),
+        ]
+    )
+
+    assert _served(router, "coder", team_id="team-1")["coder"]["input_modalities"] == ["text", "image"]
+    assert _served(router, "coder", team_id="team-2")["coder"]["input_modalities"] == ["text"]
+
+
+def _tier_fields(entry: Mapping[str, object]) -> tuple[object, object, object]:
+    return (entry["service_tiers"], entry.get("additional_speed_tiers"), entry.get("default_service_tier"))
+
+
+def test_codexs_own_tiers_stay_only_when_every_deployment_behind_the_name_prices_them() -> None:
+    stock: Final = bundled_codex_models()[_SOL_SLUG].model_dump(mode="json")
+    assert stock["service_tiers"] and stock["additional_speed_tiers"] and stock["default_service_tier"]
+    priority_price: Final = {"input_cost_per_token_priority": 1e-05}
+
+    def upstream(host: str) -> dict[str, str]:
+        return {"model": f"hosted_vllm/{_SOL_SLUG}", "api_base": f"https://{host}.example/v1"}
+
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "all-priced", "litellm_params": upstream("a"), "model_info": priority_price},
+            {"model_name": "all-priced", "litellm_params": upstream("b"), "model_info": priority_price},
+            {"model_name": "half-priced", "litellm_params": upstream("c"), "model_info": priority_price},
+            {"model_name": "half-priced", "litellm_params": upstream("d")},
+            {
+                "model_name": "configured",
+                "litellm_params": upstream("e"),
+                "model_info": {"service_tiers": ["priority"]},
+            },
+        ]
+    )
+
+    served: Final = _served(router, "all-priced", "half-priced", "configured")
+
+    assert _tier_fields(served["all-priced"]) == _tier_fields(stock)
+    assert _tier_fields(served["half-priced"]) == ([], [], None)
+    assert served["half-priced"]["model_messages"] == stock["model_messages"]
+    assert [tier["id"] for tier in served["configured"]["service_tiers"]] == ["priority"]
+
+
+
+def test_model_info_that_does_not_validate_declares_no_capability_but_keeps_its_prices() -> None:
+    priced: Final = get_service_tier_cost_key("input_cost_per_token", "priority")
+
+    capabilities: Final = deployment_capabilities(
+        {"supports_vision": "sometimes", "supports_function_calling": False, priced: 1e-05}, "odd"
+    )
+
+    assert capabilities == CodexDeploymentCapabilities(priced_service_tier_keys=frozenset({priced}))

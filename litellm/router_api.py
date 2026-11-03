@@ -156,6 +156,7 @@ GroupField: TypeAlias = Literal[
     "mode",
     "service_tiers",
     "max_input_tokens",
+    "deployment_model_info",
     "token_limits",
     "listing_info",
 ]
@@ -871,6 +872,16 @@ class RouterRegistry:
         self,
         name: str,
         *,
+        field: Literal["deployment_model_info"],
+        include_hidden: bool = False,
+        team_id: str | None = None,
+    ) -> "tuple[ModelMapInfo | None, ...]": ...
+
+    @overload
+    def group(
+        self,
+        name: str,
+        *,
         field: Literal["token_limits"],
         include_hidden: bool = False,
         team_id: str | None = None,
@@ -904,6 +915,7 @@ class RouterRegistry:
           ``get_configured_token_limits``, ``get_model_listing_info``)
         - ``service_tiers``: (was ``get_configured_service_tiers``)
         - ``max_input_tokens``: each routable deployment's own ``model_info.max_input_tokens``
+        - ``deployment_model_info``: each routable deployment's model info, merged with the pricing map
         """
         r: Final = self._router
         if field == "info":
@@ -918,6 +930,8 @@ class RouterRegistry:
             return r._core_get_configured_service_tiers(name, team_id=team_id)
         if field == "max_input_tokens":
             return r._core_get_configured_max_input_tokens(name, team_id=team_id)
+        if field == "deployment_model_info":
+            return r._core_get_routable_deployment_model_info(name, team_id=team_id)
         if field == "token_limits":
             return r._core_get_configured_token_limits(name)
         if field == "listing_info":

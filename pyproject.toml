@@ -334,7 +334,7 @@ include = [
     "litellm/proxy/model_insights_tasks.json",
     "litellm/proxy/public_endpoints/whats_new.json",
     "litellm/proxy/common_utils/codex_base_instructions.md",
-    "litellm/proxy/common_utils/codex_bundled_models_0.159.3.json",
+    "litellm/proxy/common_utils/codex_bundled_models_0.166.0.json",
     { path = "model_prices_and_context_window.json", format = "sdist" },
 ]
 exclude = [

@@ -59,6 +59,7 @@ def patched_models(monkeypatch):
     router.get_configured_display_name = MagicMock(return_value=None)
     router.get_configured_service_tiers = MagicMock(return_value=())
     router.get_configured_max_input_tokens = MagicMock(return_value=())
+    router.get_routable_deployment_model_info = MagicMock(return_value=())
     router.get_model_group_info = MagicMock(return_value=None)
     router.get_search_tool_support = MagicMock(return_value=())
     route_entry_points_to_stubs(router)

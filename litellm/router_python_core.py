@@ -12740,6 +12740,26 @@ class PythonCore(DeprecatedRouterMembers):
         """
         return tuple(_search_tool_support(deployment) for deployment in self._routable_deployments(model_name, team_id))
 
+    def _core_get_routable_deployment_model_info(
+        self, model_name: str, team_id: str | None = None
+    ) -> tuple[ModelMapInfo | None, ...]:
+        """
+        The model info of each deployment a request from team_id to model_name
+        can route to (see _routable_deployments), read one deployment at a time
+        the way cost tracking reads it: the cost map entry of its upstream model
+        merged with its own model_info, None where neither is known. Unlike
+        get_model_group_info nothing is merged across deployments, so a caller
+        can tell a deployment that lacks a capability from one that says nothing.
+
+        Returns an empty tuple for wildcard-expanded or unknown names.
+        """
+        return tuple(
+            self._core_cached_deployment_model_info(deployment_id, deployment["litellm_params"]["model"])
+            if isinstance(deployment_id := _configured_model_info(deployment).get("id"), str)
+            else None
+            for deployment in self._routable_deployments(model_name, team_id)
+        )
+
     def _core_get_routable_upstream_model(self, model_name: str, team_id: str | None = None) -> str | None:
         """
         Return the `litellm_params.model` of the first deployment a request
