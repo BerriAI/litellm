@@ -1663,9 +1663,12 @@ class AmazonConverseConfig(BaseConfig):
             model, deployment_model
         ):
             return False
+        message_cache_points: Final = sum(map(AnthropicCacheControlHook.count_converse_cache_points, messages))
+        if message_cache_points == 0:
+            return False
         cache_points: Final = (
             sum(1 for block in system_content_blocks if "cachePoint" in block)
-            + sum(map(AnthropicCacheControlHook.count_converse_cache_points, messages))
+            + message_cache_points
             + self._tool_cache_points_on_the_wire(model, deployment_model, optional_params, litellm_params)
         )
         return cache_points <= MAX_CACHE_CONTROL_BLOCKS

@@ -1405,11 +1405,13 @@ _CLIENT_MARKED_CONVERSATION: Final = (
 )
 
 
-def _hook_output(model: str, **params: object) -> list[AllMessageValues]:
+def _hook_output(
+    model: str, points: tuple[Mapping[str, object], ...] = ({"location": "message", "index": -1},), **params: object
+) -> list[AllMessageValues]:
     _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
         model=model,
         messages=cast(list[AllMessageValues], copy.deepcopy(list(_CLIENT_MARKED_CONVERSATION))),
-        non_default_params={"cache_control_injection_points": [{"location": "message", "index": -1}], **params},
+        non_default_params={"cache_control_injection_points": list(points), **params},
         prompt_id=None,
         prompt_variables=None,
         dynamic_callback_params={},
@@ -1429,6 +1431,33 @@ def test_cache_control_injection_points_replace_client_prompt_cache_breakpoints_
     assert _marks_in(request["system"]) == 0
     assert [_marks_in(message) for message in request["messages"]] == [0, 0, 1]
     assert "prompt_cache_breakpoint" not in json.dumps(request)
+
+
+def test_cache_control_injection_points_replace_client_prompt_cache_breakpoints_on_a_flagged_bedrock_profile(
+    local_model_cost_map,
+):
+    from litellm import Router
+
+    arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-flagged"
+    Router(
+        model_list=[
+            {
+                "model_name": "claude-profile",
+                "litellm_params": {"model": f"bedrock/{arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": True},
+            }
+        ]
+    )
+
+    assert "prompt_cache_breakpoint" not in json.dumps(_hook_output(f"bedrock/{arn}"))
+
+
+def test_tool_config_injection_point_leaves_client_prompt_cache_breakpoints_on_claude():
+    processed: Final = _hook_output("anthropic/claude-sonnet-5-5", points=({"location": "tool_config"},))
+
+    assert [message["content"] for message in processed[:2]] == [
+        message["content"] for message in _CLIENT_MARKED_CONVERSATION[:2]
+    ]
 
 
 def test_cache_control_injection_points_keep_client_prompt_cache_breakpoints_for_a_model_that_reads_them():

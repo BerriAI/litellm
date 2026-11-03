@@ -550,6 +550,14 @@ def _builds_anthropic_messages(model: str, custom_llm_provider: str | None) -> b
     return isinstance(chat_config, AnthropicConfig) and not isinstance(chat_config, OpenAIGPTConfig)
 
 
+def _reads_prompt_cache_breakpoint_natively(model: str, custom_llm_provider: str | None) -> bool:
+    return (
+        supports_openai_prompt_cache_breakpoint(model, custom_llm_provider)
+        and (custom_llm_provider or _served_provider_for_model(model)) != "bedrock"
+        and not _builds_anthropic_messages(model, custom_llm_provider)
+    )
+
+
 def _custom_llm_provider(non_default_params: Mapping[str, object], point: Mapping[str, object]) -> str | None:
     provider: Final = non_default_params.get("custom_llm_provider") or point.get(CUSTOM_LLM_PROVIDER_STAMP)
     return provider if isinstance(provider, str) else None
@@ -772,7 +780,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
         processed_messages = copy.deepcopy(
             messages
-            if openai_dialect or supports_openai_prompt_cache_breakpoint(model, custom_llm_provider)
+            if openai_dialect
+            or not message_points
+            or _reads_prompt_cache_breakpoint_natively(model, custom_llm_provider)
             else [without_prompt_cache_breakpoints(message) for message in messages]
         )
         # A provisional message list defers every role-targeted point to the pass holding
