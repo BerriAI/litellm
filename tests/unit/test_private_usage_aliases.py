@@ -2991,20 +2991,6 @@ PROXY_ALIAS_CASES: Final = (
     (
         'litellm.proxy.db.db_spend_update_writer',
         'DBSpendUpdateWriter',
-        '_commit_daily_tag_spend_to_db',
-        'commit_daily_tag_spend_to_db',
-        False,
-    ),
-    (
-        'litellm.proxy.db.db_spend_update_writer',
-        'DBSpendUpdateWriter',
-        '_commit_daily_tag_spend_to_db_with_redis',
-        'commit_daily_tag_spend_to_db_with_redis',
-        False,
-    ),
-    (
-        'litellm.proxy.db.db_spend_update_writer',
-        'DBSpendUpdateWriter',
         '_handle_spend_update_failure',
         'handle_spend_update_failure',
         False,

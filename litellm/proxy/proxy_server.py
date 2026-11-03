@@ -77,7 +77,6 @@ from litellm.constants import (
     AWS_ERROR_TYPE_HEADER,
     BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME,
     BASE_MCP_ROUTE,
-    DAILY_TAG_SPEND_BATCH_MULTIPLIER,
     DEFAULT_MAX_RECURSE_DEPTH,
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
@@ -637,9 +636,6 @@ from litellm.proxy.credential_endpoints.endpoints import router as credential_ro
 from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
-from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
-    build_window_spend_transaction,
-)
 from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
@@ -1316,11 +1312,7 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
 
 
 async def _flush_spend_on_shutdown() -> None:
-    from litellm.proxy.utils import update_daily_tag_spend
-
     await flush_spend_counters_on_shutdown()
-    if prisma_client is not None:
-        await update_daily_tag_spend(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
     await _flush_spend_logs_queue_on_shutdown()
 
 
@@ -3751,9 +3743,6 @@ async def _increment_spend_counters_batched(
         duration: Final = (
             window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
         )
-        window_reset_at: Final = (
-            window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
-        )
         window_counter: Final = f"spend:{entity_type.value}:{entity_id}:window:{duration}"
         window_start: Final = get_budget_window_start(window)
         pending_window: Final = (
@@ -3768,16 +3757,6 @@ async def _increment_spend_counters_batched(
             if window_counter not in reserved_counter_keys
             else None
         )
-        if accounting_path != "ledger":
-            await _enqueue_window_spend_row_update(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                reset_at=window_reset_at,
-                window_duration=duration,
-                window_start=window_start,
-                increment=cost,
-                request_started_at=request_started_at,
-            )
         return pending_window
 
     async def _window_increments(
@@ -4163,55 +4142,6 @@ async def _prepare_spend_counter_increment(
             source_cache_key=source_cache_key,
         )
     return PendingSpendIncrement(counter_key=counter_key, increment=increment)
-
-
-async def _enqueue_window_spend_row_update(
-    entity_type: Litellm_EntityType,
-    entity_id: str,
-    reset_at: datetime | str | None,
-    window_duration: str,
-    window_start: datetime | None,
-    increment: float,
-    request_started_at: datetime | None,
-) -> None:
-    """Queue this request's cost against the LiteLLM_BudgetWindowSpend row for
-    the window, so enforcement can read a maintained total instead of
-    aggregating LiteLLM_SpendLogs.
-
-    request_started_at is this request's LiteLLM_SpendLogs startTime; the flush
-    stops the one-time seed there so a request its increment already covers is
-    not counted twice.
-
-    Enqueued even when the cache increment was skipped for a reserved counter:
-    the reservation only pre-charged the counter, and the row still owes the
-    actual cost.
-
-    Windows with no reset_at slide with wall clock, so their window_start moves
-    on every request and no single row can represent them. Those are left to
-    the read path's LiteLLM_SpendLogs fallback rather than rewritten per
-    request.
-    """
-    if window_start is None or not reset_at:
-        return
-    try:
-        await proxy_logging_obj.db_spend_update_writer.window_spend_update_queue.add_update(
-            build_window_spend_transaction(
-                entity_type=entity_type.value,
-                entity_id=entity_id,
-                window_duration=window_duration,
-                window_start=window_start,
-                spend=increment,
-                started_at=request_started_at,
-            )
-        )
-    except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback
-        verbose_proxy_logger.debug(
-            "Unable to enqueue budget window spend update for %s=%s window=%s: %s",
-            entity_type.value,
-            entity_id,
-            window_duration,
-            e,
-        )
 
 
 async def _prepare_window_spend_counter_increment(
@@ -11621,25 +11551,6 @@ class ProxyStartupEvent:
             id="commit_tool_discoveries_job",
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-        )
-
-        ### UPDATE DAILY TAG SPEND (separate scheduler job with longer interval) ###
-        ## Reduces QPS as there are more tags for a single request
-        tag_spend_update_interval: Final = int(batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER)
-        from litellm.proxy.utils import update_daily_tag_spend
-
-        scheduler.add_job(
-            update_daily_tag_spend,
-            "interval",
-            seconds=tag_spend_update_interval,
-            args=[prisma_client, proxy_logging_obj],
-            id="update_daily_tag_spend_job",
-            replace_existing=True,
-            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-        )
-        verbose_proxy_logger.info(
-            f"Tag spend update job scheduled at {tag_spend_update_interval}s interval "
-            f"({tag_spend_update_interval / batch_writing_interval:.1f}x main job interval)"
         )
 
         ### UPDATE GATEWAY REQUEST COUNTS (SGR) ###

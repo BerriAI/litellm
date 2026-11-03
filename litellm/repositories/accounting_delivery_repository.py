@@ -42,6 +42,7 @@ class _Delivery(BaseModel):
     request_id: str
     attempts: int
     previous_row: Mapping[str, object] | None = None
+    legacy_takeover: bool = False
 
 
 class _StoredRow(BaseModel):
@@ -54,6 +55,7 @@ class _StoredRow(BaseModel):
 class DeliveryProjection:
     row: Mapping[str, object]
     previous_row: Mapping[str, object] | None
+    legacy_takeover: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +77,7 @@ class DeliveryMetrics(BaseModel):
 _DELIVERIES: Final = TypeAdapter(tuple[_Delivery, ...])
 _ROWS: Final = TypeAdapter(tuple[_StoredRow, ...])
 _TIMEOUT: Final = timedelta(seconds=60)
-_CLAIM: Final = """SELECT request_id, attempts, previous_row FROM "LiteLLM_AccountingDelivery"
+_CLAIM: Final = """SELECT request_id, attempts, previous_row, legacy_takeover FROM "LiteLLM_AccountingDelivery"
 WHERE state = 'pending' AND next_attempt_at <= CURRENT_TIMESTAMP
   AND (attempts > 0) = $2::boolean
 ORDER BY next_attempt_at, request_id LIMIT $1::integer FOR UPDATE SKIP LOCKED"""
@@ -145,7 +147,10 @@ class AccountingDeliveryRepository:
                     raise ValueError("Pending delivery has no stored SpendLogs row")
                 await apply(
                     transaction,
-                    tuple(DeliveryProjection(rows[delivery.request_id], delivery.previous_row) for delivery in claimed),
+                    tuple(
+                        DeliveryProjection(rows[delivery.request_id], delivery.previous_row, delivery.legacy_takeover)
+                        for delivery in claimed
+                    ),
                 )
                 await transaction.execute_raw(_APPLIED, tuple(delivery.request_id for delivery in claimed))
             return DeliveryBatchResult(applied=len(claimed))

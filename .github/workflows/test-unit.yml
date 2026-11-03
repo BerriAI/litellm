@@ -617,7 +617,6 @@ jobs:
             test-path: |-
               tests/unit/proxy/db
               --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
-              --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py
               tests/unit/proxy/middleware
               --ignore=tests/unit/proxy/middleware/test_request_size_limit_middleware.py
               tests/unit/proxy/spend_tracking
@@ -898,7 +897,6 @@ jobs:
             test-path: |-
               tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py
               tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
-              tests/unit/proxy/db/test_update_daily_tag_spend.py
               tests/unit/proxy/test_db_schema_changes.py
               tests/unit/proxy/test_prisma_client_backoff_retry.py
               tests/unit/proxy/test_update_spend.py

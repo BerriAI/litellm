@@ -83,14 +83,10 @@ def capture_model_windows(enabled: bool) -> Generator[Callable[[], CapturedModel
         _MODEL_WINDOWS.reset(token)
 
 
-async def _queue_on_proxy_spend_writer(transaction: WindowSpendTransaction) -> None:
-    from litellm.proxy.proxy_server import proxy_logging_obj
-
+async def _capture_window_spend(transaction: WindowSpendTransaction) -> None:
     captured: Final = _MODEL_WINDOWS.get()
     if captured is not None:
         _MODEL_WINDOWS.set((*captured, transaction))
-        return
-    await proxy_logging_obj.db_spend_update_writer.window_spend_update_queue.add_update(transaction)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +98,7 @@ class DatabaseSharedWindows:
     def __init__(
         self,
         prisma_client_source: PrismaClientSource = _proxy_prisma_client,
-        sink: WindowSpendSink = _queue_on_proxy_spend_writer,
+        sink: WindowSpendSink = _capture_window_spend,
         read_ttl_seconds: int = _READ_TTL_SECONDS,
     ) -> None:
         self._prisma_client_source = prisma_client_source

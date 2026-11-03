@@ -224,5 +224,5 @@ async def test_captured_database_windows_are_isolated_between_requests(monkeypat
     assert tuple(row["entity_id"] for row in first) == ("first",)
     assert tuple(row["entity_id"] for row in second) == ("second",)
     await windows.add("legacy", "1d", WINDOW_START.timestamp(), 0.5)
-    queued = await writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
-    assert tuple((row["entity_id"], row["spend"]) for row in queued) == (("legacy", 0.5),)
+    with capture_model_windows(True) as next_request:
+        assert next_request().transactions == ()

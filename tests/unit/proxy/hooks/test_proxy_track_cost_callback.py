@@ -2839,10 +2839,18 @@ async def test_a_failure_spend_row_lands_in_the_key_budget_window_as_of_the_requ
     it already logged from being counted twice."""
     from litellm.proxy.proxy_server import proxy_logging_obj
 
-    window_queue: Final = proxy_logging_obj.db_spend_update_writer.window_spend_update_queue
-    await window_queue.flush_and_get_aggregated_window_spend_transactions()
-    key_cache: Final = DualCache()
+    from litellm.proxy.utils import PrismaClient
+    from litellm.accounting.projection import project
+
+    client = PrismaClient(database_url="postgresql://unused", proxy_logging_obj=proxy_logging_obj)
+    client.spend_log_transactions = []
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.disable_spend_logs", False)
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    key_cache: Final = UserApiKeyCache()
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", key_cache)
+    await key_cache.async_set_cache("team_id:team-1", {"team_id": "team-1", "budget_limits": []})
     request_start: Final = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
     reset_at: Final = request_start + timedelta(days=10)
     await key_cache.async_set_cache(
@@ -2862,10 +2870,8 @@ async def test_a_failure_spend_row_lands_in_the_key_budget_window_as_of_the_requ
         },
     )
 
-    assert [
-        (row["entity_type"], row["entity_id"], row["spend"], row["started_at"])
-        for row in await window_queue.flush_and_get_aggregated_window_spend_transactions()
-    ] == [("key", "hashed-key", pytest.approx(0.125), "2026-10-20T12:00:00.000000")]
+    windows = [item for row in client.spend_log_transactions for item in project(row) if item.table == "LiteLLM_BudgetWindowSpend"]
+    assert [(dict(item.key)["entity_type"], dict(item.key)["entity_id"], dict(item.increments)["spend"], dict(item.values)["started_at"]) for item in windows] == [("key", "hashed-key", pytest.approx(0.125), request_start.isoformat())]
 
 
 @pytest.mark.asyncio

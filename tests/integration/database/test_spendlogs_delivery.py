@@ -38,6 +38,7 @@ def delivery_database(request: pytest.FixtureRequest) -> Iterator[psycopg.Connec
             updated_at timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
         )""")
         connection.execute((_MIGRATIONS / "20261103010000_spendlogs_accounting_delivery/migration.sql").read_text())
+        connection.execute((_MIGRATIONS / "20261103020000_spendlogs_ledger_cutover/migration.sql").read_text())
         yield connection
 
 
@@ -254,7 +255,7 @@ async def test_batch_takeover_preserves_pending_work_or_queues_difference(
 
 
 @pytest.mark.asyncio
-async def test_legacy_batch_takeover_stays_legacy_across_flag_change(
+async def test_legacy_batch_takeover_creates_a_full_projection_receipt(
     delivery_database: psycopg.Connection[tuple[object, ...]],
     delivery_client: Prisma,
 ) -> None:
@@ -273,7 +274,7 @@ async def test_legacy_batch_takeover_stays_legacy_across_flag_change(
     result: Final = await repository.take_over_batch({**initial, "spend": 0.5, "accounting_path": "ledger"})
     assert result.charged
     assert result.accounting_path == "legacy"
-    assert delivery_database.execute('SELECT COUNT(*) FROM "LiteLLM_AccountingDelivery"').fetchone() == (0,)
+    assert delivery_database.execute('SELECT legacy_takeover, previous_row FROM "LiteLLM_AccountingDelivery"').fetchone() == (True, None)
     assert delivery_database.execute('SELECT spend, accounting_path FROM "LiteLLM_SpendLogs"').fetchone() == (
         0.5,
         "legacy",
@@ -402,28 +403,16 @@ async def test_batch_takeover_waits_for_worker_then_applies_only_difference(
     assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (1.0,)
 
 
-def test_downgrade_requires_drained_buffers_disabled_writers_and_no_unsettled_rows(
-    delivery_database: psycopg.Connection[tuple[object, ...]],
-) -> None:
+def test_cutover_ends_the_downgrade_window_even_when_operator_attestations_are_supplied():
     import subprocess
     import sys
 
-    url = urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{delivery_database.info.dbname}"))
-    command = [sys.executable, "scripts/check_spendlogs_ledger_downgrade.py"]
-    environment = {**os.environ, "DATABASE_URL": url}
-    assert subprocess.run(command, env=environment, capture_output=True).returncode == 1
-    assert (
-        subprocess.run(command + ["--all-writers-ledger-disabled"], env=environment, capture_output=True).returncode
-        == 1
+    blocked = subprocess.run(
+        [sys.executable, "-I", "scripts/check_spendlogs_ledger_downgrade.py", "--all-writers-ledger-disabled", "--ledger-buffers-drained"],
+        capture_output=True, text=True,
     )
-    confirmed = command + ["--all-writers-ledger-disabled", "--ledger-buffers-drained"]
-    _insert(delivery_database, (_row("pending"), _row("parked")))
-    delivery_database.execute("UPDATE \"LiteLLM_AccountingDelivery\" SET state='parked' WHERE request_id='parked'")
-    blocked = subprocess.run(confirmed, env=environment, capture_output=True, text=True)
-    assert blocked.returncode == 1 and "1 pending and 1 parked" in blocked.stdout, blocked.stderr
-    delivery_database.execute("UPDATE \"LiteLLM_AccountingDelivery\" SET state='applied'")
-    passed = subprocess.run(confirmed, env=environment, capture_output=True, text=True)
-    assert passed.returncode == 0 and "no pending or parked" in passed.stdout, passed.stderr
+    assert blocked.returncode == 1
+    assert "cutover ended the rollback window" in blocked.stdout
 
 
 @pytest.mark.parametrize("delivery_database", ["public", "ledger_tenant"], indirect=True)
@@ -460,3 +449,15 @@ def test_delivery_migration_rejects_unsettled_old_receipts(state):
         connection.execute("ROLLBACK")
         assert connection.execute('SELECT event_id, state::text FROM "LiteLLM_AccountingDelivery"').fetchall() == [("old-event", state)]
         assert connection.execute("SELECT count(*) FROM information_schema.columns WHERE table_name='LiteLLM_SpendLogs' AND column_name='accounting_path'").fetchone() == (0,)
+
+
+@pytest.mark.parametrize("delivery_database", ["public", "ledger_tenant"], indirect=True)
+def test_cutover_migration_replay_preserves_takeover_marker(delivery_database):
+    _insert(delivery_database, (_row("legacy-batch"),))
+    delivery_database.execute('UPDATE "LiteLLM_AccountingDelivery" SET legacy_takeover=true')
+    before = delivery_database.execute('SELECT * FROM "LiteLLM_AccountingDelivery"').fetchall()
+    migration = (_MIGRATIONS / "20261103020000_spendlogs_ledger_cutover/migration.sql").read_text()
+    delivery_database.execute(migration)
+    delivery_database.execute(migration)
+    assert delivery_database.execute('SELECT * FROM "LiteLLM_AccountingDelivery"').fetchall() == before
+    assert delivery_database.execute('SELECT legacy_takeover FROM "LiteLLM_AccountingDelivery"').fetchone() == (True,)

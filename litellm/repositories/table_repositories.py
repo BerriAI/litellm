@@ -239,6 +239,12 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
                     row["request_id"],
                     safe_dumps(old, non_finite_as_null=True),
                 )
+            if path == "legacy":
+                await transaction.execute_raw(
+                    'INSERT INTO "LiteLLM_AccountingDelivery" (request_id, legacy_takeover) VALUES ($1, true) '
+                    "ON CONFLICT (request_id) DO NOTHING",
+                    row["request_id"],
+                )
             return BatchTakeover(True, path)
 
 

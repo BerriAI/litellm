@@ -1,0 +1,3800 @@
+{
+  "baseline_sha": "efbdc5add87c02de9f053d4e4e09b2627fe66279",
+  "cases": {
+    "test_baseline_correction_order_preserves_frozen_request_savings[after]": "d2f59bb15e95",
+    "test_baseline_correction_order_preserves_frozen_request_savings[before]": "d2f59bb15e95",
+    "test_destination_failure_rolls_back_all_earlier_updates_before_retry[LiteLLM_AgentsTable]": "276a9456fad1",
+    "test_destination_failure_rolls_back_all_earlier_updates_before_retry[LiteLLM_EndUserTable]": "276a9456fad1",
+    "test_destination_failure_rolls_back_all_earlier_updates_before_retry[LiteLLM_OrganizationMembership]": "276a9456fad1",
+    "test_destination_failure_rolls_back_all_earlier_updates_before_retry[LiteLLM_OrganizationTable]": "276a9456fad1",
+    "test_destination_failure_rolls_back_all_earlier_updates_before_retry[LiteLLM_ProjectTable]": "276a9456fad1",
+    "test_destination_failure_rolls_back_all_earlier_updates_before_retry[LiteLLM_TeamMembership]": "276a9456fad1",
+    "test_destination_failure_rolls_back_all_earlier_updates_before_retry[LiteLLM_TeamTable]": "276a9456fad1",
+    "test_destination_failure_rolls_back_all_earlier_updates_before_retry[LiteLLM_UserTable]": "276a9456fad1",
+    "test_destination_failure_rolls_back_all_earlier_updates_before_retry[LiteLLM_VerificationToken]": "276a9456fad1",
+    "test_fallback_charges_only_groups_declared_by_the_served_deployment": "d6da4c4dd83a",
+    "test_missing_organization_matches_legacy_daily_rollups[full]": "7beabefa0a16",
+    "test_missing_organization_matches_legacy_daily_rollups[lean]": "7beabefa0a16",
+    "test_missing_organization_matches_legacy_daily_rollups[stripped]": "7beabefa0a16",
+    "test_pending_delivery_after_reset_matches_queued_legacy_spend[global]": "fe3941df20ee",
+    "test_pending_delivery_after_reset_matches_queued_legacy_spend[key]": "7b7c19602985",
+    "test_pending_delivery_after_reset_matches_queued_legacy_spend[scheduled]": "bb4069daf9cb",
+    "test_pending_delivery_after_reset_matches_queued_legacy_spend[team_member]": "d89db3c3086b",
+    "test_pending_delivery_after_reset_matches_queued_legacy_spend[window_rollover]": "332104391cbf",
+    "test_stored_ledger_matches_real_legacy_database_updates[full-failure-None-0.25]": "665f9754723d",
+    "test_stored_ledger_matches_real_legacy_database_updates[full-failure-billed_retry-0.25]": "59562f4cfe39",
+    "test_stored_ledger_matches_real_legacy_database_updates[full-success-None-0.0]": "14a13a51eb75",
+    "test_stored_ledger_matches_real_legacy_database_updates[full-success-None-0.25]": "276a9456fad1",
+    "test_stored_ledger_matches_real_legacy_database_updates[full-success-auto_router-0.25]": "cab0afe2220c",
+    "test_stored_ledger_matches_real_legacy_database_updates[lean-failure-None-0.25]": "665f9754723d",
+    "test_stored_ledger_matches_real_legacy_database_updates[lean-failure-billed_retry-0.25]": "59562f4cfe39",
+    "test_stored_ledger_matches_real_legacy_database_updates[lean-success-None-0.0]": "14a13a51eb75",
+    "test_stored_ledger_matches_real_legacy_database_updates[lean-success-None-0.25]": "276a9456fad1",
+    "test_stored_ledger_matches_real_legacy_database_updates[lean-success-auto_router-0.25]": "cab0afe2220c",
+    "test_stored_ledger_matches_real_legacy_database_updates[stripped-failure-None-0.25]": "665f9754723d",
+    "test_stored_ledger_matches_real_legacy_database_updates[stripped-failure-billed_retry-0.25]": "59562f4cfe39",
+    "test_stored_ledger_matches_real_legacy_database_updates[stripped-success-None-0.0]": "14a13a51eb75",
+    "test_stored_ledger_matches_real_legacy_database_updates[stripped-success-None-0.25]": "276a9456fad1",
+    "test_stored_ledger_matches_real_legacy_database_updates[stripped-success-auto_router-0.25]": "cab0afe2220c"
+  },
+  "snapshots": {
+    "14a13a51eb75": {
+      "LiteLLM_AgentsTable": [
+        {
+          "agent_id": "agent",
+          "spend": 0
+        }
+      ],
+      "LiteLLM_BudgetWindowSpend": [
+        {
+          "entity_id": "virtual_key_spend:key:ledger-test:1d",
+          "entity_type": "model_max_budget",
+          "spend": 0,
+          "window_duration": "1d",
+          "window_start": "2026-11-02T00:00:00"
+        }
+      ],
+      "LiteLLM_DailyAgentSpend": [
+        {
+          "agent_id": "agent",
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyEndUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "end_user_id": "end-user",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyGuardrailUsageUnits": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "cost": 0.02,
+          "date": "2026-11-02",
+          "guardrail_id": "guard",
+          "team_id": "team",
+          "units": 2,
+          "untracked_units": 0,
+          "usage_unit": "text"
+        }
+      ],
+      "LiteLLM_DailyModelUsage": [
+        {
+          "completion_tokens": 5,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "failed_requests": 0,
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_tokens": 10,
+          "request_count": 1,
+          "spend": 0,
+          "successful_requests": 1,
+          "task_type": "uncategorized"
+        }
+      ],
+      "LiteLLM_DailyOrganizationSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "organization_id": "org",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTagSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0,
+          "successful_requests": 1,
+          "tag": "tag",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTeamSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "ptu_flat_cost": 0,
+          "spend": 0,
+          "successful_requests": 1,
+          "team_id": "team",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_EndUserTable": [
+        {
+          "spend": 0,
+          "user_id": "end-user"
+        }
+      ],
+      "LiteLLM_ModelAccessGroupBudgetTable": [
+        {
+          "access_group_name": "group",
+          "spend": 0
+        }
+      ],
+      "LiteLLM_OrganizationMembership": [
+        {
+          "organization_id": "org",
+          "spend": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_OrganizationTable": [
+        {
+          "organization_id": "org",
+          "spend": 0
+        }
+      ],
+      "LiteLLM_ProjectTable": [
+        {
+          "project_id": "project",
+          "spend": 0,
+          "team_id": null
+        }
+      ],
+      "LiteLLM_TagTable": [
+        {
+          "spend": 0,
+          "tag_name": "tag"
+        }
+      ],
+      "LiteLLM_TeamMembership": [
+        {
+          "spend": 0,
+          "team_id": "team",
+          "total_spend": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_TeamTable": [
+        {
+          "organization_id": null,
+          "spend": 0,
+          "team_id": "team"
+        }
+      ],
+      "LiteLLM_UserTable": [
+        {
+          "organization_id": null,
+          "spend": 0,
+          "team_id": null,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_VerificationToken": [
+        {
+          "agent_id": null,
+          "organization_id": null,
+          "project_id": null,
+          "spend": 0,
+          "team_id": null,
+          "token": "key",
+          "total_spend": 0,
+          "user_id": null
+        }
+      ]
+    },
+    "276a9456fad1": {
+      "LiteLLM_AgentsTable": [
+        {
+          "agent_id": "agent",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_BudgetWindowSpend": [
+        {
+          "entity_id": "key",
+          "entity_type": "key",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "team",
+          "entity_type": "team",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "virtual_key_spend:key:ledger-test:1d",
+          "entity_type": "model_max_budget",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-02T00:00:00"
+        }
+      ],
+      "LiteLLM_DailyAgentSpend": [
+        {
+          "agent_id": "agent",
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyEndUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "end_user_id": "end-user",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyGuardrailUsageUnits": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "cost": 0.02,
+          "date": "2026-11-02",
+          "guardrail_id": "guard",
+          "team_id": "team",
+          "units": 2,
+          "untracked_units": 0,
+          "usage_unit": "text"
+        }
+      ],
+      "LiteLLM_DailyModelUsage": [
+        {
+          "completion_tokens": 5,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "failed_requests": 0,
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_tokens": 10,
+          "request_count": 1,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "task_type": "uncategorized"
+        }
+      ],
+      "LiteLLM_DailyOrganizationSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "organization_id": "org",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTagSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "tag": "tag",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTeamSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "ptu_flat_cost": 0,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "team_id": "team",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_EndUserTable": [
+        {
+          "spend": 0.25,
+          "user_id": "end-user"
+        }
+      ],
+      "LiteLLM_ModelAccessGroupBudgetTable": [
+        {
+          "access_group_name": "group",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_OrganizationMembership": [
+        {
+          "organization_id": "org",
+          "spend": 0.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_OrganizationTable": [
+        {
+          "organization_id": "org",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_ProjectTable": [
+        {
+          "project_id": "project",
+          "spend": 0.25,
+          "team_id": null
+        }
+      ],
+      "LiteLLM_TagTable": [
+        {
+          "spend": 0.25,
+          "tag_name": "tag"
+        }
+      ],
+      "LiteLLM_TeamMembership": [
+        {
+          "spend": 0.25,
+          "team_id": "team",
+          "total_spend": 0.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_TeamTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": "team"
+        }
+      ],
+      "LiteLLM_UserTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_VerificationToken": [
+        {
+          "agent_id": null,
+          "organization_id": null,
+          "project_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "token": "key",
+          "total_spend": 0.25,
+          "user_id": null
+        }
+      ]
+    },
+    "332104391cbf": {
+      "LiteLLM_AgentsTable": [
+        {
+          "agent_id": "agent",
+          "spend": 5.25
+        }
+      ],
+      "LiteLLM_BudgetWindowSpend": [
+        {
+          "entity_id": "key",
+          "entity_type": "key",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "team",
+          "entity_type": "team",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "virtual_key_spend:key:ledger-test:1d",
+          "entity_type": "model_max_budget",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-04T00:00:00"
+        }
+      ],
+      "LiteLLM_DailyAgentSpend": [
+        {
+          "agent_id": "agent",
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyEndUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "end_user_id": "end-user",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyGuardrailUsageUnits": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "cost": 0.02,
+          "date": "2026-11-02",
+          "guardrail_id": "guard",
+          "team_id": "team",
+          "units": 2,
+          "untracked_units": 0,
+          "usage_unit": "text"
+        }
+      ],
+      "LiteLLM_DailyModelUsage": [
+        {
+          "completion_tokens": 5,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "failed_requests": 0,
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_tokens": 10,
+          "request_count": 1,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "task_type": "uncategorized"
+        }
+      ],
+      "LiteLLM_DailyOrganizationSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "organization_id": "org",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTagSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "tag": "tag",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTeamSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "ptu_flat_cost": 0,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "team_id": "team",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_EndUserTable": [
+        {
+          "spend": 5.25,
+          "user_id": "end-user"
+        }
+      ],
+      "LiteLLM_ModelAccessGroupBudgetTable": [
+        {
+          "access_group_name": "group",
+          "spend": 5.25
+        }
+      ],
+      "LiteLLM_OrganizationMembership": [
+        {
+          "organization_id": "org",
+          "spend": 5.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_OrganizationTable": [
+        {
+          "organization_id": "org",
+          "spend": 5.25
+        }
+      ],
+      "LiteLLM_ProjectTable": [
+        {
+          "project_id": "project",
+          "spend": 5.25,
+          "team_id": null
+        }
+      ],
+      "LiteLLM_TagTable": [
+        {
+          "spend": 5.25,
+          "tag_name": "tag"
+        }
+      ],
+      "LiteLLM_TeamMembership": [
+        {
+          "spend": 5.25,
+          "team_id": "team",
+          "total_spend": 5.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_TeamTable": [
+        {
+          "organization_id": null,
+          "spend": 5.25,
+          "team_id": "team"
+        }
+      ],
+      "LiteLLM_UserTable": [
+        {
+          "organization_id": null,
+          "spend": 5.25,
+          "team_id": null,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_VerificationToken": [
+        {
+          "agent_id": null,
+          "organization_id": null,
+          "project_id": null,
+          "spend": 5.25,
+          "team_id": null,
+          "token": "key",
+          "total_spend": 0.25,
+          "user_id": null
+        }
+      ]
+    },
+    "59562f4cfe39": {
+      "LiteLLM_AgentsTable": [
+        {
+          "agent_id": "agent",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_BudgetWindowSpend": [
+        {
+          "entity_id": "key",
+          "entity_type": "key",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "team",
+          "entity_type": "team",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        }
+      ],
+      "LiteLLM_DailyAgentSpend": [
+        {
+          "agent_id": "agent",
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 0,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "timed_requests": 0,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyEndUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 0,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "end_user_id": "end-user",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "timed_requests": 0,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyGuardrailUsageUnits": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "cost": 0.02,
+          "date": "2026-11-02",
+          "guardrail_id": "guard",
+          "team_id": "team",
+          "units": 2,
+          "untracked_units": 0,
+          "usage_unit": "text"
+        }
+      ],
+      "LiteLLM_DailyModelUsage": [
+        {
+          "completion_tokens": 5,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "failed_requests": 1,
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_tokens": 10,
+          "request_count": 1,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "task_type": "uncategorized"
+        }
+      ],
+      "LiteLLM_DailyOrganizationSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 0,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "organization_id": "org",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "timed_requests": 0,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTagSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 0,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "tag": "tag",
+          "timed_requests": 0,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTeamSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 0,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "ptu_flat_cost": 0,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "team_id": "team",
+          "timed_requests": 0,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 0,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "timed_requests": 0,
+          "total_response_time_ms": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_EndUserTable": [
+        {
+          "spend": 0.25,
+          "user_id": "end-user"
+        }
+      ],
+      "LiteLLM_ModelAccessGroupBudgetTable": [
+        {
+          "access_group_name": "group",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_OrganizationMembership": [
+        {
+          "organization_id": "org",
+          "spend": 0.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_OrganizationTable": [
+        {
+          "organization_id": "org",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_ProjectTable": [
+        {
+          "project_id": "project",
+          "spend": 0.25,
+          "team_id": null
+        }
+      ],
+      "LiteLLM_TagTable": [
+        {
+          "spend": 0.25,
+          "tag_name": "tag"
+        }
+      ],
+      "LiteLLM_TeamMembership": [
+        {
+          "spend": 0.25,
+          "team_id": "team",
+          "total_spend": 0.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_TeamTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": "team"
+        }
+      ],
+      "LiteLLM_UserTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_VerificationToken": [
+        {
+          "agent_id": null,
+          "organization_id": null,
+          "project_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "token": "key",
+          "total_spend": 0.25,
+          "user_id": null
+        }
+      ]
+    },
+    "665f9754723d": {
+      "LiteLLM_AgentsTable": [
+        {
+          "agent_id": "agent",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_BudgetWindowSpend": [
+        {
+          "entity_id": "key",
+          "entity_type": "key",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "team",
+          "entity_type": "team",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        }
+      ],
+      "LiteLLM_DailyAgentSpend": [
+        {
+          "agent_id": "agent",
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 1,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "timed_requests": 0,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyEndUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "end_user_id": "end-user",
+          "endpoint": "/chat/completions",
+          "failed_requests": 1,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "timed_requests": 0,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyGuardrailUsageUnits": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "cost": 0.02,
+          "date": "2026-11-02",
+          "guardrail_id": "guard",
+          "team_id": "team",
+          "units": 2,
+          "untracked_units": 0,
+          "usage_unit": "text"
+        }
+      ],
+      "LiteLLM_DailyModelUsage": [
+        {
+          "completion_tokens": 5,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "failed_requests": 1,
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_tokens": 10,
+          "request_count": 1,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "task_type": "uncategorized"
+        }
+      ],
+      "LiteLLM_DailyOrganizationSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 1,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "organization_id": "org",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "timed_requests": 0,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTagSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 1,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "tag": "tag",
+          "timed_requests": 0,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTeamSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 1,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "ptu_flat_cost": 0,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "team_id": "team",
+          "timed_requests": 0,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 1,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "timed_requests": 0,
+          "total_response_time_ms": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_EndUserTable": [
+        {
+          "spend": 0.25,
+          "user_id": "end-user"
+        }
+      ],
+      "LiteLLM_ModelAccessGroupBudgetTable": [
+        {
+          "access_group_name": "group",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_OrganizationMembership": [
+        {
+          "organization_id": "org",
+          "spend": 0.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_OrganizationTable": [
+        {
+          "organization_id": "org",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_ProjectTable": [
+        {
+          "project_id": "project",
+          "spend": 0.25,
+          "team_id": null
+        }
+      ],
+      "LiteLLM_TagTable": [
+        {
+          "spend": 0.25,
+          "tag_name": "tag"
+        }
+      ],
+      "LiteLLM_TeamMembership": [
+        {
+          "spend": 0.25,
+          "team_id": "team",
+          "total_spend": 0.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_TeamTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": "team"
+        }
+      ],
+      "LiteLLM_UserTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_VerificationToken": [
+        {
+          "agent_id": null,
+          "organization_id": null,
+          "project_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "token": "key",
+          "total_spend": 0.25,
+          "user_id": null
+        }
+      ]
+    },
+    "7b7c19602985": {
+      "LiteLLM_AgentsTable": [
+        {
+          "agent_id": "agent",
+          "spend": 5.25
+        }
+      ],
+      "LiteLLM_BudgetWindowSpend": [
+        {
+          "entity_id": "key",
+          "entity_type": "key",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "team",
+          "entity_type": "team",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "virtual_key_spend:key:ledger-test:1d",
+          "entity_type": "model_max_budget",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-02T00:00:00"
+        }
+      ],
+      "LiteLLM_DailyAgentSpend": [
+        {
+          "agent_id": "agent",
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyEndUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "end_user_id": "end-user",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyGuardrailUsageUnits": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "cost": 0.02,
+          "date": "2026-11-02",
+          "guardrail_id": "guard",
+          "team_id": "team",
+          "units": 2,
+          "untracked_units": 0,
+          "usage_unit": "text"
+        }
+      ],
+      "LiteLLM_DailyModelUsage": [
+        {
+          "completion_tokens": 5,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "failed_requests": 0,
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_tokens": 10,
+          "request_count": 1,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "task_type": "uncategorized"
+        }
+      ],
+      "LiteLLM_DailyOrganizationSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "organization_id": "org",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTagSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "tag": "tag",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTeamSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "ptu_flat_cost": 0,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "team_id": "team",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_EndUserTable": [
+        {
+          "spend": 5.25,
+          "user_id": "end-user"
+        }
+      ],
+      "LiteLLM_ModelAccessGroupBudgetTable": [
+        {
+          "access_group_name": "group",
+          "spend": 5.25
+        }
+      ],
+      "LiteLLM_OrganizationMembership": [
+        {
+          "organization_id": "org",
+          "spend": 5.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_OrganizationTable": [
+        {
+          "organization_id": "org",
+          "spend": 5.25
+        }
+      ],
+      "LiteLLM_ProjectTable": [
+        {
+          "project_id": "project",
+          "spend": 5.25,
+          "team_id": null
+        }
+      ],
+      "LiteLLM_TagTable": [
+        {
+          "spend": 5.25,
+          "tag_name": "tag"
+        }
+      ],
+      "LiteLLM_TeamMembership": [
+        {
+          "spend": 5.25,
+          "team_id": "team",
+          "total_spend": 5.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_TeamTable": [
+        {
+          "organization_id": null,
+          "spend": 5.25,
+          "team_id": "team"
+        }
+      ],
+      "LiteLLM_UserTable": [
+        {
+          "organization_id": null,
+          "spend": 5.25,
+          "team_id": null,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_VerificationToken": [
+        {
+          "agent_id": null,
+          "organization_id": null,
+          "project_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "token": "key",
+          "total_spend": 0.25,
+          "user_id": null
+        }
+      ]
+    },
+    "7beabefa0a16": {
+      "LiteLLM_AgentsTable": [
+        {
+          "agent_id": "agent",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_BudgetWindowSpend": [
+        {
+          "entity_id": "key",
+          "entity_type": "key",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "team",
+          "entity_type": "team",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "virtual_key_spend:key:ledger-test:1d",
+          "entity_type": "model_max_budget",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-02T00:00:00"
+        }
+      ],
+      "LiteLLM_DailyAgentSpend": [
+        {
+          "agent_id": "agent",
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyEndUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "end_user_id": "end-user",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyGuardrailUsageUnits": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "cost": 0.02,
+          "date": "2026-11-02",
+          "guardrail_id": "guard",
+          "team_id": "team",
+          "units": 2,
+          "untracked_units": 0,
+          "usage_unit": "text"
+        }
+      ],
+      "LiteLLM_DailyModelUsage": [
+        {
+          "completion_tokens": 5,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "failed_requests": 0,
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_tokens": 10,
+          "request_count": 1,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "task_type": "uncategorized"
+        }
+      ],
+      "LiteLLM_DailyOrganizationSpend": [],
+      "LiteLLM_DailyTagSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "tag": "tag",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTeamSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "ptu_flat_cost": 0,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "team_id": "team",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_EndUserTable": [
+        {
+          "spend": 0.25,
+          "user_id": "end-user"
+        }
+      ],
+      "LiteLLM_ModelAccessGroupBudgetTable": [
+        {
+          "access_group_name": "group",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_OrganizationMembership": [
+        {
+          "organization_id": "org",
+          "spend": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_OrganizationTable": [
+        {
+          "organization_id": "org",
+          "spend": 0
+        }
+      ],
+      "LiteLLM_ProjectTable": [
+        {
+          "project_id": "project",
+          "spend": 0.25,
+          "team_id": null
+        }
+      ],
+      "LiteLLM_TagTable": [
+        {
+          "spend": 0.25,
+          "tag_name": "tag"
+        }
+      ],
+      "LiteLLM_TeamMembership": [
+        {
+          "spend": 0.25,
+          "team_id": "team",
+          "total_spend": 0.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_TeamTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": "team"
+        }
+      ],
+      "LiteLLM_UserTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_VerificationToken": [
+        {
+          "agent_id": null,
+          "organization_id": null,
+          "project_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "token": "key",
+          "total_spend": 0.25,
+          "user_id": null
+        }
+      ]
+    },
+    "bb4069daf9cb": {
+      "LiteLLM_AgentsTable": [
+        {
+          "agent_id": "agent",
+          "spend": 5.25
+        }
+      ],
+      "LiteLLM_BudgetWindowSpend": [
+        {
+          "entity_id": "key",
+          "entity_type": "key",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "team",
+          "entity_type": "team",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "virtual_key_spend:key:ledger-test:1d",
+          "entity_type": "model_max_budget",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-02T00:00:00"
+        }
+      ],
+      "LiteLLM_DailyAgentSpend": [
+        {
+          "agent_id": "agent",
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyEndUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "end_user_id": "end-user",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyGuardrailUsageUnits": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "cost": 0.02,
+          "date": "2026-11-02",
+          "guardrail_id": "guard",
+          "team_id": "team",
+          "units": 2,
+          "untracked_units": 0,
+          "usage_unit": "text"
+        }
+      ],
+      "LiteLLM_DailyModelUsage": [
+        {
+          "completion_tokens": 5,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "failed_requests": 0,
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_tokens": 10,
+          "request_count": 1,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "task_type": "uncategorized"
+        }
+      ],
+      "LiteLLM_DailyOrganizationSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "organization_id": "org",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTagSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "tag": "tag",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTeamSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "ptu_flat_cost": 0,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "team_id": "team",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_EndUserTable": [
+        {
+          "spend": 5.25,
+          "user_id": "end-user"
+        }
+      ],
+      "LiteLLM_ModelAccessGroupBudgetTable": [
+        {
+          "access_group_name": "group",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_OrganizationMembership": [
+        {
+          "organization_id": "org",
+          "spend": 5.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_OrganizationTable": [
+        {
+          "organization_id": "org",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_ProjectTable": [
+        {
+          "project_id": "project",
+          "spend": 5.25,
+          "team_id": null
+        }
+      ],
+      "LiteLLM_TagTable": [
+        {
+          "spend": 5.25,
+          "tag_name": "tag"
+        }
+      ],
+      "LiteLLM_TeamMembership": [
+        {
+          "spend": 5.25,
+          "team_id": "team",
+          "total_spend": 5.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_TeamTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": "team"
+        }
+      ],
+      "LiteLLM_UserTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_VerificationToken": [
+        {
+          "agent_id": null,
+          "organization_id": null,
+          "project_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "token": "key",
+          "total_spend": 0.25,
+          "user_id": null
+        }
+      ]
+    },
+    "cab0afe2220c": {
+      "LiteLLM_AgentsTable": [
+        {
+          "agent_id": "agent",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_BudgetWindowSpend": [
+        {
+          "entity_id": "key",
+          "entity_type": "key",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "team",
+          "entity_type": "team",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "virtual_key_spend:key:ledger-test:1d",
+          "entity_type": "model_max_budget",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-02T00:00:00"
+        }
+      ],
+      "LiteLLM_DailyAgentSpend": [
+        {
+          "agent_id": "agent",
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 0,
+          "autorouter_savings_spend": 0,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "timed_requests": 0,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyEndUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 0,
+          "autorouter_savings_spend": 0,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "end_user_id": "end-user",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "timed_requests": 0,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyGuardrailUsageUnits": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "cost": 0.02,
+          "date": "2026-11-02",
+          "guardrail_id": "guard",
+          "team_id": "team",
+          "units": 2,
+          "untracked_units": 0,
+          "usage_unit": "text"
+        }
+      ],
+      "LiteLLM_DailyModelUsage": [],
+      "LiteLLM_DailyOrganizationSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 0,
+          "autorouter_savings_spend": 0,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "organization_id": "org",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "timed_requests": 0,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTagSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 0,
+          "autorouter_savings_spend": 0,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "tag": "tag",
+          "timed_requests": 0,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTeamSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 0,
+          "autorouter_savings_spend": 0,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "ptu_flat_cost": 0,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "team_id": "team",
+          "timed_requests": 0,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 0,
+          "autorouter_savings_spend": 0,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 0,
+          "timed_requests": 0,
+          "total_response_time_ms": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_EndUserTable": [
+        {
+          "spend": 0.25,
+          "user_id": "end-user"
+        }
+      ],
+      "LiteLLM_ModelAccessGroupBudgetTable": [
+        {
+          "access_group_name": "group",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_OrganizationMembership": [
+        {
+          "organization_id": "org",
+          "spend": 0.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_OrganizationTable": [
+        {
+          "organization_id": "org",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_ProjectTable": [
+        {
+          "project_id": "project",
+          "spend": 0.25,
+          "team_id": null
+        }
+      ],
+      "LiteLLM_TagTable": [
+        {
+          "spend": 0.25,
+          "tag_name": "tag"
+        }
+      ],
+      "LiteLLM_TeamMembership": [
+        {
+          "spend": 0.25,
+          "team_id": "team",
+          "total_spend": 0.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_TeamTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": "team"
+        }
+      ],
+      "LiteLLM_UserTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_VerificationToken": [
+        {
+          "agent_id": null,
+          "organization_id": null,
+          "project_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "token": "key",
+          "total_spend": 0.25,
+          "user_id": null
+        }
+      ]
+    },
+    "d2f59bb15e95": {
+      "LiteLLM_AgentsTable": [
+        {
+          "agent_id": "agent",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_BudgetWindowSpend": [
+        {
+          "entity_id": "key",
+          "entity_type": "key",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "team",
+          "entity_type": "team",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "virtual_key_spend:key:ledger-test:1d",
+          "entity_type": "model_max_budget",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-02T00:00:00"
+        }
+      ],
+      "LiteLLM_DailyAgentSpend": [
+        {
+          "agent_id": "agent",
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.325,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyEndUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.325,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "end_user_id": "end-user",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyGuardrailUsageUnits": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "cost": 0.02,
+          "date": "2026-11-02",
+          "guardrail_id": "guard",
+          "team_id": "team",
+          "units": 2,
+          "untracked_units": 0,
+          "usage_unit": "text"
+        }
+      ],
+      "LiteLLM_DailyModelUsage": [
+        {
+          "completion_tokens": 5,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "failed_requests": 0,
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_tokens": 10,
+          "request_count": 1,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "task_type": "uncategorized"
+        }
+      ],
+      "LiteLLM_DailyOrganizationSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.325,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "organization_id": "org",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTagSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.325,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "tag": "tag",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTeamSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.325,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "ptu_flat_cost": 0,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "team_id": "team",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.325,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_EndUserTable": [
+        {
+          "spend": 0.25,
+          "user_id": "end-user"
+        }
+      ],
+      "LiteLLM_ModelAccessGroupBudgetTable": [
+        {
+          "access_group_name": "group",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_OrganizationMembership": [
+        {
+          "organization_id": "org",
+          "spend": 0.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_OrganizationTable": [
+        {
+          "organization_id": "org",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_ProjectTable": [
+        {
+          "project_id": "project",
+          "spend": 0.25,
+          "team_id": null
+        }
+      ],
+      "LiteLLM_TagTable": [
+        {
+          "spend": 0.25,
+          "tag_name": "tag"
+        }
+      ],
+      "LiteLLM_TeamMembership": [
+        {
+          "spend": 0.25,
+          "team_id": "team",
+          "total_spend": 0.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_TeamTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": "team"
+        }
+      ],
+      "LiteLLM_UserTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_VerificationToken": [
+        {
+          "agent_id": null,
+          "organization_id": null,
+          "project_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "token": "key",
+          "total_spend": 0.25,
+          "user_id": null
+        }
+      ]
+    },
+    "d6da4c4dd83a": {
+      "LiteLLM_AgentsTable": [
+        {
+          "agent_id": "agent",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_BudgetWindowSpend": [
+        {
+          "entity_id": "key",
+          "entity_type": "key",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "team",
+          "entity_type": "team",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "virtual_key_spend:key:ledger-test:1d",
+          "entity_type": "model_max_budget",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-02T00:00:00"
+        }
+      ],
+      "LiteLLM_DailyAgentSpend": [
+        {
+          "agent_id": "agent",
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyEndUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "end_user_id": "end-user",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyGuardrailUsageUnits": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "cost": 0.02,
+          "date": "2026-11-02",
+          "guardrail_id": "guard",
+          "team_id": "team",
+          "units": 2,
+          "untracked_units": 0,
+          "usage_unit": "text"
+        }
+      ],
+      "LiteLLM_DailyModelUsage": [
+        {
+          "completion_tokens": 5,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "failed_requests": 0,
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_tokens": 10,
+          "request_count": 1,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "task_type": "uncategorized"
+        }
+      ],
+      "LiteLLM_DailyOrganizationSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "organization_id": "org",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTagSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "tag": "tag",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTeamSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "ptu_flat_cost": 0,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "team_id": "team",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_EndUserTable": [
+        {
+          "spend": 0.25,
+          "user_id": "end-user"
+        }
+      ],
+      "LiteLLM_ModelAccessGroupBudgetTable": [
+        {
+          "access_group_name": "unserved-group",
+          "spend": 0
+        },
+        {
+          "access_group_name": "group",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_OrganizationMembership": [
+        {
+          "organization_id": "org",
+          "spend": 0.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_OrganizationTable": [
+        {
+          "organization_id": "org",
+          "spend": 0.25
+        }
+      ],
+      "LiteLLM_ProjectTable": [
+        {
+          "project_id": "project",
+          "spend": 0.25,
+          "team_id": null
+        }
+      ],
+      "LiteLLM_TagTable": [
+        {
+          "spend": 0.25,
+          "tag_name": "tag"
+        }
+      ],
+      "LiteLLM_TeamMembership": [
+        {
+          "spend": 0.25,
+          "team_id": "team",
+          "total_spend": 0.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_TeamTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": "team"
+        }
+      ],
+      "LiteLLM_UserTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_VerificationToken": [
+        {
+          "agent_id": null,
+          "organization_id": null,
+          "project_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "token": "key",
+          "total_spend": 0.25,
+          "user_id": null
+        }
+      ]
+    },
+    "d89db3c3086b": {
+      "LiteLLM_AgentsTable": [
+        {
+          "agent_id": "agent",
+          "spend": 5.25
+        }
+      ],
+      "LiteLLM_BudgetWindowSpend": [
+        {
+          "entity_id": "key",
+          "entity_type": "key",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "team",
+          "entity_type": "team",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "virtual_key_spend:key:ledger-test:1d",
+          "entity_type": "model_max_budget",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-02T00:00:00"
+        }
+      ],
+      "LiteLLM_DailyAgentSpend": [
+        {
+          "agent_id": "agent",
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyEndUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "end_user_id": "end-user",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyGuardrailUsageUnits": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "cost": 0.02,
+          "date": "2026-11-02",
+          "guardrail_id": "guard",
+          "team_id": "team",
+          "units": 2,
+          "untracked_units": 0,
+          "usage_unit": "text"
+        }
+      ],
+      "LiteLLM_DailyModelUsage": [
+        {
+          "completion_tokens": 5,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "failed_requests": 0,
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_tokens": 10,
+          "request_count": 1,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "task_type": "uncategorized"
+        }
+      ],
+      "LiteLLM_DailyOrganizationSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "organization_id": "org",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTagSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "tag": "tag",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTeamSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "ptu_flat_cost": 0,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "team_id": "team",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_EndUserTable": [
+        {
+          "spend": 5.25,
+          "user_id": "end-user"
+        }
+      ],
+      "LiteLLM_ModelAccessGroupBudgetTable": [
+        {
+          "access_group_name": "group",
+          "spend": 5.25
+        }
+      ],
+      "LiteLLM_OrganizationMembership": [
+        {
+          "organization_id": "org",
+          "spend": 5.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_OrganizationTable": [
+        {
+          "organization_id": "org",
+          "spend": 5.25
+        }
+      ],
+      "LiteLLM_ProjectTable": [
+        {
+          "project_id": "project",
+          "spend": 5.25,
+          "team_id": null
+        }
+      ],
+      "LiteLLM_TagTable": [
+        {
+          "spend": 5.25,
+          "tag_name": "tag"
+        }
+      ],
+      "LiteLLM_TeamMembership": [
+        {
+          "spend": 0.25,
+          "team_id": "team",
+          "total_spend": 5.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_TeamTable": [
+        {
+          "organization_id": null,
+          "spend": 5.25,
+          "team_id": "team"
+        }
+      ],
+      "LiteLLM_UserTable": [
+        {
+          "organization_id": null,
+          "spend": 5.25,
+          "team_id": null,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_VerificationToken": [
+        {
+          "agent_id": null,
+          "organization_id": null,
+          "project_id": null,
+          "spend": 5.25,
+          "team_id": null,
+          "token": "key",
+          "total_spend": 0.25,
+          "user_id": null
+        }
+      ]
+    },
+    "fe3941df20ee": {
+      "LiteLLM_AgentsTable": [
+        {
+          "agent_id": "agent",
+          "spend": 5.25
+        }
+      ],
+      "LiteLLM_BudgetWindowSpend": [
+        {
+          "entity_id": "key",
+          "entity_type": "key",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "team",
+          "entity_type": "team",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-03T00:00:00"
+        },
+        {
+          "entity_id": "virtual_key_spend:key:ledger-test:1d",
+          "entity_type": "model_max_budget",
+          "spend": 0.25,
+          "window_duration": "1d",
+          "window_start": "2026-11-02T00:00:00"
+        }
+      ],
+      "LiteLLM_DailyAgentSpend": [
+        {
+          "agent_id": "agent",
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyEndUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "end_user_id": "end-user",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyGuardrailUsageUnits": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "cost": 0.02,
+          "date": "2026-11-02",
+          "guardrail_id": "guard",
+          "team_id": "team",
+          "units": 2,
+          "untracked_units": 0,
+          "usage_unit": "text"
+        }
+      ],
+      "LiteLLM_DailyModelUsage": [
+        {
+          "completion_tokens": 5,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "failed_requests": 0,
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_tokens": 10,
+          "request_count": 1,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "task_type": "uncategorized"
+        }
+      ],
+      "LiteLLM_DailyOrganizationSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "organization_id": "org",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTagSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "tag": "tag",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyTeamSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "ptu_flat_cost": 0,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "team_id": "team",
+          "timed_requests": 1,
+          "total_response_time_ms": 0
+        }
+      ],
+      "LiteLLM_DailyUserSpend": [
+        {
+          "api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+          "api_requests": 1,
+          "autorouter_savings_spend": 0.125,
+          "cache_creation_input_tokens": 1,
+          "cache_read_input_tokens": 4,
+          "completion_tokens": 5,
+          "compression_saved_tokens": 10,
+          "compression_savings_spend": 0.02,
+          "custom_llm_provider": "openai",
+          "date": "2026-11-02",
+          "endpoint": "/chat/completions",
+          "failed_requests": 0,
+          "gateway_injected_caching_savings_spend": 0.005,
+          "mcp_namespaced_tool_name": "",
+          "model": "ledger-test",
+          "model_group": "ledger-test",
+          "prompt_caching_savings_spend": 0.005,
+          "prompt_tokens": 10,
+          "spend": 0.25,
+          "successful_requests": 1,
+          "timed_requests": 1,
+          "total_response_time_ms": 0,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_EndUserTable": [
+        {
+          "spend": 5.25,
+          "user_id": "end-user"
+        }
+      ],
+      "LiteLLM_ModelAccessGroupBudgetTable": [
+        {
+          "access_group_name": "group",
+          "spend": 5.25
+        }
+      ],
+      "LiteLLM_OrganizationMembership": [
+        {
+          "organization_id": "org",
+          "spend": 5.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_OrganizationTable": [
+        {
+          "organization_id": "org",
+          "spend": 5.25
+        }
+      ],
+      "LiteLLM_ProjectTable": [
+        {
+          "project_id": "project",
+          "spend": 5.25,
+          "team_id": null
+        }
+      ],
+      "LiteLLM_TagTable": [
+        {
+          "spend": 5.25,
+          "tag_name": "tag"
+        }
+      ],
+      "LiteLLM_TeamMembership": [
+        {
+          "spend": 5.25,
+          "team_id": "team",
+          "total_spend": 5.25,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_TeamTable": [
+        {
+          "organization_id": null,
+          "spend": 0.25,
+          "team_id": "team"
+        }
+      ],
+      "LiteLLM_UserTable": [
+        {
+          "organization_id": null,
+          "spend": 5.25,
+          "team_id": null,
+          "user_id": "user"
+        }
+      ],
+      "LiteLLM_VerificationToken": [
+        {
+          "agent_id": null,
+          "organization_id": null,
+          "project_id": null,
+          "spend": 0.25,
+          "team_id": null,
+          "token": "key",
+          "total_spend": 0.25,
+          "user_id": null
+        }
+      ]
+    }
+  }
+}

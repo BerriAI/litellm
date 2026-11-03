@@ -2,7 +2,6 @@
 
 Symbols pinned here:
   - ``update_spend``
-  - ``update_daily_tag_spend``
   - ``update_spend_logs_job``
   - ``_monitor_spend_logs_queue``
   - ``_raise_failed_update_spend_exception``
@@ -27,7 +26,6 @@ from litellm.proxy.utils import (
     raise_failed_update_spend_exception,
     drain_spend_logs_queue,
     recover_parked_spend_logs,
-    update_daily_tag_spend,
     update_spend,
     update_spend_logs_job,
 )
@@ -103,69 +101,10 @@ async def test_update_spend_handler_failure_propagates(
         )
 
 
-@pytest.mark.asyncio
-async def test_update_daily_tag_spend_redis_path_when_buffered(
-    mock_prisma_client: Any,
-) -> None:
-    proxy_logging = MagicMock()
-    writer = MagicMock()
-    proxy_logging.db_spend_update_writer = writer
-    writer.redis_update_buffer = MagicMock()
-    writer.redis_update_buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
-    writer.commit_daily_tag_spend_to_db_with_redis = AsyncMock()
-    writer.commit_daily_tag_spend_to_db = AsyncMock()
-
-    await update_daily_tag_spend(prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging)
-    redis_kwargs = writer.commit_daily_tag_spend_to_db_with_redis.await_args.kwargs
-    pinned = {
-        "redis_calls": writer.commit_daily_tag_spend_to_db_with_redis.await_count,
-        "direct_calls": writer.commit_daily_tag_spend_to_db.await_count,
-        "redis_kwargs_keys": sorted(redis_kwargs.keys()),
-        "redis_n_retries": redis_kwargs["n_retry_times"],
-    }
-    assert pinned == {
-        "redis_calls": 1,
-        "direct_calls": 0,
-        "redis_kwargs_keys": sorted(["prisma_client", "n_retry_times", "proxy_logging_obj"]),
-        "redis_n_retries": 3,
-    }
 
 
-@pytest.mark.asyncio
-async def test_update_daily_tag_spend_direct_path_when_no_redis(
-    mock_prisma_client: Any,
-) -> None:
-    proxy_logging = MagicMock()
-    writer = MagicMock()
-    proxy_logging.db_spend_update_writer = writer
-    writer.redis_update_buffer = MagicMock()
-    writer.redis_update_buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=False)
-    writer.commit_daily_tag_spend_to_db_with_redis = AsyncMock()
-    writer.commit_daily_tag_spend_to_db = AsyncMock()
-
-    await update_daily_tag_spend(prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging)
-    assert writer.commit_daily_tag_spend_to_db.await_count == 1
-    assert writer.commit_daily_tag_spend_to_db_with_redis.await_count == 0
 
 
-@pytest.mark.asyncio
-async def test_update_daily_tag_spend_logs_and_swallows_errors(
-    mock_prisma_client: Any,
-) -> None:
-    """A failure in the commit path is logged but not re-raised; this matches
-    the historical behavior of this site (see plain ``logger.error`` rather
-    than ``spend_log_error``).
-    """
-    proxy_logging = MagicMock()
-    proxy_logging.db_spend_update_writer = MagicMock()
-    proxy_logging.db_spend_update_writer.redis_update_buffer = MagicMock()
-    proxy_logging.db_spend_update_writer.redis_update_buffer.should_commit_spend_updates_to_redis = MagicMock(
-        return_value=False
-    )
-    proxy_logging.db_spend_update_writer.commit_daily_tag_spend_to_db = AsyncMock(
-        side_effect=RuntimeError("commit boom")
-    )
-    await update_daily_tag_spend(prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging)
 
 
 @pytest.mark.asyncio
@@ -213,31 +152,6 @@ async def test_update_spend_logs_job_drains_tool_queue_when_spend_queue_empty(
     assert mock_prisma_client.tool_usage_transactions == []
 
 
-@pytest.mark.asyncio
-async def test_update_spend_logs_job_drains_the_whole_model_usage_queue_in_one_run(
-    mock_prisma_client: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import litellm.proxy.db.model_usage_rollup as model_usage_mod
-    import litellm.proxy.db.spend_log_tool_index as tool_mod
-    import litellm.proxy.guardrails.usage_tracking as guard_mod
-
-    proxy_logging = MagicMock()
-    proxy_logging.failure_handler = AsyncMock()
-    queued = [MagicMock() for _ in range(25_000)]
-    mock_prisma_client.model_usage_transactions = list(queued)
-    monkeypatch.setattr(guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False)
-    monkeypatch.setattr(tool_mod, "flush_tool_usage_transactions", AsyncMock(), raising=False)
-    flush_stub = AsyncMock()
-    monkeypatch.setattr(model_usage_mod, "flush_model_usage_transactions", flush_stub, raising=False)
-
-    await update_spend_logs_job(
-        prisma_client=mock_prisma_client,
-        db_writer_client=None,
-        proxy_logging_obj=proxy_logging,
-    )
-
-    assert flush_stub.await_args.kwargs["transactions"] == queued
-    assert mock_prisma_client.model_usage_transactions == []
 
 
 @pytest.mark.asyncio
@@ -1070,8 +984,7 @@ async def test_tool_usage_flush_requeues_when_the_rollup_row_lock_times_out(
     gives its connection back instead of pinning it behind the holder, and its
     increments go back to the queue head for the next flush rather than being dropped.
     Unlike a full server, one contended row says nothing about the other writers, so the
-    job carries on: the model usage rollup still opens its own transaction and the
-    auto-router drain still runs."""
+    job carries on and the auto-router drain still runs."""
     mock_prisma_client.db.litellm_spendlogtoolindex.create_many = AsyncMock()
     rollup_batch = MagicMock()
     rollup_batch.__aenter__ = AsyncMock(return_value=MagicMock())
@@ -1080,7 +993,6 @@ async def test_tool_usage_flush_requeues_when_the_rollup_row_lock_times_out(
     mock_prisma_client.spend_log_transactions = []
     first, second = _tool_usage_transaction("r1"), _tool_usage_transaction("r2")
     mock_prisma_client.tool_usage_transactions = [first, second]
-    mock_prisma_client.model_usage_transactions = [_model_usage_transaction("gpt-4o")]
     mock_prisma_client.autorouter_turn_transactions = [MagicMock(name="autorouter_turn")]
 
     await update_spend_logs_job(
@@ -1093,21 +1005,9 @@ async def test_tool_usage_flush_requeues_when_the_rollup_row_lock_times_out(
         "rollup_transactions": mock_prisma_client.db.batch_.call_count,
         "queue_after": mock_prisma_client.tool_usage_transactions,
         "autorouter_queue_after": mock_prisma_client.autorouter_turn_transactions,
-    } == {"rollup_transactions": 2, "queue_after": [first, second], "autorouter_queue_after": []}
+    } == {"rollup_transactions": 1, "queue_after": [first, second], "autorouter_queue_after": []}
 
 
-def _model_usage_transaction(model: str) -> object:
-    from litellm.proxy.db.model_usage_rollup import ModelUsageKey, ModelUsageTransaction
-
-    return ModelUsageTransaction(
-        key=ModelUsageKey(
-            date="2026-10-03", model_group="gpt", model=model, custom_llm_provider="openai", task_type="chat"
-        ),
-        spend=0.001,
-        prompt_tokens=1,
-        completion_tokens=1,
-        successful=True,
-    )
 
 
 def _model_usage_batch_failing_with(error: Exception, mock_prisma_client: MagicMock) -> MagicMock:
@@ -1121,75 +1021,3 @@ def _model_usage_batch_failing_with(error: Exception, mock_prisma_client: MagicM
     rollup_batch.__aexit__ = AsyncMock(side_effect=error)
     mock_prisma_client.db.batch_ = MagicMock(return_value=rollup_batch)
     return rollup_batch
-
-
-@pytest.mark.asyncio
-async def test_model_usage_flush_requeues_and_carries_on_when_its_row_lock_times_out(
-    mock_prisma_client: MagicMock,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The DailyModelUsage rollup shares its rows across every pod exactly like the tool rollup.
-    A batch cancelled under ``lock_timeout`` never applied, so its transactions go back to the
-    queue head for the next flush instead of being dropped, and because only that rollup's row
-    was contended the job still drains the auto-router queue behind it."""
-    monkeypatch.setattr("litellm.proxy.db.model_usage_rollup.asyncio.sleep", AsyncMock(return_value=None))
-    _model_usage_batch_failing_with(_postgres_lock_timeout(), mock_prisma_client)
-    first, second = _model_usage_transaction("gpt-4o"), _model_usage_transaction("gpt-4o-mini")
-    mock_prisma_client.model_usage_transactions = [first, second]
-    mock_prisma_client.autorouter_turn_transactions = [MagicMock(name="autorouter_turn")]
-
-    await update_spend_logs_job(
-        prisma_client=mock_prisma_client,
-        db_writer_client=None,
-        proxy_logging_obj=MagicMock(),
-    )
-
-    assert {
-        "queue_after": mock_prisma_client.model_usage_transactions,
-        "autorouter_queue_after": mock_prisma_client.autorouter_turn_transactions,
-    } == {"queue_after": [first, second], "autorouter_queue_after": []}
-
-
-@pytest.mark.asyncio
-async def test_model_usage_flush_requeues_and_stops_the_job_when_postgres_is_out_of_connections(
-    mock_prisma_client: MagicMock,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A batch refused for want of a connection (53300) was never sent either, so it is kept, but
-    a full server will refuse the writers behind it too: the job stops there like the tool
-    rollup does, so the drain loop backs off instead of re-hitting the server."""
-    monkeypatch.setattr("litellm.proxy.db.model_usage_rollup.asyncio.sleep", AsyncMock(return_value=None))
-    _model_usage_batch_failing_with(_postgres_out_of_connections(), mock_prisma_client)
-    first, second = _model_usage_transaction("gpt-4o"), _model_usage_transaction("gpt-4o-mini")
-    mock_prisma_client.model_usage_transactions = [first, second]
-    mock_prisma_client.autorouter_turn_transactions = [MagicMock(name="autorouter_turn")]
-
-    with pytest.raises(Exception, match="too many clients already"):
-        await update_spend_logs_job(
-            prisma_client=mock_prisma_client,
-            db_writer_client=None,
-            proxy_logging_obj=MagicMock(),
-        )
-
-    assert {
-        "queue_after": mock_prisma_client.model_usage_transactions,
-        "autorouter_queue_after": len(mock_prisma_client.autorouter_turn_transactions),
-    } == {"queue_after": [first, second], "autorouter_queue_after": 1}
-
-
-@pytest.mark.asyncio
-async def test_model_usage_flush_still_drops_a_batch_that_may_have_applied(
-    mock_prisma_client: MagicMock,
-) -> None:
-    """Any other failure is ambiguous about whether the increments landed, so replaying it could
-    double-count: the batch is logged and dropped, and the job carries on."""
-    _model_usage_batch_failing_with(RuntimeError("engine lost mid-commit"), mock_prisma_client)
-    mock_prisma_client.model_usage_transactions = [_model_usage_transaction("gpt-4o")]
-
-    await update_spend_logs_job(
-        prisma_client=mock_prisma_client,
-        db_writer_client=None,
-        proxy_logging_obj=MagicMock(),
-    )
-
-    assert mock_prisma_client.model_usage_transactions == []

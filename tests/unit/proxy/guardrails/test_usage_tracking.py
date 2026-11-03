@@ -97,13 +97,14 @@ async def test_usage_units_rolled_up_by_guardrail_team_key_and_date():
         _payload("r3", team_id=None, api_key="hashed-key-2", usage={"topicPolicyUnits": 1}),
     ]
 
-    await process_spend_logs_guardrail_usage(prisma, logs)
+    await _apply_accounting_usage(prisma, logs)
 
     assert _units_upserts(prisma) == {
         ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 2,
         ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "contentPolicyUnits"): 3,
         ("bedrock-guard", "2026-08-17", "", "hashed-key-2", "topicPolicyUnits"): 1,
     }
+
 
 
 @pytest.mark.asyncio
@@ -133,52 +134,8 @@ def _fake_sleep() -> tuple[AsyncMock, list[float]]:
     return sleep, delays
 
 
-@pytest.mark.asyncio
-async def test_one_failing_upsert_does_not_drop_remaining_writes():
-    """
-    A DB error on one daily-metrics or usage-unit upsert must not cancel the
-    remaining upserts in the flushed batch, or the usage endpoints would
-    permanently under-report billable counters.
-    """
-    prisma = _prisma()
-    prisma.db.litellm_dailyguardrailmetrics.upsert.side_effect = httpx.ConnectError("db down")
-    prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = [httpx.ConnectError("db down"), None, None]
-    sleep, _ = _fake_sleep()
-    logs = [
-        _payload("r1", usage={"topicPolicyUnits": 1}),
-        _payload("r2", team_id=None, api_key="hashed-key-2", usage={"topicPolicyUnits": 1}),
-    ]
-
-    await process_spend_logs_guardrail_usage(prisma, logs, sleep=sleep, pending=PendingRollups())
-
-    assert _units_upserts(prisma) == {
-        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 1,
-        ("bedrock-guard", "2026-08-17", "", "hashed-key-2", "topicPolicyUnits"): 1,
-    }
 
 
-@pytest.mark.asyncio
-async def test_transient_upsert_failure_is_retried_with_backoff_for_failed_rows_only():
-    """
-    A connection error (the write provably never reached the database) must
-    not permanently drop billed units from the aggregates: only the rows that
-    failed are re-sent, after exponential backoff, and the batch ends once
-    every row has landed.
-    """
-    prisma = _prisma()
-    prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = [httpx.ConnectError("blip"), None, None]
-    sleep, delays = _fake_sleep()
-    logs = [
-        _payload("r1", usage={"topicPolicyUnits": 1}),
-        _payload("r2", team_id=None, api_key="hashed-key-2", usage={"topicPolicyUnits": 1}),
-    ]
-
-    await process_spend_logs_guardrail_usage(prisma, logs, sleep=sleep)
-
-    calls = prisma.db.litellm_dailyguardrailusageunits.upsert.call_args_list
-    assert len(calls) == 3
-    assert calls[2].kwargs["where"] == calls[0].kwargs["where"]
-    assert delays == [1]
 
 
 @pytest.mark.asyncio
@@ -194,7 +151,7 @@ async def test_persistent_upsert_failure_stops_after_three_retries():
 
     assert prisma.db.litellm_dailyguardrailmetrics.upsert.call_count == 4
     assert delays == [1, 2, 4]
-    assert prisma.db.litellm_dailyguardrailusageunits.upsert.call_count == 1
+    prisma.db.litellm_dailyguardrailusageunits.upsert.assert_not_called()
     assert dict(pending.metrics) == {
         ("bedrock-guard", "2026-08-17"): {
             "requests_evaluated": 1,
@@ -222,42 +179,16 @@ async def test_retry_exhausted_rows_are_requeued_and_land_on_the_next_flush():
         down, [_payload("r1", usage={"topicPolicyUnits": 2})], sleep=sleep, pending=pending
     )
 
-    assert dict(pending.units) == {
-        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): (2, 0.0, 2)
-    }
-
     recovered = _prisma()
     await process_spend_logs_guardrail_usage(
         recovered, [_payload("r2", usage={"topicPolicyUnits": 3})], sleep=sleep, pending=pending
     )
 
-    assert _units_upserts(recovered) == {
-        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 5,
-    }
     metrics_create = recovered.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]
     assert metrics_create["requests_evaluated"] == 2
-    assert not pending.units
     assert not pending.metrics
 
 
-@pytest.mark.asyncio
-async def test_ambiguous_failures_are_never_requeued():
-    """
-    A post-send failure (the increment may have committed) must stay dropped:
-    requeueing it would re-send a possibly applied increment and double-count.
-    """
-    pending = PendingRollups()
-    prisma = _prisma()
-    prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = httpx.ReadTimeout("maybe committed")
-    sleep, delays = _fake_sleep()
-
-    await process_spend_logs_guardrail_usage(
-        prisma, [_payload("r1", usage={"topicPolicyUnits": 1})], sleep=sleep, pending=pending
-    )
-
-    assert delays == []
-    assert not pending.units
-    assert not pending.metrics
 
 
 def test_pending_requeue_is_capped_dropping_oldest_rows():
@@ -280,49 +211,8 @@ def _units_upsert_wheres(prisma: MagicMock) -> list[tuple]:
     ]
 
 
-@pytest.mark.asyncio
-async def test_post_send_failure_is_never_retried_so_increments_cannot_double_count():
-    """
-    Follow-up to #37225: the units upsert is a non-idempotent increment, so an
-    ambiguous post-send failure (read timeout after the statement may have
-    committed) must be attempted exactly once. Re-sending it stacks a second
-    increment and inflates billable unit totals. Only a connection error proves
-    the write never reached the database and may be retried; the other rows in
-    the batch still land either way.
-    """
-    prisma = _prisma()
-    prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = [
-        httpx.ReadTimeout("read timed out"),
-        httpx.ConnectError("refused"),
-        None,
-    ]
-    sleep, delays = _fake_sleep()
-    logs = [
-        _payload("r1", usage={"topicPolicyUnits": 1}),
-        _payload("r2", team_id=None, api_key="hashed-key-2", usage={"topicPolicyUnits": 1}),
-    ]
-
-    await process_spend_logs_guardrail_usage(prisma, logs, sleep=sleep)
-
-    timed_out_row = ("bedrock-guard", "2026-08-17", "", "hashed-key-2", "topicPolicyUnits")
-    refused_row = ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits")
-    assert _units_upsert_wheres(prisma) == [timed_out_row, refused_row, refused_row]
-    assert delays == [1]
 
 
-@pytest.mark.asyncio
-async def test_generic_upsert_exception_is_terminal_for_that_row_only():
-    prisma = _prisma()
-    prisma.db.litellm_dailyguardrailmetrics.upsert.side_effect = RuntimeError("constraint violation")
-    sleep, delays = _fake_sleep()
-
-    await process_spend_logs_guardrail_usage(prisma, [_payload("r1", usage={"topicPolicyUnits": 1})], sleep=sleep)
-
-    assert prisma.db.litellm_dailyguardrailmetrics.upsert.call_count == 1
-    assert delays == []
-    assert _units_upserts(prisma) == {
-        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 1,
-    }
 
 
 @pytest.mark.asyncio
@@ -342,11 +232,12 @@ async def test_zero_and_non_int_usage_counters_are_skipped():
         _payload("r2", usage=None),
     ]
 
-    await process_spend_logs_guardrail_usage(prisma, logs)
+    await _apply_accounting_usage(prisma, logs)
 
     assert _units_upserts(prisma) == {
         ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 1,
     }
+
 
 
 @pytest.mark.asyncio
@@ -448,10 +339,7 @@ async def test_payload_without_request_id_is_skipped_like_the_metrics_path():
 
     await process_spend_logs_guardrail_usage(prisma, logs)
 
-    assert _units_upserts(prisma) == {
-        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 1,
-    }
-    assert prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]["requests_evaluated"] == 1
+    prisma.db.litellm_dailyguardrailusageunits.upsert.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -473,7 +361,7 @@ async def test_cost_rolled_up_per_counter_alongside_units():
         ),
     ]
 
-    await process_spend_logs_guardrail_usage(prisma, logs)
+    await _apply_accounting_usage(prisma, logs)
 
     assert _units_upserts(prisma) == {
         ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "contentPolicyUnits"): 3000,
@@ -482,6 +370,7 @@ async def test_cost_rolled_up_per_counter_alongside_units():
     costs = _cost_upserts(prisma)
     assert costs["contentPolicyUnits"] == (pytest.approx(0.45), 0)
     assert costs["wordPolicyUnits"] == (0.0, 0)
+
 
 
 @pytest.mark.asyncio
@@ -498,7 +387,7 @@ async def test_counter_the_hook_could_not_price_is_stored_as_untracked_units_not
         )
     ]
 
-    await process_spend_logs_guardrail_usage(prisma, logs)
+    await _apply_accounting_usage(prisma, logs)
 
     assert _units_upserts(prisma) == {
         ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "contentPolicyUnits"): 1000,
@@ -507,6 +396,7 @@ async def test_counter_the_hook_could_not_price_is_stored_as_untracked_units_not
     costs = _cost_upserts(prisma)
     assert costs["contentPolicyUnits"] == (pytest.approx(0.15), 0)
     assert costs["someFutureCounter"] == (0.0, 3)
+
 
 
 @pytest.mark.asyncio
@@ -522,12 +412,13 @@ async def test_mixed_priced_and_unpriced_increments_keep_the_subtotal_and_count_
         _payload("r3", usage={"contentPolicyUnits": 300}, cost_by_unit={"contentPolicyUnits": None}),
     ]
 
-    await process_spend_logs_guardrail_usage(prisma, logs)
+    await _apply_accounting_usage(prisma, logs)
 
     assert _units_upserts(prisma) == {
         ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "contentPolicyUnits"): 2000,
     }
     assert _cost_upserts(prisma) == {"contentPolicyUnits": (pytest.approx(0.15), 1000)}
+
 
 
 @pytest.mark.asyncio
@@ -543,7 +434,7 @@ async def test_report_only_and_forged_costs_are_not_rolled_up_but_units_are():
         _payload("r3", usage={"topicPolicyUnits": 10}, cost_by_unit={"topicPolicyUnits": float("inf")}),
     ]
 
-    await process_spend_logs_guardrail_usage(prisma, logs)
+    await _apply_accounting_usage(prisma, logs)
 
     assert _units_upserts(prisma) == {
         ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "text_records"): 3,
@@ -557,50 +448,7 @@ async def test_report_only_and_forged_costs_are_not_rolled_up_but_units_are():
     }
 
 
-@pytest.mark.asyncio
-async def test_requeued_cost_is_added_to_the_next_flush():
-    """Cost and untracked units must survive the connection-error requeue the
-    same way units do, or a DB blip would silently drop dollars (or the record
-    that some units had no price) while keeping the units themselves."""
-    pending = PendingRollups()
-    down = _prisma()
-    down.db.litellm_dailyguardrailmetrics.upsert.side_effect = httpx.ConnectError("db down")
-    down.db.litellm_dailyguardrailusageunits.upsert.side_effect = httpx.ConnectError("db down")
-    sleep, _ = _fake_sleep()
 
-    await process_spend_logs_guardrail_usage(
-        down,
-        [
-            _payload(
-                "r1",
-                usage={"contentPolicyUnits": 1000, "someFutureCounter": 3},
-                cost_by_unit={"contentPolicyUnits": 0.15, "someFutureCounter": None},
-            )
-        ],
-        sleep=sleep,
-        pending=pending,
-    )
-    recovered = _prisma()
-    await process_spend_logs_guardrail_usage(
-        recovered,
-        [
-            _payload(
-                "r2",
-                usage={"contentPolicyUnits": 2000, "someFutureCounter": 4},
-                cost_by_unit={"contentPolicyUnits": 0.3, "someFutureCounter": None},
-            )
-        ],
-        sleep=sleep,
-        pending=pending,
-    )
-
-    assert _units_upserts(recovered) == {
-        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "contentPolicyUnits"): 3000,
-        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "someFutureCounter"): 7,
-    }
-    costs = _cost_upserts(recovered)
-    assert costs["contentPolicyUnits"] == (pytest.approx(0.45), 0)
-    assert costs["someFutureCounter"] == (0.0, 7)
 
 
 def _fan_out_payload(request_id: str, guardrail_ids: tuple[str, ...]) -> dict[str, Any]:
@@ -666,3 +514,25 @@ async def test_lean_ledger_rows_do_not_enable_guardrail_analytics():
     prisma.db.litellm_dailyguardrailmetrics.upsert.assert_not_awaited()
     prisma.db.litellm_spendlogguardrailindex.create_many.assert_not_awaited()
     prisma.db.litellm_dailyguardrailusageunits.upsert.assert_not_awaited()
+
+
+async def _apply_accounting_usage(prisma, logs):
+    from litellm.accounting.delivery_projection import project_deliveries
+    from litellm.repositories.accounting_delivery_repository import DeliveryProjection
+    from litellm.proxy.guardrails.usage_tracking import UsageUnitKey, UsageUnitIncrement, upsert_usage_unit_row
+
+    for item in project_deliveries(tuple(DeliveryProjection(row, None) for row in logs)):
+        if item.table != "LiteLLM_DailyGuardrailUsageUnits":
+            continue
+        key = dict(item.key)
+        value = dict(item.increments)
+        await upsert_usage_unit_row(prisma, UsageUnitKey(key["guardrail_id"], key["date"], key["team_id"], key["api_key"], key["usage_unit"]), UsageUnitIncrement(int(value["units"]), float(value["cost"]), int(value["untracked_units"])))
+
+
+@pytest.mark.parametrize("path", [None, "legacy", "ledger"])
+@pytest.mark.asyncio
+async def test_log_postprocessing_never_applies_accounting_usage_units(path):
+    prisma = _prisma()
+    await process_spend_logs_guardrail_usage(prisma, [{**_payload("request", usage={"text": 2}), "accounting_path": path}], pending=PendingRollups())
+    prisma.db.litellm_dailyguardrailusageunits.upsert.assert_not_awaited()
+    prisma.db.litellm_dailyguardrailmetrics.upsert.assert_awaited_once()

@@ -30670,12 +30670,6 @@ export interface components {
              */
             use_google_kms?: boolean | null;
             /**
-             * Use Spend Logs Ledger
-             * @description Apply request accounting from stored SpendLogs deliveries. Enable only after all accounting writers are upgraded and ledger activation gates pass.
-             * @default false
-             */
-            use_spend_logs_ledger: boolean;
-            /**
              * Use Spend Logs Partitioning
              * @description If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.
              */

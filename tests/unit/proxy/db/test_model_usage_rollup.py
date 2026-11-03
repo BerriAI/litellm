@@ -1,4 +1,3 @@
-import asyncio
 import json
 from datetime import datetime, timezone
 from typing import Any
@@ -9,7 +8,6 @@ import pytest
 
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy.db import rollup_lock_timeout
-from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.model_usage_rollup import (
     ModelUsageKey,
     ModelUsageTransaction,
@@ -208,26 +206,6 @@ async def test_flush_does_not_retry_ambiguous_errors() -> None:
     prisma.db.batch_.assert_called_once()
 
 
-@pytest.mark.asyncio
-async def test_request_time_path_queues_usage_instead_of_writing_to_the_db() -> None:
-    prisma = MagicMock()
-    prisma.model_usage_transactions = []
-    prisma._model_usage_transactions_lock = asyncio.Lock()
-
-    await DBSpendUpdateWriter()._batch_database_updates(
-        response_cost=0.25,
-        user_id="u1",
-        hashed_token="t1",
-        team_id=None,
-        org_id=None,
-        end_user_id=None,
-        prisma_client=prisma,
-        litellm_proxy_budget_name=None,
-        payload=_payload(request_id="req-1"),
-    )
-
-    assert [transaction.key.model for transaction in prisma.model_usage_transactions] == ["openai/gpt-5.4-mini"]
-    prisma.db.litellm_dailymodelusage.upsert.assert_not_called()
 
 
 @pytest.mark.asyncio

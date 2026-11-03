@@ -2078,6 +2078,7 @@ model LiteLLM_AccountingDelivery {
   last_error      String?
   created_at      DateTime                 @default(now())
   previous_row    Json?
+  legacy_takeover Boolean                  @default(false)
 
   @@index([state, next_attempt_at])
   @@index([state, applied_at])

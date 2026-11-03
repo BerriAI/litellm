@@ -130,103 +130,6 @@ def test_projection_carries_windows_and_does_not_reprice_guardrails() -> None:
     }
 
 
-@pytest.mark.asyncio
-async def test_entity_projection_matches_real_request_queues(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.proxy import proxy_server
-    from litellm.responses.streaming_iterator import drain_logging_tasks
-
-    client: Final = PrismaClient(database_url="postgresql://unused", proxy_logging_obj=proxy_logging_obj)
-    monkeypatch.setattr(proxy_server, "prisma_client", client)
-    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
-    monkeypatch.setattr(client, "spend_log_transactions", [])
-    monkeypatch.setattr(client, "model_usage_transactions", [])
-    writer: Final = DBSpendUpdateWriter()
-    charged: Final = await writer.update_database(
-        token="sk-projection",
-        user_id="user",
-        end_user_id="end-user",
-        team_id="team",
-        org_id="org",
-        project_id="project",
-        kwargs={
-            "model": "projection-test",
-            "custom_llm_provider": "openai",
-            "call_type": "acompletion",
-            "litellm_call_id": "entity-request",
-            "agent_id": "agent",
-            "user": "end-user",
-            "litellm_params": {
-                "metadata": {
-                    "user_api_key": "sk-projection",
-                    "user_api_key_user_id": "user",
-                    "user_api_key_team_id": "team",
-                    "user_api_key_org_id": "org",
-                    "user_api_key_project_id": "project",
-                    "user_api_key_end_user_id": "end-user",
-                    "tags": ["tag", "tag"],
-                },
-                "user": "end-user",
-            },
-        },
-        completion_response=ModelResponse(
-            id="entity-request", model="projection-test", usage=Usage(prompt_tokens=10, completion_tokens=5)
-        ),
-        start_time=_NOW,
-        end_time=_NOW,
-        response_cost=0.25,
-    )
-    await drain_logging_tasks()
-    assert charged
-    assert len(client.spend_log_transactions) == 1
-    queued: Final = await writer.spend_update_queue.flush_all_updates_from_in_memory_queue()
-    row: Final = _FIELDS.validate_python(client.spend_log_transactions[0])
-    projected: Final = project(row)
-    legacy: Final = {(item["entity_type"].value, item["entity_id"]): item["response_cost"] for item in queued}
-    assert legacy[("key", proxy_server.hash_token("sk-projection"))] == next(
-        dict(item.increments)["spend"] for item in projected if item.table == "LiteLLM_VerificationToken"
-    )
-    for table, entity, identity in (
-        ("LiteLLM_UserTable", "user", "user"),
-        ("LiteLLM_TeamTable", "team", "team"),
-        ("LiteLLM_OrganizationTable", "organization", "org"),
-        ("LiteLLM_EndUserTable", "end_user", "end-user"),
-        ("LiteLLM_AgentsTable", "agent", "agent"),
-        ("LiteLLM_ProjectTable", "project", "project"),
-    ):
-        assert legacy[(entity, identity)] == next(
-            dict(item.increments)["spend"] for item in projected if item.table == table
-        )
-    assert sum(dict(item.increments)["spend"] for item in projected if item.table == "LiteLLM_TagTable") == sum(
-        item["response_cost"] or 0 for item in queued if item["entity_type"].value == "tag"
-    )
-
-    daily_queues: Final = (
-        ("LiteLLM_DailyUserSpend", writer.daily_spend_update_queue),
-        ("LiteLLM_DailyTeamSpend", writer.daily_team_spend_update_queue),
-        ("LiteLLM_DailyOrganizationSpend", writer.daily_org_spend_update_queue),
-        ("LiteLLM_DailyEndUserSpend", writer.daily_end_user_spend_update_queue),
-        ("LiteLLM_DailyAgentSpend", writer.daily_agent_spend_update_queue),
-        ("LiteLLM_DailyTagSpend", writer.daily_tag_spend_update_queue),
-    )
-    for table, queue in daily_queues:
-        transactions = await queue.flush_and_get_aggregated_daily_spend_update_transactions()
-        matching = tuple(item for item in projected if item.table == table)
-        assert matching, table
-        contribution = matching[0]
-        assert len(transactions) == 1
-        transaction = next(iter(transactions.values()))
-        assert dict(contribution.increments) == {name: transaction[name] for name, _ in contribution.increments}
-    assert len(client.model_usage_transactions) == 1
-    model: Final = client.model_usage_transactions[0]
-    model_projection: Final = next(item for item in projected if item.table == "LiteLLM_DailyModelUsage")
-    assert dict(model_projection.increments) == {
-        "spend": model.spend,
-        "prompt_tokens": model.prompt_tokens,
-        "completion_tokens": model.completion_tokens,
-        "request_count": int(model.counts_as_request),
-        "successful_requests": int(model.successful),
-        "failed_requests": int(not model.successful),
-    }
 
 
 @pytest.mark.parametrize("served_id", ["requested", "fallback", "missing"])
@@ -250,16 +153,12 @@ async def test_projection_preserves_fallback_narrowed_model_access_groups(served
         ]
     )
     attributed: Final = ("first-group", "second-group", "first-group")
-    writer: Final = DBSpendUpdateWriter()
-    client: Final = PrismaClient(database_url="postgresql://unused", proxy_logging_obj=proxy_logging_obj)
-    await writer._update_model_access_group_db(0.5, attributed, served_id, client, router)
-    queued: Final = await writer.spend_update_queue.flush_all_updates_from_in_memory_queue()
     frozen_groups: Final = debitable_model_access_groups(attributed, served_id, router)
     projected: Final = project(
         {"spend": 0.5, "metadata": json.dumps({"accounting_model_access_groups": frozen_groups})}
     )
     assert {dict(item.key)["access_group_name"]: dict(item.increments)["spend"] for item in projected} == {
-        item["entity_id"]: item["response_cost"] for item in queued
+        group: 0.5 for group in {"requested": ("first-group",), "fallback": ("second-group",), "missing": ("first-group", "second-group")}[served_id]
     }
     assert "unattributed" not in frozen_groups
 
@@ -337,3 +236,14 @@ def test_daily_organization_uses_frozen_charged_identity(organization_id: str | 
         assert len(daily) == 1
         assert dict(daily[0].key)["organization_id"] == organization_id
         assert dict(daily[0].increments)["spend"] == 0.25
+
+
+def test_legacy_takeover_applies_the_new_row_without_projecting_old_metadata():
+    from litellm.accounting.delivery_projection import project_deliveries
+    from litellm.repositories.accounting_delivery_repository import DeliveryProjection
+
+    new = {"request_id": "batch", "api_key": "key", "spend": 0.25}
+    old = {"request_id": "batch", "api_key": "old-key", "spend": 99, "metadata": {}}
+    contributions = project_deliveries((DeliveryProjection(new, old, legacy_takeover=True),))
+    assert contributions == project_deliveries((DeliveryProjection(new, None),))
+    assert [(dict(item.key)["token"], dict(item.increments)["spend"]) for item in contributions if item.table == "LiteLLM_VerificationToken"] == [("key", 0.25)]
