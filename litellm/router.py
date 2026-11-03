@@ -7710,7 +7710,7 @@ class Router(DeprecatedRouterMembers):
             if failures:
                 failure: Final = next((each for each in failures if create_may_already_exist(each)), failures[0])
                 if len(failures) < len(outcomes):
-                    raise CreatedOnSomeDeployments(failure) from failure
+                    raise failure from CreatedOnSomeDeployments(failure)
                 raise failure
             responses: Final = [outcome for outcome in outcomes if not isinstance(outcome, BaseException)]
 

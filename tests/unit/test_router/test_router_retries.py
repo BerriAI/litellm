@@ -1368,8 +1368,32 @@ async def test_an_upload_that_one_deployment_refused_is_not_resent_to_a_deployme
         return_value=httpx.Response(200, json=_CREATED_OBJECTS["file"])
     )
 
-    with pytest.raises(Exception, match="Connection error") as raised:
+    with pytest.raises(openai.APIConnectionError, match="Connection error") as raised:
         await _create(_batch_router((refused_base, healthy_base), num_retries=2, orders=(1, 1)), "file")
 
     assert healthy_route.call_count == 1
+    assert create_may_already_exist(raised.value)
+
+
+async def test_an_upload_that_one_deployment_rejected_answers_with_the_provider_error_and_is_not_resent(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "calculate_retry_after", lambda **_: 0.0)
+    rejecting_base: Final = "https://router-file-rejecting.test"
+    healthy_base: Final = "https://router-file-healthy.test"
+    respx_mock.post(url__startswith=rejecting_base).mock(
+        return_value=httpx.Response(
+            401, json={"error": {"message": "invalid api key for this resource", "code": "401"}}
+        )
+    )
+    healthy_route: Final = respx_mock.post(url__startswith=healthy_base).mock(
+        return_value=httpx.Response(200, json=_CREATED_OBJECTS["file"])
+    )
+
+    with pytest.raises(openai.AuthenticationError, match="invalid api key for this resource") as raised:
+        await _create(_batch_router((rejecting_base, healthy_base), num_retries=2, orders=(1, 1)), "file")
+
+    assert healthy_route.call_count == 1
+    assert raised.value.status_code == 401
     assert create_may_already_exist(raised.value)

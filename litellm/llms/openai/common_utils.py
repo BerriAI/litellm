@@ -129,8 +129,8 @@ def _cause_chain(error: BaseException | None, links_left: int = _LONGEST_CAUSE_C
 
 class CreatedOnSomeDeployments(Exception):
     def __init__(self, failure: BaseException) -> None:
-        super().__init__(str(failure))
-        self.status_code: Final[object] = getattr(failure, "status_code", 500)
+        super().__init__("Another deployment in this model group already created it")
+        self.__cause__ = _error_it_wraps(failure)
 
 
 def _request_it_sent(failure: httpx.TransportError | httpx.HTTPStatusError) -> httpx.Request | None:

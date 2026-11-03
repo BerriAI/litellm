@@ -656,8 +656,8 @@ _FILE_MAY_EXIST_NOTICE: Final = (
         ),
         pytest.param(
             lambda: _raised_from(
-                CreatedOnSomeDeployments(openai.APIConnectionError(request=_UPSTREAM_FILE_UPLOAD)),
                 openai.APIConnectionError(request=_UPSTREAM_FILE_UPLOAD),
+                CreatedOnSomeDeployments(openai.APIConnectionError(request=_UPSTREAM_FILE_UPLOAD)),
             ),
             500,
             "false",
