@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import chain
 from types import MappingProxyType
@@ -11,6 +11,7 @@ from litellm._uuid import uuid
 from litellm.proxy.mcp_server.utils import strip_known_server_prefix
 from litellm.responses.mcp.direct_url_claims import DirectListing, server_names
 from litellm.responses.mcp.mcp_streaming_iterator import output_items
+from litellm.responses.mcp.tool_precheck import LITELLM_PROXY_MCP_SERVER_URL_PREFIX
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.llms.openai import (
     MCPCallFailedEvent,
@@ -52,6 +53,44 @@ class OpenAIMCPItems:
     list_items: tuple[Mapping[str, object], ...]
     names: Mapping[str, GatewayToolName]
 
+    def runs_every_call(self, tool_names: Iterable[str | None]) -> bool:
+        return all(name in self.names for name in tool_names)
+
+
+@dataclass(frozen=True, slots=True)
+class HeldReferences:
+    """The caller's `litellm_proxy` references without `require_approval: "never"`. While any is present, a registered
+    tool runs on the gateway only when the gateway claimed its server and no such reference names it, so the model's
+    other calls go back to the caller the way they do without a claim."""
+
+    present: bool
+    whole_gateway: bool
+    server_names: frozenset[str]
+
+    def lets_run(self, server_keys: Sequence[str], server_labels: Mapping[str, str]) -> bool:
+        if not self.present:
+            return True
+        names_server: Final = self.whole_gateway or any(key.lower() in self.server_names for key in server_keys)
+        return not names_server and any(key in server_labels for key in server_keys)
+
+
+def held_references(gateway_tools: Sequence[Mapping[str, object]]) -> HeldReferences:
+    held_urls: Final = tuple(
+        str(tool.get("server_url") or "") for tool in gateway_tools if tool.get("require_approval") != "never"
+    )
+    return HeldReferences(
+        present=bool(held_urls),
+        whole_gateway=any(not url.startswith(LITELLM_PROXY_MCP_SERVER_URL_PREFIX) for url in held_urls),
+        server_names=frozenset(url.split("/")[-1].lower() for url in held_urls),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _RegisteredTool:
+    tool: MCPTool
+    name: GatewayToolName
+    server_keys: tuple[str, ...]
+
 
 def _field(item: object, key: str) -> object:
     if isinstance(item, BaseModel):
@@ -67,13 +106,17 @@ def _text(item: object, key: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _registered_name(
-    tool_name: str, server_key: str, server_labels: Mapping[str, str], server_for: Callable[[str], MCPServer | None]
-) -> GatewayToolName:
+def _registered_tool(
+    tool: MCPTool, server_key: str, server_labels: Mapping[str, str], server_for: Callable[[str], MCPServer | None]
+) -> _RegisteredTool:
     server: Final = server_for(server_key)
     keys: Final = (server_key, *(server_names(server) if server is not None else ()))
     label: Final = next((server_labels[key] for key in keys if key in server_labels), server_key)
-    return GatewayToolName(server_label=label, name=strip_known_server_prefix(tool_name, server))
+    return _RegisteredTool(
+        tool=tool,
+        name=GatewayToolName(server_label=label, name=strip_known_server_prefix(tool.name, server)),
+        server_keys=keys,
+    )
 
 
 def _listed_tool(tool: MCPTool, name: str) -> Mapping[str, object]:
@@ -105,9 +148,10 @@ def openai_mcp_items(
     server_labels: Mapping[str, str],
     server_for: Callable[[str], MCPServer | None],
     direct: DirectListing,
+    held: HeldReferences,
 ) -> OpenAIMCPItems:
     registered: Final = tuple(
-        (tool, _registered_name(tool.name, tool_server_map.get(tool.name, ""), server_labels, server_for))
+        _registered_tool(tool, tool_server_map.get(tool.name, ""), server_labels, server_for)
         for tool in registered_tools
     )
     direct_names: Final = MappingProxyType(
@@ -117,8 +161,10 @@ def openai_mcp_items(
         }
     )
     registered_items: Final = tuple(
-        _list_item(label, [_listed_tool(tool, name.name) for tool, name in registered if name.server_label == label])
-        for label in _labels_in_order([name for _, name in registered])
+        _list_item(
+            label, [_listed_tool(each.tool, each.name.name) for each in registered if each.name.server_label == label]
+        )
+        for label in _labels_in_order([each.name for each in registered])
     )
     direct_items: Final = tuple(
         _list_item(label, [_listed_tool(tool, tool.name) for tool in tools])
@@ -126,7 +172,12 @@ def openai_mcp_items(
     )
     return OpenAIMCPItems(
         list_items=(*registered_items, *direct_items),
-        names=MappingProxyType({**{tool.name: name for tool, name in registered}, **direct_names}),
+        names=MappingProxyType(
+            {
+                **{each.tool.name: each.name for each in registered if held.lets_run(each.server_keys, server_labels)},
+                **direct_names,
+            }
+        ),
     )
 
 

@@ -371,20 +371,16 @@ async def aresponses_api_with_mcp(
         request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
         raw_headers=discovery_raw_headers,
     )
-    direct_listing: Final = await _direct_listing(
-        hosted_mcp_claims,
-        direct_client_factory,
-        mcp_tools_with_litellm_proxy,
-        model=model,
-        route=custom_llm_provider or "responses",
-    )
+    direct_listing: Final = await _direct_listing(hosted_mcp_claims, direct_client_factory)
     openai_tools: Final = LiteLLM_Proxy_MCP_Handler.transform_mcp_tools_to_openai(
         [*original_mcp_tools, *direct_listing.tools]
     )
     claimed_items: Final = (
         None
         if hosted_mcp_claims is None
-        else _claimed_mcp_items(hosted_mcp_claims, original_mcp_tools, tool_server_map, direct_listing)
+        else _claimed_mcp_items(
+            hosted_mcp_claims, original_mcp_tools, tool_server_map, direct_listing, mcp_tools_with_litellm_proxy
+        )
     )
 
     # Combine with other tools
@@ -512,6 +508,7 @@ async def aresponses_api_with_mcp(
                 ),
                 request_trace_id=_langfuse_request_trace_id(request_kwargs, tool_trace_id_for_claims),
                 direct_tools=direct_listing.by_name,
+                reports_errors=True,
             )
 
         def record_claimed_breakdown(breakdown: CostBreakdown | None) -> None:
@@ -686,6 +683,20 @@ def _strips_hosted_mcp(model: str, custom_llm_provider: str) -> bool:
     return chat_config is not None and chat_config.strips_hosted_mcp_tools(model)
 
 
+def _raise_unrunnable_responses_hosted_mcp(
+    tools: Iterable[ToolParam] | None, model: str, custom_llm_provider: str | None, drop_params: object
+) -> None:
+    if not tools or custom_llm_provider is None or not _strips_hosted_mcp(model, custom_llm_provider):
+        return
+    from litellm.litellm_core_utils.tool_fields import responses_hosted_mcp_error
+
+    error: Final = responses_hosted_mcp_error(
+        tuple(tools), model=model, route=custom_llm_provider, drop_params=drop_params
+    )
+    if error is not None:
+        raise error
+
+
 def _hosted_mcp_claims(
     tools: Iterable[ToolParam] | None,
     model: str,
@@ -719,17 +730,10 @@ def _hosted_mcp_claims(
 
 
 async def _direct_listing(
-    claims: "HostedMCPClaims | None",
-    client_factory: "DirectClientFactory | None",
-    gateway_tools: Sequence[Mapping[str, object]],
-    model: str,
-    route: str,
+    claims: "HostedMCPClaims | None", client_factory: "DirectClientFactory | None"
 ) -> "DirectListing":
-    from litellm.litellm_core_utils.tool_fields import hosted_mcp_approval_error
     from litellm.responses.mcp.direct_url_claims import guarded_mcp_client, list_direct_tools
 
-    if claims is not None and not _claimed_tools_run_without_approval(gateway_tools):
-        raise hosted_mcp_approval_error(_approval_labels(gateway_tools), model=model, route=route)
     factory: Final = client_factory if callable(client_factory) else guarded_mcp_client
     allowed_hosts: Final = tuple(litellm.gateway_hosted_mcp_allowed_hosts)
     return await list_direct_tools(
@@ -742,11 +746,17 @@ def _claimed_mcp_items(
     registered_tools: Sequence[MCPTool],
     tool_server_map: Mapping[str, str],
     direct_listing: "DirectListing",
+    gateway_tools: Sequence[Mapping[str, object]],
 ) -> "OpenAIMCPItems":
-    from litellm.responses.mcp.openai_mcp_items import openai_mcp_items
+    from litellm.responses.mcp.openai_mcp_items import held_references, openai_mcp_items
 
     return openai_mcp_items(
-        registered_tools, tool_server_map, claims.server_labels, _registered_mcp_server, direct_listing
+        registered_tools,
+        tool_server_map,
+        claims.server_labels,
+        _registered_mcp_server,
+        direct_listing,
+        held_references(gateway_tools),
     )
 
 
@@ -754,18 +764,6 @@ def _stream_shaper(items: "OpenAIMCPItems") -> "OpenAIStreamShaper":
     from litellm.responses.mcp.openai_mcp_items import OpenAIStreamShaper
 
     return OpenAIStreamShaper(items=items)
-
-
-def _claimed_tools_run_without_approval(mcp_tools_with_litellm_proxy: Sequence[Mapping[str, object]]) -> bool:
-    return all(tool.get("require_approval") == "never" for tool in mcp_tools_with_litellm_proxy)
-
-
-def _approval_labels(mcp_tools_with_litellm_proxy: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
-    return tuple(
-        str(tool.get("server_label") or tool.get("server_url"))
-        for tool in mcp_tools_with_litellm_proxy
-        if tool.get("require_approval") != "never"
-    )
 
 
 def _max_tool_call_rounds(kwargs: Mapping[str, object]) -> int:
@@ -1975,6 +1973,7 @@ def responses(
             bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
             if isinstance(bridge_kwargs, _UntranslatableResponsesFields):
                 _raise_untranslatable_responses_fields(bridge_kwargs, model, custom_llm_provider)
+            _raise_unrunnable_responses_hosted_mcp(tools, model, custom_llm_provider, litellm_params.drop_params)
             return litellm_completion_transformation_handler.response_api_handler(
                 previous_response_client_ids(previous_response_id, kwargs),
                 model=model,

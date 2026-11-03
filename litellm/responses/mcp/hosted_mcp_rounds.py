@@ -83,7 +83,7 @@ async def _next_round(
     from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 
     tool_calls: Final = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response)
-    if not tool_calls:
+    if not tool_calls or not rounds.items.runs_every_call(name for name, _, _ in map(_call_details, tool_calls)):
         return response.model_copy(
             update={"output": list(openai_output(rounds.items, (*composed, *output_items(response))))}
         )
@@ -130,5 +130,6 @@ async def run_claimed_rounds(
     original_input: str | ResponseInputParam | None,
 ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
     """Run every tool call the model makes on the gateway's MCP tools, round after round up to `max_rounds`, and
-    answer with OpenAI's items: mcp_list_tools first, each executed call as an mcp_call, and one bill for all rounds."""
+    answer with OpenAI's items: mcp_list_tools first, each executed call as an mcp_call, and one bill for all rounds.
+    A round that calls any tool the gateway does not run goes back to the caller unexecuted."""
     return await _next_round(rounds, first, first_breakdown, _initial_history(original_input), (), 1)

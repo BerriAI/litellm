@@ -211,21 +211,43 @@ def hosted_mcp_approval_error(server_labels: Sequence[str], model: str, route: s
     )
 
 
+_GATEWAY_REMEDY: Final = (
+    'register it on the LiteLLM MCP gateway and send `server_url: "litellm_proxy/mcp/<server name>"`'
+)
+_RESPONSES_GATEWAY_REMEDY: Final = (
+    f"{_GATEWAY_REMEDY}, or set `litellm_settings.gateway_runs_hosted_mcp: true` with the server registered or "
+    "its host in `gateway_hosted_mcp_allowed_hosts`"
+)
+
+
+def _named_hosted_mcp_servers(tools: Sequence[object]) -> str:
+    return ", ".join(f"`{label}`" for label in map(_hosted_mcp_server_label, tools) if label is not None)
+
+
+def _unrunnable_hosted_mcp_error(named_servers: str, model: str, route: str, remedy: str) -> UnsupportedParamsError:
+    return _unrunnable_mcp_error(
+        f'{model} on {route} cannot run the hosted MCP tool {named_servers} (`type: "mcp"`). To have LiteLLM '
+        f"run the MCP server for this model, {remedy}. " + _drop_params_hint("hosted MCP tools"),
+        model=model,
+        route=route,
+    )
+
+
+def responses_hosted_mcp_error(
+    tools: Sequence[object], model: str, route: str, drop_params: object
+) -> UnsupportedParamsError | None:
+    named_servers: Final = _named_hosted_mcp_servers(tools)
+    if not named_servers or drops_unsupported_params(drop_params):
+        return None
+    return _unrunnable_hosted_mcp_error(named_servers, model=model, route=route, remedy=_RESPONSES_GATEWAY_REMEDY)
+
+
 def tools_without_hosted_mcp(tools: Sequence[_ToolT], model: str, route: str, drop_params: bool) -> Sequence[_ToolT]:
-    server_labels: Final = tuple(label for label in map(_hosted_mcp_server_label, tools) if label is not None)
-    if not server_labels:
+    named_servers: Final = _named_hosted_mcp_servers(tools)
+    if not named_servers:
         return tools
-    named_servers: Final = ", ".join(f"`{label}`" for label in server_labels)
     if not drops_unsupported_params(drop_params):
-        raise _unrunnable_mcp_error(
-            f'{model} on {route} cannot run the hosted MCP tool {named_servers} (`type: "mcp"`). To have LiteLLM '
-            "run the MCP server for this model, register it on the LiteLLM MCP gateway and send "
-            '`server_url: "litellm_proxy/mcp/<server name>"`, or set `litellm_settings.gateway_runs_hosted_mcp: true` '
-            "with the server registered or its host in `gateway_hosted_mcp_allowed_hosts`. "
-            + _drop_params_hint("hosted MCP tools"),
-            model=model,
-            route=route,
-        )
+        raise _unrunnable_hosted_mcp_error(named_servers, model=model, route=route, remedy=_GATEWAY_REMEDY)
     verbose_logger.warning(
         HOSTED_MCP_DROP_WARNING, _one_log_line(named_servers), _one_log_line(model), _one_log_line(route)
     )

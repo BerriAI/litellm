@@ -304,9 +304,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             self.original_request_params.get("max_agentic_loops"), field="litellm_params.max_agentic_loops"
         )
         self.max_tool_call_rounds: int = MAX_MCP_TOOL_CALL_ROUNDS if configured_rounds is None else configured_rounds
-        self.should_auto_execute = self._should_auto_execute_tools() or (
-            bool(self.direct_tools) and not self.mcp_tools_with_litellm_proxy
-        )
+        self.should_auto_execute = self._stream_shaper is not None or self._should_auto_execute_tools()
 
         # Streaming state management
         self.phase = "initial_response"  # initial_response -> mcp_discovery -> (continue_initial_response <-> tool_execution) -> finished
@@ -849,6 +847,13 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         if self._initial_creation_error is not None:
             raise self._initial_creation_error
 
+    def _runs_every_call(self, tool_calls: Sequence[object]) -> bool:
+        from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+
+        return self._stream_shaper is None or self._stream_shaper.items.runs_every_call(
+            name for name, _, _ in map(LiteLLM_Proxy_MCP_Handler.extract_tool_call_details, tool_calls)
+        )
+
     async def _generate_tool_execution_events(self) -> None:
         """Generate tool execution events and execute tools"""
         if not self.collected_response:
@@ -863,7 +868,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 tool_calls = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(self.collected_response)
             else:
                 tool_calls = []
-            if not tool_calls:
+            if not tool_calls or not self._runs_every_call(tool_calls):
                 return
             self.tool_call_round += 1
 
@@ -929,6 +934,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(self.original_request_params),
                 guardrail_context=MCPRequestContext.resolve_guardrail_context(self.original_request_params),
                 direct_tools=self.direct_tools,
+                reports_errors=self._stream_shaper is not None,
             )
 
             # Create completion events and output_item.done events for tool execution
@@ -976,7 +982,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         "status": "completed",
                         "approval_request_id": f"mcpr_{uuid.uuid4().hex[:8]}",
                         "arguments": tool_arguments,
-                        "error": tool_result.get("error") if self._stream_shaper is not None else None,
+                        "error": tool_result.get("error"),
                         "name": tool_name,
                         "output": result_text,
                         "server_label": "litellm",  # or extract from tool config
