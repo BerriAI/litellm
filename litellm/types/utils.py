@@ -4812,7 +4812,7 @@ class TokenCountResponse(LiteLLMPydanticObjectBase):
     model_used: str
     tokenizer_type: str
     count_source: TokenCountSource | None = None
-    count_tokenizer: LocalTokenizer | None = None
+    count_tokenizer: LocalTokenizer | None = Field(default=None, exclude_if=lambda tokenizer: tokenizer is None)
     original_response: dict | None = None
     """
     Original Response from upstream API call - if an API call was made for token counting
