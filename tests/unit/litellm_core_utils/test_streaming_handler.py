@@ -9587,7 +9587,7 @@ def _continuous_usage_wrapper(
             messages=[{"role": "user", "content": "hi"}],
             stream=True,
             call_type="acompletion",
-            start_time=1754900000,
+            start_time=1754900000.0,
             litellm_call_id="continuous-usage",
             function_id="test",
         ),
