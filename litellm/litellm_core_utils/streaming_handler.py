@@ -139,6 +139,9 @@ def _prepend_upstream_choice_extras(
     choice.__pydantic_fields_set__.update(upstream_extras)
 
 
+_CHOICE_EXTRAS_NOT_CARRIED_TO_FINISH: Final = frozenset({"message", *STREAM_CHUNK_CHOICE_FIELDS})
+
+
 def _keep_single_upstream_choice_extras(
     model_response: ModelResponseStream, response_obj: Mapping[str, object]
 ) -> None:
@@ -147,13 +150,15 @@ def _keep_single_upstream_choice_extras(
         not isinstance(original_chunk, ChatCompletionChunk)
         or len(original_chunk.choices) != 1
         or len(model_response.choices) != 1
+        or original_chunk.choices[0].index != model_response.choices[0].index
     ):
         return
     upstream_choice: Final = original_chunk.choices[0]
+    non_null_extras: Final = frozenset(
+        key for key, value in (upstream_choice.model_extra or {}).items() if value is not None
+    )
     _prepend_upstream_choice_extras(
-        model_response.choices[0],
-        upstream_choice,
-        frozenset(upstream_choice.__pydantic_extra__ or {}) - {"message"},
+        model_response.choices[0], upstream_choice, non_null_extras - _CHOICE_EXTRAS_NOT_CARRIED_TO_FINISH
     )
 
 

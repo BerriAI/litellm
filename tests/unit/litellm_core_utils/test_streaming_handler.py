@@ -7375,6 +7375,92 @@ async def test_azure_stream_passes_on_prompt_filter_results_and_finish_content_f
     assert finish_frame["choices"][0]["content_filter_results"] == _AZURE_FINISH_FILTER_RESULTS
 
 
+def _openai_sdk_stream_choices(
+    logging_obj: Logging, upstream_choices: Sequence[Mapping[str, object]]
+) -> tuple[dict[str, object], ...]:
+    chunks: Final = tuple(
+        ChatCompletionChunk.model_validate(
+            {"id": "c1", "created": 1, "model": "m", "object": "chat.completion.chunk", "choices": [choice]}
+        )
+        for choice in upstream_choices
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks), model="m", custom_llm_provider="openai", logging_obj=logging_obj
+    )
+    return tuple(chunk.choices[0].model_dump() for chunk in wrapper)
+
+
+_TWO_CHOICE_ROLE_CHUNKS: Final = tuple(
+    {"index": index, "delta": {"role": "assistant", "content": ""}, "finish_reason": None} for index in (0, 1)
+)
+
+
+@pytest.mark.parametrize(
+    "upstream_choices",
+    [
+        pytest.param(
+            (
+                *_TWO_CHOICE_ROLE_CHUNKS,
+                {"index": 0, "delta": {"content": "1"}, "finish_reason": None},
+                {"index": 1, "delta": {"content": "1"}, "finish_reason": None},
+                {"index": 1, "delta": {}, "finish_reason": "stop", "content_filter_results": {"choice": 1}},
+                {"index": 0, "delta": {}, "finish_reason": "stop", "content_filter_results": {"choice": 0}},
+            ),
+            id="other-choice-finishes-first",
+        ),
+        pytest.param(
+            (
+                *_TWO_CHOICE_ROLE_CHUNKS,
+                {"index": 0, "delta": {"content": "1"}, "finish_reason": "stop", "stop_reason": ", 3", "token_ids": [16]},
+                {"index": 1, "delta": {"content": ""}, "finish_reason": None, "token_ids": [26]},
+                {"index": 1, "delta": {"content": "1"}, "finish_reason": "stop", "stop_reason": 151645, "token_ids": [27]},
+            ),
+            id="other-choice-streams-after-a-finish",
+        ),
+    ],
+)
+def test_openai_sdk_stream_with_two_choices_keeps_choice_extras_on_their_own_choice(
+    logging_obj: Logging, upstream_choices: tuple[Mapping[str, object], ...]
+) -> None:
+    emitted: Final = _openai_sdk_stream_choices(logging_obj, upstream_choices)
+
+    assert [
+        (choice["index"], choice.get("token_ids"), choice.get("stop_reason"), choice.get("content_filter_results"))
+        for choice in emitted
+        if _carries_another_choices_fields(choice)
+        or choice.get("content_filter_results") not in (None, {"choice": choice["index"]})
+    ] == []
+
+
+@pytest.mark.parametrize(
+    ("dropped_extras", "post_call_rules"),
+    [
+        pytest.param({"token_ids": None}, [], id="null-token-ids"),
+        pytest.param({"content_filter_results": None}, [], id="null-content-filter-results"),
+        pytest.param({"token_ids": [20]}, [_rejects_a_two], id="token-ids-under-post-call-rules"),
+    ],
+)
+def test_openai_sdk_stream_sends_the_same_finish_frame_without_choice_extras_it_drops(
+    logging_obj: Logging,
+    monkeypatch: pytest.MonkeyPatch,
+    dropped_extras: Mapping[str, object],
+    post_call_rules: list[Callable[[str], bool]],
+) -> None:
+    monkeypatch.setattr(litellm, "post_call_rules", post_call_rules)
+
+    def finish_frame(finish_extras: Mapping[str, object]) -> dict[str, object]:
+        emitted: Final = _openai_sdk_stream_choices(
+            logging_obj,
+            (
+                {"index": 0, "delta": {"role": "assistant", "content": "1"}, "finish_reason": None},
+                {"index": 0, "delta": {}, "finish_reason": "stop", **finish_extras},
+            ),
+        )
+        return emitted[-1]
+
+    assert finish_frame(dropped_extras) == finish_frame({})
+
+
 def test_openai_chunk_creator_keeps_single_choice_logprobs_on_later_chunks(logging_obj: Logging) -> None:
     logprobs: Final = {"content": [{"token": "hello", "logprob": -0.25, "bytes": [104], "top_logprobs": []}]}
     chunk: Final = ChatCompletionChunk(
