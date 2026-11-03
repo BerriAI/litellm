@@ -38,7 +38,7 @@ def test_default_encoding_directory_created() -> None:
 
 
 def test_default_encoding_fallback_on_uncreatable_dir() -> None:
-    """Verify fallback to temporary directory when configured cache directory cannot be created."""
+    """Verify fallback to secure temporary directory when configured cache directory cannot be created."""
     invalid_dir: Final = "Z:\\non_existent_drive_for_test_12345\\tokenizers"
     original_env: Final = os.environ.get("CUSTOM_TIKTOKEN_CACHE_DIR")
     try:

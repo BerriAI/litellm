@@ -26,20 +26,18 @@ else:
 
 # Ensure cache_dir exists and is writable.
 # If the target directory cannot be created or is read-only (e.g. read-only site-packages),
-# fall back to a user-writable temporary directory to avoid FileNotFoundError / PermissionError.
+# fall back to a private user-writable temporary directory to avoid FileNotFoundError / PermissionError.
 try:
     os.makedirs(cache_dir, exist_ok=True)
     probe_file = os.path.join(cache_dir, f".probe_{os.getpid()}")
     try:
-        with open(probe_file, "wb") as f:
+        with open(probe_file, "xb") as f:
             f.write(b"")
         os.remove(probe_file)
-    except (OSError, PermissionError):
-        cache_dir = os.path.join(tempfile.gettempdir(), "litellm_tokenizers")
-        os.makedirs(cache_dir, exist_ok=True)
+    except (OSError, PermissionError, FileExistsError):
+        cache_dir = tempfile.mkdtemp(prefix="litellm_tokenizers_")
 except Exception:
-    cache_dir = os.path.join(tempfile.gettempdir(), "litellm_tokenizers")
-    os.makedirs(cache_dir, exist_ok=True)
+    cache_dir = tempfile.mkdtemp(prefix="litellm_tokenizers_")
 
 os.environ["TIKTOKEN_CACHE_DIR"] = (
     cache_dir  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
@@ -60,11 +58,11 @@ for attempt in range(_max_retries):
         encoding = tiktoken.get_encoding("cl100k_base")
         break
     except (FileExistsError, OSError):
-        # On early failures, ensure fallback cache directory is active if original cache directory had issues
-        fallback_dir: Final = os.path.join(tempfile.gettempdir(), "litellm_tokenizers")
-        if os.environ.get("TIKTOKEN_CACHE_DIR") != fallback_dir:
+        # On early failures, switch to a private fallback cache directory if original cache directory had issues
+        current_cache = os.environ.get("TIKTOKEN_CACHE_DIR", "")
+        if "litellm_tokenizers_" not in current_cache:
             try:
-                os.makedirs(fallback_dir, exist_ok=True)
+                fallback_dir: Final = tempfile.mkdtemp(prefix="litellm_tokenizers_")
                 os.environ["TIKTOKEN_CACHE_DIR"] = fallback_dir
             except Exception:
                 pass
