@@ -9,16 +9,19 @@ methods; richer repositories live in their own modules.
 
 from typing import TYPE_CHECKING, Any, Final, Generic, Protocol
 
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models  # noqa: F401  # used by quoted base-class subscripts
 
 
-class _PrismaClientView(Protocol):
+class _PrismaReaderClientView(Protocol):
     @property
     def db(self) -> object: ...
 
+
+class _PrismaWriterClientView(Protocol):
     @property
     def writer_db(self) -> object: ...
 
@@ -32,19 +35,26 @@ class PrismaTableRepository(Generic[RowT_co]):
         self._prisma_client = prisma_client
         self._use_writer = use_writer
 
-    @property
-    def prisma_client(self) -> Any:
+    def _connected_client(self) -> object:
         if self._prisma_client is None:
             raise RuntimeError("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
         return self._prisma_client
 
     @property
+    def prisma_client(self) -> Any:
+        return self._connected_client()
+
+    def _selected_database(self) -> object:
+        client: Final = self._connected_client()
+        if self._use_writer:
+            return require_attributes(client, _PrismaWriterClientView, "writer_db").writer_db
+        return require_attributes(client, _PrismaReaderClientView, "db").db
+
+    @property
     def table(self) -> TableActions[RowT_co]:
         from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
 
-        client: Final[_PrismaClientView] = self.prisma_client
-        database: Final = client.writer_db if self._use_writer else client.db
-        actions: Final[TableActions[RowT_co]] = getattr(database, self.table_name)
+        actions: Final[TableActions[RowT_co]] = getattr(self._selected_database(), self.table_name)
         return wrap_table_actions_for_config_sync(actions=actions, table_name=self.table_name)
 
 

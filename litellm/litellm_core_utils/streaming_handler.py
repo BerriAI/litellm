@@ -433,9 +433,8 @@ class CustomStreamWrapper:
         self._closed = False
         self._stream_created_time: float = time.time()
 
-        litellm_params: Final[GenericLiteLLMParams] = GenericLiteLLMParams.model_validate(
-            dict(**self.logging_obj.model_call_details.get("litellm_params", {}))
-        )
+        raw_litellm_params: Final = dict[str, object](**self.logging_obj.model_call_details.get("litellm_params", {}))
+        litellm_params: Final[GenericLiteLLMParams] = GenericLiteLLMParams.model_validate(raw_litellm_params)
         self.merge_reasoning_content_in_choices: bool = litellm_params.merge_reasoning_content_in_choices or False
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
@@ -466,7 +465,7 @@ class CustomStreamWrapper:
 
         _api_base: Final = get_api_base(
             model=model or "",
-            optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
+            optional_params=raw_litellm_params,
         )
 
         self._hidden_params: dict[str, object] = {

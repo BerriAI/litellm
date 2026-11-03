@@ -40,7 +40,7 @@ from litellm.constants import (
     REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION,
     REDIS_TIMEOUT_LOG_INTERVAL,
 )
-from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs, has_attributes
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.types.caching import (
     RedisPipelineIncrementOperation,
@@ -94,6 +94,22 @@ class _AsyncRedisCommands(Protocol):
     def pipeline(self, transaction: bool = True) -> "Pipeline[bytes]": ...
 
     def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
+
+
+class _AsyncLuaScript(Protocol):
+    def __call__(
+        self, keys: Sequence[str], args: Sequence[str | bytes | int | float], client: object
+    ) -> Awaitable[object]: ...
+
+
+class _SupportsRegisterScript(Protocol):
+    def register_script(self, script: str, /) -> _AsyncLuaScript: ...
+
+
+class _SupportsScriptLoad(Protocol):
+    def script_load(self, script: str, /) -> object: ...
+
+    def evalsha(self, sha: object, numkeys: int, /, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
 
 
 _GENERIC_CALLER_MODULES: Final = frozenset(
@@ -829,6 +845,9 @@ class RedisCache(BaseCache):
     def _async_commands(self) -> _AsyncRedisCommands:
         return self.init_async_client()
 
+    def _async_client_object(self) -> object:
+        return self.init_async_client()
+
     def check_and_fix_namespace(self, key: str) -> str:
         """
         Make sure each key starts with the given namespace
@@ -1102,8 +1121,8 @@ class RedisCache(BaseCache):
         Kept separate from async_register_script so each loop caches its own
         executor; see that method for why the binding must be per loop.
         """
-        _redis_client: Final[Any] = self.init_async_client()
-        if hasattr(_redis_client, "register_script"):
+        _redis_client: Final = self._async_client_object()
+        if has_attributes(_redis_client, _SupportsRegisterScript, "register_script"):
             registered_script: Final = _redis_client.register_script(script)
 
             async def standalone_executor(
@@ -1116,7 +1135,7 @@ class RedisCache(BaseCache):
 
             return standalone_executor
 
-        if hasattr(_redis_client, "script_load"):
+        if has_attributes(_redis_client, _SupportsScriptLoad, "script_load"):
             script_sha: Final = _redis_client.script_load(script)
 
             async def cluster_executor(

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.models.user import LiteLLM_UserTable, SCIMPlaceholder
 from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
@@ -177,7 +178,7 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
                 where={"user_id": data["user_id"]}, data={"create": dict(data), "update": {}}
             )
 
-        client: Final[_PrismaClientView] = self.prisma_client
+        client: Final = require_attributes(self._connected_client(), _PrismaClientView, "tx")
         async with client.tx() as transaction:
             await transaction.execute_raw("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
             await transaction.query_raw("SELECT 1 AS locked FROM pg_advisory_xact_lock(468530001)")

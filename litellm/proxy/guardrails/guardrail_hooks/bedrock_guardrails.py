@@ -33,7 +33,12 @@ from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    decoded_json_object,
+    iter_items,
+    redact_nested_match_and_regex_keys,
+)
 from litellm.litellm_core_utils.litellm_logging import (
     get_masked_values,
 )
@@ -2106,12 +2111,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         response: BedrockGuardrailChecksResponse,
     ) -> dict[str, object]:
         """Strip PII location offsets from a checks response before it is logged."""
-        sanitized: Final[dict[str, Any]] = copy.deepcopy(dict(response))
-        sensitive: Final = (sanitized.get("results") or {}).get("sensitiveInformation") or {}
-        for entry in sensitive.get("results") or []:
-            if isinstance(entry, dict):
+        sanitized: Final = copy.deepcopy(dict(response))
+        sensitive: Final = decoded_json_object(
+            decoded_json_object(sanitized.get("results") or {}).get("sensitiveInformation") or {}
+        )
+        for entry in iter_items(sensitive.get("results") or []):
+            if isinstance(pii_entry := as_str_mapping(entry), dict):
                 for key in _BEDROCK_CHECKS_PII_LOCATION_KEYS:
-                    entry.pop(key, None)
+                    pii_entry.pop(key, None)
         return sanitized
 
     @staticmethod

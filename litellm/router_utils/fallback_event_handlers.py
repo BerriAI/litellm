@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import TypeAdapter
@@ -787,7 +787,7 @@ async def run_async_fallback(
     fallback_depth: int,
     include_fallback_errors: bool = False,
     **kwargs,
-) -> Any:
+) -> object:
     """
     Loops through all the fallback model groups and calls kwargs["original_function"] with the arguments and keyword arguments provided.
 

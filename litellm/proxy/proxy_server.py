@@ -5774,8 +5774,16 @@ class _DbCallbackRegistration:
     displaced: tuple[tuple[str, object], ...] = ()
 
 
+class _CallbackList(Protocol):
+    def __contains__(self, value: object, /) -> bool: ...
+
+    def append(self, value: object, /) -> None: ...
+
+
 def _restore_displaced_callback(list_name: str, entry: object) -> None:
-    callback_list: Final = getattr(litellm, list_name)
+    callback_list: Final = require_attributes(
+        _UNTYPED_VALUE.validate_python(getattr(litellm, list_name)), _CallbackList, "append"
+    )
     if entry not in callback_list:
         callback_list.append(entry)
 
@@ -10851,7 +10859,7 @@ async def async_data_generator(
         await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
             request=request,
             request_data=request_data,
-            response=response,
+            response=_UNTYPED_VALUE.validate_python(response),
             stream_completed=stream_completed,
             client_disconnected=client_disconnected,
             user_api_key_dict=user_api_key_dict,

@@ -6,7 +6,9 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.url_utils import encode_url_path_segments
@@ -35,6 +37,8 @@ else:
 
 # 5 minute timeout (models may need to load)
 STREAMING_TIMEOUT: Final = 60 * 5
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class BytezChatConfig(BaseConfig):
@@ -194,11 +198,11 @@ class BytezChatConfig(BaseConfig):
     ) -> ModelResponse:
         json: Final = raw_response.json()
 
-        error: Final = json.get("error")
+        error: Final = decoded_json_object(_DECODED_JSON.validate_python(json)).get("error")
 
         if error is not None:
             raise BytezError(
-                message=str(json["error"]),
+                message=str(error),
                 status_code=raw_response.status_code,
             )
 

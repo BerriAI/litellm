@@ -35,7 +35,7 @@ from litellm.integrations.otel.model.metadata import flatten_metadata
 from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.integrations.otel.routing import routing_decision_attributes
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
@@ -47,7 +47,6 @@ from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.integrations.otel_span_attributes import SpanAttributes
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
-    ChatCompletionMessageToolCall,
     CostBreakdown,
     Function,
     LLMResponseTypes,
@@ -2423,11 +2422,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     @staticmethod
     def _tool_calls_kv_pair(
-        tool_calls: list[ChatCompletionMessageToolCall],
+        tool_calls: Iterable[object],
     ) -> dict[str, object]:
         kv_pairs: Final[dict[str, object]] = {}
         for idx, tool_call in enumerate(tool_calls):
-            _function: object = tool_call.get("function")
+            _function: object = require_attributes(tool_call, _SupportsGet, "get").get("function")
             if not _function:
                 continue
 
@@ -2723,7 +2722,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             ########## LLM Response Attributes ##########
             #############################################
             if response_obj is not None:
-                if response_obj.get("choices"):
+                response_view: Final = require_attributes(response_obj, _SupportsGet, "get")
+                if response_view.get("choices"):
                     transformed_choices: Final = self._transform_choices_to_otel_semantic_conventions(
                         response_obj.get("choices")
                     )
@@ -2733,10 +2733,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         value=safe_dumps(transformed_choices),
                     )
 
-                    finish_reasons: Final = []
-                    for idx, choice in enumerate(response_obj.get("choices")):
-                        if choice.get("finish_reason"):
-                            finish_reasons.append(choice.get("finish_reason"))
+                    choice_views: Final = [
+                        require_attributes(choice, _SupportsGet, "get")
+                        for choice in iter_items(response_view.get("choices"))
+                    ]
+                    finish_reasons: Final = [
+                        choice.get("finish_reason") for choice in choice_views if choice.get("finish_reason")
+                    ]
 
                     if finish_reasons:
                         self.safe_set_attribute(
@@ -2745,12 +2748,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                             value=safe_dumps(finish_reasons),
                         )
 
-                    for idx, choice in enumerate(response_obj.get("choices")):
+                    for choice in choice_views:
                         if choice.get("finish_reason"):
-                            message = choice.get("message")
-                            tool_calls = message.get("tool_calls")
+                            tool_calls = require_attributes(choice.get("message"), _SupportsGet, "get").get(
+                                "tool_calls"
+                            )
                             if tool_calls:
-                                kv_pairs = OpenTelemetry._tool_calls_kv_pair(tool_calls)
+                                kv_pairs = OpenTelemetry._tool_calls_kv_pair(iter_items(tool_calls))
                                 for key, value in kv_pairs.items():
                                     self.safe_set_attribute(
                                         span=span,
@@ -2758,13 +2762,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                                         value=value,
                                     )
 
-                elif response_obj.get("output"):
+                elif response_view.get("output"):
                     # Responses API: ResponsesAPIResponse has an "output"
                     # list instead of "choices".  Each item with
                     # type="message" contains a "content" list of
                     # OutputText objects (type="output_text").
-                    output_items: Final = response_obj.get("output")
-                    output_messages: Final = self._transform_responses_api_output_to_otel(output_items)
+                    output_items: Final = response_view.get("output")
+                    output_messages: Final = self._transform_responses_api_output_to_otel(iter_items(output_items))
                     if output_messages:
                         self.safe_set_attribute(
                             span=span,
@@ -2778,7 +2782,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     # ChatCompletionMessageToolCall format expected by
                     # _tool_calls_kv_pair.
                     tool_calls = []
-                    for out_item in output_items:
+                    for out_item in iter_items(output_items):
                         item_d = self._to_dict(out_item)
                         if item_d and item_d.get("type") == "function_call":
                             tool_calls.append(
@@ -2799,7 +2803,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                             )
 
                     # Extract finish reason from ResponsesAPIResponse.status
-                    status: Final = response_obj.get("status")
+                    status: Final = response_view.get("status")
                     if status:
                         self.safe_set_attribute(
                             span=span,
@@ -2917,7 +2921,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             return obj.model_dump()
         return None
 
-    def _transform_responses_api_output_to_otel(self, output: list) -> list[dict]:
+    def _transform_responses_api_output_to_otel(self, output: Iterable[object]) -> list[dict]:
         """
         Transform Responses API output items into OTEL GenAI 1.38 format.
 

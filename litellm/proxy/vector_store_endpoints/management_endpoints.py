@@ -647,8 +647,9 @@ async def update_vector_store(
         )
 
         # Handle metadata serialization
-        if update_data.get("vector_store_metadata") is not None:
-            update_data["vector_store_metadata"] = safe_dumps(update_data["vector_store_metadata"])
+        submitted_metadata: Final[object] = update_data.get("vector_store_metadata")
+        if submitted_metadata is not None:
+            update_data["vector_store_metadata"] = safe_dumps(submitted_metadata)
 
         # Handle litellm_params if provided. As with the create path, the
         # embedding-config auto-resolve previously persisted cleartext

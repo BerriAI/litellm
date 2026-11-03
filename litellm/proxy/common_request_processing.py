@@ -4568,7 +4568,7 @@ class ProxyBaseLLMRequestProcessing:
     async def finalize_streaming_generator_cleanup(
         request: Request | None,
         request_data: dict,
-        response: Any,
+        response: object,
         stream_completed: bool = False,
         client_disconnected: bool = False,
         user_api_key_dict: UserAPIKeyAuth | None = None,

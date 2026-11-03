@@ -51,7 +51,7 @@ async def send_llm_exception_alert(
         # the proxy is already instrumented to send LLM API call failures
         return
 
-    litellm_debug_info: Final = getattr(original_exception, "litellm_debug_info", None)
+    litellm_debug_info: Final[str | None] = getattr(original_exception, "litellm_debug_info", None)
     exception_str = str(original_exception)
     if litellm_debug_info is not None:
         exception_str += litellm_debug_info

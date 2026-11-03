@@ -68,6 +68,7 @@ from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
+    require_attributes,
 )
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
@@ -2237,15 +2238,13 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
     return restored_metadata
 
 
-class _PassThroughRequestEnvelope(TypedDict, total=False):
-    query_params: Mapping[str, object] | None
-    custom_body: Mapping[str, object] | None
-    stream: bool | None
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 async def _parse_request_data_by_content_type(
     request: Request,
-) -> tuple[object, object, None, bool | None]:
+) -> tuple[object, object, None, object]:
     """
     Parse request data based on content type.
 
@@ -2264,10 +2263,12 @@ async def _parse_request_data_by_content_type(
     if "application/json" in content_type:
         # ✅ Handle JSON
         try:
-            body: _PassThroughRequestEnvelope = await request.json()
-            query_params_data = body.get("query_params")
-            custom_body_data = body.get("custom_body")
-            stream = body.get("stream")
+            json_body: Final = require_attributes(
+                _DECODED_JSON.validate_python(await request.json()), _SupportsGet, "get"
+            )
+            query_params_data = json_body.get("query_params")
+            custom_body_data = json_body.get("custom_body")
+            stream = json_body.get("stream")
         except json.JSONDecodeError:
             # Handle requests with no body (e.g., DELETE requests)
             pass
@@ -2275,14 +2276,16 @@ async def _parse_request_data_by_content_type(
         # ✅ Try to parse as JSON first (handles misconfigured clients sending JSON with multipart content-type)
         # If that fails, skip parsing - pass_through_request will handle actual multipart
         try:
-            body = await request.json()
+            multipart_json_body: Final = require_attributes(
+                _DECODED_JSON.validate_python(await request.json()), _SupportsGet, "get"
+            )
             # Successfully parsed as JSON - treat as JSON body
-            query_params_data = body.get("query_params")
-            custom_body_data = body.get("custom_body")
-            stream = body.get("stream")
+            query_params_data = multipart_json_body.get("query_params")
+            custom_body_data = multipart_json_body.get("custom_body")
+            stream = multipart_json_body.get("stream")
             # If custom_body is not set, use the entire body
-            if custom_body_data is None and body:
-                custom_body_data = body
+            if custom_body_data is None and multipart_json_body:
+                custom_body_data = multipart_json_body
         except (json.JSONDecodeError, Exception):
             # Not JSON - this is actual multipart data
             # Skip parsing here to avoid consuming the request body stream

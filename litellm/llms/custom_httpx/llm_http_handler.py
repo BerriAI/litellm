@@ -176,6 +176,7 @@ from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    AgenticLoopParams,
     CallTypes,
     EmbeddingResponse,
     FileTypes,
@@ -225,6 +226,10 @@ def _client_request_headers(
 
     optional_headers: Final = as_str_mapping(response_api_optional_request_params.get("extra_headers"))
     return _merge_headers_case_insensitive(optional_headers or {}, extra_headers)
+
+
+def _requested_stream(response_api_optional_request_params: Mapping[str, object]) -> object:
+    return response_api_optional_request_params.get("stream", False)
 
 
 def _rust_responses_websocket_enabled(
@@ -372,6 +377,10 @@ async def _avalidate_files_environment(
 class _SignedBodyKwargs(TypedDict, total=False):
     data: ReadOnly[bytes]
     json: ReadOnly[dict[str, object]]
+
+
+class _AgenticLoopParamsView(TypedDict):
+    agentic_loop_params: ReadOnly[AgenticLoopParams]
 
 
 _GOAWAY_RETRY_MESSAGE: Final = "Vector store search connection was closed by an HTTP/2 GOAWAY, retrying once"
@@ -3037,7 +3046,7 @@ class BaseLLMHTTPHandler:
         }
 
         # Check if streaming is requested
-        stream = response_api_optional_request_params.get("stream", False)
+        stream = _requested_stream(response_api_optional_request_params)
         caller_requested_stream: Final = bool(stream or (extra_body or {}).get("stream"))
 
         api_base: Final = responses_api_provider_config.get_complete_url(
@@ -6129,8 +6138,10 @@ class BaseLLMHTTPHandler:
 
         full_model_name = model
         if logging_obj is not None:
-            agentic_params: Final[Mapping[str, object]] = logging_obj.model_call_details.get("agentic_loop_params", {})
-            full_model_name = cast(str, agentic_params.get("model", model))
+            agentic_view: Final[_AgenticLoopParamsView] = {
+                "agentic_loop_params": logging_obj.model_call_details.get("agentic_loop_params", {})
+            }
+            full_model_name = agentic_view["agentic_loop_params"].get("model", model)
 
         optional_params: Final = dict(anthropic_messages_optional_request_params)
         optional_params.update(patch.optional_params)
@@ -6712,7 +6723,7 @@ class BaseLLMHTTPHandler:
                 )
 
                 if plan.response_override is not None:
-                    return plan.response_override
+                    return _AGENTIC_LOOP_RESULT.validate_python(plan.response_override)
                 if plan.terminate:
                     verbose_logger.debug(
                         "Agentic chat loop terminated by callback=%s reason=%s",

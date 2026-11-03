@@ -3,12 +3,13 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes
 from litellm.responses.litellm_completion_transformation.client_tool_search import (
     bridge_client_tool_search,
     client_tool_search_loaded_tools,
@@ -44,12 +45,24 @@ COLD_STORAGE_HANDLER: Final = ColdStorageHandler()
 ########################################################
 
 
+class _CarriesArguments(Protocol):
+    arguments: object
+
+
+def _normalize_redacted_function_arguments(tool_call: object) -> None:
+    function: Final = attribute_or_none(tool_call, "function")
+    if function is None:
+        return
+    carrier: Final = require_attributes(function, _CarriesArguments, "arguments")
+    if carrier.arguments == REDACTED_BY_LITELLM:
+        carrier.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+
+
 def _normalize_redacted_tool_call_arguments(message: Message) -> None:
     """Redaction stores the bare sentinel (invalid JSON) in tool-call arguments;
     normalize replayed history to "{}" so provider converters can parse it."""
     for tool_call in message.tool_calls or []:
-        if (function := getattr(tool_call, "function", None)) is not None and function.arguments == REDACTED_BY_LITELLM:
-            function.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+        _normalize_redacted_function_arguments(tool_call)
     function_call: Final = message.function_call
     if function_call is not None and function_call.arguments == REDACTED_BY_LITELLM:
         function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER

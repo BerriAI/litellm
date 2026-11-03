@@ -894,6 +894,10 @@ def _without_line_breaks(value: object) -> str:
     return str(value).replace("\r", "").replace("\n", "")
 
 
+def _without_keys(mapping: Mapping[str, object], excluded: tuple[str, ...]) -> Mapping[str, object]:
+    return {key: value for key, value in mapping.items() if key not in excluded}
+
+
 def _anthropic_stream_error_is_gateway_verdict(chunk: object) -> bool:
     """AgenticAnthropicStreamingIterator's own retrieval-failure frame is the gateway's verdict, not a provider
     failure: another deployment would rerun the same failed hook, so it reaches the client instead of falling back."""
@@ -1365,6 +1369,7 @@ class PythonCore(DeprecatedRouterMembers):
     # Bumped by every ``apply``: the static arguments plus ``_core_applied`` are the settings.
     _settings_version: int = 0
     _core_applied: Mapping[str, object] = MappingProxyType({})
+    _core_applying: int = 0
 
     # -- entry points: everything outside code needs besides the endpoint methods ---------------
     # See litellm/router_api.py. The members outside code used before these live in
@@ -1508,7 +1513,7 @@ class PythonCore(DeprecatedRouterMembers):
     @contextlib.contextmanager
     def _core_applying_changes(self, changes: ChangeSet) -> Generator[None, None, None]:
         """Mark a changeset in progress, then record its settings and bump ``_settings_version``."""
-        depth: Final = self.__dict__.get("_core_applying", 0)
+        depth: Final = self._core_applying
         self.__dict__["_core_applying"] = depth + 1
         try:
             yield
@@ -6073,7 +6078,7 @@ class PythonCore(DeprecatedRouterMembers):
             if value is not None
         }
         return await self.async_function_with_fallbacks(
-            **{key: value for key, value in kwargs.items() if key not in ("timeout", "stream_timeout")},
+            **_without_keys(kwargs, ("timeout", "stream_timeout")),
             **target_group_timeouts,
         )
 

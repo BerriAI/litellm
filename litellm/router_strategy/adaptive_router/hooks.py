@@ -14,7 +14,9 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -42,7 +44,12 @@ _IDENTITY_FIELDS: Final = (
 )
 
 
-def _resolve_session_key(kwargs: dict[str, Any]) -> str | None:
+class _LoggedCallKwargs(TypedDict, total=False):
+    litellm_params: ReadOnly[Mapping[str, object]]
+    messages: ReadOnly[Sequence[Mapping[str, object]] | None]
+
+
+def _resolve_session_key(kwargs: _LoggedCallKwargs) -> str | None:
     """Pick a stable per-conversation key for owner-cache attribution.
 
     Order:
@@ -247,7 +254,7 @@ class AdaptiveRouterPostCallHook(CustomLogger):
 
     async def _record(
         self,
-        kwargs: dict[str, Any],
+        kwargs: _LoggedCallKwargs,
         response_obj: object,
         response_status: int,
     ) -> None:

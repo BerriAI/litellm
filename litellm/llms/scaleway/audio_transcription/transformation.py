@@ -7,8 +7,10 @@ API reference: https://www.scaleway.com/en/developers/api/generative-apis/#path-
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
@@ -21,6 +23,8 @@ from litellm.types.llms.openai import (
     OpenAIAudioTranscriptionOptionalParams,
 )
 from litellm.types.utils import FileTypes, TranscriptionResponse
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class ScalewayAudioTranscriptionException(BaseLLMException):
@@ -131,13 +135,17 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return TranscriptionResponse(text=raw_response.text)
 
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise ScalewayAudioTranscriptionException(
                 message=raw_response.text,
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
+
+        if not is_str_keyed_dict(response_json):
+            missing_get: Final = f"{type(response_json).__name__!r} object has no attribute 'get'"
+            raise AttributeError(missing_get, name="get", obj=response_json)
 
         text: Final = response_json.get("text") or ""
         response: Final = TranscriptionResponse(text=text)
