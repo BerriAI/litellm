@@ -20,7 +20,7 @@ from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.single_flight import SingleFlight, single_flight_lru_cache
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
 from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIAsyncHTTPClient, OpenAIHTTPClient
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -192,8 +192,12 @@ def _exception_chain(error: BaseException) -> Iterator[BaseException]:
         link = link.__cause__ or link.__context__
 
 
+def entra_rejection_in(error: BaseException) -> EntraRejectionError | None:
+    return next((link for link in _exception_chain(error) if isinstance(link, EntraRejectionError)), None)
+
+
 def caused_by_entra_rejection(error: BaseException) -> bool:
-    return any(isinstance(link, EntraRejectionError) for link in _exception_chain(error))
+    return entra_rejection_in(error) is not None
 
 
 async def _awaited_token(token: Awaitable[str]) -> str:
@@ -392,9 +396,13 @@ def _cached_oidc_token(cache_key: str) -> str | None:
     return cached if isinstance(cached, str) else None
 
 
-def _oidc_exchange_error(status_code: int, body: str) -> AzureOpenAIError:
-    reason: Final = _entra_rejection_reason(body) if status_code in (400, 401) else None
-    return AzureOpenAIError(status_code=status_code, message=body) if reason is None else _entra_rejection(reason)
+def _oidc_exchange_error(response: httpx.Response, message: str) -> AzureOpenAIError:
+    reason: Final = _entra_rejection_reason(message) if response.status_code in (400, 401) else None
+    if reason is not None:
+        return _entra_rejection(reason)
+    return AzureOpenAIError(
+        status_code=response.status_code, message=message, response=response, headers=response.headers
+    )
 
 
 def _exchange_oidc_token(cache_key: str, token_url: str, client_id: str, scope: str, oidc_token: str) -> str:
@@ -414,8 +422,8 @@ def _exchange_oidc_token(cache_key: str, token_url: str, client_id: str, scope: 
                     "client_assertion": oidc_token,
                 },
             )
-        except httpx.HTTPStatusError as error:
-            raise _oidc_exchange_error(error.response.status_code, error.response.text) from error
+        except MaskedHTTPStatusError as error:
+            raise _oidc_exchange_error(error.response, error.text or error.response.text) from error
 
     if req_token.status_code != 200:
         raise AzureOpenAIError(

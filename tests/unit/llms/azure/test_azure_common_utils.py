@@ -2871,11 +2871,17 @@ def test_entra_outage_or_throttle_through_a_real_azure_identity_credential_stays
     assert excinfo.value.status_code != 401
 
 
-def _azure_chat_with_oidc_token(respx_mock, monkeypatch, entra_status_code: int, entra_body: Mapping[str, object]):
+def _azure_chat_with_oidc_token(
+    respx_mock,
+    monkeypatch,
+    entra_status_code: int,
+    entra_body: Mapping[str, object],
+    entra_headers: Mapping[str, str] | None = None,
+):
     monkeypatch.setenv("LITELLM_QA_FEDERATED_TOKEN", "federated-token")
     monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
     respx_mock.post(f"https://login.microsoftonline.com/{_ENTRA_TENANT_ID}/oauth2/v2.0/token").mock(
-        return_value=httpx.Response(entra_status_code, json=entra_body)
+        return_value=httpx.Response(entra_status_code, json=entra_body, headers=entra_headers)
     )
     return litellm.completion(
         model="azure/gpt-4.1",
@@ -2913,6 +2919,19 @@ def test_entra_answering_an_oidc_exchange_with_a_transient_code_keeps_its_status
 
     assert excinfo.value.status_code == 400
     assert not isinstance(excinfo.value, litellm.AuthenticationError)
+
+
+def test_entra_throttling_an_oidc_exchange_keeps_its_retry_after(no_azure_api_key, respx_mock, monkeypatch):
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        _azure_chat_with_oidc_token(
+            respx_mock,
+            monkeypatch,
+            429,
+            _entra_error("AADSTS90055", "TenantThrottlingError: There are too many pending requests."),
+            {"Retry-After": "7"},
+        )
+
+    assert excinfo.value.response.headers.get("retry-after") == "7"
 
 
 class _EntraServiceUnavailableAnswer:

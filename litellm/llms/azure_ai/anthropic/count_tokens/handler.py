@@ -16,6 +16,7 @@ from litellm.anthropic_beta_headers_manager import aload_beta_headers_config
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.anthropic.common_utils import AnthropicError
+from litellm.llms.azure.common_utils import EntraRejectionError
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
 )
@@ -135,6 +136,8 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
         except AnthropicError:
             # Re-raise Anthropic exceptions as-is
             raise
+        except EntraRejectionError as rejection:
+            raise AnthropicError(status_code=rejection.status_code, message=rejection.message) from rejection
         except httpx.HTTPStatusError as e:
             # HTTP errors - preserve the actual status code
             verbose_logger.error("HTTP error in CountTokens handler: %s", e)

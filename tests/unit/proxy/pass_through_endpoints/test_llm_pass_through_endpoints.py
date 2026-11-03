@@ -7241,6 +7241,54 @@ class TestRouterModelRelayUpstreamContract:
         assert json.loads(result.body) == upstream_body
         assert result.headers["x-ms-request-id"] == "req-1"
 
+    @pytest.mark.asyncio
+    async def test_azure_relay_answers_401_when_entra_rejects_the_deployment_credential(self, monkeypatch):
+        from litellm.llms.azure.common_utils import EntraRejectionError
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        reason: Final = "Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided."
+
+        class EntraRejectingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                try:
+                    raise EntraRejectionError(status_code=401, message=reason)
+                except EntraRejectionError as rejection:
+                    raise BaseLLMException(status_code=401, message=str(rejection)) from rejection
+
+        self._install_router(monkeypatch, EntraRejectingRouter(), {"model": "gpt-5", "stream": False})
+
+        with pytest.raises(ProxyException) as excinfo:
+            await azure_proxy_route(
+                endpoint="openai/deployments/gpt-5/chat/completions",
+                request=self._request("application/json"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+
+        assert (excinfo.value.code, excinfo.value.message) == ("401", reason)
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_keeps_a_failure_entra_did_not_cause(self, monkeypatch):
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        upstream_failure: Final = BaseLLMException(status_code=500, message="Connection reset by Azure")
+
+        class FailingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                raise upstream_failure
+
+        self._install_router(monkeypatch, FailingRouter(), {"model": "gpt-5", "stream": False})
+
+        with pytest.raises(BaseLLMException) as excinfo:
+            await azure_proxy_route(
+                endpoint="openai/deployments/gpt-5/chat/completions",
+                request=self._request("application/json"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+
+        assert excinfo.value is upstream_failure
+
 
 NIM_INFER_BODY = {
     "input": [
