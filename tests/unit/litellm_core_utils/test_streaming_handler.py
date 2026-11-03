@@ -9601,6 +9601,8 @@ def _continuous_usage_chunk(choice: Mapping[str, object], usage: Mapping[str, in
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_continuous_usage_stats_keeps_usage_on_every_chunk(sync_mode: bool) -> None:
+    from litellm.proxy.proxy_server import _serialize_streaming_chunk
+
     counts: Final = [
         {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
         {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
@@ -9620,6 +9622,8 @@ async def test_continuous_usage_stats_keeps_usage_on_every_chunk(sync_mode: bool
     assert all(getattr(chunk, "usage", None) is not None for chunk in emitted)
     assert [chunk.usage.total_tokens for chunk in emitted] == [11, 12, 13]
     assert litellm.stream_chunk_builder(chunks=emitted).usage.total_tokens == 13
+    serialized: Final = tuple(json.loads(_serialize_streaming_chunk(chunk)) for chunk in emitted)
+    assert [chunk["usage"]["total_tokens"] for chunk in serialized] == [count["total_tokens"] for count in counts]
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
