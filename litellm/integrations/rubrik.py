@@ -103,7 +103,7 @@ class _RequestContextSource(Protocol):
     @overload
     def get(self, key: Literal["optional_params"], /) -> Mapping[str, object] | None: ...
     @overload
-    def get(self, key: Literal["metadata"], /) -> Mapping[str, object] | None: ...
+    def get(self, key: Literal["metadata", "litellm_metadata"], /) -> Mapping[str, object] | None: ...
     @overload
     def get(self, key: str, /) -> object | None: ...
     def __contains__(self, key: object, /) -> bool: ...
@@ -689,14 +689,22 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
     @staticmethod
     def _rac_agent_metadata(request_data: _RequestContextSource) -> Mapping[str, object]:
-        """Forward only ``metadata.rac_agent_id``, which the webhooks use to
-        scope agent-specific policies. The rest of ``request_data["metadata"]``
-        carries non-JSON-serializable objects and inbound HTTP headers."""
-        metadata: Final = request_data.get("metadata")
-        rac_agent_id: Final = metadata.get("rac_agent_id") if isinstance(metadata, dict) else None
-        if not isinstance(rac_agent_id, str) or not rac_agent_id:
-            return _EMPTY_MAPPING
-        return {"metadata": {"rac_agent_id": rac_agent_id}}
+        """Forward only ``rac_agent_id``, which the webhooks use to scope
+        agent-specific policies. The rest of the request metadata carries
+        non-JSON-serializable objects and inbound HTTP headers. Routes such as
+        ``/v1/messages`` and ``/v1/responses`` keep proxy metadata under
+        ``litellm_metadata``, so callers there may set it in either place."""
+        rac_agent_id: Final = next(
+            (
+                value
+                for key in ("metadata", "litellm_metadata")
+                if isinstance(container := request_data.get(key), dict)
+                and isinstance(value := container.get("rac_agent_id"), str)
+                and value
+            ),
+            None,
+        )
+        return {"metadata": {"rac_agent_id": rac_agent_id}} if rac_agent_id else _EMPTY_MAPPING
 
     @staticmethod
     def _sanitize_proxy_server_request(proxy_server_request: Mapping[str, object] | str | None) -> object:

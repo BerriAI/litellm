@@ -1486,6 +1486,39 @@ class TestRacAgentIdForwarding:
         )
         assert result["metadata"] == {"rac_agent_id": "agent-42"}
 
+    def test_rac_agent_id_read_from_litellm_metadata(self):
+        """/v1/messages and /v1/responses keep proxy metadata under litellm_metadata"""
+        request_data = {"litellm_metadata": dict(_LITELLM_ENRICHED_METADATA)}
+        inputs = {"structured_messages": [{"role": "user", "content": "hi"}]}
+        prompt_payload = RubrikLogger._build_prompt_moderation_payload(
+            inputs, inputs["structured_messages"], request_data
+        )
+        response_request = RubrikLogger._extract_request_data(
+            {"model": "gpt-4"}, request_data
+        )
+        assert prompt_payload["metadata"] == {"rac_agent_id": "agent-42"}
+        assert response_request["metadata"] == {"rac_agent_id": "agent-42"}
+
+    def test_metadata_takes_precedence_over_litellm_metadata(self):
+        result = RubrikLogger._extract_request_data(
+            {"model": "gpt-4"},
+            {
+                "metadata": {"rac_agent_id": "from-metadata"},
+                "litellm_metadata": {"rac_agent_id": "from-litellm-metadata"},
+            },
+        )
+        assert result["metadata"] == {"rac_agent_id": "from-metadata"}
+
+    def test_falls_back_to_litellm_metadata_when_metadata_has_no_valid_id(self):
+        result = RubrikLogger._extract_request_data(
+            {"model": "gpt-4"},
+            {
+                "metadata": {"rac_agent_id": ""},
+                "litellm_metadata": {"rac_agent_id": "from-litellm-metadata"},
+            },
+        )
+        assert result["metadata"] == {"rac_agent_id": "from-litellm-metadata"}
+
     @pytest.mark.parametrize(
         "request_data",
         [
@@ -1495,6 +1528,8 @@ class TestRacAgentIdForwarding:
             {"metadata": {"rac_agent_id": ""}},
             {"metadata": {"rac_agent_id": {"nested": "object"}}},
             {"metadata": {"other": 1}},
+            {"litellm_metadata": {"rac_agent_id": {"nested": "object"}}},
+            {"litellm_metadata": "not-a-dict"},
         ],
     )
     def test_metadata_omitted_without_rac_agent_id(self, request_data):
