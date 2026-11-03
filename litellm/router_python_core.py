@@ -1142,8 +1142,10 @@ class _SharedCostWrite:
         return self.model_id in writers or not writers.isdisjoint(self.backend_keys)
 
     @property
-    def sets_mode(self) -> bool:
-        return isinstance(self.model_info.get("mode"), str)
+    def may_write_mode(self) -> bool:
+        """Whether its write can carry ``mode``: set directly, or copied with the backend entry an off-peak schedule
+        inherits."""
+        return isinstance(self.model_info.get("mode"), str) or bool(self.model_info.get("off_peak_pricing"))
 
     def replay_key(self, targets: frozenset[str]) -> tuple[str | None, str]:
         """Equal for two entries only when replaying both writes the ``targets`` rows exactly as replaying one does.
@@ -12513,10 +12515,10 @@ class PythonCore(DeprecatedRouterMembers):
     ) -> tuple[int, ...]:
         """The position of the last of each set of ``landing`` writes that leave the ``targets`` rows as one of them
         does. Each field keeps the last value written to it, so only the last write of each set counts, unless a write
-        sets ``mode``: what a ``mode`` write does depends on the mode the row holds, so then only back-to-back runs
+        may carry ``mode``: what a ``mode`` write does depends on the mode the row holds, so then only back-to-back runs
         collapse."""
         keyed: Final = tuple((position, write.replay_key(targets)) for position, write in landing)
-        if any(write.sets_mode for _position, write in landing):
+        if any(write.may_write_mode for _position, write in landing):
             return tuple(tuple(run)[-1][0] for _replay_key, run in groupby(keyed, key=itemgetter(1)))
         return tuple(sorted({replay_key: position for position, replay_key in keyed}.values()))
 

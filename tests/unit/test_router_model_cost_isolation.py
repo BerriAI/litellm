@@ -2995,6 +2995,39 @@ def test_deleting_a_deployment_keeps_the_mode_its_siblings_registered_in_model_l
     assert litellm.model_cost[backend_model].get("mode") == registered_mode
 
 
+def _openai_catalog_model_with_mode(mode: str) -> str:
+    return next(
+        key
+        for key, entry in GetModelCostMap.loaded_model_cost_map().items()
+        if (entry.get("mode"), entry.get("litellm_provider"), "/" in key) == (mode, "openai", False)
+    )
+
+
+def test_deleting_a_deployment_keeps_the_mode_off_peak_siblings_inherit_in_model_list_order() -> None:
+    backend_model: Final = "hosted_vllm/withdraw-test-inherited-mode-model"
+    off_peak: Final = {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-7}
+    responses_model: Final = _openai_catalog_model_with_mode("responses")
+    router: Final = Router(
+        model_list=[
+            _cache_point_deployment("doomed", model=backend_model, max_input_tokens=5),
+            *(
+                _cache_point_deployment(model_id, model=backend_model, base_model=base_model, off_peak_pricing=off_peak)
+                for model_id, base_model in (
+                    ("responses-first", responses_model),
+                    ("embedding", _openai_catalog_model_with_mode("embedding")),
+                    ("responses-last", responses_model),
+                )
+            ),
+        ]
+    )
+    registered_mode: Final = litellm.model_cost[backend_model].get("mode")
+    assert registered_mode is not None
+
+    assert router.delete_deployment(id="doomed") is not None
+
+    assert litellm.model_cost[backend_model].get("mode") == registered_mode
+
+
 class _CostMapWriteRecordingHost(PythonHost):
     __slots__ = ("cost_map_writes",)
 
