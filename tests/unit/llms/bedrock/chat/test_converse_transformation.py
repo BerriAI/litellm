@@ -9983,7 +9983,7 @@ def test_converse_carries_prompt_cache_breakpoint_to_cache_point():
     ]
 
 
-def test_converse_keeps_the_earliest_prompt_cache_breakpoints_within_the_cap():
+def test_converse_keeps_the_first_and_last_prompt_cache_breakpoints_within_the_cap():
     messages = [
         {
             "role": "user",
@@ -10015,10 +10015,10 @@ def test_converse_keeps_the_earliest_prompt_cache_breakpoints_within_the_cap():
                 {"text": "part 1"},
                 cache_point,
                 {"text": "part 2"},
-                cache_point,
                 {"text": "part 3"},
                 cache_point,
                 {"text": "part 4"},
+                cache_point,
             ],
         }
     ]
@@ -10071,8 +10071,8 @@ def test_converse_reserves_the_tool_cache_point_within_the_cap(tool_cache_params
         {"text": "part 1"},
         cache_point,
         {"text": "part 2"},
-        cache_point,
         {"text": "part 3"},
+        cache_point,
     ]
     assert request["toolConfig"]["tools"][-1] == cache_point
 
@@ -10181,8 +10181,17 @@ def test_converse_drops_marks_until_a_merged_tool_result_fits_the_cap():
         transform({})
 
     request = transform({"drop_params": True})
-    assert len(_collect_cache_points(request["messages"][:1])) == 4
-    assert _collect_cache_points(request["messages"][1:]) == []
+    cache_point = {"cachePoint": {"type": "default"}}
+    assert request["messages"][0]["content"] == [
+        {"text": "part 0"},
+        cache_point,
+        {"text": "part 1"},
+        cache_point,
+        {"text": "part 2"},
+        cache_point,
+        {"text": "part 3"},
+    ]
+    assert len(_collect_cache_points(request["messages"][1:])) == 1
 
 
 def test_converse_drops_prompt_cache_breakpoint_from_a_nova_tool_result():
@@ -10287,6 +10296,78 @@ def test_converse_prompt_cache_breakpoint_follows_the_arn_flag_over_its_base_mod
         {"cachePoint": {"type": "default"}},
     ]
     assert user_content(opted_out_arn, "anthropic.claude-sonnet-5-5", {"ttl": "30m"}) == [{"text": "Hello"}]
+
+
+def test_converse_translates_prompt_cache_breakpoint_only_for_families_that_take_cache_points(local_model_cost_map):
+    litellm.register_model(
+        {"zai.glm-next-v1:0": {"litellm_provider": "bedrock_converse", "mode": "chat", "supports_prompt_caching": True}}
+    )
+
+    def user_content(model: str, mark: dict) -> list:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model=model,
+            messages=[{"role": "user", "content": [{"type": "text", "text": "Hello", **mark}]}],
+            optional_params={},
+            litellm_params={},
+        )["messages"][0]["content"]
+
+    marker: Final = {"prompt_cache_breakpoint": {"mode": "explicit"}}
+    client_mark: Final = {"cache_control": {"type": "ephemeral"}}
+    cache_point: Final = {"cachePoint": {"type": "default"}}
+    assert user_content("zai.glm-next-v1:0", marker) == [{"text": "Hello"}]
+    assert user_content("zai.glm-next-v1:0", client_mark) == [{"text": "Hello"}, cache_point]
+    assert user_content("us.anthropic.claude-next-v1:0", marker) == [{"text": "Hello"}, cache_point]
+    assert user_content("us.amazon.nova-next-v1:0", marker) == [{"text": "Hello"}, cache_point]
+
+
+def test_converse_prompt_cache_breakpoint_on_guarded_user_text_keeps_its_cache_point(local_model_cost_map):
+    guardrail: Final = {"guardrailConfig": {"guardrailIdentifier": "gr-1", "guardrailVersion": "DRAFT"}}
+
+    def request(system_marks: int) -> dict:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model="anthropic.claude-sonnet-5-5",
+            messages=[
+                *(
+                    {
+                        "role": "system",
+                        "content": [{"type": "text", "text": f"Rule {i}", "cache_control": {"type": "ephemeral"}}],
+                    }
+                    for i in range(system_marks)
+                ),
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+                },
+            ],
+            optional_params=dict(guardrail),
+            litellm_params={},
+        )
+
+    assert request(0)["messages"][0]["content"] == [
+        {"guardContent": {"text": {"text": "Hello"}}},
+        {"cachePoint": {"type": "default"}},
+    ]
+    with pytest.raises(litellm.UnsupportedParamsError):
+        request(4)
+
+    client_marked: Final = litellm.AmazonConverseConfig()._transform_request(
+        model="anthropic.claude-sonnet-5-5",
+        messages=[
+            *(
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": f"Rule {i}", "cache_control": {"type": "ephemeral"}}],
+                }
+                for i in range(4)
+            ),
+            {"role": "user", "content": [{"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}}]},
+        ],
+        optional_params=dict(guardrail),
+        litellm_params={},
+    )
+    assert sum("cachePoint" in block for block in client_marked["system"]) == 4
+    assert client_marked["messages"][0]["content"] == [{"guardContent": {"text": {"text": "Hello"}}}]
+
 
 def _converse_request_with_30m_breakpoint(model: str, litellm_params: dict) -> dict:
     return litellm.AmazonConverseConfig()._transform_request(

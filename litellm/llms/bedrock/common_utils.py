@@ -1495,16 +1495,29 @@ def bedrock_declared_cache_point_support(model: str) -> bool | None:
 
 
 def bedrock_model_known_to_accept_cache_points(model: str, deployment_model: str | None = None) -> bool:
-    """Like ``bedrock_model_accepts_cache_points``, but an unmapped model gets no cachePoint: an OpenAI
+    """Like ``bedrock_model_accepts_cache_points``, but only for the Claude and Nova families Bedrock documents
+    as taking cache checkpoints, unless the entry sets ``supports_prompt_cache_breakpoint``: an OpenAI
     ``prompt_cache_breakpoint`` reaches every model of a mixed fleet, not only the ones a client marked for
-    Bedrock caching, so an application inference profile ARN opts in through ``supports_prompt_cache_breakpoint``."""
-    deployment_declared: Final = (
-        None if deployment_model is None else bedrock_declared_cache_point_support(deployment_model)
-    )
-    declared: Final = (
-        deployment_declared if deployment_declared is not None else bedrock_declared_cache_point_support(model)
-    )
+    Bedrock caching, and other families price implicit cache reads yet may reject the cachePoint field."""
+    deployment_declared: Final = None if deployment_model is None else _declared_marker_support(deployment_model)
+    declared: Final = deployment_declared if deployment_declared is not None else _declared_marker_support(model)
     return declared is True
+
+
+def _declared_marker_support(model: str) -> bool | None:
+    if _OPENAI_FAMILY_MODEL_RE.search(model):
+        return False
+    explicit_marker_support: Final = _explicit_cache_point_support(model)
+    if explicit_marker_support is not None:
+        return explicit_marker_support
+    mapped: Final = _mapped_prompt_caching_support(model)
+    if not _documents_cache_checkpoints(model):
+        return None if mapped is None else False
+    return mapped is not False
+
+
+def _documents_cache_checkpoints(model: str) -> bool:
+    return _is_claude(model) or get_bedrock_base_model(model).startswith("amazon.nova")
 
 
 def _explicit_cache_point_support(model: str) -> bool | None:

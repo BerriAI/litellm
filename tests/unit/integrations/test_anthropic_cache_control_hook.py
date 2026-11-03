@@ -4983,8 +4983,8 @@ def test_capping_thousands_of_marks_on_one_tool_result_counts_the_request_a_loga
         cast(List[AllMessageValues], messages), True, sent_breakpoints, lambda: 0
     )
 
-    assert [part.get("cache_control") for part in capped[0]["content"]] == [{"type": "ephemeral"}] * 4
-    assert not any("cache_control" in part for part in capped[2]["content"])
+    assert [part.get("cache_control") for part in capped[0]["content"]] == [{"type": "ephemeral"}] * 3 + [None]
+    assert ["cache_control" in part for part in capped[2]["content"]] == [False] * 1997 + [True] * 3
     assert sent_breakpoints.call_count < 3 * 20
 
 

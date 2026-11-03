@@ -644,19 +644,21 @@ def _part_without_cache_control(part: object) -> object:
     return {key: value for key, value in _CONTENT_PART_ADAPTER.validate_python(part).items() if key != "cache_control"}
 
 
-def _message_keeping_created_cache_controls_below(
-    message: AllMessageValues, created: Sequence[bool], marks_before: int, kept_marks: int
+def _message_dropping_created_cache_controls_between(
+    message: AllMessageValues, created: Sequence[bool], marks_before: int, first_dropped: int, first_kept_after: int
 ) -> AllMessageValues:
     if not any(created):
         return message
     parts: Final = _as_object_list(_attribute_or_key(message, "content")) or []
     ordinals: Final = itertools.accumulate((int(flag) for flag in created), initial=marks_before)
-    return cast(  # cast-ok: the same message with its late translated marks removed
+    return cast(  # cast-ok: the same message with its middle translated marks removed
         AllMessageValues,
         {
             **message,
             "content": [
-                _part_without_cache_control(part) if is_created and ordinal >= kept_marks else part
+                _part_without_cache_control(part)
+                if is_created and first_dropped <= ordinal < first_kept_after
+                else part
                 for part, is_created, ordinal in zip(parts, created, ordinals)
             ],
         },
@@ -920,8 +922,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     def count_chat_external_cache_breakpoints(optional_params: object) -> int:
         params: Final = _validated_object_mapping(optional_params) or {}
         return AnthropicCacheControlHook.count_external_cache_breakpoints(
-            AnthropicCacheControlHook.tools_keeping_cache_control_on_chat(params.get("tools")),
-            params.get("cache_control"),
+            _as_object_list(params.get("tools")), params.get("cache_control")
         )
 
     @staticmethod
@@ -1187,8 +1188,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     ) -> tuple[AllMessageValues, ...]:
         """``prompt_cache_breakpoints_as_cache_control`` over the whole request, held to the provider's
         breakpoint cap, counting each message by the breakpoints ``sent_breakpoints`` says its provider sends.
-        Under ``drop_params`` the earliest translated marks fill the slots the client's own ``cache_control``
-        marks leave, and without it a request over the cap is rejected."""
+        Under ``drop_params`` the first and last translated marks fill the slots the client's own
+        ``cache_control`` marks leave, the first half taking the odd slot, so the stable prefix and the newest
+        turns stay cached, and without it a request over the cap is rejected."""
         translated: Final = tuple(
             AnthropicCacheControlHook.prompt_cache_breakpoints_as_cache_control(message, drop_params)
             for message in messages
@@ -1209,16 +1211,20 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 message=(
                     f"This model takes at most {MAX_CACHE_CONTROL_BLOCKS} cache breakpoints per request, and this "
                     f"request has {breakpoints} once its prompt_cache_breakpoint marks are translated. Remove {excess} "
-                    f"of them, or {PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT} to keep only the earliest."
+                    f"of them, or {PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT} to keep the first and last of them."
                 ),
                 status_code=400,
             )
-        verbose_logger.debug("Dropping the latest prompt_cache_breakpoint marks past the cap under drop_params")
+        verbose_logger.debug("Dropping the middle prompt_cache_breakpoint marks past the cap under drop_params")
         marks_before: Final = tuple(itertools.accumulate((sum(flags) for flags in created), initial=0))
 
         def capped_request(kept_marks: int) -> tuple[AllMessageValues, ...]:
+            first_dropped: Final = (kept_marks + 1) // 2
+            first_kept_after: Final = created_marks - kept_marks // 2
             return tuple(
-                _message_keeping_created_cache_controls_below(message, flags, before, kept_marks)
+                _message_dropping_created_cache_controls_between(
+                    message, flags, before, first_dropped, first_kept_after
+                )
                 for message, flags, before in zip(translated, created, marks_before)
             )
 

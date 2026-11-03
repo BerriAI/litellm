@@ -4485,7 +4485,7 @@ def test_transform_request_prompt_cache_breakpoint_without_claude_equivalent(mar
     assert body["messages"] == [{"role": "user", "content": [expected_block]}]
 
 
-def test_transform_request_keeps_the_earliest_prompt_cache_breakpoints_within_the_cap():
+def test_transform_request_keeps_the_first_and_last_prompt_cache_breakpoints_within_the_cap():
     client_marked_part = {"type": "text", "text": "part 0", "cache_control": {"type": "ephemeral"}}
     marked_parts = [
         {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
@@ -4501,11 +4501,59 @@ def test_transform_request_keeps_the_earliest_prompt_cache_breakpoints_within_th
     assert [part.get("cache_control") for part in body["messages"][0]["content"]] == [
         {"type": "ephemeral"},
         {"type": "ephemeral"},
+        None,
+        None,
         {"type": "ephemeral"},
-        None,
-        None,
     ]
     assert body["tools"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_transform_request_counts_a_cache_marked_tool_search_tool_toward_the_cap():
+    config = AnthropicConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "max_tokens": 100,
+            "tools": [
+                {
+                    "type": "tool_search_tool_regex_20251119",
+                    "name": "tool_search_tool_regex",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        optional_params={},
+        model="claude-sonnet-5-5",
+        drop_params=False,
+    )
+    marked_turns = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": f"turn {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        }
+        for index in range(4)
+    ]
+
+    def body(litellm_params: dict) -> dict:
+        return config.transform_request(
+            model="claude-sonnet-5-5",
+            messages=copy.deepcopy(marked_turns),
+            optional_params=copy.deepcopy(optional_params),
+            litellm_params=litellm_params,
+            headers={},
+        )
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="this request has 5"):
+        body({})
+
+    capped = body({"drop_params": True})
+    assert capped["tools"][0]["cache_control"] == {"type": "ephemeral"}
+    sent_parts = itertools.chain.from_iterable(message["content"] for message in capped["messages"])
+    assert [part.get("cache_control") for part in sent_parts] == [
+        {"type": "ephemeral"},
+        {"type": "ephemeral"},
+        None,
+        {"type": "ephemeral"},
+    ]
 
 
 @pytest.mark.parametrize(
