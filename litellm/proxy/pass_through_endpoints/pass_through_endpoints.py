@@ -204,7 +204,7 @@ _blocked_response_cost_logging: Final = PassThroughEndpointLogging(log_dispatch=
 _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
 _DECODED_JSON: Final = TypeAdapter(object)
 _GUARDRAIL_ENTRIES: Final = TypeAdapter(list[object])
-_POLICY_PIPELINE_FIELDS: Final = ("_guardrail_pipelines", "_pipeline_managed_guardrails")
+_POST_CALL_SELECTION_FIELDS: Final = ("_guardrail_pipelines", "_pipeline_managed_guardrails", "tags")
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
 
@@ -930,9 +930,10 @@ async def _inherit_auth_guardrails(
     )
     if entries and isinstance(metadata, dict):
         metadata["guardrails"] = entries
+    admin_metadata: Final = _admin_guardrail_metadata(user_api_key_dict)
     admin_scoped_body: Final = {
         **parsed_body,
-        "metadata": {**(as_str_mapping(metadata) or {}), **_admin_guardrail_metadata(user_api_key_dict)},
+        **{key: {**(as_str_mapping(parsed_body.get(key)) or {}), **admin_metadata} for key in sorted(_METADATA_KEYS)},
     }
     return entries if entries and _named_guardrail_runs_post_call(admin_scoped_body, entries) else None
 
@@ -954,14 +955,14 @@ def _admin_guardrail_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str,
     )
 
 
-def _policy_pipeline_metadata(kwargs: Mapping[str, object], inherited: bool) -> Mapping[str, object]:
-    """The policy pipelines resolved for a request that inherits auth guardrails, from the logging metadata that
-    request setup moved the body's ``metadata`` into"""
+def _post_call_selection_metadata(kwargs: Mapping[str, object], inherited: bool) -> Mapping[str, object]:
+    """The policy pipelines resolved for a request that inherits auth guardrails, and the tags a tag-scoped guardrail
+    mode reads, from the logging metadata that request setup moved the body's ``metadata`` into"""
     if not inherited:
         return MappingProxyType({})
     litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
     metadata: Final = as_str_mapping(litellm_params.get("metadata")) or {}
-    return {field: metadata[field] for field in _POLICY_PIPELINE_FIELDS if field in metadata}
+    return {field: metadata[field] for field in _POST_CALL_SELECTION_FIELDS if field in metadata}
 
 
 def _starts_post_call_pass(guardrails: Sequence[object] | None, policy_pipelines: Mapping[str, object]) -> bool:
@@ -2141,7 +2142,7 @@ async def pass_through_request(
             logging_obj=logging_obj,
         )
 
-        policy_pipelines: Final = _policy_pipeline_metadata(
+        policy_pipelines: Final = _post_call_selection_metadata(
             cast(dict[str, object], kwargs),  # cast-ok: the logging fields init_kwargs built above
             inherit_auth_guardrails,
         )

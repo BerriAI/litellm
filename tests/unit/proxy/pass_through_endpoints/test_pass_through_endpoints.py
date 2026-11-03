@@ -13518,6 +13518,22 @@ class TestInheritAuthGuardrails:
         assert metadata["user_api_key_team_metadata"] == {"opted_out_global_guardrails": ["global-post"]}
 
     @pytest.mark.asyncio
+    async def test_a_body_opt_out_in_litellm_metadata_does_not_stop_the_post_call_pass(self):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["global-post"]})
+
+        _, post_call = await self._run(
+            {
+                **self._chat_body(),
+                "litellm_metadata": {"user_api_key_metadata": {"disable_global_guardrails": True}},
+            },
+            inherit=True,
+            user_api_key_dict=auth,
+            guardrails=(self._guardrail("global-post", GuardrailEventHooks.post_call, default_on=True),),
+        )
+
+        post_call.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_inherited_post_call_pass_runs_only_the_guardrails_the_request_selected(self):
         auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
 
