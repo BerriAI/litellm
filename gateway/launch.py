@@ -22,15 +22,16 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
+from typing_extensions import assert_never
 from uvicorn.main import main as uvicorn_main
 
 from litellm_cli.main import without_gc_pauses
 
 if TYPE_CHECKING:
-    from fastapi import FastAPI
-
     from litellm.proxy.db.db_url_settings import DatabaseURLSettings
     from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings
+    from litellm.proxy.rust_forward.peer import ASGIApp
+    from litellm.proxy.rust_forward.server import PythonServer
 
 GATEWAY_APP: Final = "gateway.launch:worker_app"
 KEEPALIVE_FLAG: Final = "--timeout-keep-alive"
@@ -65,17 +66,58 @@ def pool_database_url(
     return start_in_container_pgbouncer(pgbouncer, upstream_url, token_auth=settings.token_auth())
 
 
-def worker_app() -> "FastAPI":
+def worker_app() -> "ASGIApp":
     with without_gc_pauses():
         from gateway.main import app
-    return app
+        from litellm.proxy.rust_forward.mode import rust_forward_mode
+        from litellm.proxy.rust_forward.peer import wrap
+    return wrap(app, rust_forward_mode(os.environ))
 
 
 def _serve(argv: Sequence[str]) -> None:
     uvicorn_main(tuple(argv), prog_name="uvicorn")
 
 
-def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
+def python_server(argv: Sequence[str]) -> "PythonServer":
+    """What uvicorn would serve the public port with, read from the same flags and environment it reads."""
+    from pydantic import TypeAdapter
+
+    from litellm.proxy.rust_forward.server import Listener, PythonServer, Server
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+    params: Final[Mapping[str, object]] = uvicorn_main.make_context(
+        "uvicorn", list(uvicorn_argv(argv, os.environ))
+    ).params
+    tls: Final = (
+        params["ssl_keyfile"] is not None
+        or params["ssl_certfile"] is not None
+        or any(arg.split("=")[0] == "--ssl-ciphers" for arg in argv)
+    )
+    listener: Final = (
+        Listener.TLS
+        if tls
+        else Listener.UNIX_SOCKET
+        if params["uds"] is not None
+        else Listener.INHERITED_FD
+        if params["fd"] is not None
+        else Listener.TCP
+    )
+    graceful_timeout: Final = TypeAdapter[int | None](int | None).validate_python(params["timeout_graceful_shutdown"])
+    return PythonServer(
+        server=Server.UVICORN,
+        listener=listener,
+        host=TypeAdapter(str).validate_python(params["host"]),
+        port=TypeAdapter(int).validate_python(params["port"]),
+        keepalive_seconds=TypeAdapter(int).validate_python(params["timeout_keep_alive"]),
+        graceful_timeout_seconds=GracefulShutdownManager.get_timeout()
+        if graceful_timeout is None
+        else graceful_timeout,
+        proxy_headers=TypeAdapter(bool).validate_python(params["proxy_headers"]),
+        trusted_proxies=TypeAdapter[str | None](str | None).validate_python(params["forwarded_allow_ips"]),
+    )
+
+
+def configure_database() -> None:
     from litellm.proxy.db.db_url_settings import DatabaseURLSettings
     from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings, export_pooled_database_url
 
@@ -86,7 +128,24 @@ def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -
         sys.exit(f"LiteLLM gateway: in-container pgbouncer could not start: {pooled_url.reason}")
     if pooled_url is not None:
         export_pooled_database_url(pooled_url)
-    serve(uvicorn_argv(argv, os.environ))
+
+
+def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
+    from litellm.proxy.rust_forward.mode import Disabled, Supervised, Supervisor, rust_forward_mode, uvicorn_flags
+    from litellm.proxy.rust_forward.supervisor import supervise
+
+    mode: Final = rust_forward_mode(os.environ)
+    match mode:
+        case Disabled():
+            configure_database()
+            serve(uvicorn_argv(argv, os.environ))
+        case Supervisor():
+            command: Final = (sys.executable, "-m", "gateway.launch", *argv)
+            sys.exit(supervise(python_server(argv), command, before_start=configure_database))
+        case Supervised():
+            serve((*uvicorn_argv(argv, os.environ), *uvicorn_flags(mode)))
+        case _:
+            assert_never(mode)
 
 
 if __name__ == "__main__":

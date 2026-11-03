@@ -6,6 +6,8 @@ from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE
 def build_graceful_shutdown_uvicorn_worker(
     timeout_graceful_shutdown: float,
     max_request_header_size: int | None = None,
+    *,
+    proxy_headers: bool = True,
 ) -> type[UvicornWorker]:
     class GracefulShutdownUvicornWorker(UvicornWorker):
         def __init__(self, *args: object) -> None:
@@ -15,6 +17,7 @@ def build_graceful_shutdown_uvicorn_worker(
                 "h11_max_incomplete_event_size": (
                     max_request_header_size if max_request_header_size is not None else DEFAULT_MAX_REQUEST_HEADER_SIZE
                 ),
+                "proxy_headers": proxy_headers,
             }
             super().__init__(*args)
 
