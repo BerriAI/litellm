@@ -1,15 +1,17 @@
 #![cfg(feature = "schema")]
 
-use litellm_model_catalog::{BUNDLED_REGISTRY, model_entry_json_schema, registry_json_schema};
+use litellm_model_catalog::{model_entry_json_schema, registry_json_schema};
 use rstest::rstest;
 use serde_json::{Map, Value, json};
+
+const REGISTRY: &[u8] = include_bytes!("../../../../model_prices_and_context_window.json");
 
 fn schema() -> Value {
     serde_json::to_value(model_entry_json_schema()).expect("generated schema serializes")
 }
 
 fn checked_in_catalog() -> Value {
-    serde_json::from_slice(BUNDLED_REGISTRY).unwrap()
+    serde_json::from_slice(REGISTRY).unwrap()
 }
 
 fn registry_validator() -> jsonschema::Validator {

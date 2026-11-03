@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Coroutine
 from dataclasses import dataclass
+from importlib.resources import files
 from types import SimpleNamespace
 from typing import Final, cast  # noqa: TID251  # narrows the async binding's untyped coroutine
 
@@ -15,6 +16,15 @@ from litellm.rust_bridge.ocr import entrypoints as ocr
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.responses import entrypoints as responses
 from litellm.rust_bridge.transcription import native as transcription
+
+
+def test_bundled_model_cost_map_uses_package_resource_and_reuses_bytes() -> None:
+    first: Final = _native.bundled_model_cost_map()
+    second: Final = _native.bundled_model_cost_map()
+    expected: Final = files("litellm").joinpath("model_prices_and_context_window_backup.json").read_bytes()
+
+    assert first is second
+    assert first == expected
 
 
 def test_binding_distinguishes_disable_from_reset() -> None:

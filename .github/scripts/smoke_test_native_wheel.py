@@ -7,19 +7,14 @@ import zipfile
 from pathlib import Path
 from typing import Final
 
-COST_MAP: Final = Path(__file__).resolve().parents[2] / "model_prices_and_context_window.json"
-
 CHILD_SCRIPT: Final = """
-from importlib.util import module_from_spec, spec_from_file_location
+from importlib.resources import files
 from pathlib import Path
 import sys
 
-native_path = Path(sys.argv[1])
-spec = spec_from_file_location("litellm.rust_bridge._native", native_path)
-if spec is None or spec.loader is None:
-    raise RuntimeError("cannot create native extension import specification")
-module = module_from_spec(spec)
-spec.loader.exec_module(module)
+sys.path.insert(0, sys.argv[1])
+
+import litellm.rust_bridge._native as module
 
 before = module.gil_stats()
 if not isinstance(before.get("releases"), int):
@@ -37,8 +32,9 @@ after = module.gil_stats()
 if not isinstance(after.get("releases"), int):
     raise AssertionError(f"native module unusable after panic: {after!r}")
 
-if module.bundled_model_cost_map() != Path(sys.argv[2]).read_bytes():
-    raise AssertionError("the wheel embeds a different model_prices_and_context_window.json than this checkout")
+wheel_cost_map = files("litellm").joinpath("model_prices_and_context_window_backup.json").read_bytes()
+if module.bundled_model_cost_map() != wheel_cost_map:
+    raise AssertionError("the native cost map does not match the wheel package resource")
 """
 
 
@@ -58,10 +54,17 @@ def main() -> int:
             sys.stderr.write(f"expected one native extension, found {len(native_members)}\n")
             return 1
 
-        native_path: Final = Path(temporary_directory) / Path(native_members[0].filename).name
-        native_path.write_bytes(archive.read(native_members[0]))
+        package_path: Final = Path(temporary_directory) / "litellm"
+        bridge_path: Final = package_path / "rust_bridge"
+        bridge_path.mkdir(parents=True)
+        (package_path / "__init__.py").write_bytes(b"")
+        (bridge_path / "__init__.py").write_bytes(b"")
+        (bridge_path / Path(native_members[0].filename).name).write_bytes(archive.read(native_members[0]))
+        (package_path / "model_prices_and_context_window_backup.json").write_bytes(
+            archive.read("litellm/model_prices_and_context_window_backup.json")
+        )
         result: Final = subprocess.run(
-            (sys.executable, "-c", CHILD_SCRIPT, str(native_path), str(COST_MAP)), check=False
+            (sys.executable, "-c", CHILD_SCRIPT, temporary_directory), check=False
         )
 
     if result.returncode != 0:

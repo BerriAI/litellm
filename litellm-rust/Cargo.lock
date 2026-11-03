@@ -4356,7 +4356,6 @@ dependencies = [
  "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",
- "litellm-model-catalog",
  "litellm-router-types",
  "litellm-secret-value",
  "litellm-secrets",

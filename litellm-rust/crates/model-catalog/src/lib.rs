@@ -35,7 +35,6 @@ macro_rules_attribute::attribute_alias! {
         #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
 }
 
-mod bundled;
 mod catalog;
 mod error;
 mod fallback;
@@ -49,7 +48,6 @@ mod store;
 mod vocabulary;
 pub mod wire;
 
-pub use bundled::*;
 pub use catalog::*;
 pub use error::*;
 pub use fallback::*;

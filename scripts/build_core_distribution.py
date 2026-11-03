@@ -14,7 +14,6 @@ SOURCES: Final = (
     "litellm-rust",
     ".cargo",
     "rust-toolchain.toml",
-    "model_prices_and_context_window.json",
     "README.md",
     "LICENSE",
 )

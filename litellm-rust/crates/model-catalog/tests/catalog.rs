@@ -1,10 +1,10 @@
 use std::collections::BTreeSet;
 
-use litellm_model_catalog::{
-    BUNDLED_REGISTRY, Catalog, Error, ErrorKind, IntegrityLimits, Mode, Rejects, Written,
-};
+use litellm_model_catalog::{Catalog, Error, ErrorKind, IntegrityLimits, Mode, Rejects, Written};
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
+
+const REGISTRY: &[u8] = include_bytes!("../../../../model_prices_and_context_window.json");
 
 const ALPHA_FIXTURE: &[u8] = br#"{
     "sample_spec":{"explanation":"example","input_cost_per_token":"not checked"},
@@ -272,7 +272,7 @@ fn timezone_errors_reject_providerless_rows_without_rejecting_other_providerless
 
 #[rstest]
 fn bundled_per_row_errors_match_document_errors() {
-    let parsed = Catalog::parse(BUNDLED_REGISTRY).unwrap();
+    let parsed = Catalog::parse(REGISTRY).unwrap();
     let row_errors: Vec<_> = parsed
         .value
         .written()
@@ -367,21 +367,18 @@ fn written_is_the_document_in_order_including_sections_and_bad_entries() {
 
 #[rstest]
 fn the_bundled_registry_has_no_problems() {
-    let problems: Vec<_> = Catalog::problems(BUNDLED_REGISTRY)
-        .iter()
-        .map(report)
-        .collect();
+    let problems: Vec<_> = Catalog::problems(REGISTRY).iter().map(report).collect();
     assert!(problems.is_empty(), "{problems:#?}");
     const REFERENCE_MODEL_COUNT: usize = 4303;
-    let catalog = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;
+    let catalog = Catalog::parse(REGISTRY).unwrap().value;
     assert!(catalog.model_count() as f64 >= REFERENCE_MODEL_COUNT as f64 * 0.9);
 }
 
 #[rstest]
 fn the_bundled_registry_is_written_back_as_it_was_read() {
-    let document: Value = serde_json::from_slice(BUNDLED_REGISTRY).unwrap();
+    let document: Value = serde_json::from_slice(REGISTRY).unwrap();
     assert_eq!(
-        written(&Catalog::parse(BUNDLED_REGISTRY).unwrap().value),
+        written(&Catalog::parse(REGISTRY).unwrap().value),
         serde_json::to_string(&document).unwrap()
     );
 }
