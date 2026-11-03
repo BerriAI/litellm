@@ -88,11 +88,12 @@ class SensitiveDataMasker:
         if excluded_keys and key in excluded_keys:
             return False
 
-        # Split on underscores, hyphens and camelCase boundaries and check if any segment matches the pattern
-        # This avoids false positives like "max_tokens" matching "token"
-        # but still catches "api_key", "access_token", "apiKey", "clientSecret", etc.
-        key_lower: Final = _CAMEL_BOUNDARY.sub("_", str(key)).lower()
-        key_segments: Final = key_lower.replace("-", "_").split("_")
+        # Split on underscores and hyphens, and separately on camelCase boundaries, then check whether any
+        # segment matches the pattern. This avoids false positives like "max_tokens" matching "token"
+        # but still catches "api_key", "access_token", "apiKey", "clientSecret" and odd-cased "sEt-CoOkIe".
+        key_lower: Final = str(key).lower().replace("-", "_")
+        camel_lower: Final = _CAMEL_BOUNDARY.sub("_", str(key)).lower().replace("-", "_")
+        key_segments: Final = frozenset(key_lower.split("_")) | frozenset(camel_lower.split("_"))
 
         # If any segment matches a non-sensitive override, the key is not sensitive.
         # For example, "input_cost_per_token" contains "token" but also "cost",

@@ -626,6 +626,11 @@ def test_is_sensitive_key_camel_case_split_keeps_pricing_and_count_fields_clear(
     assert masker.is_sensitive_key("inputCostPerToken") is False
 
 
+@pytest.mark.parametrize("key", ["sEt-CoOkIe", "AUTHORIZATION", "Api-Key", "X-API-KEY"])
+def test_is_sensitive_key_camel_case_split_does_not_break_odd_cased_plain_names(key: str):
+    assert SensitiveDataMasker().is_sensitive_key(key) is True
+
+
 def test_empty_non_sensitive_overrides_disables_the_cost_exemption():
     strict = SensitiveDataMasker(non_sensitive_overrides=frozenset())
 
