@@ -63,7 +63,6 @@ if TYPE_CHECKING:
     from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
     from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
     from litellm.router_strategy.quality_router.quality_router import QualityRouter
-    from litellm.router_utils.context_window_fit import PreCallTokenCount
     from litellm.router_utils.cooldown_cache import CooldownCache
     from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets as _AttemptedFallbackTargets
     from litellm.router_utils.health_state_cache import DeploymentHealthCache
@@ -1496,7 +1495,7 @@ class RoutingContext:
         messages: list[dict[str, str]] | None = None,  # mutable-ok: Router._pre_call_checks takes a list
         input: str | list[object] | None = None,  # mutable-ok: Router._pre_call_checks takes a list
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: Router._pre_call_checks takes a dict
-        input_token_counts: "Mapping[str, PreCallTokenCount] | None" = None,
+        input_token_counts: Mapping[str | None, int] | None = None,
         skip_inline_token_count: bool = False,
         request_deployments: "Sequence[DeploymentTypedDict] | None" = None,
     ) -> Sequence[object]:

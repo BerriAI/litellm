@@ -1,6 +1,8 @@
 import hashlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -573,6 +575,53 @@ def fallback_lookup_groups(kwargs: Mapping[str, object], model_group: str | None
     original_group: Final = original_group_value if isinstance(original_group_value, str) else None
     ordered: Final = (get_pre_routing_selection(kwargs), routed_group, model_group, original_group)
     return tuple(dict.fromkeys(group for group in ordered if group))
+
+
+@dataclass(frozen=True, slots=True)
+class _ContextWindowFallbackScope:
+    kwargs: Mapping[str, object]
+    model_group: str
+    fallbacks: Sequence[Mapping[str, list[str]]]  # mutable-ok: mirrors the fallbacks config shape
+    max_fallbacks: int | None
+
+
+_CONTEXT_WINDOW_FALLBACK_SCOPE: Final[ContextVar[_ContextWindowFallbackScope | None]] = ContextVar(
+    "context_window_fallback_scope", default=None
+)
+
+
+@contextmanager
+def context_window_fallback_scope(
+    kwargs: Mapping[str, object],
+    model_group: str | None,
+    fallbacks: Sequence[Mapping[str, list[str]]] | None,  # mutable-ok: mirrors the fallbacks config shape
+    max_fallbacks: int | None,
+    fallbacks_disabled: bool,
+) -> Generator[None]:
+    scope: Final = (
+        None
+        if fallbacks_disabled or model_group is None or fallbacks is None
+        else _ContextWindowFallbackScope(kwargs, model_group, fallbacks, max_fallbacks)
+    )
+    token: Final = _CONTEXT_WINDOW_FALLBACK_SCOPE.set(scope)
+    try:
+        yield
+    finally:
+        _CONTEXT_WINDOW_FALLBACK_SCOPE.reset(token)
+
+
+def context_window_fallback_resolves() -> bool:
+    scope: Final = _CONTEXT_WINDOW_FALLBACK_SCOPE.get()
+    if scope is None:
+        return False
+    depth: Final = scope.kwargs.get("fallback_depth", 0)
+    max_fallbacks: Final = scope.kwargs.get("max_fallbacks", scope.max_fallbacks)
+    if isinstance(depth, int) and isinstance(max_fallbacks, int) and depth >= max_fallbacks:
+        return False
+    chain, _ = get_fallback_model_group_for_lookup_groups(
+        fallbacks=scope.fallbacks, lookup_groups=fallback_lookup_groups(scope.kwargs, scope.model_group)
+    )
+    return chain is not None
 
 
 def _resolved_a_specific_chain(

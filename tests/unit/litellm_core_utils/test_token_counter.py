@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.token_counter import (
     high_detail_image_token_upper_bound,
     is_openai_model,
     offload_token_count,
+    openai_tokenizer_encoding,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
@@ -135,6 +136,19 @@ def test_token_counter_counts_with_a_custom_openai_tokenizer_encoding():
     assert token_counter_new(
         custom_tokenizer={"type": "openai_tokenizer", "tokenizer": o200k}, text=japanese
     ) == len(o200k.encode(japanese))
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6-luna", "openai/gpt-5.6-luna", "azure/gpt-5.6-luna"])
+def test_a_selected_tokenizer_never_overrides_an_openai_models_own_encoding(model: str):
+    japanese: Final = "日本語のテキストを数えます。" * 50
+    own_encoding: Final = openai_tokenizer_encoding(model)
+    selected: Final = litellm.utils.select_tokenizer(model)
+    assert selected["type"] == "openai_tokenizer"
+    assert len(own_encoding.encode(japanese)) != len(selected["tokenizer"].encode(japanese))
+
+    assert token_counter_new(model=model, custom_tokenizer=selected, text=japanese) == token_counter_new(
+        model=model, text=japanese
+    )
 
 
 def test_token_counter_text_over_chunk_boundary_stays_close_to_tiktoken():

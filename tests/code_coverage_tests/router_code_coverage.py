@@ -135,7 +135,6 @@ ignored_function_names = [
     "_params_sent_to_deployment",  # Tested through the configured-constraint continuation tests in test_router.py
     "_names_deployment_that_cannot_continue",  # Tested through the deployment-id continuation tests in test_router.py
     "_set_retry_policy",  # Tested through update_settings in test_router_retry_policy_update.py
-    "_resolve_pre_call_check_input_tokens",  # Tested through the token-count failure pre-call check tests in test_router.py
     "_params_neither_dropped_nor_allowed",  # Tested through the allowed-or-dropped param pre-call check tests in test_router.py
     "_deployment_rejects_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
     "_deployment_lacks_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
@@ -184,7 +183,6 @@ ignored_function_names = [
     "_aresponses_background_stream_can_release",  # Tested through the background Responses stream tests in test_router.py
     "_raise_released_stream_error",  # Tested through the background Responses stream content-policy tests in test_router.py
     "_mid_stream_error_before_output",  # Tested through the Responses mid-stream fallback and background stream tests
-    "_pre_call_check_token_count",  # Run by _pre_call_check_token_counts, tested through the per-deployment pre-call check tests in test_router.py
     "_pre_call_check_token_counts",  # Run by _pre_call_checks and _acount_pre_call_check_tokens, tested through the pre-call check tests in test_router.py
     "_resolve_pre_call_check_token_counts",  # Run by _pre_call_checks, tested through the precounted and inline pre-call check tests in test_router.py
     "_context_window_exceeded_line",  # Builds the ContextWindowExceededError text, tested through the stand-in margin refusal test in test_router.py

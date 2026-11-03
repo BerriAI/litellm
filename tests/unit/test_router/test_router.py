@@ -40,7 +40,6 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.router_utils.context_window_fit import (
     STAND_IN_OVERCOUNT_MARGIN,
     ContextWindow,
-    PreCallTokenCount,
     stand_in_tokenizer,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -8047,12 +8046,7 @@ async def test_acount_pre_call_check_tokens_counts_a_group_of_one_openai_model_w
         request_kwargs=None,
     )
 
-    assert count == {
-        "gpt-6.1-sol": PreCallTokenCount(
-            tokens=litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT),
-            own_tokenizer=True,
-        )
-    }
+    assert count == {"gpt-6.1-sol": litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT)}
 
 
 async def test_a_wildcard_route_checks_the_context_window_with_the_requested_openai_models_tokenizer():
@@ -8109,7 +8103,7 @@ def test_pre_call_checks_uses_precounted_tokens(monkeypatch):
             model="m",
             healthy_deployments=deployments,
             messages=[{"role": "user", "content": "hi"}],
-            input_token_counts={"gpt-3.5-turbo": PreCallTokenCount(tokens=1000, own_tokenizer=True)},
+            input_token_counts={"gpt-3.5-turbo": 1000},
         )
 
     assert calls == []
@@ -8156,7 +8150,7 @@ async def test_async_get_healthy_deployments_counts_tokens_off_the_event_loop(mo
     )
 
     assert len(result) == 1
-    assert counts_passed_in == [{"gpt-3.5-turbo": PreCallTokenCount(tokens=42, own_tokenizer=True)}]
+    assert counts_passed_in == [{"gpt-3.5-turbo": 42}]
     assert len(counting_threads) == 1
     assert counting_threads[0] is not threading.current_thread()
 
@@ -8210,7 +8204,7 @@ def test_deployment_max_input_tokens_survives_an_unmappable_deployment(monkeypat
 
     assert router._deployment_context_window("m", unmapped) is None
     assert router._deployment_context_window("m", mapped) == ContextWindow(
-        tokenizer_model="gpt-3.5-turbo", max_input_tokens=100
+        openai_model="gpt-3.5-turbo", max_input_tokens=100
     )
     assert router._pre_call_check_tokenizer_models("m", [unmapped, mapped]) == frozenset({"gpt-3.5-turbo"})
 
@@ -8321,7 +8315,7 @@ async def test_acount_pre_call_check_tokens_leaves_the_event_loop_free(monkeypat
     ran.append("count")
     await task
 
-    assert count is not None and count["gpt-3.5-turbo"].tokens > 0
+    assert count is not None and count["gpt-3.5-turbo"] > 0
     assert ran == ["competitor", "count"]
 
 
@@ -30485,7 +30479,9 @@ def _kept_ids(model_list: list[dict[str, object]], messages: list[dict[str, str]
     ]
 
 
-@pytest.mark.parametrize("model", ["openai/my-fake-model", "claude-sonnet-5-5"])
+@pytest.mark.parametrize(
+    "model", ["openai/my-fake-model", "claude-sonnet-5-5", "deepseek/deepseek-v4-pro", "replicate/meta/llama-2-70b-chat"]
+)
 def test_pre_call_checks_leaves_a_stand_in_overcount_within_the_margin_to_the_provider(model):
     tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
     smallest_window_within_margin: Final = -(-tokens // STAND_IN_OVERCOUNT_MARGIN)
@@ -30537,6 +30533,206 @@ def test_pre_call_checks_steers_off_a_stand_in_overcount_when_another_deployment
     ]
 
     assert _kept_ids(model_list, _RUSSIAN_PROMPT) == ["large"]
+
+
+def _uncertain_overflow_window() -> int:
+    return _stand_in_tokens(_RUSSIAN_PROMPT) - 1
+
+
+def _context_window_fallback_router(**router_settings: object) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "mock_response": "m"},
+                "model_info": {"id": "m", "max_input_tokens": _uncertain_overflow_window()},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {
+                    "model": "openai/my-other-fake-model",
+                    "api_key": "my-fake-key",
+                    "mock_response": "fallback",
+                },
+                "model_info": {"id": "fallback"},
+            },
+        ],
+        enable_pre_call_checks=True,
+        num_retries=0,
+        **router_settings,
+    )
+
+
+@pytest.mark.parametrize(
+    ("router_settings", "request_settings", "answered_by"),
+    [
+        ({"context_window_fallbacks": [{"m": ["fallback"]}]}, {}, "fallback"),
+        ({}, {"context_window_fallbacks": [{"m": ["fallback"]}]}, "fallback"),
+        ({"context_window_fallbacks": [{"m": ["fallback"]}]}, {"context_window_fallbacks": []}, "m"),
+        ({"context_window_fallbacks": [{"m": ["fallback"]}]}, {"disable_fallbacks": True}, "m"),
+        ({"context_window_fallbacks": [{"m": ["fallback"]}], "max_fallbacks": 0}, {}, "m"),
+        ({"context_window_fallbacks": [{"other": ["fallback"]}]}, {}, "m"),
+        ({"fallbacks": [{"m": ["fallback"]}]}, {}, "m"),
+        ({}, {}, "m"),
+    ],
+    ids=[
+        "router_context_window_fallback",
+        "request_context_window_fallback",
+        "request_clears_the_router_fallback",
+        "fallbacks_disabled",
+        "no_fallback_budget",
+        "fallback_for_another_group",
+        "generic_fallbacks_only",
+        "no_fallback",
+    ],
+)
+async def test_an_uncertain_stand_in_overflow_goes_to_a_context_window_fallback_that_resolves(
+    router_settings: dict[str, object], request_settings: dict[str, object], answered_by: str
+):
+    router: Final = _context_window_fallback_router(**router_settings)
+
+    response: Final = await router.acompletion(model="m", messages=_RUSSIAN_PROMPT, **request_settings)
+
+    assert response.choices[0].message.content == answered_by
+
+
+def test_a_sync_completion_sends_an_uncertain_stand_in_overflow_to_its_context_window_fallback():
+    router: Final = _context_window_fallback_router(context_window_fallbacks=[{"m": ["fallback"]}])
+
+    response: Final = router.completion(model="m", messages=_RUSSIAN_PROMPT)
+
+    assert response.choices[0].message.content == "fallback"
+
+
+@pytest.mark.parametrize(("allowed_model_region", "kept"), [("eu", ["eu"]), (["eu"], [])])
+def test_pre_call_checks_excludes_every_deployment_whose_region_cannot_match(allowed_model_region: object, kept):
+    model_list: Final = [
+        {
+            "model_name": "m",
+            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "region_name": region},
+            "model_info": {"id": region},
+        }
+        for region in ("eu", "us")
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="m",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={"allowed_model_region": allowed_model_region},
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == kept
+
+
+@pytest.mark.parametrize(("fitting_tags", "picked"), [(["paid"], "free"), (["free"], "fits")])
+async def test_an_uncertain_stand_in_overflow_steers_only_to_a_deployment_tag_routing_can_pick(
+    fitting_tags: list[str], picked: str
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {"model": "openai/my-other-fake-model", "api_key": "my-fake-key", "tags": fitting_tags},
+                "model_info": {"id": "fits"},
+            },
+            {
+                "model_name": "m",
+                "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "tags": ["free"]},
+                "model_info": {"id": "free", "max_input_tokens": _uncertain_overflow_window()},
+            },
+        ],
+        enable_pre_call_checks=True,
+        enable_tag_filtering=True,
+        num_retries=0,
+    )
+
+    deployment: Final = await router.async_get_available_deployment(
+        model="m", messages=_RUSSIAN_PROMPT, request_kwargs={"metadata": {"tags": ["free"]}}
+    )
+
+    assert deployment["model_info"]["id"] == picked
+
+
+async def test_a_tag_routed_request_still_gets_a_context_window_error_when_every_window_is_too_small():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "tags": [tag]},
+                "model_info": {"id": tag, "max_input_tokens": 1},
+            }
+            for tag in ("paid", "free")
+        ],
+        enable_pre_call_checks=True,
+        enable_tag_filtering=True,
+        num_retries=0,
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.async_get_available_deployment(
+            model="m", messages=_RUSSIAN_PROMPT, request_kwargs={"metadata": {"tags": ["free"]}}
+        )
+
+
+def test_an_uncertain_stand_in_overflow_is_kept_when_the_fitting_deployment_rejects_a_requested_param(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    no_json_mode_model: Final = "gpt-3.5-turbo-16k"
+    assert "response_format" not in (
+        litellm.get_supported_openai_params(model=no_json_mode_model, custom_llm_provider="openai") or []
+    )
+    model_list: Final = [
+        {
+            "model_name": "m",
+            "litellm_params": {"model": f"openai/{no_json_mode_model}", "api_key": "my-fake-key"},
+            "model_info": {"id": "fits", "max_input_tokens": 1_000_000},
+        },
+        {
+            "model_name": "m",
+            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key"},
+            "model_info": {"id": "json", "max_input_tokens": _uncertain_overflow_window()},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="m",
+        healthy_deployments=model_list,
+        messages=_RUSSIAN_PROMPT,
+        request_kwargs={"response_format": {"type": "json_object"}},
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["json"]
+
+
+async def test_acount_pre_call_check_tokens_counts_every_stand_in_deployment_with_one_count():
+    model_list: Final = [
+        {
+            "model_name": "m",
+            "litellm_params": {"model": model, "api_key": "my-fake-key"},
+            "model_info": {"id": model, "max_input_tokens": 1_000_000},
+        }
+        for model in (
+            "cohere_chat/command-a-plus-05-2026",
+            "deepseek/deepseek-v4-pro",
+            "claude-sonnet-5-5",
+            "openai/my-fake-model",
+            "gpt-5.6-luna",
+        )
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    counts: Final = await router._acount_pre_call_check_tokens(
+        model="m", healthy_deployments=model_list, messages=_RUSSIAN_PROMPT, input=None, request_kwargs=None
+    )
+
+    assert counts == {
+        None: _stand_in_tokens(_RUSSIAN_PROMPT),
+        "gpt-5.6-luna": litellm.token_counter(model="gpt-5.6-luna", messages=_RUSSIAN_PROMPT),
+    }
 
 
 def test_pre_call_checks_context_window_check_is_skipped_but_not_fatal_when_token_counting_fails():

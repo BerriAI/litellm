@@ -36,7 +36,7 @@ from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
-from litellm.router_utils.context_window_fit import PreCallTokenCount
+from litellm.router_utils.context_window_fit import STAND_IN_OVERCOUNT_MARGIN
 from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
@@ -392,7 +392,7 @@ async def test_discovered_limits_are_isolated_overridable_and_refreshable(
             model="local",
             healthy_deployments=router.model_list,
             input="prompt",
-            input_token_counts={window.tokenizer_model: PreCallTokenCount(tokens=5000, own_tokenizer=True)},
+            input_token_counts={window.openai_model: 5000},
         )
         assert [deployment["model_info"]["id"] for deployment in allowed] == ["one"]
         assert router.model_list[0]["model_info"].get("max_input_tokens") is None
@@ -4226,21 +4226,21 @@ def _capacity_test_router(route: str, base: str, base_location: str | None, expl
     )
 
 
-def _tokens_for_every_model(router: Router, tokens: int) -> Mapping[str, PreCallTokenCount]:
-    return {
-        model: PreCallTokenCount(tokens=tokens, own_tokenizer=True)
-        for model in router._pre_call_check_tokenizer_models("capacity-test", router.model_list)
-    }
+_CAPACITY_TEST_INPUT_TOKENS: Final = 2048 * STAND_IN_OVERCOUNT_MARGIN
 
 
-def _deployments_allowed_for_2048_input_tokens(router: Router) -> int:
+def _tokens_for_every_model(router: Router, tokens: int) -> Mapping[str | None, int]:
+    return {model: tokens for model in router._pre_call_check_tokenizer_models("capacity-test", router.model_list)}
+
+
+def _deployments_allowed_for_capacity_test_input(router: Router) -> int:
     try:
         return len(
             router._pre_call_checks(
                 model="capacity-test",
                 healthy_deployments=router.model_list,
                 input="synthetic input",
-                input_token_counts=_tokens_for_every_model(router, 2048),
+                input_token_counts=_tokens_for_every_model(router, _CAPACITY_TEST_INPUT_TOKENS),
             )
         )
     except litellm.ContextWindowExceededError:
@@ -4277,7 +4277,7 @@ def test_router_capacity_widens_to_a_larger_base_model_window(
     router: Final = _capacity_test_router(route, base, base_location, explicit_limit)
     expected: Final = explicit_limit if explicit_limit is not None else (1024 if base_location is None else 8192)
     assert _effective_max_input_tokens(router) == expected
-    assert _deployments_allowed_for_2048_input_tokens(router) == (1 if expected >= 2048 else 0)
+    assert _deployments_allowed_for_capacity_test_input(router) == (1 if expected >= _CAPACITY_TEST_INPUT_TOKENS else 0)
     _invalidate_model_cost_lowercase_map()
 
 
@@ -4298,7 +4298,7 @@ def test_router_capacity_never_narrows_to_a_smaller_base_model_window(
     _invalidate_model_cost_lowercase_map()
     router: Final = _capacity_test_router(route, base, base_location, None)
     assert _effective_max_input_tokens(router) == 8192
-    assert _deployments_allowed_for_2048_input_tokens(router) == 1
+    assert _deployments_allowed_for_capacity_test_input(router) == 1
     _invalidate_model_cost_lowercase_map()
 
 
@@ -4309,7 +4309,7 @@ def test_router_capacity_never_takes_a_window_from_base_model_when_the_route_is_
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, base: _capacity_test_metadata(provider, 1024)})
     _invalidate_model_cost_lowercase_map()
     router: Final = _capacity_test_router(f"{route}-not-in-cost-map", base, "model_info", None)
-    assert _deployments_allowed_for_2048_input_tokens(router) == 1
+    assert _deployments_allowed_for_capacity_test_input(router) == 1
     _invalidate_model_cost_lowercase_map()
 
 
@@ -4330,7 +4330,7 @@ def test_router_capacity_never_takes_a_window_from_base_model_when_the_route_dec
     _invalidate_model_cost_lowercase_map()
     router: Final = _capacity_test_router(route, base, "model_info", None)
     assert _effective_max_input_tokens(router) is None
-    assert _deployments_allowed_for_2048_input_tokens(router) == 1
+    assert _deployments_allowed_for_capacity_test_input(router) == 1
     _invalidate_model_cost_lowercase_map()
 
 
@@ -4382,7 +4382,7 @@ def test_router_capacity_widens_only_for_an_exact_base_model_entry_of_the_same_m
     _invalidate_model_cost_lowercase_map()
     router: Final = _capacity_test_router(route, base_model, "model_info", None)
     assert _effective_max_input_tokens(router) == expected
-    assert _deployments_allowed_for_2048_input_tokens(router) == (1 if expected >= 2048 else 0)
+    assert _deployments_allowed_for_capacity_test_input(router) == (1 if expected >= _CAPACITY_TEST_INPUT_TOKENS else 0)
     _invalidate_model_cost_lowercase_map()
 
 
@@ -4417,7 +4417,7 @@ def test_router_capacity_reads_a_model_info_base_model_before_a_litellm_params_o
         enable_pre_call_checks=True,
     )
     assert _effective_max_input_tokens(router) == 1024
-    assert _deployments_allowed_for_2048_input_tokens(router) == 0
+    assert _deployments_allowed_for_capacity_test_input(router) == 0
     _invalidate_model_cost_lowercase_map()
 
 

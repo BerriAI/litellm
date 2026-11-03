@@ -1107,6 +1107,7 @@ def _get_exact_count_function(
             tokenizer_json["tokenizer"]
             if custom_tokenizer is not None
             and isinstance(tokenizer_json["tokenizer"], (tiktoken.Encoding, OpenAIEncoding))
+            and not is_openai_model(model or "")
             else openai_tokenizer_encoding(model or "")
         )
 
@@ -1153,25 +1154,6 @@ def openai_tokenizer_encoding_name(model: str) -> str:
         )
 
 
-def counts_with_own_tokenizer(model: str) -> bool:
-    """Whether `token_counter` counts `model` with that model's own tokenizer rather than a stand-in encoding.
-
-    The bundled Anthropic tokenizer is Claude 2's, which overcounts current Claude models on some scripts."""
-    from litellm.utils import select_tokenizer, uses_anthropic_tokenizer
-
-    if uses_anthropic_tokenizer(model):
-        return False
-    return select_tokenizer(model)["type"] == "huggingface_tokenizer" or is_openai_model(model)
-
-
-def own_tokenizer_model(model: str) -> str | None:
-    """The name `token_counter` counts `model` by with that model's own tokenizer, trying it without its provider
-    prefix too, or None when litellm has no tokenizer of the model's own."""
-    provider, _, bare_model = model.partition("/")
-    candidates: Final = (model, bare_model) if bare_model and provider in litellm.provider_list else (model,)
-    return next((candidate for candidate in candidates if counts_with_own_tokenizer(candidate)), None)
-
-
 def unresolved_tokenizer_model(model: str) -> str:
     """`model`, or `gpt-3.5-turbo` when resolving the OpenAI model `model` names moves it off cl100k_base, the encoding
     tiktoken gives the name as written, so a count with the result never drops below that one."""
@@ -1203,27 +1185,12 @@ def deployment_openai_model(deployment: object) -> str | None:
     return _as_openai_model(_served_model(deployment))
 
 
-def served_openai_models(deployments: Iterable[object]) -> tuple[str | None, ...]:
-    """The distinct OpenAI models `deployments` serve, with None standing for any deployment serving another model."""
-    served: Final = dict.fromkeys(_served_model(deployment) for deployment in deployments)
-    return tuple(dict.fromkeys(_as_openai_model(model) for model in served))
-
-
 def _served_model(deployment: object) -> str | None:
     return next(iter(deployment_pricing_models(deployment)), None)
 
 
 def _as_openai_model(model: str | None) -> str | None:
     return model if model is not None and is_openai_model(model) else None
-
-
-def single_encoding_openai_model(served: Sequence[str | None]) -> str | None:
-    """An OpenAI model to count a request with, when every `served_openai_models` entry is an OpenAI model on the same
-    encoding, else None."""
-    if not served or None in served:
-        return None
-    encodings: Final = frozenset(openai_tokenizer_encoding_name(model) for model in served if model is not None)
-    return served[0] if len(encodings) == 1 else None
 
 
 def _openai_model_name(model: str) -> str | None:
