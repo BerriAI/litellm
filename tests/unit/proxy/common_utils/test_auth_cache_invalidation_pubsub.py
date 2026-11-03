@@ -3,6 +3,7 @@ import hashlib
 import json
 import time
 from collections.abc import Iterable
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -19,7 +20,11 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
     publish_auth_cache_invalidation,
 )
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    AUTH_OBJECTS_TARGET,
+    UserApiKeyCache,
+    budget_windows_absent_cache_key,
+)
 
 
 class _RecordingRedisClient(Redis):
@@ -241,6 +246,28 @@ async def test_subscriber_deletes_key_object_partition_entry_on_message() -> Non
         await subscriber.stop()
 
     assert cache.get_cache(hashed_token, model_type=UserAPIKeyAuth) is None
+
+
+@pytest.mark.asyncio
+async def test_subscriber_evicts_a_user_whose_id_looks_like_a_no_window_marker_along_with_the_marker() -> None:
+    user_id: Final = budget_windows_absent_cache_key("key", "alice")
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(user_id, {"user_id": user_id, "models": ["gpt-4o"]})
+    cache.budget_windows_absent_cache.set_cache(key=user_id, value=True)
+
+    pubsub: Final = _QueuePubSub(initial_messages=[_invalidation_message(user_id)])
+    subscriber: Final = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
+        user_api_key_cache=cache,
+    )
+    subscriber.start()
+    try:
+        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
+    finally:
+        await subscriber.stop()
+
+    assert cache.get_cache(user_id) is None
+    assert cache.budget_windows_absent_cache.get_cache(key=user_id) is None
 
 
 @pytest.mark.asyncio

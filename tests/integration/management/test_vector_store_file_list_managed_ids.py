@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
+from itertools import count
 from pathlib import Path
 from queue import SimpleQueue
 from types import MappingProxyType
@@ -1040,6 +1041,77 @@ def test_multi_model_upload_maps_only_the_provider_id_the_managed_id_carries(gat
         second_ids: Final = _ids(second.listed(member.key))
         assert first_ids == ((managed_a,) if carried == first.file_id("a.txt") else (first.file_id("a.txt"),))
         assert second_ids == ((managed_a,) if carried == second.file_id("a.txt") else (second.file_id("a.txt"),))
+
+
+def _team_wildcard(scenario: Scenario, pattern: str, api_base: str, bearer: str, team: str) -> str:
+    identity: Final = f"wildcard-{uuid.uuid4().hex}"
+    scenario.gateway.post(
+        "/model/new",
+        {
+            "model_name": pattern,
+            "litellm_params": {"model": "openai/*", "api_key": bearer, "api_base": api_base},
+            "model_info": {"id": identity, "team_id": team},
+        },
+    )
+    scenario.cleanups.callback(scenario.delete_model, identity)
+    eventually(lambda: _every_worker_has_deployment(scenario.gateway, identity), lambda served: served, seconds=90)
+    return identity
+
+
+def test_two_targets_served_by_one_team_wildcard_keep_one_upload_that_delete_removes(gateway: Gateway) -> None:
+    store: Final = "vs_" + uuid.uuid4().hex
+    bearer: Final = "provider-key-" + uuid.uuid4().hex[:8]
+    prefix: Final = f"wc-{uuid.uuid4().hex}"
+    upload_numbers: Final = count(1)
+    first_upload: Final = f"file-{prefix}-1"
+    second_upload: Final = f"file-{prefix}-2"
+    served: Final = _provider(store, _constant_listing(store, first_upload))
+
+    def respond(request: Request) -> Reply:
+        if (request.method, urlsplit(request.target).path) != ("POST", "/v1/files"):
+            return served(request)
+        _assert_provider_upload(request, bearer, "a.txt")
+        return _json_reply(_file_object(f"file-{prefix}-{next(upload_numbers)}"))
+
+    with gateway.scenario() as scenario, wire_server(respond) as wire:
+        team: Final = scenario.team(models=[])
+        _team_wildcard(scenario, f"{prefix}/*", f"{wire.url}/v1", bearer, team)
+        key: Final = scenario.key(team_id=team, user_id=scenario.member(team))
+        wire.drain()
+
+        managed: Final = _upload(gateway, key, f"{prefix}/gpt-one,{prefix}/gpt-two", "a.txt")
+        assert _carried_provider_file_id(managed) == first_upload, _decoded(managed)
+        assert [row["flat_model_file_ids"] for row in read_rows(MANAGED_FILE_ROW, (managed,))] == [[first_upload]]
+        eventually(lambda: wire.received.qsize(), lambda received: received >= 3)
+        create_requests: Final = wire.drain()
+        assert [(request.method, request.target) for request in create_requests] == [
+            ("POST", "/v1/files"),
+            ("POST", "/v1/files"),
+            ("DELETE", f"/v1/files/{second_upload}"),
+        ], create_requests
+        assert create_requests[2].headers["authorization"] == f"Bearer {bearer}", create_requests[2].headers
+
+        attached: Final = gateway.request(
+            "POST", f"/v1/vector_stores/{store}/files", {"file_id": managed}, key=key, params={"model": f"{prefix}/*"}
+        )
+        assert attached.status_code == 200, attached.text
+        listed: Final = gateway.request(
+            "GET", f"/v1/vector_stores/{store}/files", key=key, params={"model": f"{prefix}/*"}
+        )
+        assert _ids(_listed(listed)) == (managed,), listed.text
+        attach_bodies: Final = [
+            JSON_OBJECT.validate_json(request.body) for request in wire.drain() if request.method == "POST"
+        ]
+        assert attach_bodies == [{"file_id": first_upload}], attach_bodies
+
+        deleted: Final = gateway.request("DELETE", f"/v1/files/{managed}", key=key)
+        assert deleted.status_code == 200, deleted.text
+        assert read_rows(MANAGED_FILE_ROW, (managed,)) == []
+        delete_requests: Final = wire.drain()
+        assert [(request.method, request.target) for request in delete_requests] == [
+            ("DELETE", f"/v1/files/{first_upload}")
+        ], delete_requests
+        assert delete_requests[0].headers["authorization"] == f"Bearer {bearer}", delete_requests[0].headers
 
 
 def test_deleting_the_managed_file_makes_its_listing_raw_again(gateway: Gateway) -> None:

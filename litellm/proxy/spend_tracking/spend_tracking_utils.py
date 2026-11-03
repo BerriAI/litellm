@@ -20,7 +20,6 @@ from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     CLI_SESSION_KEY_PREFIX,
     EMPTY_MAPPING,
-    INTERNAL_CALL_ORIGIN_METADATA_KEY,
     KUBERNETES_POD_ROUTING_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -30,7 +29,6 @@ from litellm.constants import (
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
     MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB,
     MCP_SPEND_LOG_MODEL_PREFIX,
-    NON_INFERENCE_CALL_TYPES,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
@@ -53,7 +51,11 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.hidden_params import served_from_cache
-from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
+from litellm.litellm_core_utils.internal_call_metadata import (
+    BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX,
+    is_unbilled_non_inference_call,
+    settles_background_response,
+)
 from litellm.litellm_core_utils.litellm_logging import (
     StandardLoggingPayloadSetup,
     UsageObservation,
@@ -79,13 +81,8 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
     summary_only_compaction_content,
     with_compaction_summary,
 )
-from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    SETTLES_BACKGROUND_RESPONSE_KWARG,
-    BackgroundResponseSettlement,
-)
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, SilentExperimentFlag
 from litellm.types.utils import (
-    BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
     AzureSpillover,
     CallTypes,
@@ -347,24 +344,21 @@ def _get_spend_logs_metadata(
 
 
 BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
-BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX: Final = "_background_cost"
 
 
-def _cost_row_request_id_suffix(
-    call_type: str, metadata: Mapping[str, object], settles_background_response: bool
-) -> str:
+def _cost_row_request_id_suffix(call_type: str, metadata: Mapping[str, object], kwargs: Mapping[str, object]) -> str:
     if call_type == CallTypes.aretrieve_batch.value:
         return BATCH_COST_REQUEST_ID_SUFFIX
-    if settles_background_response or (
-        call_type in NON_INFERENCE_CALL_TYPES
-        and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
-    ):
+    if settles_background_response(call_type, metadata, kwargs):
         return BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
     return ""
 
 
 def get_spend_logs_id(
-    call_type: str, response_obj: dict, kwargs: Mapping[str, object], metadata: Mapping[str, object] = EMPTY_MAPPING
+    call_type: str,
+    response_obj: Mapping[str, object],
+    kwargs: Mapping[str, object],
+    metadata: Mapping[str, object] = EMPTY_MAPPING,
 ) -> str | None:
     standard_logging_payload = kwargs.get("standard_logging_object")
     candidate_ids: Final = (
@@ -377,10 +371,7 @@ def get_spend_logs_id(
     )
     if resolved_id is None:
         return None
-    settles_background_response: Final = (
-        kwargs.get(SETTLES_BACKGROUND_RESPONSE_KWARG) is BackgroundResponseSettlement.SETTLES
-    )
-    return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, settles_background_response)}"
+    return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, kwargs)}"
 
 
 _MISSING_ATTRIBUTE: Final = object()
@@ -607,6 +598,7 @@ def get_logging_payload(
         kwargs = {}
 
     rejected_as_unknown_model: Final = isinstance(response_obj, ProxyModelNotFoundError)
+    failure_exception: Final = response_obj if isinstance(response_obj, BaseException) else None
     response_served_from_cache: Final = served_from_cache(response_obj)
     if response_obj is None:
         response_obj = {}
@@ -897,14 +889,11 @@ def get_logging_payload(
                 additional_usage_values["cache_creation_input_tokens"] = cache_write_tokens
     clean_metadata["additional_usage_values"] = additional_usage_values
     drop_requester_ip_address: Final = requester_ip_address_logging_disabled()
-    error_information: Final = clean_metadata["error_information"]
     if drop_requester_ip_address:
         clean_metadata["requester_ip_address"] = None
-    if drop_requester_ip_address and isinstance(error_information, Mapping):
-        clean_metadata["error_information"] = cast(  # cast-ok: same keys, only the str values are masked
-            StandardLoggingPayloadErrorInformation,
-            _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(error_information)),
-        )
+    clean_metadata["error_information"] = sanitize_error_information_for_spend_logs(
+        clean_metadata["error_information"], original_exception=failure_exception
+    )
 
     if litellm.cache is None:
         cache_key = "Cache OFF"

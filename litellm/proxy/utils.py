@@ -68,6 +68,7 @@ from litellm.constants import (
     SPEND_LOG_QUEUE_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_ROWS,
+    VLLM_CHOICE_FIELDS,
 )
 from litellm.cost_calculator import BaseTokenUsageProcessor
 from litellm.litellm_core_utils.bug_report import (
@@ -170,6 +171,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     deployment_pricing_model_info,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.redact_messages import drop_token_ids
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -179,6 +181,7 @@ from litellm.litellm_core_utils.served_output_texts import (
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count, usage_tokenizer_model
 from litellm.llms import load_guardrail_translation_mappings
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -705,6 +708,56 @@ def _pipeline_step_streams_live(step: "PipelineStep") -> bool:
     if callback is None or callback.mask_response_content:
         return False
     return not unified_guardrail.resolve_streaming_flag(callback, "streaming_buffer_until_moderated", True)
+
+
+def _drop_stream_chunk_token_ids(chunk: object) -> None:
+    for choice in stream_item_items(chunk, "choices"):
+        drop_token_ids(choice)
+
+
+def _drop_built_stream_token_ids(request_data: Mapping[str, object]) -> None:
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    if isinstance(logging_obj, Logging):
+        logging_obj.drops_stream_token_ids = True
+
+
+def _drop_token_ids_ahead_of_chunk_check(
+    callback: CustomLogger, chunk: object, request_data: Mapping[str, object]
+) -> None:
+    if _overrides_hook(callback, "async_post_call_streaming_hook"):
+        _drop_stream_chunk_token_ids(chunk)
+        _drop_built_stream_token_ids(request_data)
+
+
+_PLAIN_STREAM_FIELDS: Final = TypeAdapter(dict[str, object])
+_EMPTY_STREAM_VALUES: Final[tuple[object, ...]] = (None, "", [], {})
+
+
+def _holds_stream_payload(value: object) -> bool:
+    if isinstance(value, dict):
+        nested: Final = _PLAIN_STREAM_FIELDS.validate_python(value).values()
+        return any(item not in _EMPTY_STREAM_VALUES for item in nested)
+    return value not in _EMPTY_STREAM_VALUES
+
+
+def _choice_carries_only_token_ids(choice: object) -> bool:
+    if stream_item_field(choice, "token_ids") is None or not isinstance(choice, BaseModel):
+        return False
+    fields: Final = _PLAIN_STREAM_FIELDS.validate_python(choice.model_dump())
+    return not any(_holds_stream_payload(value) for key, value in fields.items() if key not in ("index", "token_ids"))
+
+
+def _is_token_id_only_chunk(chunk: object) -> bool:
+    choices: Final = stream_item_items(chunk, "choices")
+    return bool(choices) and all(_choice_carries_only_token_ids(choice) for choice in choices)
+
+
+async def _without_token_id_only_chunks(response: AsyncIterable[object]) -> AsyncGenerator[object, None]:
+    async for chunk in response:
+        if _is_token_id_only_chunk(chunk):
+            _drop_stream_chunk_token_ids(chunk)
+            continue
+        yield chunk
 
 
 def _pipelines_stream_live(pipelines: Sequence[tuple[str, "GuardrailPipeline"]]) -> bool:
@@ -1707,7 +1760,10 @@ def _proxy_only_error_log_fields(
 
 
 def _failure_fields_to_lift(
-    request_data: Mapping[str, object], provider_billed: bool = False, dispatched_call_type: str | None = None
+    request_data: Mapping[str, object],
+    provider_billed: bool = False,
+    dispatched_call_type: str | None = None,
+    route_call_type: str | None = None,
 ) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
@@ -1717,7 +1773,8 @@ def _failure_fields_to_lift(
     attribution on failed-request spend logs."""
     _logging_obj: Final = request_data.get("litellm_logging_obj")
     if _logging_obj is None:
-        return _EMPTY_LIFT
+        return _EMPTY_LIFT if dispatched_call_type is None else MappingProxyType({"call_type": dispatched_call_type})
+    _estimate_call_type: Final = dispatched_call_type or route_call_type
     _model_call_details: Final = getattr(_logging_obj, "model_call_details", {})
     _first_handoff: Final = _model_call_details.get("first_api_call_start_time")
     _litellm_params: Final = getattr(_logging_obj, "litellm_params", None)
@@ -1732,10 +1789,10 @@ def _failure_fields_to_lift(
         provider_billed=_billed,
         deployment_id=_deployment_id,
         base_model=_base_model,
-        dispatched_call_type=dispatched_call_type,
+        dispatched_call_type=_estimate_call_type,
     )
     _prompt_estimate: Final = (
-        _estimated_prompt_usage(_model_call_details, request_data, dispatched_call_type)
+        _estimated_prompt_usage(_model_call_details, request_data, _estimate_call_type)
         if _billed and _first_handoff is not None and not _model_call_details.get("failed_attempts_usage")
         else None
     )
@@ -1755,7 +1812,7 @@ def _failure_fields_to_lift(
             _billed,
             _deployment_id,
             _base_model,
-            dispatched_call_type,
+            _estimate_call_type,
         )
         if Logging.usage_capture_callback is not None
         and (_billed or _model_call_details.get("combined_usage_object") is not None)
@@ -4051,13 +4108,15 @@ class ProxyLogging:
                 route=route,
                 original_exception=original_exception,
                 error_type=error_type,
+                dispatched_call_type=dispatched_call_type,
             )
 
         request_data.update(
             await offload_token_count(_failure_fields_to_lift)(
                 request_data,
                 provider_billed=_provider_billed_the_failure(original_exception),
-                dispatched_call_type=dispatched_call_type or _call_type_for_route(user_api_key_dict.request_route),
+                dispatched_call_type=dispatched_call_type,
+                route_call_type=_call_type_for_route(user_api_key_dict.request_route),
             )
         )
 
@@ -4146,6 +4205,7 @@ class ProxyLogging:
         route: str | None = None,
         original_exception: Exception | None = None,
         error_type: ProxyErrorTypes | None = None,
+        dispatched_call_type: str | None = None,
     ):
         """
         Handle logging for proxy only errors by calling `litellm_logging_obj.async_failure_handler`
@@ -4245,7 +4305,7 @@ class ProxyLogging:
                 litellm_logging_obj.model_call_details["input"] = input
                 body_shape_call_type = CallTypes.aembedding.value
             resolved_call_type: Final = _call_type_for_route(route) or (
-                None if set_up_by_request else body_shape_call_type
+                None if set_up_by_request else dispatched_call_type or body_shape_call_type
             )
             if resolved_call_type is not None and litellm_logging_obj.call_type != CallTypes.pass_through.value:
                 litellm_logging_obj.call_type = resolved_call_type
@@ -4710,6 +4770,7 @@ class ProxyLogging:
                     else:
                         _callback = callback
                     if _callback is not None and isinstance(_callback, CustomLogger):
+                        _drop_token_ids_ahead_of_chunk_check(_callback, response, data)
                         if str_so_far is not None:
                             complete_response = str_so_far + response_str
                         else:
@@ -4731,7 +4792,7 @@ class ProxyLogging:
         self,
         response,
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict,
+        request_data: dict[str, object],
     ):
         """
         Allow user to modify outgoing streaming data -> Given a whole response iterator.
@@ -4765,20 +4826,26 @@ class ProxyLogging:
         # Merge model-level guardrails before checking which guardrails to run
         request_data = check_and_merge_model_level_guardrails(data=request_data, llm_router=llm_router)
 
-        current_response = response
         stream_needs_translation: Final = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
 
         pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
+        running_overrides: Final = tuple(
+            (callback, kind)
+            for callback, kind in caps.iterator_overrides
+            if not isinstance(callback, CustomGuardrail)
+            or (
+                callback.guardrail_name not in pipeline_gated_names
+                and callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is True
+            )
+        )
+        drops_token_ids: Final = bool(post_call_pipelines) or any(
+            isinstance(callback, CustomGuardrail) for callback, _ in running_overrides
+        )
+        if drops_token_ids:
+            _drop_built_stream_token_ids(request_data)
+        current_response = _without_token_id_only_chunks(response) if drops_token_ids else response
         guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
-        for resolved_callback, kind in caps.iterator_overrides:
-            if isinstance(resolved_callback, CustomGuardrail):
-                if resolved_callback.guardrail_name in pipeline_gated_names:
-                    continue
-                if (
-                    resolved_callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call)
-                    is not True
-                ):
-                    continue
+        for resolved_callback, kind in running_overrides:
             effective_kind = (
                 "apply_guardrail"
                 if (
@@ -4836,6 +4903,8 @@ class ProxyLogging:
         try:
             async for chunk in current_response:
                 served_chunks.append(chunk)
+                if drops_token_ids:
+                    _drop_stream_chunk_token_ids(served_chunks[-1])
                 yield chunk
         except (GeneratorExit, asyncio.CancelledError):
             await ProxyLogging._close_guarded_layers(guarded_layers)
@@ -10203,7 +10272,7 @@ _PRESERVED_NONE_FIELDS: Final[list[tuple[str, str]]] = [
     ("message", "refusal"),
     ("delta", "content"),  # null in streaming chunks
 ]
-_PRESERVED_NONE_CHOICE_FIELDS: Final = ("logprobs",)
+_PRESERVED_NONE_CHOICE_FIELDS: Final = ("logprobs", *VLLM_CHOICE_FIELDS)
 _PRESERVED_NONE_RESPONSE_FIELDS: Final = ("system_fingerprint",)
 
 
