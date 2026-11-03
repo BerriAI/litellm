@@ -7480,7 +7480,9 @@ _TEAM_USER_SPEND_STATEMENT_TIMEOUT_SECONDS: Final = 30
 async def _team_user_spend_rows(
     prisma_client: PrismaClient, sql: str, params: tuple[str, ...]
 ) -> Sequence[_TeamUserSpendDbRow]:
-    async with prisma_client.db.tx(timeout=timedelta(seconds=_TEAM_USER_SPEND_STATEMENT_TIMEOUT_SECONDS + 5)) as tx:
+    async with prisma_client.read_db.tx(
+        timeout=timedelta(seconds=_TEAM_USER_SPEND_STATEMENT_TIMEOUT_SECONDS + 5)
+    ) as tx:
         await tx.execute_raw(f"SET LOCAL statement_timeout = {_TEAM_USER_SPEND_STATEMENT_TIMEOUT_SECONDS * 1000}")
         return await tx.query_raw(sql, *params)
 

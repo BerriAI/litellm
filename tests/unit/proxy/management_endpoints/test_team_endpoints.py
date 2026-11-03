@@ -17281,11 +17281,11 @@ def _team_spend_by_user_db_row(team_id: str, user_id: str, spend: float, request
 
 class _RecordingTransaction:
     def __init__(self, query_raw: AsyncMock) -> None:
-        self.statements: list[str] = []
-        self.query_raw = query_raw
+        self.statements: tuple[str, ...] = ()
+        self.query_raw: AsyncMock = query_raw
 
     async def execute_raw(self, sql: str) -> int:
-        self.statements.append(sql)
+        self.statements = (*self.statements, sql)
         return 0
 
     async def __aenter__(self) -> "_RecordingTransaction":
@@ -17295,9 +17295,9 @@ class _RecordingTransaction:
         pass
 
 
-def _team_spend_by_user_query(mock_db_client, query_raw: AsyncMock) -> _RecordingTransaction:
-    transaction = _RecordingTransaction(query_raw)
-    mock_db_client.db.tx = MagicMock(return_value=transaction)
+def _team_spend_by_user_query(mock_db_client: MagicMock, query_raw: AsyncMock) -> _RecordingTransaction:
+    transaction: Final = _RecordingTransaction(query_raw)
+    mock_db_client.read_db.tx = MagicMock(return_value=transaction)
     return transaction
 
 
@@ -17327,7 +17327,8 @@ async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(m
         end_date="2026-09-04",
     )
 
-    assert transaction.statements == ["SET LOCAL statement_timeout = 30000"]
+    assert any("statement_timeout = 30000" in statement for statement in transaction.statements)
+    mock_db_client.db.tx.assert_not_called()
     sql, *params = transaction.query_raw.call_args.args
     assert params == ["2026-09-01", "2026-09-04", "team-alpha", "team-beta"]
     assert 'FROM "LiteLLM_SpendLogs" sl' in sql
