@@ -10,10 +10,13 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpcore
 import httpx
 import pytest
 import respx
+import websockets.exceptions
 from botocore.credentials import RefreshableCredentials
+from h2.events import ConnectionTerminated
 
 import litellm
 from litellm._logging import verbose_logger
@@ -44,6 +47,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
     _collect_ws_project_quota_callbacks,
+    _collect_ws_token_limit_callbacks,
     _google_genai_streaming_hidden_params,
     _has_pre_call_deployment_hook,
     _rust_responses_websocket_enabled,
@@ -1664,7 +1668,7 @@ _BOTH_FOUNDRY_BETAS: Final = ("context-1m-2025-08-07,context-management-2025-06-
         pytest.param(
             None,
             {"anthropic-beta": "context-1m-2025-08-07"},
-            "claude-code-20250219",
+            "mcp-servers-2025-12-04",
             ("context-1m-2025-08-07",),
             id="unsupported-client-beta-is-dropped-and-deployment-beta-kept",
         ),
@@ -2785,6 +2789,194 @@ async def test_async_realtime_error_event_send_failure_still_closes():
     assert client_ws.events == [("close", (1011, "Internal server error: vertex token refresh exploded"))]
 
 
+_GEMINI_LIVE_SETUP_COMPLETE = json.dumps({"setupComplete": {}})
+_GEMINI_LIVE_TEXT_TURN = json.dumps({"serverContent": {"modelTurn": {"parts": [{"text": "Blue."}]}}})
+_GEMINI_LIVE_TURN_COMPLETE = json.dumps({"serverContent": {"turnComplete": True}})
+
+
+class _ScriptedRealtimeBackend:
+    """Backend socket that answers the first setup frame with the scripted replies
+    and closes once the client is done, so both bridge loops run to completion."""
+
+    def __init__(self, replies_after_setup):
+        self.sent = []
+        self.closed = asyncio.Event()
+        self._replies_after_setup = list(replies_after_setup)
+        self._inbox = asyncio.Queue()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def send(self, payload):
+        self.sent.append(payload)
+        if "setup" in json.loads(payload):
+            for reply in self._replies_after_setup:
+                self._inbox.put_nowait(reply)
+
+    def close_after_replies(self):
+        self._inbox.put_nowait(None)
+
+    async def recv(self, decode=True):
+        reply = await self._inbox.get()
+        if reply is None:
+            self.closed.set()
+            raise websockets.exceptions.ConnectionClosedOK(None, None)
+        return reply
+
+
+class _ScriptedRealtimeClient:
+    def __init__(self, messages, backend):
+        self.scope = {"headers": []}
+        self.exceptions = websockets.exceptions
+        self.sent = []
+        self._messages = list(messages)
+        self._backend = backend
+
+    async def send_text(self, payload):
+        self.sent.append(payload)
+
+    async def receive_text(self):
+        if self._messages:
+            return self._messages.pop(0)
+        self._backend.close_after_replies()
+        await self._backend.closed.wait()
+        raise websockets.exceptions.ConnectionClosedOK(None, None)
+
+    async def close(self, code=None, reason=None):
+        return None
+
+
+def _realtime_logging_obj():
+    logging_obj = Mock()
+    logging_obj.litellm_trace_id = "trace-lit-6974"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.dispatch_failure_handlers = AsyncMock()
+    return logging_obj
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, session, backend_modality, client_modality, backend_turn, drop_params",
+    [
+        (
+            "gemini-live-2.5-flash",
+            {"type": "realtime", "output_modalities": ["text"]},
+            "TEXT",
+            "text",
+            [_GEMINI_LIVE_TEXT_TURN],
+            False,
+        ),
+        ("gemini-live-2.5-flash", {"modalities": ["text"]}, "TEXT", "text", [_GEMINI_LIVE_TEXT_TURN], False),
+        (
+            "gemini-live-2.5-flash-native-audio",
+            {"type": "realtime", "output_modalities": ["text"]},
+            "AUDIO",
+            "audio",
+            [],
+            True,
+        ),
+    ],
+)
+async def test_async_realtime_vertex_first_session_update_builds_the_only_setup(
+    model, session, backend_modality, client_modality, backend_turn, drop_params: bool, monkeypatch
+):
+    """Regression for text-only Vertex Live sessions answered in audio: the
+    connect-time default setup (AUDIO) used to go out before the client's
+    session.update, and Gemini accepts only one setup per connection, so the
+    requested modality was dropped and billed at the audio rate. The setup now
+    goes out on the client's first message, built from session.update when that
+    comes first. Under drop_params an audio-only model still gets AUDIO, and the
+    client learns the downgrade from session.updated."""
+    from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
+
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    backend = _ScriptedRealtimeBackend([_GEMINI_LIVE_SETUP_COMPLETE, *backend_turn, _GEMINI_LIVE_TURN_COMPLETE])
+    client_ws = _ScriptedRealtimeClient(
+        [
+            json.dumps({"type": "session.update", "session": session}),
+            json.dumps(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "What color is the sky? One word."}],
+                    },
+                }
+            ),
+            json.dumps({"type": "response.create"}),
+        ],
+        backend,
+    )
+    handler = BaseLLMHTTPHandler()
+
+    with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(return_value=backend)):
+        await asyncio.wait_for(
+            handler.async_realtime(
+                model=model,
+                websocket=client_ws,
+                logging_obj=_realtime_logging_obj(),
+                provider_config=VertexAIRealtimeConfig(
+                    access_token="fake-token", project="fake-project", location="us-central1", drop_params=drop_params
+                ),
+                headers={},
+            ),
+            timeout=10,
+        )
+
+    backend_frames = [json.loads(frame) for frame in backend.sent]
+    setups = [frame["setup"] for frame in backend_frames if "setup" in frame]
+    assert len(setups) == 1
+    assert "setup" in backend_frames[0]
+    assert setups[0]["generationConfig"]["responseModalities"] == [backend_modality]
+    assert any("clientContent" in frame for frame in backend_frames[1:])
+
+    client_events = [json.loads(frame) for frame in client_ws.sent]
+    event_types = [event["type"] for event in client_events]
+    assert event_types[:2] == ["session.created", "session.updated"]
+    assert client_events[1]["session"]["modalities"] == [client_modality]
+    if backend_turn:
+        assert "response.output_text.delta" in event_types
+        assert "response.output_audio_transcript.delta" not in event_types
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_sends_setup_at_connect_when_provider_cannot_build_it_from_session_update():
+    """Bedrock Nova Sonic style providers keep the connect-time setup and get no
+    synthetic session.created."""
+    setup = json.dumps({"event": {"sessionStart": {}}})
+    backend = _ScriptedRealtimeBackend([])
+    client_ws = _ScriptedRealtimeClient([], backend)
+    provider_config = Mock()
+    provider_config.get_complete_url.return_value = "wss://backend.example/live"
+    provider_config.validate_environment.return_value = {}
+    provider_config.requires_session_configuration.return_value = True
+    provider_config.builds_setup_from_session_update.return_value = False
+    provider_config.session_configuration_request.return_value = setup
+    provider_config.unbilled_usage_on_session_close.return_value = None
+    provider_config.open_backend = AsyncMock(return_value=None)
+    provider_config.wrap_backend.side_effect = lambda opened: opened
+    handler = BaseLLMHTTPHandler()
+
+    with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(return_value=backend)):
+        await asyncio.wait_for(
+            handler.async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=client_ws,
+                logging_obj=_realtime_logging_obj(),
+                provider_config=provider_config,
+                headers={},
+            ),
+            timeout=10,
+        )
+
+    assert backend.sent == [setup]
+    assert client_ws.sent == []
+
+
 class _JSONBodyAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def get_supported_openai_params(self, model):
         return []
@@ -3852,26 +4044,29 @@ def test_a_callback_that_overrides_the_deployment_hook_is_detected(monkeypatch):
     assert _has_pre_call_deployment_hook(logging_obj) is True
 
 
-def test_only_callbacks_that_can_charge_a_frame_are_collected_for_ws_quota(monkeypatch):
+@pytest.mark.parametrize(
+    "collect, frame_check",
+    [
+        (_collect_ws_project_quota_callbacks, "enforce_project_io_token_quota_for_frame"),
+        (_collect_ws_token_limit_callbacks, "enforce_token_limits_for_frame"),
+    ],
+    ids=["project-quota", "token-limits"],
+)
+def test_only_callbacks_that_can_check_a_frame_are_collected_for_ws_turns(monkeypatch, collect, frame_check):
     from litellm.integrations.custom_logger import CustomLogger
 
-    class _PlainLogger(CustomLogger):
-        pass
+    async def check_frame(self, *args, **kwargs):
+        return None
 
-    class _QuotaLogger(CustomLogger):
-        async def enforce_project_io_token_quota_for_frame(self, *args, **kwargs):
-            return None
-
-    class _NotCallableAttribute:
-        enforce_project_io_token_quota_for_frame = "not a method"
-
-    plain, quota, decoy = _PlainLogger(), _QuotaLogger(), _NotCallableAttribute()
+    plain: Final = CustomLogger()
+    checker: Final = type("_FrameChecker", (CustomLogger,), {frame_check: check_frame})()
+    decoy: Final = type("_NotCallableAttribute", (), {frame_check: "not a method"})()
 
     monkeypatch.setattr(litellm, "callbacks", [plain, decoy])
-    assert _collect_ws_project_quota_callbacks() == ()
+    assert collect() == ()
 
-    monkeypatch.setattr(litellm, "callbacks", [plain, quota, decoy])
-    assert _collect_ws_project_quota_callbacks() == (quota,)
+    monkeypatch.setattr(litellm, "callbacks", [plain, checker, decoy])
+    assert collect() == (checker,)
 
 
 @pytest.mark.asyncio
@@ -5788,6 +5983,39 @@ async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_
     assert "dangerous-tool-use-2026-09-03" not in sent.headers.get("anthropic-beta", ""), dict(sent.headers)
 
 
+_EMPTY_SEARCH_PAGE: Final = {
+    "object": "vector_store.search_results.page",
+    "search_query": "q",
+    "data": [],
+    "has_more": False,
+    "next_page": None,
+}
+
+
+def _close_with_goaway(request: httpx.Request) -> httpx.Response:
+    raise httpx.RemoteProtocolError("GOAWAY", request=request) from httpcore.RemoteProtocolError(ConnectionTerminated())
+
+
+def _hang_up(request: httpx.Request) -> httpx.Response:
+    raise httpx.RemoteProtocolError("Server disconnected without sending a response.", request=request)
+
+
+def _answer_search(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json=_EMPTY_SEARCH_PAGE)
+
+
+async def _search_through(transport: httpx.MockTransport, is_async: bool) -> object:
+    search_kwargs: Final = {"vector_store_id": "vs_1", "query": "q", "custom_llm_provider": "openai", "api_key": "sk-test"}
+    if not is_async:
+        with httpx.Client(transport=transport) as sync_client:
+            return litellm.vector_stores.search(**search_kwargs, client=HTTPHandler(client=sync_client))
+    async with httpx.AsyncClient(transport=transport) as async_client:
+        client: Final = AsyncHTTPHandler()
+        await client.close()
+        client.client = async_client
+        return await litellm.vector_stores.asearch(**search_kwargs, client=client)
+
+
 class TestAgenticFollowUpKeepsTheProviderPrefix:
     @staticmethod
     async def _run_followup(
@@ -5958,6 +6186,24 @@ def test_vector_store_retrieve_handler_sends_id_before_azure_api_version_query()
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", (False, True))
+async def test_vector_store_search_sends_again_once_after_an_http2_goaway(is_async: bool) -> None:
+    sends: Final = iter((_close_with_goaway, _answer_search))
+    response: Final = await _search_through(httpx.MockTransport(lambda request: next(sends)(request)), is_async)
+    assert response["search_query"] == "q"
+    assert next(sends, None) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+async def test_vector_store_search_sends_once_when_the_connection_drops_without_a_goaway(is_async: bool) -> None:
+    sends: Final = iter((_hang_up, _answer_search))
+    with pytest.raises(litellm.InternalServerError, match="Server disconnected"):
+        await _search_through(httpx.MockTransport(lambda request: next(sends)(request)), is_async)
+    assert next(sends) is _answer_search
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
 @pytest.mark.parametrize("provider", ("openai", "azure"))
 async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
     is_async: bool, provider: str, respx_mock: respx.MockRouter,
@@ -5995,6 +6241,142 @@ async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
             await client.close()
         else:
             client.client.close()
+
+
+_BETA_THE_TABLE_DOES_NOT_LIST: Final = "not-in-the-beta-table-2099-01-01"
+
+
+def _anthropic_messages_logging_obj():
+    from datetime import datetime, timezone
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    return Logging(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="foundry-beta-row",
+        function_id="foundry-beta-row",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "messages_config", "foundry_api_base", "forwarded_betas"),
+    [
+        pytest.param(
+            "anthropic",
+            "anthropic",
+            "https://my-resource.services.ai.azure.com/anthropic",
+            f"thinking-binding-controls-2026-08-01,{_BETA_THE_TABLE_DOES_NOT_LIST}",
+            id="anthropic-drops-what-the-azure-ai-row-rejects",
+        ),
+        pytest.param(
+            "anthropic",
+            "anthropic",
+            "https://my-resource.cognitiveservices.azure.com/anthropic",
+            f"thinking-binding-controls-2026-08-01,{_BETA_THE_TABLE_DOES_NOT_LIST}",
+            id="anthropic-on-a-cognitiveservices-host",
+        ),
+        pytest.param(
+            "azure_ai",
+            "azure_ai",
+            "https://my-resource.services.ai.azure.com/anthropic",
+            "thinking-binding-controls-2026-08-01",
+            id="azure-ai-keeps-dropping-unlisted-betas",
+        ),
+        pytest.param(
+            "openai",
+            "pass_through",
+            "https://my-resource.services.ai.azure.com/anthropic",
+            f"advisor-tool-2026-03-01,thinking-binding-controls-2026-08-01,{_BETA_THE_TABLE_DOES_NOT_LIST}",
+            id="messages-pass-through-forwards-as-sent",
+        ),
+    ],
+)
+async def test_async_anthropic_messages_handler_picks_the_beta_row_by_deployment_on_a_foundry_api_base(
+    monkeypatch: pytest.MonkeyPatch,
+    custom_llm_provider: str,
+    messages_config: str,
+    foundry_api_base: str,
+    forwarded_betas: str,
+) -> None:
+    from litellm import anthropic_beta_headers_manager
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+    from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
+    from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
+
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    assert _BETA_THE_TABLE_DOES_NOT_LIST not in anthropic_beta_headers_manager._load_beta_headers_config()["azure_ai"]
+    configs: Final = {
+        "anthropic": AnthropicMessagesConfig,
+        "azure_ai": AzureAnthropicMessagesConfig,
+        "pass_through": OpenAILikeAnthropicMessagesConfig,
+    }
+    upstream: Final = _AnthropicMessagesUpstream()
+
+    await BaseLLMHTTPHandler().async_anthropic_messages_handler(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_provider_config=configs[messages_config](),
+        anthropic_messages_optional_request_params={"max_tokens": 8},
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=GenericLiteLLMParams(api_base=foundry_api_base),
+        logging_obj=_anthropic_messages_logging_obj(),
+        api_key="sk-test",
+        api_base=foundry_api_base,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream.respond)),
+        kwargs={
+            "extra_headers": {
+                "anthropic-beta": (
+                    f"advisor-tool-2026-03-01,thinking-binding-controls-2026-08-01,{_BETA_THE_TABLE_DOES_NOT_LIST}"
+                )
+            }
+        },
+    )
+
+    assert set(",".join(upstream.anthropic_beta).split(",")) == set(forwarded_betas.split(","))
+
+
+@pytest.mark.asyncio
+async def test_first_foundry_request_with_betas_fetches_the_beta_table_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm import anthropic_beta_headers_manager, anthropic_beta_headers_url
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    monkeypatch.delenv("LITELLM_OFFLINE_MODE", raising=False)
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    bundled_table: Final = anthropic_beta_headers_manager.GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
+    foundry_api_base: Final = "https://my-resource.services.ai.azure.com/anthropic"
+    upstream: Final = _AnthropicMessagesUpstream()
+
+    with respx.mock(assert_all_called=True) as router:
+        table_route: Final = router.get(anthropic_beta_headers_url).mock(
+            side_effect=lambda request: httpx.Response(
+                200, json=bundled_table, headers={"x-fetch-thread": str(threading.get_ident())}
+            )
+        )
+        await BaseLLMHTTPHandler().async_anthropic_messages_handler(
+            model="claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_provider_config=AnthropicMessagesConfig(),
+            anthropic_messages_optional_request_params={"max_tokens": 8},
+            custom_llm_provider="anthropic",
+            litellm_params=GenericLiteLLMParams(api_base=foundry_api_base),
+            logging_obj=_anthropic_messages_logging_obj(),
+            api_key="sk-test",
+            api_base=foundry_api_base,
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream.respond)),
+            kwargs={"extra_headers": {"anthropic-beta": "advisor-tool-2026-03-01,compact-2026-01-12"}},
+        )
+
+    assert table_route.calls.last.response.headers["x-fetch-thread"] != str(threading.get_ident())
+    assert upstream.anthropic_beta == ("compact-2026-01-12",)
 
 
 @pytest.mark.asyncio

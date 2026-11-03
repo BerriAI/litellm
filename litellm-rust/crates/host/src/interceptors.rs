@@ -22,7 +22,7 @@ pub struct RequestContext {
     /// Optional-param names that carry credentials and must be redacted when logged.
     pub secret_fields: Vec<String>,
     /// The credential the route resolved for the provider call.
-    pub api_key: Option<litellm_auth::SecretValue>,
+    pub api_key: Option<litellm_secret_value::SecretValue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

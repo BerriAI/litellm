@@ -14,6 +14,8 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -2476,9 +2478,9 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
     # Reset module-level cache to ensure test isolation
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
-    class _MockRouter:
-        model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
-        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
+    mock_router = route_entry_points_to_stubs(MagicMock())
+    mock_router.model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
+    mock_router.team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
 
     test_data = {"model": "gpt-4o"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -2487,7 +2489,7 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
         team_model_aliases={"gpt-4o": "model_name_team-1_legacy-uuid"},
     )
 
-    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         _update_model_if_team_alias_exists(
             data=test_data, user_api_key_dict=user_api_key_dict
         )
@@ -2502,9 +2504,9 @@ def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
     # Reset module-level cache to ensure test isolation
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
-    class _MockRouter:
-        model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
-        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
+    mock_router = route_entry_points_to_stubs(MagicMock())
+    mock_router.model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
+    mock_router.team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
 
     test_data = {"model": "gpt-4o"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -2514,7 +2516,7 @@ def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
     )
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "true")
 
-    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         _update_model_if_team_alias_exists(
             data=test_data, user_api_key_dict=user_api_key_dict
         )

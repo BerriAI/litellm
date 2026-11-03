@@ -437,11 +437,11 @@ async def new_end_user(
                     status_code=422,
                     detail={"error": CommonProxyErrors.no_llm_router.value},
                 )
-            elif data.default_model not in llm_router.get_model_names():
+            elif data.default_model not in llm_router.registry().names():
                 raise HTTPException(
                     status_code=422,
                     detail={
-                        "error": f"Default Model not on proxy. Configure via `/model/new` or config.yaml. Default_model={data.default_model}, proxy_model_names={set(llm_router.get_model_names())}"
+                        "error": f"Default Model not on proxy. Configure via `/model/new` or config.yaml. Default_model={data.default_model}, proxy_model_names={set(llm_router.registry().names())}"
                     },
                 )
 
