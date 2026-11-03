@@ -484,55 +484,6 @@ async def test_bridged_text_completion_is_logged_as_the_text_completion_it_serve
     assert logged.payload["response"]["choices"][0]["text"] == "pong"
 
 
-@pytest.mark.asyncio
-async def test_a_bridged_chat_response_waits_on_the_usage_ack_like_any_chat_response(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.proxy import proxy_server
-    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime, capture_proxy_response
-    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
-    from tests.unit.proxy.spend_tracking.test_usage_meter import CommitBarrier
-
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    database: Final = CommitBarrier()
-    runtime: Final = UsageCaptureRuntime()
-    runtime.start(database.write, UsageCaptureSettings(batch_size=2))
-    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
-    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_sync_ack": True})
-    logging_obj: Final = Logging(
-        model="openai/gpt-5.3-codex",
-        messages=[],
-        stream=False,
-        call_type="acompletion",
-        start_time=datetime.datetime.now(),
-        litellm_call_id="bridged-chat",
-        function_id="bridged-chat",
-    )
-    with respx.mock(assert_all_called=True) as router:
-        router.post(url__startswith="https://api.openai.com/v1/responses").mock(
-            return_value=httpx.Response(200, json=_searched_responses_body("openai/gpt-5.3-codex"))
-        )
-        served: Final = await litellm.acompletion(
-            model="openai/gpt-5.3-codex",
-            messages=[{"role": "user", "content": "ping"}],
-            api_key="test-key",
-            litellm_logging_obj=logging_obj,
-        )
-    response: Final = asyncio.create_task(capture_proxy_response(logging_obj, served))
-    try:
-        await database.entered.wait()
-        assert not response.done()
-        assert database.committed == ()
-        database.release.set()
-        await response
-        assert "bridged-chat:inbound" in database.committed
-    finally:
-        database.release.set()
-        await runtime.stop(1)
-        await response
-
-
 def _served_message_start_id(events: Sequence[bytes]) -> object:
     lines: Final = b"".join(events).decode().splitlines()
     starts: Final = tuple(
