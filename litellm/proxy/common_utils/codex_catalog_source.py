@@ -18,7 +18,7 @@ import asyncio
 import os
 import re
 import time
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import cache
@@ -38,6 +38,7 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     codex_base_instructions,
 )
 
+CODEX_CATALOG_OPENAI_URL: Final = "https://chatgpt.com/backend-api/codex/models"
 CODEX_CATALOG_BASE_URL: Final = "https://raw.githubusercontent.com/openai/codex"
 CODEX_CATALOG_RETRY_SECONDS: Final = 300.0
 CODEX_CATALOG_FETCH_TIMEOUT_SECONDS: Final = 10.0
@@ -49,7 +50,13 @@ _PROMPT_PATH: Final = "codex-rs/models-manager/prompt.md"
 
 
 class _AsyncGetClient(Protocol):
-    def get(self, url: str, *, timeout: float | None = None) -> Awaitable[httpx.Response]: ...
+    def get(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,  # mutable-ok: httpx's own get signature
+        timeout: float | None = None,
+    ) -> Awaitable[httpx.Response]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +110,7 @@ class CodexCatalogSource:
         *,
         client: _AsyncGetClient | None = None,
         base_url: str | None = None,
+        openai_url: str | None = None,
         clock: Callable[[], float] = time.monotonic,
         retry_seconds: float = CODEX_CATALOG_RETRY_SECONDS,
         timeout: float = CODEX_CATALOG_FETCH_TIMEOUT_SECONDS,
@@ -112,6 +120,11 @@ class CodexCatalogSource:
         self._base_url = (
             base_url if base_url is not None else os.getenv("LITELLM_CODEX_CATALOG_BASE_URL", CODEX_CATALOG_BASE_URL)
         ).rstrip("/")
+        self._openai_url = (
+            openai_url
+            if openai_url is not None
+            else os.getenv("LITELLM_CODEX_CATALOG_OPENAI_URL", CODEX_CATALOG_OPENAI_URL)
+        )
         self._clock = clock
         self._retry_seconds = retry_seconds
         self._timeout = timeout
@@ -119,9 +132,11 @@ class CodexCatalogSource:
         self._cache: OrderedDict[str, _Cached] = OrderedDict()  # mutable-ok: filled as releases are first asked for
         self._pending: dict[str, asyncio.Task[CodexStock]] = {}  # mutable-ok: the fetches in flight, one per release
 
-    async def stock(self, client_version: str | None) -> CodexStock:
+    async def stock(self, client_version: str | None, *, openai_api_key: str | None = None) -> CodexStock:
+        """The catalog for ``client_version``: OpenAI's live one when an OpenAI key is at hand,
+        else the release's models.json on GitHub, else the bundled pair."""
         tag: Final = codex_release_tag(client_version)
-        if tag is None or uses_vendored_codex_catalog():
+        if tag is None or client_version is None or uses_vendored_codex_catalog():
             return vendored_codex_stock()
         cached: Final = self._cache.get(tag)
         if cached is not None and (cached.retry_at is None or cached.retry_at > self._clock()):
@@ -130,13 +145,13 @@ class CodexCatalogSource:
         pending: Final = self._pending.get(tag)
         if pending is not None:
             return await asyncio.shield(pending)
-        task: Final = asyncio.ensure_future(self._resolve(tag))
+        task: Final = asyncio.ensure_future(self._resolve(tag, client_version, openai_api_key))
         self._pending[tag] = task
         task.add_done_callback(lambda _: self._pending.pop(tag, None))
         return await asyncio.shield(task)
 
-    async def _resolve(self, tag: str) -> CodexStock:
-        fetched: Final = await self._fetch(tag)
+    async def _resolve(self, tag: str, version: str, openai_api_key: str | None) -> CodexStock:
+        fetched: Final = await self._fetch(tag, version, openai_api_key)
         if isinstance(fetched, _FetchFailed):
             verbose_proxy_logger.warning(
                 "Codex catalog %s not fetched (%s), serving the %s one for the next %.0fs",
@@ -146,7 +161,9 @@ class CodexCatalogSource:
                 self._retry_seconds,
             )
         else:
-            verbose_proxy_logger.info("Codex catalog %s fetched, %d models", tag, len(fetched.models))
+            verbose_proxy_logger.info(
+                "Codex catalog %s fetched from %s, %d models", tag, fetched.source, len(fetched.models)
+            )
         entry: Final = (
             _Cached(stock=vendored_codex_stock(), retry_at=self._clock() + self._retry_seconds)
             if isinstance(fetched, _FetchFailed)
@@ -158,7 +175,35 @@ class CodexCatalogSource:
             self._cache.popitem(last=False)
         return entry.stock
 
-    async def _fetch(self, tag: str) -> CodexStock | _FetchFailed:
+    async def _fetch(self, tag: str, version: str, openai_api_key: str | None) -> CodexStock | _FetchFailed:
+        if openai_api_key:
+            fetched: Final = await self._fetch_openai(version, openai_api_key)
+            if not isinstance(fetched, _FetchFailed):
+                return fetched
+            verbose_proxy_logger.info(
+                "Codex catalog %s not fetched from OpenAI (%s), trying GitHub", tag, fetched.reason
+            )
+        return await self._fetch_github(tag)
+
+    async def _fetch_openai(self, version: str, openai_api_key: str) -> CodexStock | _FetchFailed:
+        url: Final = f"{self._openai_url}?client_version={version}"
+        body: Final = await self._get(url, headers={"Authorization": f"Bearer {openai_api_key}"})
+        if isinstance(body, _FetchFailed):
+            return body
+        try:
+            catalog: Final = CodexStockCatalog.model_validate_json(body)
+        except ValidationError as error:
+            return _FetchFailed(reason=f"{url} body does not parse: {type(error).__name__}")
+        prompts: Final = Counter(model.base_instructions for model in catalog.models if model.base_instructions.strip())
+        if not catalog.models or not prompts:
+            return _FetchFailed(reason=f"{url} catalog is empty")
+        return CodexStock(
+            models=MappingProxyType({model.slug: model for model in catalog.models}),
+            instructions=prompts.most_common(1)[0][0],
+            source=f"openai {version}",
+        )
+
+    async def _fetch_github(self, tag: str) -> CodexStock | _FetchFailed:
         models, prompt = await asyncio.gather(
             self._get(f"{self._base_url}/{tag}/{_MODELS_PATH}"), self._get(f"{self._base_url}/{tag}/{_PROMPT_PATH}")
         )
@@ -176,13 +221,17 @@ class CodexCatalogSource:
         return CodexStock(
             models=MappingProxyType({model.slug: model for model in catalog.models}),
             instructions=instructions,
-            source=tag,
+            source=f"github {tag}",
         )
 
-    async def _get(self, url: str) -> bytes | _FetchFailed:
+    async def _get(
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,  # mutable-ok: httpx's own get signature
+    ) -> bytes | _FetchFailed:
         client: Final = self._client if self._client is not None else _default_client()
         try:
-            response: Final = await client.get(url, timeout=self._timeout)
+            response: Final = await client.get(url, headers=headers, timeout=self._timeout)
         except httpx.HTTPError as error:
             return _FetchFailed(reason=f"{type(error).__name__} fetching {url}")
         if response.status_code != 200:

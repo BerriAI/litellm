@@ -23,6 +23,7 @@ newer tag and renaming the json after it.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
@@ -36,12 +37,14 @@ from pydantic import ConfigDict, Field, StringConstraints, TypeAdapter, Validati
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.router import Router
     from litellm.router_api import RouterRegistry
     from litellm.types.proxy.model_listing import ModelInfoResponse
+    from litellm.types.router import DeploymentTypedDict
 
 CODEX_BASE_INSTRUCTIONS_PATH: Final = Path(__file__).with_name("codex_base_instructions.md")
 CODEX_BUNDLED_VERSION: Final = "0.166.0"
@@ -164,6 +167,7 @@ class CodexStockModel(LiteLLMBaseModel):
     supported_reasoning_levels: tuple[CodexReasoningLevel, ...] = ()
     context_window: int | None = None
     max_context_window: int | None = None
+    base_instructions: str = ""
 
 
 class CodexStockCatalog(LiteLLMBaseModel):
@@ -563,6 +567,38 @@ def _catalog_row(
             registry.group(lookup_id, field="max_input_tokens", team_id=team_id) if registry is not None else ()
         ),
     )
+
+
+def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
+    params: Final = MappingProxyType[str, object](deployment["litellm_params"])
+    model: Final = params.get("model")
+    provider: Final = params.get("custom_llm_provider") or (model.partition("/")[0] if isinstance(model, str) else "")
+    api_key: Final = params.get("api_key")
+    if provider != "openai" or not isinstance(api_key, str) or not api_key:
+        return None
+    return (get_secret_str(api_key) if api_key.startswith("os.environ/") else api_key) or None
+
+
+def codex_catalog_openai_key(
+    llm_router: Router | None,
+    entries: Sequence[tuple[str, str]],
+    team_id: str | None = None,
+) -> str | None:
+    """The OpenAI API key the catalog fetch authenticates with: the first one among the
+    listed entries' OpenAI deployments, else ``OPENAI_API_KEY`` from the environment."""
+    registry: Final = llm_router.registry() if llm_router is not None else None
+    deployments: Final = (
+        tuple(
+            deployment
+            for _, lookup_id in entries
+            for deployment in registry.deployments(
+                lookup_id, source="all", team_id=team_id
+            )  # comprehension-ok: flattening the entries' deployment lists
+        )
+        if registry is not None
+        else ()
+    )
+    return next(filter(None, map(_deployment_openai_key, deployments)), None) or os.getenv("OPENAI_API_KEY") or None
 
 
 def codex_catalog_rows(

@@ -31,6 +31,11 @@ BUNDLED_STOCK_PATH: Final = ROOT / "litellm" / "proxy" / "common_utils" / "codex
 BASE_INSTRUCTIONS_PATH: Final = ROOT / "litellm" / "proxy" / "common_utils" / "codex_base_instructions.md"
 PUBLISHED_VERSION: Final = "0.999.0"
 UNPUBLISHED_VERSION: Final = "0.998.0"
+OPENAI_VERSION: Final = "0.997.0"
+OPENAI_SLUG: Final = "gpt-openai-release"
+OPENAI_PROMPT: Final = "# Base prompt OpenAI serves for its release"
+OPENAI_MODELS_PATH: Final = "/codex/models"
+DEPLOYMENT_KEY: Final = "integration-provider-key"
 FRESH_SLUG: Final = "gpt-fresh-release"
 FRESH_PROMPT: Final = "# Base prompt of the published release"
 MODELS_PATH: Final = "codex-rs/models-manager/models.json"
@@ -57,7 +62,21 @@ def _published_entry() -> dict[str, JsonValue]:
     return {**_vendored_entry("gpt-5.5"), "slug": FRESH_SLUG, "display_name": "Fresh Release", "upgrade": None}
 
 
+def _openai_entry() -> dict[str, JsonValue]:
+    return {
+        **_published_entry(),
+        "slug": OPENAI_SLUG,
+        "display_name": "OpenAI Release",
+        "base_instructions": OPENAI_PROMPT,
+    }
+
+
 def _raw_tree(request: Request) -> Reply:
+    if request.target.startswith(f"{OPENAI_MODELS_PATH}?"):
+        served: Final = request.target == f"{OPENAI_MODELS_PATH}?client_version={OPENAI_VERSION}"
+        if served and request.headers.get("authorization") == f"Bearer {DEPLOYMENT_KEY}":
+            return Reply(body=json.dumps({"models": [_openai_entry()]}).encode())
+        return Reply(status=401, body=b'{"detail":"Unauthorized"}')
     if request.target == f"/rust-v{PUBLISHED_VERSION}/{MODELS_PATH}":
         return Reply(body=json.dumps({"models": [_published_entry()]}).encode())
     if request.target == f"/rust-v{PUBLISHED_VERSION}/{PROMPT_PATH}":
@@ -83,7 +102,11 @@ def raw_tree() -> Iterator[Wire]:
 def gateway(tmp_path_factory: pytest.TempPathFactory, raw_tree: Wire) -> Iterator[Gateway]:
     with gateway_from_environment() as parent_gateway:
         directory: Final = tmp_path_factory.mktemp("codex_catalog_fetch")
-        overrides: Final = {"LITELLM_LOCAL_CODEX_CATALOG": "False", "LITELLM_CODEX_CATALOG_BASE_URL": raw_tree.url}
+        overrides: Final = {
+            "LITELLM_LOCAL_CODEX_CATALOG": "False",
+            "LITELLM_CODEX_CATALOG_BASE_URL": raw_tree.url,
+            "LITELLM_CODEX_CATALOG_OPENAI_URL": f"{raw_tree.url}{OPENAI_MODELS_PATH}",
+        }
         config: Final = _config_without_model_list(directory)
         with owned_proxy(parent_gateway, directory, overrides, config=config) as isolated_gateway:
             yield isolated_gateway
@@ -106,6 +129,28 @@ def _catalog(gateway: Gateway, client_version: str) -> dict[str, dict[str, JsonV
     models: Final = JSON_OBJECT.validate_json(response.content)["models"]
     assert isinstance(models, list), response.text
     return {string_value(object_value(entry)["slug"]): object_value(entry) for entry in models}
+
+
+def test_a_release_openai_serves_is_fetched_from_openai_with_the_deployment_key_and_github_is_skipped(
+    gateway: Gateway, raw_tree: Wire
+) -> None:
+    assert OPENAI_SLUG not in _vendored_slugs()
+    with gateway.scenario() as scenario:
+        scenario.model(name=OPENAI_SLUG)
+        listing: Final = _catalog_listing(gateway, OPENAI_VERSION, OPENAI_SLUG)
+        expected: Final = {
+            **_openai_entry(),
+            "priority": listing[OPENAI_SLUG]["priority"],
+            "visibility": "list",
+            "supported_in_api": True,
+            "upgrade": None,
+        }
+        assert listing[OPENAI_SLUG] == expected, listing[OPENAI_SLUG]
+    requests: Final = raw_tree.drain()
+    openai_requests: Final = [request for request in requests if request.target.startswith(OPENAI_MODELS_PATH)]
+    assert len(openai_requests) == gateway.workers, [request.target for request in requests]
+    assert {request.headers.get("authorization") for request in openai_requests} == {f"Bearer {DEPLOYMENT_KEY}"}
+    assert not any(request.target.startswith(f"/rust-v{OPENAI_VERSION}/") for request in requests), requests
 
 
 def test_a_published_release_gets_its_own_entry_for_a_model_the_vendored_pair_lacks(

@@ -14,6 +14,7 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     CodexStockModel,
     CodexStockUpgrade,
     bundled_codex_models,
+    codex_catalog_openai_key,
     codex_catalog_rows,
     codex_model_list_body,
     codex_models_response_json,
@@ -944,3 +945,36 @@ def test_codex_tool_search_is_offered_off_the_route_and_model_info_and_only_when
         "mixed": False,
     }
     assert models[0]["context_window"] == 1000000
+
+
+def _router_with(*litellm_params: Mapping[str, str]) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": f"catalog-model-{index}", "litellm_params": dict(params)}
+            for index, params in enumerate(litellm_params)
+        ]
+    )
+
+
+def test_the_catalog_key_is_the_listed_openai_deployments_key_before_the_environments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    monkeypatch.setenv("CATALOG_OPENAI_KEY", "sk-from-secret-ref")
+    router: Final = _router_with(
+        {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-ant-not-openai"},
+        {"model": "openai/gpt-5.5", "api_key": "os.environ/CATALOG_OPENAI_KEY"},
+        {"model": "openai/gpt-5.5", "api_key": "sk-second-openai"},
+    )
+    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(3)]
+    assert codex_catalog_openai_key(router, entries) == "sk-from-secret-ref"
+    assert codex_catalog_openai_key(router, entries[:1]) == "sk-from-env"
+
+
+def test_the_catalog_key_is_absent_without_an_openai_deployment_or_environment_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    router: Final = _router_with({"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-ant-not-openai"})
+    assert codex_catalog_openai_key(router, [("catalog-model-0", "catalog-model-0")]) is None
+    assert codex_catalog_openai_key(None, [("catalog-model-0", "catalog-model-0")]) is None
