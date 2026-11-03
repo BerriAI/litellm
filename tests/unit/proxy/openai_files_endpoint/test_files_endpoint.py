@@ -643,6 +643,16 @@ _FILE_MAY_EXIST_NOTICE: Final = (
             None,
             id="rate-limited",
         ),
+        pytest.param(
+            lambda: openai.AuthenticationError(
+                "invalid x-api-key",
+                response=httpx.Response(401, headers={"x-should-retry": "false"}, request=_UPSTREAM_FILE_UPLOAD),
+                body=None,
+            ),
+            401,
+            None,
+            id="rejected-with-should-retry-false",
+        ),
     ],
 )
 def test_create_file_tells_the_caller_not_to_resend_only_an_upload_the_provider_may_have_made(

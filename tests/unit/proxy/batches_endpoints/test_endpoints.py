@@ -1467,6 +1467,15 @@ _BATCH_MAY_EXIST_NOTICE: Final = (
             None,
             id="rate-limited",
         ),
+        pytest.param(
+            lambda: openai.AuthenticationError(
+                "invalid x-api-key",
+                response=httpx.Response(401, headers={"x-should-retry": "false"}, request=_UPSTREAM_BATCH_CREATE),
+                body=None,
+            ),
+            None,
+            id="rejected-with-should-retry-false",
+        ),
     ],
 )
 async def test_create__tells_the_caller_not_to_resend_only_a_create_the_provider_may_have_made(

@@ -62,6 +62,7 @@ _CAUSES_THAT_CANNOT_HAVE_CREATED_ANYTHING: Final = (
     httpx.WriteTimeout,
 )
 _STATUSES_THE_SDK_RETRIES: Final = frozenset({408, 409, 429})
+_REQUEST_TIMEOUT: Final = 408
 _GATEWAY_TIMEOUT: Final = 504
 _LONGEST_CAUSE_CHAIN: Final = 10
 _WIRE_FAILURES: Final = (httpx.TransportError, httpx.HTTPStatusError, openai.APIStatusError)
@@ -92,7 +93,13 @@ def _provider_asks_for_a_retry(response: httpx.Response) -> bool:
     )
 
 
+def _provider_rejected_the_request(response: httpx.Response) -> bool:
+    return 400 <= response.status_code < 500 and response.status_code != _REQUEST_TIMEOUT
+
+
 def _answer_says_it_may_exist(response: httpx.Response) -> bool:
+    if _provider_rejected_the_request(response):
+        return False
     asked: Final = _retry_the_provider_asked_for(response)
     if asked is not None:
         return not asked

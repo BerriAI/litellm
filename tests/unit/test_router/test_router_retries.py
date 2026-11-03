@@ -1229,6 +1229,10 @@ async def test_a_create_whose_connection_dropped_after_it_was_sent_is_neither_re
             httpx.Response(500, headers={"x-should-retry": "false"}, json={"error": {"message": "do not resend"}}),
             id="500-should-not-retry",
         ),
+        pytest.param(
+            httpx.Response(408, headers={"x-should-retry": "false"}, json={"error": {"message": "do not resend"}}),
+            id="408-should-not-retry",
+        ),
         pytest.param(httpx.Response(504, json={"error": {"message": "the gateway gave up waiting"}}), id="504"),
     ],
 )
@@ -1249,6 +1253,28 @@ async def test_a_create_whose_answer_says_it_may_exist_is_sent_once(
         await _create(_one_deployment_router("litellm_proxy/gpt-batch", api_base), create)
 
     assert create_route.call_count == 1
+
+
+@pytest.mark.parametrize("create", ["batch", "file"])
+async def test_a_create_the_provider_rejected_with_should_retry_false_still_falls_back(
+    create: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _patch_asyncio_sleep(monkeypatch)
+    api_bases: Final = tuple(f"https://router-{create}-rejected-order-{order}.test" for order in (1, 2))
+    respx_mock.post(url__startswith=api_bases[0]).mock(
+        return_value=httpx.Response(401, headers={"x-should-retry": "false"}, json={"error": {"message": "invalid x-api-key"}})
+    )
+    fallback_route: Final = respx_mock.post(url__startswith=api_bases[1]).mock(
+        return_value=httpx.Response(200, json=_CREATED_OBJECTS[create])
+    )
+
+    created: Final = await _create(_batch_router(api_bases, num_retries=2), create)
+
+    assert getattr(created, "id") == _CREATED_OBJECTS[create]["id"]
+    assert fallback_route.call_count == 1
 
 
 _ANTHROPIC_FILE: Final = {
