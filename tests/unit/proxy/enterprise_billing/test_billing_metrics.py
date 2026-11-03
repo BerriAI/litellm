@@ -28,6 +28,9 @@ _ENV_VARS = (
     bm.CLIENT_CERT_ENV,
     bm.CLIENT_KEY_ENV,
     bm.CA_CERT_ENV,
+    bm.CLIENT_ID_ENV,
+    bm.CLIENT_SECRET_ENV,
+    bm.TOKEN_URL_ENV,
     bm.EXPORT_INTERVAL_ENV,
 )
 
@@ -77,14 +80,42 @@ def _config(tmp_path: Path, license_id: Optional[str] = "org-1") -> bm.BillingMe
 
 
 def test_export_config_uses_bearer_when_all_credentials_are_set(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(bm.ENDPOINT_ENV, "https://collector.example:4318")
+    monkeypatch.setenv(bm.ENDPOINT_ENV, "HTTPS://collector.example:4318")
     monkeypatch.setenv(bm.CLIENT_ID_ENV, "client-id")
     monkeypatch.setenv(bm.CLIENT_SECRET_ENV, "client-secret")
-    monkeypatch.setenv(bm.TOKEN_URL_ENV, "https://auth.example/oauth2/token")
+    monkeypatch.setenv(bm.TOKEN_URL_ENV, "HTTPS://auth.example/oauth2/token")
 
     config: Final = bm._load_billing_metrics_export_config(license_data=None, litellm_version="1.0")
 
     assert isinstance(config, bm.BillingMetricsBearerConfig)
+
+
+@pytest.mark.parametrize(
+    ("env_name", "url"),
+    (
+        (bm.ENDPOINT_ENV, "http://collector.example:4318"),
+        (bm.TOKEN_URL_ENV, "http://auth.example/oauth2/token"),
+        (bm.TOKEN_URL_ENV, "https://["),
+    ),
+)
+def test_bearer_mode_disables_metrics_when_url_is_not_https(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    env_name: str,
+    url: str,
+) -> None:
+    _set_full_env(monkeypatch, tmp_path)
+    monkeypatch.setenv(bm.CLIENT_ID_ENV, "client-id")
+    monkeypatch.setenv(bm.CLIENT_SECRET_ENV, "client-secret")
+    monkeypatch.setenv(bm.TOKEN_URL_ENV, "https://auth.example/oauth2/token")
+    monkeypatch.setenv(env_name, url)
+
+    config: Final = bm._load_billing_metrics_export_config(license_data=None, litellm_version="1.0")
+
+    assert config is None
+    assert env_name in caplog.text
+    assert url not in caplog.text
 
 
 def test_export_config_uses_mtls_when_no_bearer_credentials_are_set(
@@ -469,6 +500,48 @@ def test_bearer_export_sets_authorization_header() -> None:
     export_requests: Final = tuple(request for request in http_mock.request_history if request.url == export_url)
     assert export_requests
     assert all(request.headers["Authorization"] == "Bearer export-token" for request in export_requests)
+
+
+def test_unauthorized_export_refetches_token_before_next_export() -> None:
+    token_url: Final = "https://auth.example/oauth2/token"
+    endpoint: Final = "https://collector.example:4318"
+    export_url: Final = f"{endpoint}/v1/metrics"
+    config: Final = bm.BillingMetricsBearerConfig(
+        endpoint=endpoint,
+        token_url=token_url,
+        client_id="client-id",
+        client_secret="client-secret",
+        export_interval_ms=60_000,
+        litellm_version="1.0",
+        license_id=None,
+    )
+    http_mock: Final = requests_mock.Mocker()
+    with http_mock:
+        http_mock.post(
+            token_url,
+            [
+                {"json": {"access_token": "first-token", "expires_in": 3600}},
+                {"json": {"access_token": "second-token", "expires_in": 3600}},
+            ],
+        )
+        http_mock.post(export_url, [{"status_code": 401}, {"status_code": 200}])
+        provider: Final = bm.build_bearer_meter_provider(config)
+        try:
+            counter: Final = provider.get_meter("test").create_counter("requests")
+            counter.add(1)
+            provider.force_flush(timeout_millis=1000)
+            counter.add(1)
+            provider.force_flush(timeout_millis=1000)
+        finally:
+            provider.shutdown(timeout_millis=1000)
+
+    token_requests: Final = tuple(request for request in http_mock.request_history if request.url == token_url)
+    export_requests: Final = tuple(request for request in http_mock.request_history if request.url == export_url)
+    assert len(token_requests) == 2
+    assert tuple(request.headers["Authorization"] for request in export_requests[:2]) == (
+        "Bearer first-token",
+        "Bearer second-token",
+    )
 
 
 def test_failed_bearer_token_fetch_does_not_raise_from_export() -> None:

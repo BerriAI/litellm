@@ -16,7 +16,8 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional, TypedDict, Unpack
+from urllib.parse import urlsplit
 
 import requests
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
@@ -26,6 +27,7 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from pydantic import BaseModel, ConfigDict
 from requests.auth import AuthBase
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
@@ -161,6 +163,11 @@ class _BillingMetricsBearerAuth(AuthBase):
         authenticated_request.headers["Authorization"] = f"Bearer {token}"
         return authenticated_request
 
+    def invalidate(self) -> None:
+        with self._lock:
+            self._cached_token = None
+            self._refresh_at = 0.0
+
     def _get_token(self) -> str:
         with self._lock:
             now: Final = self._clock()
@@ -186,13 +193,38 @@ class _BillingMetricsBearerAuth(AuthBase):
             raise requests.RequestException("Billing metrics token request failed") from None
 
 
+class _SessionHookKwargs(TypedDict, total=False):
+    stream: ReadOnly[object]
+    timeout: ReadOnly[object]
+    verify: ReadOnly[object]
+    cert: ReadOnly[object]
+    proxies: ReadOnly[object]
+
+
+class _BillingMetricsBearerSession(requests.Session):
+    def __init__(self, auth: _BillingMetricsBearerAuth) -> None:
+        super().__init__()
+        self._bearer_auth: Final = auth
+        self.auth = auth
+        self.hooks = {"response": [self._invalidate_token_on_unauthorized]}
+
+    def _invalidate_token_on_unauthorized(
+        self,
+        response: requests.Response,
+        **kwargs: Unpack[_SessionHookKwargs],  # kwargs-ok: requests hooks forward send options
+    ) -> requests.Response:
+        if response.status_code == 401:
+            self._bearer_auth.invalidate()
+        return response
+
+
 def build_bearer_meter_provider(config: BillingMetricsBearerConfig) -> MeterProvider:
-    session: Final = requests.Session()
-    session.auth = _BillingMetricsBearerAuth(
+    auth: Final = _BillingMetricsBearerAuth(
         client_id=config.client_id,
         client_secret=config.client_secret,
         token_url=config.token_url,
     )
+    session: Final = _BillingMetricsBearerSession(auth)
     exporter: Final = OTLPMetricExporter(endpoint=_metrics_endpoint(config.endpoint), session=session)
     reader: Final = PeriodicExportingMetricReader(exporter, export_interval_millis=config.export_interval_ms)
     return MeterProvider(metric_readers=[reader], resource=Resource.create(_resource_attributes(config)))
@@ -362,9 +394,18 @@ def _load_billing_metrics_export_config(
                 "Enterprise billing metrics disabled: licensed deployment missing config (%s)", ENDPOINT_ENV
             )
             return None
+        token_url: Final = bearer_env[2][1] or ""
+        insecure_urls: Final = tuple(
+            env_name
+            for env_name, url in ((ENDPOINT_ENV, endpoint), (TOKEN_URL_ENV, token_url))
+            if not _is_https_url(url)
+        )
+        if insecure_urls:
+            verbose_proxy_logger.warning("Enterprise billing metrics disabled: %s must use HTTPS", insecure_urls[0])
+            return None
         return BillingMetricsBearerConfig(
             endpoint=endpoint,
-            token_url=bearer_env[2][1] or "",
+            token_url=token_url,
             client_id=bearer_env[0][1] or "",
             client_secret=bearer_env[1][1] or "",
             export_interval_ms=_export_interval_ms(),
@@ -378,6 +419,14 @@ def _load_billing_metrics_export_config(
             ", ".join(missing_bearer_env),
         )
     return load_billing_metrics_config(license_data=license_data, litellm_version=litellm_version)
+
+
+def _is_https_url(value: str) -> bool:
+    try:
+        parsed_url: Final = urlsplit(value)
+        return parsed_url.scheme.lower() == "https" and bool(parsed_url.netloc)
+    except ValueError:
+        return False
 
 
 class _ActiveRecorderRegistry:
