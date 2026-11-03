@@ -3013,7 +3013,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     trusted_proxy_ranges: list[str] | None = Field(
         None,
-        description="CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler, and whose X-Forwarded-For is used to attribute Admin UI sign-in attempts to a source address. Set it to an empty list when clients connect directly, so the peer address is the source. Left unset, or containing an entry that is not an address or CIDR range, the per-source sign-in limit is off.",
+        description="CIDR ranges of trusted reverse proxies. Their X-Forwarded-For and X-Forwarded-Proto are resolved once by ASGI middleware for auth, allowed_ips, sign-in throttling and requester IP logging. Identity-header auth still checks the original peer. Set [] for direct connections. When unset, use_x_forwarded_for retains deprecated raw-header behavior for legacy IP consumers and the per-source sign-in limit is off. Invalid ranges are ignored, and disable the per-source sign-in limit. Disable server-level proxy-header rewriting when launching an external ASGI server. MCP keeps its separate trust settings.",
     )
     store_model_in_db: bool | None = Field(
         None,

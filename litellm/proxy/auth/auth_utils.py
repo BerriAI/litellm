@@ -95,15 +95,16 @@ def mark_invalid_virtual_key_error(exception: ProxyException, is_invalid_virtual
 
 
 def get_request_ip_address(request: Request, use_x_forwarded_for: bool | None = False) -> str | None:
-    client_ip = None
-    if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
-        client_ip = request.headers["x-forwarded-for"]
-    elif request.client is not None:
-        client_ip = request.client.host
-    else:
-        client_ip = ""
+    from litellm.proxy.auth.network import proxy_header_context
 
-    return client_ip
+    context: Final = proxy_header_context(request)
+    if (
+        (context is None or not context.configured)
+        and use_x_forwarded_for is True
+        and "x-forwarded-for" in request.headers
+    ):
+        return request.headers["x-forwarded-for"]
+    return request.client.host if request.client else ""
 
 
 _get_request_ip_address: Final = get_request_ip_address

@@ -4,6 +4,7 @@ from fastapi import Request
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.network import (
+    get_direct_client_ip,
     ip_in_networks,
     normalize_cidr_ranges,
     parse_trusted_proxy_ranges,
@@ -37,14 +38,6 @@ def get_trusted_proxy_cidrs(
     )
 
 
-def _get_direct_client_ip(request: Request) -> str | None:
-    client: Final = getattr(request, "client", None)
-    client_host: Final = getattr(client, "host", None)
-    if isinstance(client_host, str):
-        return client_host
-    return None
-
-
 def require_trusted_proxy_request(
     *,
     request: Request,
@@ -70,7 +63,7 @@ def require_trusted_proxy_request(
             "trusting identity headers from an upstream proxy."
         )
 
-    direct_client_ip: Final = _get_direct_client_ip(request)
+    direct_client_ip: Final = get_direct_client_ip(request)
     if not ip_in_networks(direct_client_ip, trusted_networks):
         verbose_proxy_logger.warning(
             "%s rejected identity headers from untrusted direct client IP %r",

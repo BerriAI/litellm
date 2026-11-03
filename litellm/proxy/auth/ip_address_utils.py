@@ -20,6 +20,7 @@ from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module expor
     _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_ip_address,
 )
+from litellm.proxy.auth.network import get_direct_client_ip, get_direct_request, proxy_header_context
 
 # One-shot warning so operators upgrading from the prior "always trust X-Forwarded-*"
 # behaviour see an actionable message in their logs the first time it triggers.
@@ -192,7 +193,7 @@ class IPAddressUtils:
                 _warned_xff_without_trusted_ranges = True
             return False
 
-        direct_ip: Final = request.client.host if request.client else None
+        direct_ip: Final = get_direct_client_ip(request)
         trusted_networks: Final = IPAddressUtils.parse_trusted_proxy_networks(trusted_ranges)
         return IPAddressUtils.is_trusted_proxy(direct_ip, trusted_networks)
 
@@ -209,22 +210,27 @@ class IPAddressUtils:
         reverse proxy, so ``request.url.scheme`` alone cannot answer this in
         that deployment shape. Resolved from the first trusted signal:
           1. ``PROXY_BASE_URL`` (operator-declared public origin).
-          2. ``X-Forwarded-Proto``, only when the request's direct peer is a
+          2. Middleware-resolved scheme when ``trusted_proxy_ranges`` is set.
+          3. Legacy ``X-Forwarded-Proto``, only when the request's direct peer is a
              configured trusted proxy -- see ``is_request_from_trusted_proxy``.
              An untrusted caller cannot spoof this header to strip Secure.
-          3. The request's own literal scheme (direct TLS termination, or no
+          4. The request's own literal scheme (direct TLS termination, or no
              reverse proxy in front of litellm).
         """
         configured_base_url: Final = os.environ.get("PROXY_BASE_URL", "").strip()
         if configured_base_url:
             return urlparse(configured_base_url).scheme == "https"
 
+        context: Final = proxy_header_context(request)
+        if context is not None and context.configured:
+            return request.url.scheme == "https"
+
         if IPAddressUtils.is_request_from_trusted_proxy(request, general_settings=general_settings):
             forwarded_proto: Final = request.headers.get("X-Forwarded-Proto")
             if forwarded_proto:
                 return forwarded_proto.split(",")[0].strip().lower() == "https"
 
-        return request.url.scheme == "https"
+        return get_direct_request(request).url.scheme == "https"
 
     @staticmethod
     def extract_client_ip_from_xff_hops(
@@ -343,7 +349,7 @@ class IPAddressUtils:
         # If XFF is enabled, validate the request comes from a trusted proxy
         if use_xff and "x-forwarded-for" in request.headers:
             if not IPAddressUtils.is_request_from_trusted_proxy(request, general_settings=general_settings):
-                direct_ip: Final = request.client.host if request.client else None
+                direct_ip: Final = get_direct_client_ip(request)
                 if general_settings.get("mcp_trusted_proxy_ranges"):
                     # Direct connection isn't in any configured trusted CIDR.
                     verbose_proxy_logger.warning("XFF header from untrusted IP %s, ignoring", direct_ip)
@@ -371,4 +377,4 @@ class IPAddressUtils:
                     return client_ip
                 case _HopCountUnset():
                     pass
-        return get_request_ip_address(request, use_x_forwarded_for=use_xff is True)
+        return get_request_ip_address(get_direct_request(request), use_x_forwarded_for=use_xff is True)

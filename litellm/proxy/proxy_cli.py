@@ -426,6 +426,7 @@ class ProxyInitializationHelpers:
             "host": host,
             "port": port,
             "server_header": False,
+            "proxy_headers": False,
             "timeout_graceful_shutdown": GracefulShutdownManager.get_timeout(),
         }
         if log_config is not None:

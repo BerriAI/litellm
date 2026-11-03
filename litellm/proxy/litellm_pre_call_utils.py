@@ -75,7 +75,7 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import get_request_route
+from litellm.proxy.auth.auth_utils import get_request_ip_address, get_request_route
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
@@ -3020,22 +3020,10 @@ async def add_litellm_data_to_request(
         data["allowed_model_region"] = user_api_key_dict.allowed_model_region
     start_time: Final = time.time()
     ## [Enterprise Only]
-    # Add User-IP Address
-    requester_ip_address = ""
-    if True:  # Always set the IP Address if available
-        # logic for tracking IP Address
-
-        # logic for tracking IP Address
-        if (
-            general_settings is not None
-            and general_settings.get("use_x_forwarded_for") is True
-            and hasattr(request, "headers")
-            and "x-forwarded-for" in request.headers
-        ):
-            requester_ip_address = request.headers["x-forwarded-for"]
-        elif hasattr(request, "client") and hasattr(request.client, "host") and request.client is not None:
-            requester_ip_address = request.client.host
-    data[_metadata_variable_name]["requester_ip_address"] = requester_ip_address
+    data[_metadata_variable_name]["requester_ip_address"] = (
+        get_request_ip_address(request, use_x_forwarded_for=(general_settings or {}).get("use_x_forwarded_for") is True)
+        or ""
+    )
 
     # Add User-Agent
     user_agent = ""
