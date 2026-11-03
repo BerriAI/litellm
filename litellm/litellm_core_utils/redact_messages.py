@@ -10,6 +10,7 @@
 import asyncio
 import copy
 import inspect
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
@@ -288,6 +289,47 @@ def _redact_field_when_held(item: object, field: str) -> None:
 
 
 _MCP_CALL_CONTENT_FIELDS: Final = ("arguments", "output", "error")
+_TOOL_EXECUTION_RESULTS_TYPE: Final = "tool_execution_results"
+_TOOL_RESULT_IDENTITY_FIELDS: Final = frozenset({"name", "tool_call_id"})
+_TOOL_RESULTS: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])
+
+
+def _redacted_tool_execution_results_text(text: str, redacted_str: str) -> str:
+    """The gateway's tool results with only the tool names and call ids left, since the spend log's tool index reads
+    the names from this text and they are not message content."""
+    try:
+        results: Final = _TOOL_RESULTS.validate_json(text)
+    except ValidationError:
+        return redacted_str
+    return json.dumps(
+        [
+            {
+                field: value if field in _TOOL_RESULT_IDENTITY_FIELDS or value is None else redacted_str
+                for field, value in result.items()
+            }
+            for result in results
+        ],
+        indent=2,
+    )
+
+
+_CONTENT_PART_REDACTED_FIELDS: Final = ("text", "refusal")
+
+
+def _redacted_output_text(text: str, output_type: object, redacted_str: str) -> str:
+    return (
+        _redacted_tool_execution_results_text(text, redacted_str)
+        if output_type == _TOOL_EXECUTION_RESULTS_TYPE
+        else redacted_str
+    )
+
+
+def _redact_content_part(content_part: object, output_type: object) -> None:
+    for field in _CONTENT_PART_REDACTED_FIELDS:
+        value = getattr(content_part, field, None)
+        redacted = _redacted_content_part_value(field, value, output_type, REDACTED_BY_LITELLM)
+        if redacted is not value:
+            setattr(content_part, field, redacted)
 
 
 def _redact_responses_api_output(output_items: Iterable[object]) -> None:
@@ -297,8 +339,7 @@ def _redact_responses_api_output(output_items: Iterable[object]) -> None:
         _redact_field_when_present(output_item, "text")
 
         for content_part in stream_item_items(output_item, "content"):
-            _redact_field_when_present(content_part, "text")
-            _redact_field_when_present(content_part, "refusal")
+            _redact_content_part(content_part, output_type)
 
         if output_type == "reasoning":
             for summary_item in stream_item_items(output_item, "summary"):
@@ -324,6 +365,23 @@ def _redacted_responses_api_output_part(part: object, fields: tuple[str, ...], r
     return {key: redacted_str if key in fields and value is not None else value for key, value in part_mapping.items()}
 
 
+def _redacted_content_part_value(field: str, value: object, output_type: object, redacted_str: str) -> object:
+    if field not in _CONTENT_PART_REDACTED_FIELDS or value is None:
+        return value
+    if field == "text" and isinstance(value, str):
+        return _redacted_output_text(value, output_type, redacted_str)
+    return redacted_str
+
+
+def _redacted_responses_api_content_part(part: object, output_type: object, redacted_str: str) -> object:
+    if (part_mapping := _as_mapping(part)) is None:
+        return part
+    return {
+        field: _redacted_content_part_value(field, value, output_type, redacted_str)
+        for field, value in part_mapping.items()
+    }
+
+
 def _redacted_responses_api_output_item(item: object, redacted_str: str) -> object:
     if (item_mapping := _as_mapping(item)) is None:
         return item
@@ -335,7 +393,7 @@ def _redacted_responses_api_output_item(item: object, redacted_str: str) -> obje
         **(
             {
                 "content": [
-                    _redacted_responses_api_output_part(part, ("text", "refusal"), redacted_str)
+                    _redacted_responses_api_content_part(part, item_mapping.get("type"), redacted_str)
                     for part in _RESPONSE_ITEMS.validate_python(content)
                 ]
             }

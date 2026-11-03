@@ -1,7 +1,9 @@
 """
 The outside sources a Responses request reads: the stored turns a follow-up continues and the client that opens a
 hosted MCP server. They sit in a context variable rather than a parameter, since the proxy hands every request body key
-to ``litellm.aresponses()`` as a keyword argument, so a parameter of that name could be bound from a request.
+to ``litellm.aresponses()`` as a keyword argument, so a parameter of that name could be bound from a request. Only a
+caller that swaps a source, such as a test, sets it. The entry point reads it once, and what one request reuses across
+its rounds travels with the call as a ``TurnReplay``, which no request body can build.
 """
 
 from collections.abc import Generator

@@ -17,7 +17,11 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
-from litellm.responses.litellm_completion_transformation.session_handler import StoredTurns
+from litellm.responses.litellm_completion_transformation.session_handler import (
+    NO_MCP_CALL_NAMES,
+    McpCallNames,
+    StoredTurns,
+)
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -59,6 +63,7 @@ async def test_async_response_api_handler_merges_trace_id_without_error():
         previous_response_client_ids: tuple[str, ...] = (),
         input_replaces_history: bool = False,
         stored_turns: StoredTurns | None = None,
+        mcp_call_names: McpCallNames = NO_MCP_CALL_NAMES,
     ) -> dict[str, object]:
         litellm_completion_request["litellm_trace_id"] = "session-trace"
         return litellm_completion_request

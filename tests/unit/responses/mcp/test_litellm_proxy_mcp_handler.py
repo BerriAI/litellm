@@ -1154,6 +1154,29 @@ async def test_aresponses_api_with_mcp_forwards_unserved_external_mcp_tool_to_th
     assert provider_tools == [[ZAPIER_TOOL]]
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["aresponses", "responses"])
+async def test_a_gateway_mcp_request_goes_through_the_public_aresponses_api_with_mcp_name(
+    monkeypatch: pytest.MonkeyPatch, entry: str
+):
+    intercepted: Final[list[Mapping[str, object]]] = []
+    answer: Final = ResponsesAPIResponse(id="resp_intercepted", created_at=0, output=[])
+
+    async def intercepting_gateway(**kwargs: object) -> ResponsesAPIResponse:
+        intercepted.append(kwargs)
+        return answer
+
+    monkeypatch.setattr(responses_main, "aresponses_api_with_mcp", intercepting_gateway)
+    request: Final = {"input": "Reply with ok.", "model": "openai/gpt-4.1", "tools": [EXPLICIT_GATEWAY_TOOL]}
+
+    response: Final = (
+        await litellm.aresponses(**request) if entry == "aresponses" else litellm.responses(**request)
+    )
+
+    assert response is answer
+    assert [call["tools"] for call in intercepted] == [[EXPLICIT_GATEWAY_TOOL]]
+
 def _response_with_reasoning_and_tool_call() -> Any:
     """A first-turn response as a reasoning model returns it: reasoning item, then a function call."""
     return ResponsesAPIResponse(

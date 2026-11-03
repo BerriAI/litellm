@@ -80,6 +80,8 @@ from litellm.llms.openrouter.chat.transformation import openrouter_model_support
 from litellm.llms.snowflake.chat.transformation import is_snowflake_claude_model
 from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary
 from litellm.responses.litellm_completion_transformation.session_handler import (
+    NO_MCP_CALL_NAMES,
+    McpCallNames,
     ResponsesSessionHandler,
     StoredTurns,
 )
@@ -567,47 +569,49 @@ def _is_call_item(item: Mapping[str, object]) -> bool:
     return item.get("type") in ("function_call", "mcp_call")
 
 
+def _ran_call_result(item: Mapping[str, object]) -> object:
+    output: Final = item.get("output")
+    return item.get("error") if output is None else output
+
+
 def _is_ran_call(item: Mapping[str, object]) -> bool:
-    return item.get("type") == "mcp_call" and bool(item.get("id"))
+    return item.get("type") == "mcp_call" and bool(item.get("id")) and _ran_call_result(item) is not None
 
 
-def _ran_call_as_function_call(item: Mapping[str, object]) -> Mapping[str, object]:
+def _ran_call_as_function_call(item: Mapping[str, object], names: McpCallNames) -> Mapping[str, object]:
+    name: Final = str(item.get("name") or "")
     return {
         "type": "function_call",
         "call_id": str(item["id"]),
-        "name": str(item.get("name") or ""),
+        "name": names.get((str(item.get("server_label") or ""), name), name),
         "arguments": str(item.get("arguments") or "{}"),
     }
 
 
 def _ran_call_output(item: Mapping[str, object]) -> Mapping[str, object]:
-    return {
-        "type": "function_call_output",
-        "call_id": str(item["id"]),
-        "output": str(item.get("output") or item.get("error") or ""),
-    }
+    return {"type": "function_call_output", "call_id": str(item["id"]), "output": str(_ran_call_result(item))}
 
 
-def _call_run_items(run: tuple[Mapping[str, object], ...]) -> tuple[Mapping[str, object], ...]:
+def _call_run_items(run: tuple[Mapping[str, object], ...], names: McpCallNames) -> tuple[Mapping[str, object], ...]:
     ran_calls: Final = tuple(item for item in run if _is_ran_call(item))
-    if not ran_calls or not any(item.get("type") == "function_call" for item in run):
+    if not ran_calls:
         return run
     return (
-        *(_ran_call_as_function_call(item) if _is_ran_call(item) else item for item in run),
+        *(_ran_call_as_function_call(item, names) if _is_ran_call(item) else item for item in run),
         *(_ran_call_output(item) for item in ran_calls),
     )
 
 
-def _with_ran_calls_beside_handed_back_calls(
-    input_items: Sequence[Mapping[str, object]],
+def _with_ran_calls_as_tool_calls(
+    input_items: Sequence[Mapping[str, object]], names: McpCallNames
 ) -> tuple[Mapping[str, object], ...]:
-    """An mcp_call the gateway ran in the same turn as a function_call it handed back to the caller goes to the model
-    as one of that turn's tool calls with its result, so the turn's tool calls and results still pair up once the
-    caller answers its function_call. Other mcp_call items, and one without the id its result pairs on, stay out of the
-    conversation, as before."""
+    """Each mcp_call that ran, with the id its result pairs on and a result, goes to the model as one of its turn's tool
+    calls followed by that result, so the reasoning on either side of it stays on its own assistant message, the way
+    the provider signed it. The call takes the name the request's tools give that server's tool, and keeps its own
+    name when no tool of the request matches. An mcp_call that never ran stays out of the conversation."""
     return tuple(
         chain.from_iterable(
-            _call_run_items(tuple(run)) if is_call else tuple(run)
+            _call_run_items(tuple(run), names) if is_call else tuple(run)
             for is_call, run in groupby(input_items, key=_is_call_item)
         )
     )
@@ -1265,6 +1269,7 @@ class LiteLLMCompletionResponsesConfig:
         *,
         caller_input: str | ResponseInputParam | None = None,
         names_non_string_fields: bool = False,
+        mcp_call_names: McpCallNames = NO_MCP_CALL_NAMES,
         **kwargs,
     ) -> dict:
         """
@@ -1323,6 +1328,7 @@ class LiteLLMCompletionResponsesConfig:
             native_compaction=native_compaction,
             only_since_compaction=not native_compaction,
             caller_input=numbered_input,
+            mcp_call_names=mcp_call_names,
         )
         malformed_field_error: Final = (
             _first_invalid_input_type(
@@ -1408,6 +1414,7 @@ class LiteLLMCompletionResponsesConfig:
         native_compaction: bool = False,
         only_since_compaction: bool = False,
         caller_input: str | ResponseInputParam | None = None,
+        mcp_call_names: McpCallNames = NO_MCP_CALL_NAMES,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -1422,7 +1429,8 @@ class LiteLLMCompletionResponsesConfig:
         sent to a model: prior-turn ``reasoning`` items are then rebuilt as
         assistant ``reasoning_content`` and signed ``thinking_blocks`` so the
         provider gets its own chain-of-thought back instead of reading it as
-        visible text. ``item_cache_control`` belongs to the same callers, when
+        visible text, and an ``mcp_call`` that ran goes back as the tool call and
+        result it was, named through ``mcp_call_names``. ``item_cache_control`` belongs to the same callers, when
         the target keeps an input item's ``cache_control`` on the message, and
         ``tool_call_provider_fields`` when the target reads a function call's
         thought signature from ``provider_specific_fields`` instead of its id.
@@ -1468,6 +1476,7 @@ class LiteLLMCompletionResponsesConfig:
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message,
             replay_reasoning=replay_reasoning,
             native_compaction=native_compaction,
+            mcp_call_names=mcp_call_names,
         )
         try:
             converted: Final = convert_input(sent_input)
@@ -1520,6 +1529,7 @@ class LiteLLMCompletionResponsesConfig:
         previous_response_client_ids: tuple[str, ...] = (),
         input_replaces_history: bool = False,
         stored_turns: StoredTurns | None = None,
+        mcp_call_names: McpCallNames = NO_MCP_CALL_NAMES,
     ) -> dict[str, object]:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
@@ -1537,6 +1547,7 @@ class LiteLLMCompletionResponsesConfig:
             client_response_ids=previous_response_client_ids,
             tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(request_kwargs),
             stored_turns=stored_turns,
+            mcp_call_names=mcp_call_names,
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)
@@ -1645,6 +1656,7 @@ class LiteLLMCompletionResponsesConfig:
         input: str | ResponseInputParam,
         replay_reasoning: bool = False,
         native_compaction: bool = False,
+        mcp_call_names: McpCallNames = NO_MCP_CALL_NAMES,
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
     ]:
@@ -1665,7 +1677,8 @@ class LiteLLMCompletionResponsesConfig:
             messages.append(ChatCompletionUserMessage(role="user", content=input))
         elif isinstance(input, list):
             existing_tool_call_ids: Final[set[str]] = set()
-            for _input in _with_ran_calls_beside_handed_back_calls(_without_paused_turn_thinking(input)):
+            unpaused: Final = _without_paused_turn_thinking(input)
+            for _input in _with_ran_calls_as_tool_calls(unpaused, mcp_call_names) if replay_reasoning else unpaused:
                 chat_completion_messages = (
                     LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
                         input_item=_input,

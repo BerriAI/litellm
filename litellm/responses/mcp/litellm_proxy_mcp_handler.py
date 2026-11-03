@@ -49,7 +49,6 @@ if TYPE_CHECKING:
 
     from litellm.proxy.mcp_server.ui_session_utils import GrantedToolsetIds
     from litellm.proxy.utils import ProxyLogging
-    from litellm.responses.dependencies import ResponsesDependencies
     from litellm.responses.mcp.direct_url_claims import DirectTool
     from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
     from litellm.responses.mcp.openai_mcp_items import OpenAIStreamShaper
@@ -1221,7 +1220,6 @@ class LiteLLM_Proxy_MCP_Handler:
     def _create_mcp_streaming_response(
         direct_tools: "Mapping[str, DirectTool]",
         stream_shaper: "OpenAIStreamShaper | None",
-        dependencies: "ResponsesDependencies",
         /,
         input: str | ResponseInputParam,
         model: str,
@@ -1268,7 +1266,6 @@ class LiteLLM_Proxy_MCP_Handler:
             original_request_params=request_params,
             direct_tools=direct_tools,
             stream_shaper=stream_shaper,
-            dependencies=dependencies,
         )
 
     @staticmethod

@@ -190,6 +190,8 @@ class StoredTurns:
 
 
 StoredTurnsSource: TypeAlias = Callable[[str, tuple[str, ...]], Awaitable[StoredTurns]]
+McpCallNames: TypeAlias = Mapping[tuple[str, str], str]
+NO_MCP_CALL_NAMES: Final[McpCallNames] = MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,6 +324,7 @@ class ResponsesSessionHandler:
         client_response_ids: tuple[str, ...] = (),
         tool_call_provider_fields: bool = False,
         stored_turns: StoredTurns | None = None,
+        mcp_call_names: McpCallNames = NO_MCP_CALL_NAMES,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -363,12 +366,14 @@ class ResponsesSessionHandler:
             ],
             item_cache_control,
             tool_call_provider_fields,
+            mcp_call_names,
         )
         history_before_replay: Final = ResponsesSessionHandler._history_of_turns(
             all_spend_logs[: start.index],
             proxy_server_requests[: start.index],
             item_cache_control,
             tool_call_provider_fields,
+            mcp_call_names,
         )
         chat_completion_message_history: Final = (
             list(with_stored_calls_the_input_answers(replayed_history, history_before_replay))
@@ -449,6 +454,7 @@ class ResponsesSessionHandler:
         proxy_server_requests: Sequence[Mapping[str, object] | None],
         item_cache_control: bool,
         tool_call_provider_fields: bool,
+        mcp_call_names: McpCallNames,
     ) -> list["SessionMessage"]:
         return list(
             chain.from_iterable(
@@ -458,6 +464,7 @@ class ResponsesSessionHandler:
                     chat_completion_message_history=[],
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
+                    mcp_call_names=mcp_call_names,
                 )
                 for spend_log, proxy_server_request in zip(spend_logs, proxy_server_requests, strict=True)
             )
@@ -476,6 +483,7 @@ class ResponsesSessionHandler:
         ],
         item_cache_control: bool = False,
         tool_call_provider_fields: bool = False,
+        mcp_call_names: McpCallNames = NO_MCP_CALL_NAMES,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -510,6 +518,7 @@ class ResponsesSessionHandler:
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
+                    mcp_call_names=mcp_call_names,
                 )
             )
 
@@ -526,6 +535,7 @@ class ResponsesSessionHandler:
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
+                    mcp_call_names=mcp_call_names,
                 )
             )
         elif isinstance(_response_output, dict) and _response_output and _response_output != {}:
@@ -714,3 +724,15 @@ class ResponsesSessionHandler:
 
         verbose_proxy_logger.debug("Found no spend logs for previous response id %s", response_id)
         return []
+
+
+@dataclass(frozen=True, slots=True)
+class TurnReplay:
+    """How a bridged call replays the conversation it continues: where it reads the stored turns, and the name the
+    request's tools give each server's tool, so an mcp_call the gateway ran goes back under that name."""
+
+    stored_turns_source: StoredTurnsSource = ResponsesSessionHandler.get_stored_turns_for_previous_response_id
+    mcp_call_names: McpCallNames = NO_MCP_CALL_NAMES
+
+
+DEFAULT_TURN_REPLAY: Final = TurnReplay()

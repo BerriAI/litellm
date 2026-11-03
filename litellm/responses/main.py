@@ -3,7 +3,7 @@ import contextvars
 import json
 from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast, get_type_hints
@@ -51,7 +51,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
-from litellm.responses.dependencies import responses_dependencies, using_responses_dependencies
+from litellm.responses.dependencies import ResponsesDependencies, responses_dependencies
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     with_compaction_items_as_summaries,
 )
@@ -59,8 +59,11 @@ from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
 from litellm.responses.litellm_completion_transformation.session_handler import (
+    NO_MCP_CALL_NAMES,
+    McpCallNames,
     ResponsesSessionHandler,
     StoredTurnsSource,
+    TurnReplay,
     prefetched_stored_turns,
 )
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -284,6 +287,7 @@ def _listing_trace_id(request_kwargs: Mapping[str, object], *, bridged_first_tur
 
 async def _aresponses_api_with_mcp(
     hosted_mcp_claims: "HostedMCPClaims | None",
+    dependencies: ResponsesDependencies,
     /,
     input: str | ResponseInputParam,
     model: str,
@@ -376,7 +380,6 @@ async def _aresponses_api_with_mcp(
         request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
         raw_headers=discovery_raw_headers,
     )
-    dependencies: Final = responses_dependencies()
     direct_listing: Final = await _direct_listing(hosted_mcp_claims, dependencies.direct_client_factory)
     client_ids: Final = previous_response_client_ids(previous_response_id, request_kwargs)
     turns_source: Final = (
@@ -384,7 +387,6 @@ async def _aresponses_api_with_mcp(
         if hosted_mcp_claims is None
         else await _stored_turns_read_once(dependencies.stored_turns_source, previous_response_id, client_ids)
     )
-    round_dependencies: Final = replace(dependencies, stored_turns_source=turns_source)
     openai_tools: Final = LiteLLM_Proxy_MCP_Handler.transform_mcp_tools_to_openai(
         [*original_mcp_tools, *direct_listing.tools]
     )
@@ -399,6 +401,9 @@ async def _aresponses_api_with_mcp(
             mcp_tools_with_litellm_proxy,
             await _conversation_items(input, previous_response_id, client_ids, turns_source),
         )
+    )
+    turn_replay: Final = TurnReplay(
+        turns_source, NO_MCP_CALL_NAMES if claimed_items is None else _mcp_call_names(claimed_items)
     )
 
     # Combine with other tools
@@ -429,6 +434,7 @@ async def _aresponses_api_with_mcp(
         "custom_llm_provider": custom_llm_provider,
         **kwargs,
         "_skip_mcp_handler": True,
+        "_turn_replay": turn_replay,
     }
 
     # Handle MCP streaming if requested
@@ -454,7 +460,6 @@ async def _aresponses_api_with_mcp(
         mcp_streaming_response: Final = LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
             direct_listing.by_name,
             None if claimed_items is None else _stream_shaper(claimed_items),
-            round_dependencies,
             input=input,
             model=model,
             all_tools=all_tools,
@@ -487,10 +492,7 @@ async def _aresponses_api_with_mcp(
     #########################################################
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.carry_failed_attempt_usage()
-    with (
-        internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None),
-        using_responses_dependencies(round_dependencies),
-    ):
+    with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None):
         response: Final = await aresponses(
             input=input,
             model=model,
@@ -540,10 +542,7 @@ async def _aresponses_api_with_mcp(
         async def claimed_follow_up(
             follow_up_input: Sequence[object], with_tools: bool
         ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
-            with (
-                internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None),
-                using_responses_dependencies(round_dependencies),
-            ):
+            with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None):
                 return await LiteLLM_Proxy_MCP_Handler.make_follow_up_call(
                     follow_up_input=list(follow_up_input),
                     model=model,
@@ -631,11 +630,8 @@ async def _aresponses_api_with_mcp(
                             tool_calls=tool_calls, tool_results=tool_results
                         )
 
-                    with (
-                        internal_sub_call(
-                            logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None
-                        ),
-                        using_responses_dependencies(round_dependencies),
+                    with internal_sub_call(
+                        logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None
                     ):
                         final_response = await LiteLLM_Proxy_MCP_Handler.make_follow_up_call(
                             follow_up_input=follow_up_input,
@@ -690,7 +686,83 @@ async def _aresponses_api_with_mcp(
     return response
 
 
-aresponses_api_with_mcp: Final = partial(_aresponses_api_with_mcp, None)
+async def aresponses_api_with_mcp(
+    input: str | ResponseInputParam,
+    model: str,
+    include: Sequence[ResponseIncludable] | None = None,
+    instructions: str | None = None,
+    max_output_tokens: int | None = None,
+    prompt: PromptObject | None = None,
+    metadata: Mapping[str, object] | None = None,
+    parallel_tool_calls: bool | None = None,
+    previous_response_id: str | None = None,
+    reasoning: Reasoning | None = None,
+    store: bool | None = None,
+    background: bool | None = None,
+    stream: bool | None = None,
+    temperature: float | None = None,
+    text: Optional["ResponseText"] = None,
+    tool_choice: ToolChoice | None = None,
+    tools: Iterable[ToolParam] | None = None,
+    top_p: float | None = None,
+    truncation: Literal["auto", "disabled"] | None = None,
+    user: str | None = None,
+    extra_headers: Mapping[str, object] | None = None,
+    extra_query: Mapping[str, object] | None = None,
+    extra_body: Mapping[str, object] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs: object,  # kwargs-ok: public entry keeps base's open contract for litellm params such as api_key
+) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
+    """
+    Async version of responses API with MCP integration.
+
+    When MCP tools with server_url="litellm_proxy" are provided, this function will:
+    1. Get available tools from the MCP server manager
+    2. Insert the tools into the messages/input
+    3. Call the standard responses API
+    4. If require_approval="never" and tool calls are returned, automatically execute them
+    """
+    return await _aresponses_api_with_mcp(
+        None,
+        responses_dependencies(),
+        input=input,
+        model=model,
+        include=None if include is None else list(include),
+        instructions=instructions,
+        max_output_tokens=max_output_tokens,
+        prompt=prompt,
+        metadata=None if metadata is None else dict(metadata),
+        parallel_tool_calls=parallel_tool_calls,
+        previous_response_id=previous_response_id,
+        reasoning=reasoning,
+        store=store,
+        background=background,
+        stream=stream,
+        temperature=temperature,
+        text=text,
+        tool_choice=tool_choice,
+        tools=tools,
+        top_p=top_p,
+        truncation=truncation,
+        user=user,
+        extra_headers=None if extra_headers is None else dict(extra_headers),
+        extra_query=None if extra_query is None else dict(extra_query),
+        extra_body=None if extra_body is None else dict(extra_body),
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
+
+
+def _mcp_call_names(claimed_items: "OpenAIMCPItems") -> McpCallNames:
+    return MappingProxyType(
+        {(tool.server_label, tool.name): model_name for model_name, tool in claimed_items.names.items()}
+    )
+
+
+def _carried_turn_replay(carried: object) -> TurnReplay:
+    return carried if isinstance(carried, TurnReplay) else TurnReplay(responses_dependencies().stored_turns_source)
 
 
 def _registered_mcp_servers() -> tuple["MCPServer", ...]:
@@ -1628,8 +1700,9 @@ def _responses_try_dispatch_mcp_gateway(
     if skip_mcp_handler or (hosted_mcp_claims is None and not may_name_litellm_mcp_gateway(tools)):
         return None
     gateway_call: Final = partial(
-        _aresponses_api_with_mcp,
-        hosted_mcp_claims,
+        aresponses_api_with_mcp
+        if hosted_mcp_claims is None
+        else partial(_aresponses_api_with_mcp, hosted_mcp_claims, responses_dependencies()),
         input=input,
         model=model,
         include=include,
@@ -1796,6 +1869,7 @@ def responses(
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aresponses", False) is True
         skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
+        turn_replay: Final = _carried_turn_replay(kwargs.pop("_turn_replay", None))
         require_encrypted_task_support: Final = kwargs.pop("_require_encrypted_task_support", False) is True
         use_chat_completions_api = _pop_use_chat_completions_api_kw(kwargs)
 
@@ -2038,7 +2112,7 @@ def responses(
             _raise_unrunnable_responses_hosted_mcp(tools, model, custom_llm_provider, litellm_params.drop_params)
             return litellm_completion_transformation_handler.response_api_handler(
                 previous_response_client_ids(previous_response_id, kwargs),
-                responses_dependencies().stored_turns_source,
+                turn_replay,
                 model=model,
                 input=input,
                 responses_api_request=response_api_optional_params,
