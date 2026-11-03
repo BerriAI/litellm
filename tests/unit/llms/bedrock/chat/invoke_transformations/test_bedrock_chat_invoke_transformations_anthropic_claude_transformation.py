@@ -3,7 +3,7 @@ import copy
 import json
 import uuid
 from types import SimpleNamespace
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -14,11 +14,13 @@ from pydantic import BaseModel, ConfigDict
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
 import litellm
+from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.unit.conftest import NativeStructuredOutputKey
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 ONE_PIXEL_PNG = base64.b64decode(
@@ -635,7 +637,6 @@ def test_shared_defs_reach_native_output_once_instead_of_inlined_per_use(set_nat
     assert "tools" not in result
 
 
-
 class Relabel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -671,6 +672,7 @@ def test_nested_pydantic_response_format_reaches_native_output_with_refs_that_re
     item_ref: Final = sent["properties"]["relabels"]["items"]["$ref"]
     assert item_ref.removeprefix("#/$defs/") in sent["$defs"]
     assert "tools" not in result
+
 
 def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(local_model_cost_map):
     """Bedrock Invoke chat path forwards ``output_config.format`` alongside effort
@@ -1050,6 +1052,64 @@ async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sourc
     } in captured["body"]["messages"][0]["content"]
 
 
+def test_bedrock_invoke_claude_sync_completion_downloads_a_pdf_link_once_and_sends_it_as_a_base64_document(monkeypatch):
+    from litellm.litellm_core_utils.prompt_templates import image_handling
+
+    pdf_url = f"https://docs.example/{uuid.uuid4()}/report.pdf"
+    pdf_bytes = b"%PDF-1.7\n" + b"0" * 64
+    fetched = []
+    captured = {}
+
+    def serve_pdf(client, url, **kwargs):
+        fetched.append(url)
+        return httpx.Response(
+            200, content=pdf_bytes, headers={"content-type": "application/pdf"}, request=httpx.Request("GET", url)
+        )
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "us.anthropic.claude-sonnet-5",
+                "content": [{"type": "text", "text": "A lease"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    monkeypatch.setattr(image_handling, "safe_get", serve_pdf)
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=httpx.MockTransport(handle))
+
+    response = litellm.completion(
+        model="bedrock/invoke/us.anthropic.claude-sonnet-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this document?"},
+                    {"type": "image_url", "image_url": {"url": pdf_url}},
+                ],
+            }
+        ],
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-east-1",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "A lease"
+    assert fetched == [pdf_url]
+    assert captured["body"]["messages"][0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": base64.b64encode(pdf_bytes).decode()},
+    }
+
+
 @pytest.mark.parametrize(
     "model, expected_betas",
     [
@@ -1384,6 +1444,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -1392,6 +1453,7 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -1425,6 +1487,7 @@ def setup_and_teardown(event_loop):
         task.cancel()
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
 
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
@@ -1496,6 +1559,7 @@ IN WITNESS WHEREOF, the parties have executed this Agreement.
 """
     * 8
 )  # Repeat to ensure we have enough tokens (need 1024+ for Claude models)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropicPromptCachingRegression:
@@ -1658,6 +1722,7 @@ class TestBedrockAnthropicPromptCachingRegression:
             additional_fields = result["additionalModelRequestFields"]
             if "anthropic_beta" in additional_fields:
                 assert "prompt-caching-2024-07-31" not in additional_fields["anthropic_beta"]
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropic1MContextRegression:
@@ -1844,6 +1909,7 @@ class TestBedrockAnthropic1MContextRegression:
         assert "context-1m-2025-08-07" in beta_headers
         assert "computer-use-2024-10-22" in beta_headers
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropicCombinedRegressions:
     """
@@ -2008,6 +2074,225 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
     assert not AmazonAnthropicClaudeConfig().uses_opt_in_native_output(
         model, optional_params, {"model_info": model_info}
     )
+
+
+@pytest.mark.parametrize(
+    ("forced_tool_use", "map_flag", "model_info", "thinking_params", "native"),
+    [
+        (False, None, None, {}, True),
+        (False, None, None, {"thinking": {"type": "adaptive"}}, False),
+        (False, True, None, {"thinking": {"type": "adaptive"}}, True),
+        (False, False, None, {}, False),
+        (False, None, {"supports_bedrock_native_structured_output": False}, {}, False),
+        (True, True, None, {}, False),
+    ],
+    ids=[
+        "cannot-force-tool",
+        "cannot-force-tool-thinking",
+        "cannot-force-tool-thinking-key-true",
+        "cannot-force-tool-key-false",
+        "cannot-force-tool-deployment-opt-out",
+        "can-force-tool",
+    ],
+)
+def test_invoke_model_that_cannot_force_the_json_tool_gets_native_output_without_thinking_unless_opted_out(
+    set_native_structured_output: Callable[[str, NativeStructuredOutputKey], None],
+    monkeypatch: pytest.MonkeyPatch,
+    forced_tool_use: bool,
+    map_flag: bool | None,
+    model_info: Mapping[str, object] | None,
+    thinking_params: Mapping[str, object],
+    native: bool,
+) -> None:
+    model: Final = "us.anthropic.claude-haiku-5-5"
+    monkeypatch.setitem(litellm.model_cost[model], "supports_forced_tool_use", forced_tool_use)
+    set_native_structured_output(model, "bedrock" if map_flag else None)
+    if map_flag is None:
+        monkeypatch.delitem(litellm.model_cost[model], "supports_bedrock_native_structured_output")
+
+    config: Final = AmazonAnthropicClaudeConfig(model_info=model_info)
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"response_format": _CITY_RESPONSE_FORMAT, "max_tokens": 2048, **thinking_params},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    body: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Capital of France?"}],
+        optional_params=optional_params,
+        litellm_params={} if model_info is None else {"model_info": model_info},
+        headers={},
+    )
+
+    assert (body.get("output_config", {}).get("format", {}).get("schema") == _CITY_SCHEMA) is native
+    assert ("tools" in body) is not native
+
+
+@pytest.mark.parametrize(
+    "caller_schema_param",
+    [
+        lambda schema: {"output_format": {"type": "json_schema", "schema": schema}},
+        lambda schema: {"output_config": {"format": {"type": "json_schema", "schema": schema}}},
+    ],
+    ids=["output_format", "output_config.format"],
+)
+@pytest.mark.parametrize(
+    ("model", "forced_tool_use", "native_key"),
+    [("us.anthropic.claude-opus-4-8", True, "legacy"), ("us.anthropic.claude-haiku-5-5", False, None)],
+    ids=["native-key", "cannot-force-tool"],
+)
+def test_invoke_caller_schema_drops_unsupported_constraints_before_going_native(
+    set_native_structured_output: Callable[[str, NativeStructuredOutputKey], None],
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    forced_tool_use: bool,
+    native_key: NativeStructuredOutputKey,
+    caller_schema_param: Callable[[Mapping[str, object]], dict[str, object]],
+) -> None:
+    monkeypatch.setitem(litellm.model_cost[model], "supports_forced_tool_use", forced_tool_use)
+    set_native_structured_output(model, native_key)
+    if native_key is None:
+        monkeypatch.delitem(litellm.model_cost[model], "supports_bedrock_native_structured_output")
+    schema: Final = {
+        "type": "object",
+        "properties": {"age": {"type": "integer", "minimum": 0}},
+        "required": ["age"],
+        "additionalProperties": False,
+    }
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "How old is the oldest tree?"}],
+        optional_params={**caller_schema_param(schema), "max_tokens": 2048},
+        litellm_params={},
+        headers={},
+    )
+
+    sent_age: Final = body["output_config"]["format"]["schema"]["properties"]["age"]
+    assert sent_age["type"] == "integer"
+    assert "minimum" not in sent_age
+
+
+BEDROCK_HAIKU_45_BASE_ID: Final = "anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}",
+        f"invoke/{BEDROCK_HAIKU_45_BASE_ID}",
+    ],
+)
+def test_bedrock_invoke_claude_default_max_tokens_comes_from_base_model(local_model_cost_map, model: str):
+    mapped_cap: Final = litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID)
+    assert mapped_cap != DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the model's mapped cap must differ from the fallback"
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == mapped_cap, (
+        f"default max_tokens should be the base model's cap, got {body['max_tokens']}"
+    )
+
+
+def test_bedrock_invoke_claude_explicit_max_tokens_is_kept(local_model_cost_map):
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"max_tokens": 123},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == 123, f"explicit max_tokens must not be overridden, got {body['max_tokens']}"
+
+
+def test_bedrock_invoke_claude_default_max_tokens_takes_the_deployments_own_cap(local_model_cost_map):
+    deployment_cap: Final = 8192
+    assert litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID) != deployment_cap
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"model_info": {"max_output_tokens": deployment_cap}},
+        headers={},
+    )
+
+    assert body["max_tokens"] == deployment_cap, f"the deployment's own cap should win, got {body['max_tokens']}"
+
+
+def test_bedrock_invoke_claude_default_max_tokens_ignores_a_sibling_deployments_cap(local_model_cost_map):
+    regional_id: Final = f"us.{BEDROCK_HAIKU_45_BASE_ID}"
+    mapped_cap: Final = litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID)
+    litellm.register_model(model_cost={regional_id: {"max_output_tokens": 50}}, persist_across_reloads=False)
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=f"invoke/{regional_id}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == mapped_cap, f"a sibling's cap on the shared id leaked, got {body['max_tokens']}"
+
+
+def test_bedrock_invoke_claude_default_max_tokens_yields_to_anthropic_config(local_model_cost_map):
+    configured_max_tokens: Final = 1000
+    assert litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID) != configured_max_tokens
+
+    body: Final = AmazonAnthropicClaudeConfig(
+        read_configured_max_tokens=lambda: configured_max_tokens
+    ).transform_request(
+        model=f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == configured_max_tokens, (
+        f"AnthropicConfig(max_tokens) was ignored, got {body['max_tokens']}"
+    )
+
+
+@pytest.mark.parametrize(("configured_max_tokens", "deployment_cap"), [(100000, 50), (1000, 8192)])
+def test_bedrock_invoke_claude_default_max_tokens_is_the_lower_of_anthropic_config_and_the_deployments_cap(
+    local_model_cost_map, configured_max_tokens: int, deployment_cap: int
+):
+    body: Final = AmazonAnthropicClaudeConfig(
+        read_configured_max_tokens=lambda: configured_max_tokens
+    ).transform_request(
+        model=f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"model_info": {"max_output_tokens": deployment_cap}},
+        headers={},
+    )
+
+    assert body["max_tokens"] == min(configured_max_tokens, deployment_cap), f"got {body['max_tokens']}"
+
+
+def test_bedrock_invoke_claude_default_max_tokens_reads_an_inference_profile_arns_base_model(local_model_cost_map):
+    mapped_cap: Final = litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID)
+    assert mapped_cap != DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the model's mapped cap must differ from the fallback"
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model="invoke/anthropic/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"base_model": BEDROCK_HAIKU_45_BASE_ID},
+        headers={},
+    )
+
+    assert body["max_tokens"] == mapped_cap, f"an ARN should take its base_model's cap, got {body['max_tokens']}"
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")

@@ -23,6 +23,17 @@ pyo3::create_exception!(
 );
 
 const MESSAGES_REQUEST_ERROR: &str = "messages_request_error";
+/// The rejection is a parameter the model does not support, which Python raises as
+/// `UnsupportedParamsError`.
+const MESSAGES_UNSUPPORTED_PARAM: &str = "messages_unsupported_param";
+/// The phase label (`Connection` or `Read`) of a timed-out call, for Python's timeout text, or
+/// `Body` for a streamed body read that timed out after the head arrived.
+const MESSAGES_TIMEOUT: &str = "messages_timeout";
+/// No credential reached the provider, which Python raises as `AuthenticationError`.
+const MESSAGES_MISSING_CREDENTIAL: &str = "messages_missing_credential";
+/// Python refuses the request only once its logger knows the resolved model and provider (the
+/// provider config's request transform), so the failure logs them.
+const MESSAGES_LATE_REJECTION: &str = "messages_late_rejection";
 
 pub(crate) fn upstream_error(
     py: Python<'_>,
@@ -78,17 +89,57 @@ pub(crate) fn route_failure(
         return Ok(raised);
     }
     if let Some((status, body)) = error.upstream_response() {
-        return public(upstream_error(py, status, body, &HeaderMap::new())?);
+        let headers = error
+            .upstream_headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                Some((
+                    reqwest::header::HeaderName::from_bytes(name.as_bytes()).ok()?,
+                    reqwest::header::HeaderValue::from_str(value).ok()?,
+                ))
+            })
+            .collect::<HeaderMap>();
+        return public(upstream_error(py, status, body, &headers)?);
     }
     let native = match (marker, error.rejected_request()) {
         (RequestMarker::Messages, Some(rejection)) => {
             let native = PyValueError::new_err(Report::new(rejection).to_string());
-            native.value(py).setattr(MESSAGES_REQUEST_ERROR, true)?;
+            let value = native.value(py);
+            value.setattr(MESSAGES_REQUEST_ERROR, true)?;
+            if matches!(
+                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
+                Some(
+                    litellm_llms::ErrorDetail::UnsupportedParameter { .. }
+                        | litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. }
+                )
+            ) {
+                value.setattr(MESSAGES_UNSUPPORTED_PARAM, true)?;
+            }
+            if matches!(
+                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
+                Some(litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. })
+            ) {
+                value.setattr(MESSAGES_LATE_REJECTION, true)?;
+            }
             native
         }
-        (RequestMarker::Messages, None) | (RequestMarker::Unmarked, _) => {
-            by_fault(error.is_request(), &error)
+        (RequestMarker::Messages, None) => {
+            let native = by_fault(error.is_request(), &error);
+            let value = native.value(py);
+            if let Some(connect) = error.timeout() {
+                let phase = match (connect, error.body_read_timeout()) {
+                    (true, _) => "Connection",
+                    (false, true) => "Body",
+                    (false, false) => "Read",
+                };
+                value.setattr(MESSAGES_TIMEOUT, phase)?;
+            }
+            if error.is_missing_credential() {
+                value.setattr(MESSAGES_MISSING_CREDENTIAL, true)?;
+            }
+            native
         }
+        (RequestMarker::Unmarked, _) => by_fault(error.is_request(), &error),
     };
     public(native)
 }
