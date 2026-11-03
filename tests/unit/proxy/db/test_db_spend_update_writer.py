@@ -42,6 +42,32 @@ from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpush
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
+class _UnavailableWindowQueue(asyncio.Queue):
+    async def put(self, item):
+        raise RuntimeError("Window queue unavailable")
+
+
+@pytest.mark.asyncio
+async def test_window_recovery_failure_does_not_fail_the_request(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.hooks.model_budget_shared_windows import CapturedModelWindows
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    writer = DBSpendUpdateWriter()
+    writer.window_spend_update_queue.update_queue = _UnavailableWindowQueue()
+    now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+    window = build_window_spend_transaction(
+        entity_type="model_max_budget", entity_id="key:model:1d", window_duration="1d",
+        window_start=now, spend=0.25,
+    )
+    assert await writer.update_database(
+        token="key", user_id=None, end_user_id=None, team_id=None, org_id=None,
+        kwargs={"accounting_model_windows": CapturedModelWindows((window,)), "standard_logging_object": {}},
+        completion_response=None, start_time=now, end_time=now, response_cost=0.25,
+    ) is True
+    assert writer.window_spend_update_queue.update_queue.empty()
+
+
 @pytest.mark.parametrize("queued,stored_path,expected", [(False, None, (0.25,)), (True, "legacy", (0.25,)), (False, "ledger", ())])
 @pytest.mark.asyncio
 async def test_legacy_failure_recovery_does_not_replay_queued_or_ledger_window_charges(queued, stored_path, expected):

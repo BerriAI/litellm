@@ -73,10 +73,10 @@ class _WindowConsumer(CustomLogger):
         self.received = kwargs
 
 
-@pytest.mark.parametrize("batch_size,row_count,expected", [(None, 251, 251), ("200", 251, 200), (None, 10001, 10000)])
+@pytest.mark.parametrize("batch_size,row_count,expected,distinct_models", [(None, 251, 251, False), ("200", 251, 200, False), (None, 10001, 10000, False), (None, 3001, 3001, True)])
 @pytest.mark.asyncio
 async def test_worker_applies_the_configured_backlog_in_one_transaction(
-    parity_database: str, monkeypatch: pytest.MonkeyPatch, batch_size: str | None, row_count: int, expected: int
+    parity_database: str, monkeypatch: pytest.MonkeyPatch, batch_size: str | None, row_count: int, expected: int, distinct_models: bool
 ):
     from litellm.accounting.worker import flush_accounting_deliveries
 
@@ -97,7 +97,7 @@ async def test_worker_applies_the_configured_backlog_in_one_transaction(
         assert await _retrieve_batch(writer, 0.25)
         stored = await client.writer_db.query_raw('SELECT to_jsonb(s) AS row FROM "LiteLLM_SpendLogs" s')
         assert await SpendLogsRepository(client).insert_with_deliveries(tuple(
-            {**stored[0]["row"], "request_id": f"backlog-{index:05}"} for index in range(row_count - 1)
+            {**stored[0]["row"], "request_id": f"backlog-{index:05}", "model": f"backlog-model-{index}" if distinct_models else stored[0]["row"]["model"]} for index in range(row_count - 1)
         )) == row_count - 1
         started = time.monotonic()
         await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
@@ -107,16 +107,30 @@ async def test_worker_applies_the_configured_backlog_in_one_transaction(
             assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_AccountingDelivery" WHERE state=\'pending\'').fetchone() == (row_count - expected,)
             assert connection.execute('SELECT COUNT(DISTINCT applied_at) FROM "LiteLLM_AccountingDelivery"').fetchone() == (1,)
             assert connection.execute('SELECT spend FROM "LiteLLM_UserTable" WHERE user_id=\'user\'').fetchone() == (expected * 0.25,)
+            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_DailyUserSpend"').fetchone() == (expected if distinct_models else 1,)
     finally:
         await client.db.disconnect()
 
 
-@pytest.mark.parametrize("ledger", [False, True])
+class _FailingWindowQueue(asyncio.Queue):
+    def __init__(self, after_enqueue: bool):
+        super().__init__()
+        self.after_enqueue = after_enqueue
+
+    async def put(self, item):
+        if self.after_enqueue:
+            await super().put(item)
+        raise RuntimeError("Window queue unavailable")
+
+
+@pytest.mark.parametrize("ledger,payload_failure,queue_failure", [
+    (False, False, None), (False, True, None), (True, False, None), (True, True, None),
+    (False, False, "before"), (False, False, "after"),
+])
 @pytest.mark.parametrize("redaction", ["excluded_fields", "messages"])
-@pytest.mark.parametrize("payload_failure", [False, True])
 @pytest.mark.asyncio
 async def test_model_window_charge_survives_redacted_callback_copies(
-    parity_database: str, monkeypatch: pytest.MonkeyPatch, ledger: bool, redaction: str, payload_failure: bool
+    parity_database: str, monkeypatch: pytest.MonkeyPatch, ledger: bool, redaction: str, payload_failure: bool, queue_failure: str | None
 ):
     from litellm.accounting.worker import flush_accounting_deliveries
     from litellm.proxy.hooks.model_budget_shared_windows import captured_model_windows
@@ -131,6 +145,8 @@ async def test_model_window_charge_survives_redacted_callback_copies(
     client.model_usage_transactions = []
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     writer = DBSpendUpdateWriter()
+    if queue_failure is not None:
+        writer.window_spend_update_queue.update_queue = _FailingWindowQueue(queue_failure == "after")
     consumer = _WindowConsumer()
     limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(
         dual_cache=DualCache(), clock=lambda: _NOW.timestamp(),
@@ -163,7 +179,7 @@ async def test_model_window_charge_survives_redacted_callback_copies(
         if payload_failure:
             consumer.received["standard_logging_object"].pop("model_map_information")
         assert await writer.update_database(
-            token="key", user_id=None, end_user_id=None, team_id=None, org_id=None,
+            token="key", user_id="user", end_user_id=None, team_id=None, org_id=None,
             kwargs=consumer.received, completion_response=response, start_time=_NOW, end_time=_NOW, response_cost=0.25,
         )
         await drain_logging_tasks()
@@ -173,7 +189,67 @@ async def test_model_window_charge_survives_redacted_callback_copies(
         else:
             await writer._commit_spend_updates_to_db_without_redis_buffer(client, 0, proxy_server.proxy_logging_obj)
         with psycopg.connect(parity_database) as connection:
-            assert connection.execute('SELECT spend FROM "LiteLLM_BudgetWindowSpend" WHERE entity_type=\'model_max_budget\'').fetchall() == [(0.0 if payload_failure and ledger else 0.25,)]
+            assert connection.execute('SELECT spend FROM "LiteLLM_BudgetWindowSpend" WHERE entity_type=\'model_max_budget\'').fetchall() == [(0.0 if (payload_failure and ledger) or queue_failure == "before" else 0.25,)]
+            assert connection.execute('SELECT spend FROM "LiteLLM_UserTable" WHERE user_id=\'user\'').fetchone() == (0.0 if payload_failure else 0.25,)
+    finally:
+        await client.db.disconnect()
+
+
+@pytest.mark.parametrize("ledger", [False, True])
+@pytest.mark.parametrize("exclude_messages", [False, True])
+@pytest.mark.asyncio
+async def test_registered_proxy_callbacks_charge_model_windows_before_persisting_spend(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch, ledger: bool, exclude_messages: bool
+):
+    from litellm.accounting.worker import flush_accounting_deliveries
+    from litellm.utils import Rules, function_setup
+
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    monkeypatch.setenv("LITELLM_COLLECTOR_ENABLED", "false")
+    for name in ("callbacks", "input_callback", "success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", ["messages"] if exclude_messages else [])
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": ledger})
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    client = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    client.spend_log_transactions = []
+    client.model_usage_transactions = []
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    writer = DBSpendUpdateWriter()
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "db_spend_update_writer", writer)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(
+        dual_cache=DualCache(), clock=lambda: _NOW.timestamp(),
+        shared_windows=DatabaseSharedWindows(prisma_client_source=lambda: client),
+    )
+    monkeypatch.setattr(proxy_server, "model_max_budget_limiter", limiter)
+    litellm.logging_callback_manager.add_litellm_callback(limiter)
+    proxy_server.cost_tracking()
+    logging, _ = function_setup("acompletion", Rules(), _NOW, model="ledger-test", messages=[], litellm_call_id="registered-window")
+    logging.update_environment_variables(
+        optional_params={}, custom_llm_provider="openai",
+        litellm_params={"metadata": {"user_api_key": "key", "user_api_key_model_max_budget": {
+            "ledger-test": {"max_budget": 100, "budget_duration": "1d"}
+        }}},
+    )
+    logging.model_call_details["response_cost"] = 0.25
+    response = ModelResponse(id="registered-window", model="ledger-test", usage=Usage(prompt_tokens=10, completion_tokens=5))
+    await client.db.connect()
+    try:
+        await logging.async_success_handler(response, _NOW, _NOW, standard_logging_object={
+            "model": "ledger-test", "model_group": "ledger-test", "response_cost": 0.25,
+            "metadata": {"user_api_key_hash": "key"},
+            "model_map_information": {}, "hidden_params": {}, "request_tags": [],
+        })
+        await drain_logging_tasks()
+        await SpendLogsRepository(client).insert_with_deliveries(tuple(client.spend_log_transactions))
+        if ledger:
+            await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
+        else:
+            await writer._commit_spend_updates_to_db_without_redis_buffer(client, 0, proxy_server.proxy_logging_obj)
+        with psycopg.connect(parity_database) as connection:
+            assert connection.execute('SELECT spend FROM "LiteLLM_BudgetWindowSpend" WHERE entity_type=\'model_max_budget\'').fetchall() == [(0.25,)]
+            assert connection.execute('SELECT spend FROM "LiteLLM_SpendLogs"').fetchall() == [(0.25,)]
     finally:
         await client.db.disconnect()
 
