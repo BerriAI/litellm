@@ -32,6 +32,7 @@ class _ResolvedDeprecation:
     litellm_model: str | None
     litellm_provider: str | None
     copied_from_another_row: bool = False
+    successor_model: str | None = None
 
 
 def _parse_deprecation_date(raw_value: object) -> date | None:
@@ -58,10 +59,11 @@ def _cost_map_lookup(model_key: str | None, catalog: Mapping[str, object]) -> _R
     entry: Final = litellm.model_cost.get(model_key)
     if not isinstance(entry, Mapping):
         return None
-    parsed: Final = _parse_deprecation_date(entry.get("deprecation_date"))
+    fields: Final[Mapping[str, object]] = entry
+    parsed: Final = _parse_deprecation_date(fields.get("deprecation_date"))
     if parsed is None:
         return None
-    provider: Final = entry.get("litellm_provider")
+    provider: Final = fields.get("litellm_provider")
     return _ResolvedDeprecation(
         deprecation_date=parsed,
         litellm_model=model_key,
@@ -69,6 +71,7 @@ def _cost_map_lookup(model_key: str | None, catalog: Mapping[str, object]) -> _R
         copied_from_another_row=isinstance(entry, AliasedCostEntry)
         and "deprecation_date" not in entry.registered_fields
         and model_key not in catalog,
+        successor_model=_successor_model(fields.get("successor_model")),
     )
 
 
@@ -199,7 +202,8 @@ def _build_info(
         days_until_deprecation=days_until,
         status=_classify(days_until, warn_within_days),
         litellm_provider=resolved.litellm_provider,
-        successor_model=_checked_successor(model_name, _mapping_field(deployment, "model_info"), llm_router),
+        successor_model=_checked_successor(model_name, _mapping_field(deployment, "model_info"), llm_router)
+        or resolved.successor_model,
     )
 
 
