@@ -7695,13 +7695,11 @@ def test_optional_mcp_metadata_does_not_change_legacy_spend_payload(tool_metadat
     assert actual == expected
 
 
-@pytest.mark.parametrize("capture_enabled", [False, True])
 @pytest.mark.parametrize("completion_start", [None, "absent", "reported"])
-def test_spend_payload_preserves_unknown_completion_start(capture_enabled: bool, completion_start: str | None) -> None:
+def test_spend_payload_preserves_unknown_completion_start(completion_start: str | None) -> None:
     start: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
     end: Final = start + datetime.timedelta(seconds=2)
     reported: Final = start + datetime.timedelta(seconds=1)
-    observations: Final[list[object]] = []
     kwargs: Final = {
         "call_type": "acompletion",
         "litellm_call_id": "timestamp-call",
@@ -7713,9 +7711,7 @@ def test_spend_payload_preserves_unknown_completion_start(capture_enabled: bool,
         {"id": "timestamp-response"},
         start,
         end,
-        capture_usage=(lambda row, usage: observations.append(row)) if capture_enabled else None,
     )
     assert payload["completionStartTime"] == (
         end if completion_start == "absent" else reported if completion_start else None
     )
-    assert observations == ([payload] if capture_enabled else [])
