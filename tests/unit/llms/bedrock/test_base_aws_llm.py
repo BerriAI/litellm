@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Final, Optional
+from typing import Any, Dict, Final, Literal, Optional
 from unittest.mock import MagicMock, Mock, patch
 
 from botocore.awsrequest import AWSPreparedRequest, AWSRequest
@@ -2742,6 +2742,69 @@ def test_is_already_running_as_role_irsa_different_role():
             )
             is False
         )
+
+
+@pytest.mark.parametrize("auth_flow", ("resolve", "access_denied"))
+@pytest.mark.parametrize(
+    ("env_region", "configured_region", "endpoint", "expected_region"),
+    (
+        ("us-east-1", None, None, "us-east-1"),
+        (None, "us-west-2", None, "us-west-2"),
+        ("us-east-1", "us-west-2", "https://sts.us-west-2.amazonaws.com", "us-west-2"),
+    ),
+)
+def test_role_identity_uses_configured_sts_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    auth_flow: Literal["resolve", "access_denied"],
+    env_region: str | None,
+    configured_region: str | None,
+    endpoint: str | None,
+    expected_region: str,
+) -> None:
+    for name in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+    if env_region is not None:
+        monkeypatch.setenv("AWS_REGION", env_region)
+    sts: Final = MagicMock()
+    sts.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::123456789012:assumed-role/TargetRole/test-session"
+    }
+    sts.assume_role.side_effect = ClientError({"Error": {"Code": "AccessDenied"}}, "AssumeRole")
+    auth: Final = BaseAWSLLM()
+    with patch("boto3.client", return_value=sts) as create_client:
+        if auth_flow == "resolve":
+            credentials, _ = auth._resolve_role_credentials(
+                aws_access_key_id=None,
+                aws_secret_access_key=None,
+                aws_session_token=None,
+                aws_role_name="arn:aws:iam::123456789012:role/TargetRole",
+                aws_session_name="test-session",
+                aws_region_name=configured_region,
+                aws_sts_endpoint=endpoint,
+                aws_external_id=None,
+                aws_session_tags=None,
+                ssl_verify=True,
+            )
+        else:
+            credentials, _ = auth._auth_with_aws_role(
+                aws_access_key_id=None,
+                aws_secret_access_key=None,
+                aws_session_token=None,
+                aws_role_name="arn:aws:iam::123456789012:role/TargetRole",
+                aws_session_name="test-session",
+                aws_region_name=configured_region,
+                aws_sts_endpoint=endpoint,
+                ssl_verify=True,
+            )
+        assert credentials.access_key == "test-access-key"
+        sts.get_caller_identity.assert_called_once_with()
+        for request in create_client.call_args_list:
+            assert request.args == ("sts",)
+            assert request.kwargs["region_name"] == expected_region
+            assert request.kwargs.get("endpoint_url") == endpoint
+            assert request.kwargs["verify"] is True
 
 
 def test_is_already_running_as_role_ecs_task_role():

@@ -24,6 +24,7 @@ litellm-tracing.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
+tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
@@ -34,5 +35,4 @@ litellm-host-native.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-inference-testing.workspace = true
 rstest.workspace = true
-tokio.workspace = true
 wiremock.workspace = true

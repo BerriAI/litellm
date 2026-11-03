@@ -37,6 +37,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm._internal_context import internal_sub_call
 from litellm._logging import redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import (
     aload_beta_headers_config,
@@ -6252,12 +6253,13 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
-                model=patch.model or model,
-                input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
-                **optional_params,
-                **kwargs_for_followup,
-            )
+            with internal_sub_call(logging_obj.litellm_call_id):
+                response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
+                    model=patch.model or model,
+                    input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
+                    **optional_params,
+                    **kwargs_for_followup,
+                )
 
             if callback is not None:
                 try:
@@ -6346,6 +6348,7 @@ class BaseLLMHTTPHandler:
         max_loops: int,
         fingerprints: list[str],
         fingerprint: str,
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> ModelResponse | CustomStreamWrapper:
         patch: Final = plan.request_patch or AgenticLoopRequestPatch()
         if patch.messages is None:
@@ -6385,12 +6388,14 @@ class BaseLLMHTTPHandler:
             fingerprint=fingerprint,
         )
 
-        return await litellm.acompletion(
-            model=full_model_name,
-            messages=patch.messages,
-            **optional_params_for_followup,
-            **kwargs_for_followup,
-        )
+        with internal_sub_call(logging_obj.litellm_call_id if logging_obj is not None else None):
+            response: Final = await litellm.acompletion(
+                model=full_model_name,
+                messages=patch.messages,
+                **optional_params_for_followup,
+                **kwargs_for_followup,
+            )
+        return response
 
     def _maybe_wrap_in_fake_stream(
         self,
@@ -6739,6 +6744,7 @@ class BaseLLMHTTPHandler:
                     messages=messages,
                     optional_params=optional_params,
                     kwargs=kwargs_with_provider,
+                    logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
                     depth=depth,
                     max_loops=max_loops,
@@ -7091,7 +7097,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout,
         provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
-        extra_headers: dict[str, object] | None = None,
+        extra_headers: Mapping[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
     ) -> httpx.Response:
@@ -7124,7 +7130,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout,
         provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
-        extra_headers: dict[str, object] | None = None,
+        extra_headers: Mapping[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
     ) -> httpx.Response:
@@ -7143,9 +7149,8 @@ class BaseLLMHTTPHandler:
             api_version=api_version,
         )
 
-    async def _async_realtime_session_post(
+    async def async_realtime_translation_client_secret_handler(
         self,
-        endpoint: Literal["client_secrets", "transcription_sessions"],
         api_base: str,
         api_key: str,
         request_data: dict[str, object],
@@ -7153,7 +7158,35 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout,
         provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
-        extra_headers: dict[str, object] | None = None,
+        extra_headers: Mapping[str, object] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        api_version: str | None = None,
+    ) -> httpx.Response:
+        return await self._async_realtime_session_post(
+            endpoint="translation_client_secrets",
+            api_base=api_base,
+            api_key=api_key,
+            request_data=request_data,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            provider_config=provider_config,
+            model=model,
+            extra_headers=extra_headers,
+            client=client,
+            api_version=api_version,
+        )
+
+    async def _async_realtime_session_post(
+        self,
+        endpoint: Literal["client_secrets", "transcription_sessions", "translation_client_secrets"],
+        api_base: str,
+        api_key: str,
+        request_data: dict[str, object],
+        logging_obj: LiteLLMLoggingObj,
+        timeout: float | httpx.Timeout,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
+        model: str | None = None,
+        extra_headers: Mapping[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
     ) -> httpx.Response:
@@ -7176,13 +7209,20 @@ class BaseLLMHTTPHandler:
                 url = provider_config.get_transcription_session_url(
                     api_base=api_base, model=model or "", api_version=api_version
                 )
+            elif endpoint == "translation_client_secrets":
+                url = provider_config.get_translation_client_secret_url(
+                    api_base=api_base, model=model or "", api_version=api_version
+                )
             else:
                 url = provider_config.get_complete_url(api_base=api_base, model=model or "", api_version=api_version)
             headers: dict[str, object] = provider_config.validate_environment(
                 headers={}, model=model or "", api_key=api_key
             )
         else:
-            url = join_api_base(api_base, f"v1/realtime/{endpoint}")
+            endpoint_path: Final = (
+                "translations/client_secrets" if endpoint == "translation_client_secrets" else endpoint
+            )
+            url = join_api_base(api_base, f"v1/realtime/{endpoint_path}")
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -7216,6 +7256,12 @@ class BaseLLMHTTPHandler:
                 )
             raise
 
+    @staticmethod
+    def _get_realtime_async_http_client(client: object | None) -> AsyncHTTPHandler:
+        if isinstance(client, AsyncHTTPHandler):
+            return client
+        return get_async_httpx_client(llm_provider=litellm.LlmProviders.OPENAI)
+
     async def async_realtime_calls_handler(
         self,
         api_base: str,
@@ -7225,10 +7271,11 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout,
         provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
-        session_config: dict[str, object] | None = None,
-        extra_headers: dict[str, object] | None = None,
+        session_config: Mapping[str, object] | None = None,
+        extra_headers: Mapping[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
+        translation: bool = False,
     ) -> httpx.Response:
         """
         Forward POST /v1/realtime/calls (SDP exchange) to upstream provider.
@@ -7240,18 +7287,30 @@ class BaseLLMHTTPHandler:
           - sdp: the SDP offer (text)
           - session: JSON string with {"type": "realtime", "model": "...", ...}
         """
-        if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.OPENAI,
-            )
-        else:
-            async_httpx_client = client
+        session_data: Final[dict[str, object]] = {  # mutable-ok: model and session type are resolved locally
+            **(session_config or {})
+        }
+        if "type" not in session_data:
+            session_data["type"] = "translation" if translation else "realtime"
+        if "model" not in session_data and model:
+            session_data["model"] = model
+
+        sdp_text: Final = sdp_body.decode("utf-8") if isinstance(sdp_body, bytes) else sdp_body
+
+        async_httpx_client: Final = self._get_realtime_async_http_client(client)
 
         if provider_config is not None:
-            url = provider_config.get_realtime_calls_url(api_base=api_base, model=model or "", api_version=api_version)
+            url = (
+                provider_config.get_translation_calls_url(api_base=api_base, model=model or "", api_version=api_version)
+                if translation
+                else provider_config.get_realtime_calls_url(
+                    api_base=api_base, model=model or "", api_version=api_version
+                )
+            )
             headers: dict[str, object] = provider_config.get_realtime_calls_headers(ephemeral_key=openai_ephemeral_key)
         else:
-            url = join_api_base(api_base, "v1/realtime/calls")
+            path: Final = "translations/calls" if translation else "calls"
+            url = join_api_base(api_base, f"v1/realtime/{path}")
             headers = {
                 "Authorization": f"Bearer {openai_ephemeral_key}",
             }
@@ -7259,14 +7318,8 @@ class BaseLLMHTTPHandler:
         if extra_headers:
             headers.update(extra_headers)
 
-        # Build multipart form data: sdp + session JSON
-        session_data: Final = session_config or {}
-        if "type" not in session_data:
-            session_data["type"] = "realtime"
-        if "model" not in session_data and model:
-            session_data["model"] = model
-
-        sdp_text: Final = sdp_body.decode("utf-8") if isinstance(sdp_body, bytes) else sdp_body
+        if translation:
+            headers["Content-Type"] = "application/sdp"
 
         files: Final = {
             "sdp": (None, sdp_text, "text/plain"),
@@ -7284,12 +7337,14 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            return await async_httpx_client.post(
-                url=url,
-                headers=headers,
-                files=files,
-                timeout=timeout,
-            )
+            if translation:
+                return await async_httpx_client.post(
+                    url=url,
+                    headers=headers,
+                    content=sdp_text,
+                    timeout=timeout,
+                )
+            return await async_httpx_client.post(url=url, headers=headers, files=files, timeout=timeout)
         except Exception as e:
             if provider_config is not None:
                 raise self._handle_error(
@@ -8099,7 +8154,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -8295,7 +8350,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -8476,7 +8531,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -8640,7 +8695,7 @@ class BaseLLMHTTPHandler:
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -8781,7 +8836,7 @@ class BaseLLMHTTPHandler:
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -8954,7 +9009,7 @@ class BaseLLMHTTPHandler:
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -9141,7 +9196,7 @@ class BaseLLMHTTPHandler:
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -9274,7 +9329,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -9356,7 +9411,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -9541,7 +9596,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
