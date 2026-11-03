@@ -678,6 +678,7 @@ _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_EXTRA_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _DEPLOYMENT_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | GenericLiteLLMParams]] = TypeAdapter(
     Mapping[str, object] | GenericLiteLLMParams
 )
@@ -747,6 +748,17 @@ def _drop_malformed_request_params_the_deployment_sets(
 ) -> None:
     for key in _malformed_request_params_the_deployment_sets(deployment_params, defaults, kwargs):
         kwargs.pop(key)
+
+
+def _merged_extra_body(
+    deployment_extra_body: object, request_extra_body: object
+) -> dict[str, object] | None:  # mutable-ok: provider and cache code reads extra_body only when it is a plain dict
+    if not isinstance(deployment_extra_body, Mapping) or not isinstance(request_extra_body, Mapping):
+        return None
+    return {
+        **_EXTRA_BODY_ADAPTER.validate_python(request_extra_body),
+        **_EXTRA_BODY_ADAPTER.validate_python(deployment_extra_body),
+    }
 
 
 def _merged_tools(deployment_tools: Sequence[object], request_tools: object) -> list[object] | None:
@@ -5303,6 +5315,15 @@ class PythonCore(DeprecatedRouterMembers):
         if "tool_choice" not in kwargs and dep_params.get("tool_choice") is not None:
             kwargs["tool_choice"] = dep_params["tool_choice"]
 
+    @staticmethod
+    def _merge_extra_body_from_deployment(
+        deployment_params: Mapping[str, object],
+        kwargs: dict[str, object],  # mutable-ok: sets extra_body on the router's request kwargs in place
+    ) -> None:
+        merged_extra_body: Final = _merged_extra_body(deployment_params.get("extra_body"), kwargs.get("extra_body"))
+        if merged_extra_body is not None:
+            kwargs["extra_body"] = merged_extra_body  # rebind-ok: updates the router's request kwargs in place
+
     def _update_kwargs_with_deployment(
         self,
         deployment: dict,
@@ -5312,10 +5333,11 @@ class PythonCore(DeprecatedRouterMembers):
         opens_responses_socket: bool = False,
     ) -> None:
         """
-        5 jobs:
+        6 jobs:
         - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
         - Adds default litellm params to kwargs, if set.
         - Merges tools from deployment with request (proxy-configured tools + request tools).
+        - Merges extra_body from deployment with request, the deployment's value winning on a shared key.
         - On a fallback hop, drops the encrypted reasoning this deployment cannot decrypt, keeping its summary.
         - On a Responses continuation, sends the partial response as prefill where this deployment takes one.
         """
@@ -5346,6 +5368,10 @@ class PythonCore(DeprecatedRouterMembers):
             kwargs,  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the router's untyped request dict
             deployment_context,
             defaults,
+        )
+        self._merge_extra_body_from_deployment(
+            deployment_params=deployment_context,
+            kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the router's untyped request dict
         )
         declared_provider: Final = deployment_context.get("custom_llm_provider")
         declared_model: Final = deployment_context.get("model")

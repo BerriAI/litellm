@@ -10773,6 +10773,73 @@ def test_update_kwargs_with_deployment_merges_tools():
     assert kwargs["tool_choice"] == "auto"
 
 
+_EXTRA_BODY_CHAT_RESPONSE: Final = {
+    "id": "chatcmpl-extra-body",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-x",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def _deployment_with_extra_body(model_name: str, api_base: str, extra_body: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": "openai/gpt-x", "api_key": "k", "api_base": api_base, "extra_body": extra_body},
+    }
+
+
+def test_router_keeps_deployment_extra_body_fields_when_the_request_sends_its_own(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://a.example/v1/chat/completions").respond(json=_EXTRA_BODY_CHAT_RESPONSE)
+    router: Final = Router(
+        model_list=[
+            _deployment_with_extra_body(
+                "g", "https://a.example/v1", {"set_by_admin": 1, "shared": "deployment"}
+            )
+        ]
+    )
+
+    router.completion(
+        model="g",
+        messages=[{"role": "user", "content": "hi"}],
+        extra_body={"set_by_client": 0, "shared": "client"},
+    )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert {k: body.get(k) for k in ("set_by_admin", "set_by_client", "shared")} == {
+        "set_by_admin": 1,
+        "set_by_client": 0,
+        "shared": "deployment",
+    }
+
+
+def test_router_fallback_sends_only_the_next_deployments_extra_body(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post("https://a.example/v1/chat/completions").respond(status_code=500, json={"error": {"message": "x"}})
+    fallback_route: Final = respx_mock.post("https://b.example/v1/chat/completions").respond(
+        json=_EXTRA_BODY_CHAT_RESPONSE
+    )
+    router: Final = Router(
+        model_list=[
+            _deployment_with_extra_body("g", "https://a.example/v1", {"only_on_a": 1}),
+            _deployment_with_extra_body("h", "https://b.example/v1", {"only_on_b": 2}),
+        ],
+        num_retries=0,
+        fallbacks=[{"g": ["h"]}],
+    )
+
+    router.completion(model="g", messages=[{"role": "user", "content": "hi"}], extra_body={"set_by_client": 0})
+
+    body: Final = json.loads(fallback_route.calls.last.request.content)
+    assert {k: body.get(k) for k in ("only_on_a", "only_on_b", "set_by_client")} == {
+        "only_on_a": None,
+        "only_on_b": 2,
+        "set_by_client": 0,
+    }
+
+
 def test_update_kwargs_with_deployment_merge_tools_deployment_only():
     """
     Test that when only deployment has tools, they are applied to kwargs.
