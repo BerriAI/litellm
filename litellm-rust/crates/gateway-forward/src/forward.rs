@@ -22,6 +22,10 @@ use crate::{Error, hop, websocket::Upgrades};
 
 pub const PEER_HEADER: &str = "x-litellm-rust-peer";
 
+// uvicorn sets no response header limit and Python copies every provider header into its
+// response, so hyper's default of 100 would turn ordinary responses into 502s.
+const PYTHON_RESPONSE_HEADERS: usize = 1000;
+
 #[derive(Clone)]
 pub struct Forward {
     upstream: Uri,
@@ -50,6 +54,7 @@ impl Forward {
         let mut connector = HttpConnector::new();
         connector.set_nodelay(true);
         let client = Client::builder(TokioExecutor::new())
+            .http1_max_headers(PYTHON_RESPONSE_HEADERS)
             .pool_timer(TokioTimer::new())
             .pool_idle_timeout(upstream_keepalive / 2)
             .build(connector);

@@ -169,6 +169,37 @@ async fn http2_clients_reach_python_with_their_public_host() {
 
 #[rstest]
 #[tokio::test]
+async fn relays_a_response_with_more_headers_than_hyper_allows_by_default() {
+    let upstream = serve(axum::Router::new().fallback(|| async {
+        let headers = (0..150).map(|index| (format!("llm_provider-x-{index}"), "v"));
+        let mut response = ok();
+        for (name, value) in headers {
+            response.headers_mut().insert(
+                axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                HeaderValue::from_static(value),
+            );
+        }
+        response
+    }))
+    .await;
+    let gateway = Gateway::start(upstream).await;
+
+    let response = within(
+        client().request(
+            axum::http::Request::get(gateway.url("/v1/chat/completions"))
+                .body(Body::empty())
+                .unwrap(),
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["llm_provider-x-149"], "v");
+}
+
+#[rstest]
+#[tokio::test]
 async fn keeps_repeated_response_headers_and_opaque_header_bytes() {
     let (upstream, mut received) = recording(|| {
         Response::builder()
