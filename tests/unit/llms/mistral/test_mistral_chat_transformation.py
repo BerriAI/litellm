@@ -184,6 +184,8 @@ class TestMistralReasoningSupport:
             ({"type": "enabled", "budget_tokens": 1024}, "high"),
             ({"type": "enabled", "budget_tokens": 100}, "high"),
             ({"type": "disabled"}, "none"),
+            ({"type": "adaptive"}, "high"),
+            ({"type": "adaptive", "display": "summarized"}, "high"),
         ],
     )
     def test_magistral_sends_thinking_as_a_reasoning_effort_the_model_accepts(
@@ -1493,6 +1495,7 @@ def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str,
         ("reasoning_effort", "xhigh", "high"),
         ("thinking", {"type": "disabled"}, "none"),
         ("thinking", {"type": "enabled", "budget_tokens": 1024}, "high"),
+        ("thinking", {"type": "adaptive"}, "high"),
     ),
 )
 def test_magistral_reasoning_request_is_sent_as_a_level_without_a_drop_warning(
