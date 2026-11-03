@@ -20,7 +20,11 @@ import litellm.proxy.proxy_server as ps
 from litellm.proxy.auth.authorization import OwnedRows
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup, load_permitted_log_team_ids
 from litellm.proxy.auth.route_checks import RouteChecks
-from tests.unit.proxy.db.fake_prisma_engine import ReadTargetOf, statement_timeout_reads
+from tests.unit.proxy.db.fake_prisma_engine import (
+    ReadTargetOf,
+    statement_timeout_error,
+    statement_timeout_reads,
+)
 
 
 def _default_date_range():
@@ -5426,6 +5430,35 @@ async def test_build_ui_spend_logs_response_sums_multi_round_session_duration():
     assert (
         'SUM( COALESCE( request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER ) )' in sql
     )
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_keeps_the_page_when_postgres_cancels_the_session_totals_read():
+    """The page already fetched is returned without session totals, like any other failed enrichment read."""
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    dict_rows = [
+        {"request_id": "req-1", "session_id": "sess-slow", "call_type": "completion", "api_key": "k"},
+        {"request_id": "req-2", "session_id": "sess-slow", "call_type": "completion", "api_key": "k"},
+    ]
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(side_effect=statement_timeout_error())
+    statement_timeout_reads(mock_prisma, mock_prisma.db.query_raw)
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=2,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    assert [row["request_id"] for row in result["data"]] == ["req-1", "req-2"]
+    assert all(row["session_total_count"] == 1 for row in result["data"])
 
 
 @pytest.mark.asyncio

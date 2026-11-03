@@ -736,6 +736,7 @@ async def test_global_spend_report_reads_are_cancelled_by_postgres_after_30s(mon
 
     mock_prisma = MagicMock()
     transaction = statement_timeout_reads(mock_prisma, AsyncMock(return_value=[]))
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
     await get_global_spend_report(

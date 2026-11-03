@@ -4705,7 +4705,7 @@ async def _build_ui_spend_logs_response(
                 if row.get("session_id") and row.get("api_key") is not None
                 for models in (TypeAdapter(list[str]).validate_python(row.get("session_models") or ()),)
             }
-        except PrismaError:
+        except (PrismaError, HTTPException):
             verbose_proxy_logger.debug(
                 "Failed to enrich session spend aggregates for spend logs UI",
                 exc_info=True,
