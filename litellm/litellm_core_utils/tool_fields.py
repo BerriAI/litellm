@@ -200,6 +200,17 @@ def _unrunnable_mcp_error(message: str, model: str, route: str) -> UnsupportedPa
     return UnsupportedParamsError(message=message, model=model, llm_provider=route, status_code=400)
 
 
+def hosted_mcp_approval_error(server_labels: Sequence[str], model: str, route: str) -> UnsupportedParamsError:
+    named_servers: Final = ", ".join(f"`{label}`" for label in server_labels)
+    return _unrunnable_mcp_error(
+        f"LiteLLM runs the hosted MCP tool {named_servers} for {model} on {route} only with "
+        '`require_approval: "never"`, since it cannot pause the response for an approval. '
+        + _drop_params_hint("hosted MCP tools that need approval"),
+        model=model,
+        route=route,
+    )
+
+
 def tools_without_hosted_mcp(tools: Sequence[_ToolT], model: str, route: str, drop_params: bool) -> Sequence[_ToolT]:
     server_labels: Final = tuple(label for label in map(_hosted_mcp_server_label, tools) if label is not None)
     if not server_labels:
@@ -209,7 +220,9 @@ def tools_without_hosted_mcp(tools: Sequence[_ToolT], model: str, route: str, dr
         raise _unrunnable_mcp_error(
             f'{model} on {route} cannot run the hosted MCP tool {named_servers} (`type: "mcp"`). To have LiteLLM '
             "run the MCP server for this model, register it on the LiteLLM MCP gateway and send "
-            '`server_url: "litellm_proxy/mcp/<server name>"`. ' + _drop_params_hint("hosted MCP tools"),
+            '`server_url: "litellm_proxy/mcp/<server name>"`, or set `litellm_settings.gateway_runs_hosted_mcp: true` '
+            "with the server registered or its host in `gateway_hosted_mcp_allowed_hosts`. "
+            + _drop_params_hint("hosted MCP tools"),
             model=model,
             route=route,
         )
@@ -286,15 +299,13 @@ _ParamsT: Final = TypeVar("_ParamsT", bound=dict[str, object])
 
 
 def tool_params_without_hosted_mcp(
-    params: _ParamsT, model: str, route: str, drop_params: bool, runs_hosted_mcp: Callable[[], bool] | None = None
+    params: _ParamsT, model: str, route: str, drop_params: bool, strips_hosted_mcp_tools: Callable[[str], bool]
 ) -> _ParamsT:
     tools: Final = params.get("tools")
-    if not isinstance(tools, list) or not tools:
+    if not isinstance(tools, list) or not tools or not strips_hosted_mcp_tools(model):
         return params
     sent_tools: Final = _TOOLS.validate_python(tools)
-    if all(_hosted_mcp_server_label(tool) is None for tool in sent_tools) or (
-        runs_hosted_mcp is not None and runs_hosted_mcp()
-    ):
+    if all(_hosted_mcp_server_label(tool) is None for tool in sent_tools):
         return params
     kept_tools: Final = tools_without_hosted_mcp(tools=sent_tools, model=model, route=route, drop_params=drop_params)
     if len(kept_tools) == len(sent_tools):

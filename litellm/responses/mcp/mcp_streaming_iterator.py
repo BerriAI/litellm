@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
@@ -31,7 +32,9 @@ if TYPE_CHECKING:
 
     from mcp.types import Tool as MCPTool
 
+    from litellm.responses.mcp.direct_url_claims import DirectTool
     from litellm.responses.mcp.litellm_proxy_mcp_handler import MCPToolResult
+    from litellm.responses.mcp.openai_mcp_items import OpenAIStreamShaper
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 else:
     MCPTool = Any
@@ -39,7 +42,7 @@ else:
 MAX_MCP_TOOL_CALL_ROUNDS: Final = 5
 
 
-def _output_items(response: ResponsesAPIResponse) -> Sequence[object]:
+def output_items(response: ResponsesAPIResponse) -> Sequence[object]:
     """Read a response's output items as plain objects; the field is a wide union of item models."""
     return tuple(cast("Sequence[object]", response.output))  # cast-ok: items are only carried, never inspected
 
@@ -286,9 +289,14 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         user_api_key_auth: "UserAPIKeyAuth | None" = None,
         original_request_params: dict[str, Any] | None = None,
         served_tools: Sequence[MCPTool] | None = None,
+        direct_tools: "Mapping[str, DirectTool] | None" = None,
+        stream_shaper: "OpenAIStreamShaper | None" = None,
     ):
         # MCP setup
         self.mcp_tools_with_litellm_proxy = mcp_tools_with_litellm_proxy or []
+        self.direct_tools: Final = MappingProxyType(dict(direct_tools or {}))
+        self._stream_shaper = stream_shaper
+        self._shaped_events: tuple[ResponsesAPIStreamingResponse, ...] = ()
         self.user_api_key_auth = user_api_key_auth
         self.original_request_params = original_request_params or {}
         self._follow_up_history: str | ResponseInputParam | None = self.original_request_params.get("input")
@@ -296,7 +304,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             self.original_request_params.get("max_agentic_loops"), field="litellm_params.max_agentic_loops"
         )
         self.max_tool_call_rounds: int = MAX_MCP_TOOL_CALL_ROUNDS if configured_rounds is None else configured_rounds
-        self.should_auto_execute = self._should_auto_execute_tools()
+        self.should_auto_execute = self._should_auto_execute_tools() or (
+            bool(self.direct_tools) and not self.mcp_tools_with_litellm_proxy
+        )
 
         # Streaming state management
         self.phase = "initial_response"  # initial_response -> mcp_discovery -> (continue_initial_response <-> tool_execution) -> finished
@@ -451,12 +461,23 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         if not self._iteration_started:
             self._iteration_started = True
             self._round_billing = self._bill_rounds_on_one_row()
+        if self._stream_shaper is None:
+            return self._numbered(await self._next_chunk())
+        while not self._shaped_events:
+            self._stream_shaper, self._shaped_events = self._stream_shaper.shape(await self._next_chunk())
+        event: Final = self._shaped_events[0]
+        self._shaped_events = self._shaped_events[1:]
+        return event
+
+    async def _next_chunk(self) -> ResponsesAPIStreamingResponse:
         try:
-            chunk: Final = await self._anext_impl()
+            return await self._anext_impl()
         except Exception:
             if self._round_billing is not None:
                 self._round_billing.finish()
             raise
+
+    def _numbered(self, chunk: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingResponse:
         sequence_number: Final = getattr(chunk, "sequence_number", None)
         if isinstance(sequence_number, int):
             if sequence_number <= self._last_sequence_number and self._last_sequence_number > 0:
@@ -499,7 +520,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         if finished is None:
             return
         self._bridged_round_billed = base
-        round_output: Final = _output_items(finished.response)
+        round_output: Final = output_items(finished.response)
         self._round_billing.complete_round(
             finished,
             finished.response,
@@ -654,7 +675,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _round_output_width(self, response: ResponsesAPIResponse) -> int:
         """How many output indexes this round used, counting items it streamed but never listed."""
-        return max(len(_output_items(response)), self._round_max_output_index + 1)
+        return max(len(output_items(response)), self._round_max_output_index + 1)
 
     def _absorb_round(self, response: ResponsesAPIResponse) -> None:
         """Bank a finished round's items, each function_call the gateway answered replaced by its mcp_call."""
@@ -663,7 +684,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             call_id for result in self.tool_results if (call_id := result.get("tool_call_id")) is not None
         )
         self._composed_output.extend(
-            item for item in _output_items(response) if _function_call_id(item) not in answered_call_ids
+            item for item in output_items(response) if _function_call_id(item) not in answered_call_ids
         )
         self._composed_output.extend(self._pending_mcp_call_items)
         self._output_index_offset += width + len(self._pending_mcp_call_items)
@@ -706,7 +727,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self._round_billing.complete_round(
                     chunk,
                     response_obj,
-                    (*self._composed_output, *_output_items(response_obj)),
+                    (*self._composed_output, *output_items(response_obj)),
                     self._restore_round_headers,
                 )
         # Move to tool execution phase after this chunk
@@ -719,7 +740,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             self._absorb_round(response_obj)
             return None
         merged_response: Final = (
-            response_obj.model_copy(update={"output": [*self._composed_output, *_output_items(response_obj)]})
+            response_obj.model_copy(update={"output": [*self._composed_output, *output_items(response_obj)]})
             if self._composed_output
             else response_obj
         )
@@ -738,7 +759,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             return chunk
         if not self._round_billed_early():
             self._round_billing.complete_round(
-                chunk, response_obj, _output_items(response_obj), self._restore_round_headers
+                chunk, response_obj, output_items(response_obj), self._restore_round_headers
             )
         client_response: Final = self._round_billing.charge_final_round(
             chunk, response_obj, self._restore_round_headers
@@ -907,6 +928,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 litellm_trace_id=self.litellm_trace_id,
                 request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(self.original_request_params),
                 guardrail_context=MCPRequestContext.resolve_guardrail_context(self.original_request_params),
+                direct_tools=self.direct_tools,
             )
 
             # Create completion events and output_item.done events for tool execution
@@ -954,7 +976,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         "status": "completed",
                         "approval_request_id": f"mcpr_{uuid.uuid4().hex[:8]}",
                         "arguments": tool_arguments,
-                        "error": None,
+                        "error": tool_result.get("error") if self._stream_shaper is not None else None,
                         "name": tool_name,
                         "output": result_text,
                         "server_label": "litellm",  # or extract from tool config

@@ -566,6 +566,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         # every request doesn't have to be transformed for to OpenAI and Anthropic request formats.
         return messages, tools
 
+    def strips_hosted_mcp_tools(self, model: str) -> bool:
+        return "claude" in model
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -574,10 +577,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict:
-        request_params: Final = (
-            tool_params_without_hosted_mcp(non_default_params, model=model, route="databricks", drop_params=drop_params)
-            if "claude" in model
-            else non_default_params
+        request_params: Final = tool_params_without_hosted_mcp(
+            non_default_params,
+            model=model,
+            route="databricks",
+            drop_params=drop_params,
+            strips_hosted_mcp_tools=self.strips_hosted_mcp_tools,
         )
         is_thinking_enabled: Final = self.is_thinking_enabled(request_params)
         mapped_params: Final = super().map_openai_params(request_params, optional_params, model, drop_params)

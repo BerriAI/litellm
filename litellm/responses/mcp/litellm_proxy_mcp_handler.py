@@ -1,12 +1,12 @@
 import traceback
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypedDict, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, overload
 
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
+from typing_extensions import NotRequired, ReadOnly, Unpack
 from typing_extensions import TypedDict as ExtraItemsTypedDict
-from typing_extensions import Unpack
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
@@ -48,7 +48,9 @@ if TYPE_CHECKING:
 
     from litellm.proxy.mcp_server.ui_session_utils import GrantedToolsetIds
     from litellm.proxy.utils import ProxyLogging
+    from litellm.responses.mcp.direct_url_claims import DirectTool
     from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
+    from litellm.responses.mcp.openai_mcp_items import OpenAIStreamShaper
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 else:
     MCPTool = Any
@@ -58,10 +60,11 @@ ToolParam: TypeAlias = Mapping[str, object]
 SplitTools: TypeAlias = tuple[list[ToolParam], list[Any]]
 
 
-class MCPToolResult(TypedDict):
+class MCPToolResult(ExtraItemsTypedDict):
     tool_call_id: str | None
     result: str
     name: str | None
+    error: ReadOnly[NotRequired[str]]
 
 
 class _AresponsesOptions(ExtraItemsTypedDict, total=False, extra_items=object):
@@ -740,6 +743,7 @@ class LiteLLM_Proxy_MCP_Handler:
         guardrail_context: Mapping[str, object] | None = None,
         served_tools: Sequence[MCPTool] | None = None,
         request_trace_id: str | None = None,
+        direct_tools: "Mapping[str, DirectTool] | None" = None,
     ) -> list[MCPToolResult]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -753,6 +757,7 @@ class LiteLLM_Proxy_MCP_Handler:
             _resolve_display_name_to_original,
         )
         from litellm.proxy.proxy_server import proxy_logging_obj
+        from litellm.responses.mcp.direct_url_claims import unregistered_mcp_server
 
         tool_results: Final[list[MCPToolResult]] = []
         tool_call_id: str | None = None
@@ -778,15 +783,21 @@ class LiteLLM_Proxy_MCP_Handler:
                 # Import here to avoid circular import
                 from litellm.proxy.proxy_server import proxy_logging_obj
 
-                server_name = tool_server_map[tool_name]
+                direct_tool = (direct_tools or {}).get(tool_name)
+                server_name = direct_tool.server.server_label if direct_tool else tool_server_map[tool_name]
 
-                mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
-                    server_name
-                ) or global_mcp_server_manager.get_mcp_server_from_tool_name(tool_name)
+                mcp_server = (
+                    None
+                    if direct_tool
+                    else global_mcp_server_manager.get_mcp_server_by_name(server_name)
+                    or global_mcp_server_manager.get_mcp_server_from_tool_name(tool_name)
+                )
                 resolved_tool_name = (
                     _resolve_display_name_to_original(tool_name, [mcp_server]) if mcp_server else tool_name
                 )
-                sanitized_tool_name = strip_known_server_prefix(resolved_tool_name, mcp_server)
+                sanitized_tool_name = (
+                    direct_tool.tool.name if direct_tool else strip_known_server_prefix(resolved_tool_name, mcp_server)
+                )
 
                 start_time = datetime.now()
                 logging_input: Sequence[Mapping[str, object]] = [
@@ -896,23 +907,37 @@ class LiteLLM_Proxy_MCP_Handler:
                     litellm_logging_obj.model = f"MCP: {tool_name}"
                     litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
 
-                result = await global_mcp_server_manager.call_tool(
-                    server_name=server_name,
-                    name=sanitized_tool_name,
-                    arguments=parsed_arguments,
-                    user_api_key_auth=typed_user_api_key_auth,
-                    mcp_auth_header=mcp_auth_header,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
-                    oauth2_headers=oauth2_headers,
-                    raw_headers=raw_headers,
-                    proxy_logging_obj=proxy_logging_obj,
-                    litellm_logging_obj=litellm_logging_obj,
-                    guardrail_context=guardrail_context,
-                    listed_tool=(
-                        next((tool for tool in served_tools if tool.name == tool_name), None)
-                        if served_tools is not None
-                        else ...
-                    ),
+                result = await (
+                    global_mcp_server_manager.call_unregistered_server_tool(
+                        server=unregistered_mcp_server(direct_tool.server),
+                        tool=direct_tool.tool,
+                        arguments=parsed_arguments,
+                        call=direct_tool.client.call_tool,
+                        user_api_key_auth=typed_user_api_key_auth,
+                        proxy_logging_obj=proxy_logging_obj,
+                        raw_headers=raw_headers,
+                        litellm_logging_obj=litellm_logging_obj,
+                        guardrail_context=guardrail_context,
+                    )
+                    if direct_tool
+                    else global_mcp_server_manager.call_tool(
+                        server_name=server_name,
+                        name=sanitized_tool_name,
+                        arguments=parsed_arguments,
+                        user_api_key_auth=typed_user_api_key_auth,
+                        mcp_auth_header=mcp_auth_header,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
+                        oauth2_headers=oauth2_headers,
+                        raw_headers=raw_headers,
+                        proxy_logging_obj=proxy_logging_obj,
+                        litellm_logging_obj=litellm_logging_obj,
+                        guardrail_context=guardrail_context,
+                        listed_tool=(
+                            next((tool for tool in served_tools if tool.name == tool_name), None)
+                            if served_tools is not None
+                            else ...
+                        ),
+                    )
                 )
 
                 if proxy_logging_obj:
@@ -949,11 +974,9 @@ class LiteLLM_Proxy_MCP_Handler:
                 # Format result for inclusion in response
                 result_text = LiteLLM_Proxy_MCP_Handler._parse_mcp_result(result)
                 tool_results.append(
-                    {
-                        "tool_call_id": tool_call_id,
-                        "result": result_text,
-                        "name": tool_name,
-                    }
+                    MCPToolResult(tool_call_id=tool_call_id, result=result_text, name=tool_name, error=result_text)
+                    if getattr(result, "is_error", False)
+                    else MCPToolResult(tool_call_id=tool_call_id, result=result_text, name=tool_name)
                 )
 
             except BlockedPiiEntityError as e:
@@ -970,6 +993,7 @@ class LiteLLM_Proxy_MCP_Handler:
                         "tool_call_id": tool_call_id,
                         "result": error_message,
                         "name": tool_name,
+                        "error": error_message,
                     }
                 )
             except GuardrailRaisedException as e:
@@ -988,6 +1012,7 @@ class LiteLLM_Proxy_MCP_Handler:
                         "tool_call_id": tool_call_id,
                         "result": error_message,
                         "name": tool_name,
+                        "error": error_message,
                     }
                 )
             except HTTPException as e:
@@ -1004,6 +1029,7 @@ class LiteLLM_Proxy_MCP_Handler:
                         "tool_call_id": tool_call_id,
                         "result": error_message,
                         "name": tool_name,
+                        "error": error_message,
                     }
                 )
             except Exception as e:
@@ -1019,6 +1045,7 @@ class LiteLLM_Proxy_MCP_Handler:
                         "tool_call_id": tool_call_id,
                         "result": f"Error executing tool: {e}",
                         "name": tool_name,
+                        "error": f"Error executing tool: {e}",
                     }
                 )
 
@@ -1216,6 +1243,8 @@ class LiteLLM_Proxy_MCP_Handler:
         previous_response_id: str | None,
         tool_server_map: dict[str, str],
         served_tools: Sequence[MCPTool] | None = None,
+        direct_tools: "Mapping[str, DirectTool] | None" = None,
+        stream_shaper: "OpenAIStreamShaper | None" = None,
         **kwargs,
     ) -> "MCPEnhancedStreamingIterator":
         """
@@ -1250,6 +1279,8 @@ class LiteLLM_Proxy_MCP_Handler:
             user_api_key_auth=kwargs.get("user_api_key_auth")
             or kwargs.get("litellm_metadata", {}).get("user_api_key_auth"),
             original_request_params=request_params,
+            direct_tools=direct_tools,
+            stream_shaper=stream_shaper,
         )
 
     @staticmethod

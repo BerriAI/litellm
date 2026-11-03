@@ -621,7 +621,7 @@ async def test_execute_tool_calls_applies_post_call_hook_content(monkeypatch):
         user_api_key_auth=None,
     )
 
-    assert results == [{"tool_call_id": "call-1", "result": "[REDACTED]", "name": tool_name}]
+    assert results == [{"tool_call_id": "call-1", "result": "[REDACTED]", "name": tool_name, "error": "[REDACTED]"}]
     assert logging_obj.async_success_handler.await_args.kwargs["result"].content[0].text == "[REDACTED]"
     assert logging_obj.async_success_handler.await_args.kwargs["result"].structured_content is None
 

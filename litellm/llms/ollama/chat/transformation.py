@@ -148,6 +148,9 @@ class OllamaChatConfig(BaseConfig):
             "reasoning_effort",
         ]
 
+    def strips_hosted_mcp_tools(self, model: str) -> bool:
+        return True
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -160,6 +163,7 @@ class OllamaChatConfig(BaseConfig):
             model=model,
             route="ollama_chat",
             drop_params=drop_params,
+            strips_hosted_mcp_tools=self.strips_hosted_mcp_tools,
         )
         for param, value in request_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":

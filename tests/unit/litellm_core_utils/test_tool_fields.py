@@ -212,6 +212,21 @@ def test_a_hosted_mcp_error_names_every_server_and_marks_an_unlabeled_one(monkey
 _HOSTED_MCP_TOOL: Final = {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}
 
 
+def _strips(model: str) -> bool:
+    return model.startswith("deepseek")
+
+
+def test_a_route_that_does_not_strip_hosted_mcp_keeps_the_tool_even_without_drop_params() -> None:
+    sent: Final = {"tools": [_HOSTED_MCP_TOOL, _GOOD_TOOL], "tool_choice": "auto"}
+
+    assert (
+        tool_params_without_hosted_mcp(
+            sent, model="claude-sonnet-4-6", route="anthropic", drop_params=False, strips_hosted_mcp_tools=_strips
+        )
+        is sent
+    )
+
+
 def test_dropping_a_hosted_mcp_tool_keeps_the_other_tool_params_and_leaves_the_caller_dict_alone() -> None:
     tool_choice: Final = {"type": "function", "function": {"name": "get_weather"}}
     sent: Final = {
@@ -220,7 +235,9 @@ def test_dropping_a_hosted_mcp_tool_keeps_the_other_tool_params_and_leaves_the_c
         "parallel_tool_calls": False,
         "temperature": 0.2,
     }
-    params: Final = tool_params_without_hosted_mcp(sent, model="deepseek-v4-flash", route="deepseek", drop_params=True)
+    params: Final = tool_params_without_hosted_mcp(
+        sent, model="deepseek-v4-flash", route="deepseek", drop_params=True, strips_hosted_mcp_tools=_strips
+    )
 
     assert params == {
         "tools": [_GOOD_TOOL],
@@ -237,6 +254,7 @@ def test_dropping_every_hosted_mcp_tool_clears_the_tool_selection_params() -> No
         model="deepseek-v4-flash",
         route="deepseek",
         drop_params=True,
+        strips_hosted_mcp_tools=_strips,
     )
 
     assert params == {"temperature": 0.2}

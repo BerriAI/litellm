@@ -1322,6 +1322,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             self._resolved_provider
         )
 
+    def strips_hosted_mcp_tools(self, model: str) -> bool:
+        return not self.runs_hosted_mcp()
+
     def _tools_param_with_openai_tool_search_mapped(
         self, non_default_params: Mapping[str, object], model: str, drop_params: bool
     ) -> Mapping[str, object]:
@@ -1915,7 +1918,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             model=model,
             route=self._resolved_provider,
             drop_params=drop_params,
-            runs_hosted_mcp=self.runs_hosted_mcp,
+            strips_hosted_mcp_tools=self.strips_hosted_mcp_tools,
         )
         is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params=request_params)
 

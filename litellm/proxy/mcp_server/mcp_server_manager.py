@@ -363,6 +363,7 @@ _ToolParamMap: TypeAlias = dict[str, list[str]]
 _EnvVarList: TypeAlias = list[dict[str, object]]
 _InMemoryCacheDict: TypeAlias = dict[str, object]
 _ToolArguments: TypeAlias = dict[str, object]
+_TOOL_ARGUMENTS: Final = TypeAdapter(dict[str, object])
 _UpstreamSessionKey: TypeAlias = tuple[
     str,
     str,
@@ -7242,6 +7243,56 @@ class MCPServerManager:
             )
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
+
+    async def call_unregistered_server_tool(
+        self,
+        server: MCPServer,
+        tool: MCPTool,
+        arguments: _ToolArguments,
+        call: Callable[[MCPCallToolRequestParams], Awaitable[CallToolResult | InputRequiredResult]],
+        user_api_key_auth: UserAPIKeyAuth | None,
+        proxy_logging_obj: ProxyLogging | None,
+        raw_headers: Mapping[str, str] | None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
+        guardrail_context: Mapping[str, object] | None,
+    ) -> CallToolResult | InputRequiredResult:
+        """Run a call on a server the request named by URL through the checks, pre_mcp_call guardrails, rate limits
+        and during_mcp_call hooks a registered server's call gets. Headers a hook injects are not sent, since the
+        server is not one the admin configured."""
+        guardrail_auth: Final = await MCPRequestHandler.guardrail_auth_for_call(
+            guardrail_auth=None, user_api_key_auth=user_api_key_auth, server=server, tool_name=tool.name
+        )
+        hook_result: Final[Mapping[str, object]] = await self.pre_call_tool_check(
+            name=tool.name,
+            arguments=arguments,
+            server_name=server.name,
+            user_api_key_auth=user_api_key_auth,
+            proxy_logging_obj=proxy_logging_obj,
+            server=server,
+            raw_headers=None if raw_headers is None else dict(raw_headers),
+            litellm_logging_obj=litellm_logging_obj,
+            guardrail_context=guardrail_context,
+            tool=tool,
+            guardrail_auth=guardrail_auth,
+        )
+        checked_arguments: Final = (
+            _TOOL_ARGUMENTS.validate_python(hook_result["arguments"]) if "arguments" in hook_result else arguments
+        )
+        tool_call: Final = call(MCPCallToolRequestParams(name=tool.name, arguments=checked_arguments))
+        if proxy_logging_obj is None:
+            return await tool_call
+        during_hook: Final = self._create_during_hook_task(
+            name=tool.name,
+            arguments=checked_arguments,
+            server_name_from_prefix=server.name,
+            user_api_key_auth=guardrail_auth,
+            proxy_logging_obj=proxy_logging_obj,
+            start_time=datetime.datetime.now(datetime.timezone.utc),
+            litellm_logging_obj=litellm_logging_obj,
+            guardrail_context=guardrail_context,
+        )
+        _, result = await asyncio.gather(during_hook, tool_call)
+        return result
 
     #########################################################
     # End of Methods that call the upstream MCP servers

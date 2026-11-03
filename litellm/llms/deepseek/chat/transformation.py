@@ -40,6 +40,9 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         """
         return [*super().get_supported_openai_params(model), "thinking", "reasoning_effort"]
 
+    def strips_hosted_mcp_tools(self, model: str) -> bool:
+        return True
+
     def map_openai_params(
         self,
         non_default_params: dict[str, object],
@@ -59,7 +62,13 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         """
         # Let parent handle standard params first
         optional_params = super().map_openai_params(
-            tool_params_without_hosted_mcp(non_default_params, model=model, route="deepseek", drop_params=drop_params),
+            tool_params_without_hosted_mcp(
+                non_default_params,
+                model=model,
+                route="deepseek",
+                drop_params=drop_params,
+                strips_hosted_mcp_tools=self.strips_hosted_mcp_tools,
+            ),
             optional_params,
             model,
             drop_params,

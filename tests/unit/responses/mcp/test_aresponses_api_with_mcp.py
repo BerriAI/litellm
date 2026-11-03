@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from mcp.types import CallToolResult, ListToolsResult, TextContent
+from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult, TextContent
 from mcp.types import Tool as MCPTool
 
 # Import required modules
@@ -27,6 +27,7 @@ from litellm.llms.xai.common_utils import xai_reported_cost_in_usd
 from litellm.proxy.mcp_server import mcp_server_manager
 from litellm.proxy.mcp_server.faults.list_outcomes import ServerListOk
 from litellm.proxy.utils import _estimate_dispatched_failure_usage, _failure_fields_to_lift
+from litellm.responses.mcp.direct_url_claims import DirectMCPServer
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
 from litellm.types.llms.openai import (
@@ -3435,3 +3436,513 @@ async def test_bridged_stream_auto_execute_bills_nothing_for_a_round_served_from
     assert [(row["response_cost"], row["cache_hit"]) for row in both_cached.logged] == [(0.0, True)]
     assert client.usage is not None
     assert client.usage.cost == pytest.approx(_bridged_round_cost(470, 4))
+
+
+_DEEPWIKI_URL: Final = "https://mcp.deepwiki.com/mcp"
+_DEEPWIKI_TOOL: Final = MappingProxyType(
+    {"type": "mcp", "server_label": "deepwiki", "server_url": _DEEPWIKI_URL, "require_approval": "never"}
+)
+_ASK_TOOL: Final = MCPTool(
+    name="ask_question",
+    description="Ask a question about a repository",
+    inputSchema={"type": "object", "properties": {"question": {"type": "string"}}},
+)
+_ASK_ARGUMENTS: Final = {"question": "What is LiteLLM?"}
+_ASK_OUTPUT: Final = "LiteLLM is an AI gateway"
+_ASK_ANSWER: Final = "DeepWiki says LiteLLM is an AI gateway"
+_DEEPSEEK_MODEL: Final = "deepseek/deepseek-v4-flash"
+_DEEPSEEK_URL: Final = r"https://gateway-mcp\.example\.com/v1/chat/completions"
+_BEDROCK_MODEL: Final = "bedrock/converse/us.anthropic.claude-haiku-5-5"
+_BEDROCK_URL: Final = r"https://bedrock-runtime\.us-west-2\.amazonaws\.com/model/.*/converse"
+_ROUTE_KWARGS: Final = MappingProxyType(
+    {
+        _DEEPSEEK_MODEL: MappingProxyType(
+            {"api_key": "sk-gateway-mcp", "api_base": "https://gateway-mcp.example.com/v1"}
+        ),
+        _BEDROCK_MODEL: MappingProxyType(
+            {"aws_access_key_id": "AKIDGATEWAYMCP", "aws_secret_access_key": "secret", "aws_region_name": "us-west-2"}
+        ),
+    }
+)
+_ROUTE_URLS: Final = MappingProxyType({_DEEPSEEK_MODEL: _DEEPSEEK_URL, _BEDROCK_MODEL: _BEDROCK_URL})
+
+
+class _ScriptedMCPServer:
+    def __init__(self, tool_failed: bool = False) -> None:
+        self.opened: tuple[tuple[DirectMCPServer, tuple[str, ...]], ...] = ()
+        self.calls: tuple[CallToolRequestParams, ...] = ()
+        self._tool_failed: Final = tool_failed
+
+    def client_for(self, server: DirectMCPServer, allowed_hosts: Sequence[str]) -> "_ScriptedMCPServer":
+        self.opened = (*self.opened, (server, tuple(allowed_hosts)))
+        return self
+
+    async def list_tools(self, raise_on_error: bool = False) -> Sequence[MCPTool]:
+        return (_ASK_TOOL,)
+
+    async def call_tool(self, call_tool_request_params: CallToolRequestParams) -> CallToolResult:
+        self.calls = (*self.calls, call_tool_request_params)
+        return CallToolResult(content=[TextContent(type="text", text=_ASK_OUTPUT)], isError=self._tool_failed)
+
+
+def _chat_round(message: Mapping[str, object]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-gateway-mcp",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "deepseek-v4-flash",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": dict(message),
+                    "finish_reason": "tool_calls" if "tool_calls" in message else "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 40, "completion_tokens": 8, "total_tokens": 48},
+        },
+    )
+
+
+def _converse_round(content: Mapping[str, object], stop_reason: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "output": {"message": {"role": "assistant", "content": [dict(content)]}},
+            "stopReason": stop_reason,
+            "usage": {"inputTokens": 40, "outputTokens": 8, "totalTokens": 48},
+            "metrics": {"latencyMs": 10},
+        },
+    )
+
+
+def _tool_call_round(model: str, tool_name: str) -> httpx.Response:
+    if model == _BEDROCK_MODEL:
+        return _converse_round(
+            {"toolUse": {"toolUseId": "call_ask", "name": tool_name, "input": _ASK_ARGUMENTS}}, "tool_use"
+        )
+    return _chat_round(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_ask",
+                    "type": "function",
+                    "function": {"name": tool_name, "arguments": json.dumps(_ASK_ARGUMENTS)},
+                }
+            ],
+        }
+    )
+
+
+def _answer_round(model: str) -> httpx.Response:
+    if model == _BEDROCK_MODEL:
+        return _converse_round({"text": _ASK_ANSWER}, "end_turn")
+    return _chat_round({"role": "assistant", "content": _ASK_ANSWER})
+
+
+def _chat_chunk(delta: Mapping[str, object], finish_reason: str | None) -> Mapping[str, object]:
+    return {
+        "id": "chatcmpl-gateway-mcp",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "deepseek-v4-flash",
+        "choices": [{"index": 0, "delta": dict(delta), "finish_reason": finish_reason}],
+    }
+
+
+def _chat_stream(*chunks: Mapping[str, object]) -> httpx.Response:
+    body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    return httpx.Response(200, content=body.encode(), headers=SSE_HEADERS)
+
+
+def _streamed_tool_call_round() -> httpx.Response:
+    tool_call: Final = {
+        "index": 0,
+        "id": "call_ask",
+        "type": "function",
+        "function": {"name": "deepwiki-ask_question", "arguments": json.dumps(_ASK_ARGUMENTS)},
+    }
+    return _chat_stream(
+        _chat_chunk({"role": "assistant", "tool_calls": [tool_call]}, None), _chat_chunk({}, "tool_calls")
+    )
+
+
+def _streamed_answer_round() -> httpx.Response:
+    return _chat_stream(_chat_chunk({"role": "assistant", "content": _ASK_ANSWER}, None), _chat_chunk({}, "stop"))
+
+
+def _gateway_runs_hosted_mcp(monkeypatch: pytest.MonkeyPatch, allowed_hosts: Sequence[str]) -> None:
+    monkeypatch.setattr(litellm, "gateway_runs_hosted_mcp", True)
+    monkeypatch.setattr(litellm, "gateway_hosted_mcp_allowed_hosts", list(allowed_hosts))
+
+
+async def _gateway_hosted_mcp_request(
+    model: str,
+    server: _ScriptedMCPServer,
+    tool: Mapping[str, object] = _DEEPWIKI_TOOL,
+    *,
+    drop_params: bool | None = None,
+    stream: bool = False,
+    caller: object = None,
+) -> object:
+    return await litellm.aresponses(
+        model=model,
+        input="Ask DeepWiki what LiteLLM is",
+        tools=[dict(tool)],
+        direct_client_factory=server.client_for,
+        drop_params=drop_params,
+        stream=stream,
+        litellm_metadata={"user_api_key_auth": caller},
+        **_ROUTE_KWARGS[model],
+    )
+
+
+def _sent_body(route: respx.Route, index: int) -> Mapping[str, object]:
+    return json.loads(route.calls[index].request.content)
+
+
+def _sent_tool_names(body: Mapping[str, object]) -> tuple[str, ...]:
+    tools: Final = body.get("tools") or body.get("toolConfig", {}).get("tools", [])
+    return tuple((tool.get("function") or tool.get("toolSpec") or {}).get("name", tool.get("type")) for tool in tools)
+
+
+def _item(item: object) -> Mapping[str, object]:
+    return item if isinstance(item, Mapping) else item.model_dump()
+
+
+def _assert_openai_mcp_output(output: Sequence[object], status: str = "completed") -> None:
+    items: Final = [_item(item) for item in output]
+    assert [item["type"] for item in items] == ["mcp_list_tools", "mcp_call", "message"]
+    assert {key: items[0][key] for key in ("server_label", "tools", "error")} == {
+        "server_label": "deepwiki",
+        "tools": [
+            {
+                "name": "ask_question",
+                "description": _ASK_TOOL.description,
+                "input_schema": _ASK_TOOL.input_schema,
+                "annotations": {"read_only": False},
+            }
+        ],
+        "error": None,
+    }
+    call: Final = items[1]
+    assert {key: call[key] for key in ("server_label", "name", "arguments", "status")} == {
+        "server_label": "deepwiki",
+        "name": "ask_question",
+        "arguments": json.dumps(_ASK_ARGUMENTS),
+        "status": status,
+    }
+    assert (call["output"], call["error"]) == ((_ASK_OUTPUT, None) if status == "completed" else (None, _ASK_OUTPUT))
+    assert str(call["id"]).startswith("mcp_")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [_BEDROCK_MODEL, _DEEPSEEK_MODEL])
+@pytest.mark.parametrize(
+    "allowed_hosts", [(), ("mcp.example.com",)], ids=["nothing_allowlisted", "another_host_allowlisted"]
+)
+@respx.mock
+async def test_a_hosted_mcp_url_neither_registered_nor_allowlisted_opens_no_connection_and_keeps_the_400(
+    monkeypatch: pytest.MonkeyPatch, model: str, allowed_hosts: tuple[str, ...]
+):
+    _gateway_runs_hosted_mcp(monkeypatch, allowed_hosts)
+    provider: Final = _serve_responses(respx.mock, monkeypatch, (), _ROUTE_URLS[model])
+    server: Final = _ScriptedMCPServer()
+
+    with pytest.raises(litellm.BadRequestError) as refused:
+        await _gateway_hosted_mcp_request(model, server)
+
+    assert "cannot run the hosted MCP tool `deepwiki`" in str(refused.value)
+    assert (server.opened, provider.call_count) == ((), 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [_BEDROCK_MODEL, _DEEPSEEK_MODEL])
+@respx.mock
+async def test_a_hosted_mcp_url_neither_registered_nor_allowlisted_is_dropped_under_drop_params_without_a_connection(
+    monkeypatch: pytest.MonkeyPatch, model: str
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.example.com",))
+    provider: Final = _serve_responses(respx.mock, monkeypatch, (_answer_round(model),), _ROUTE_URLS[model])
+    server: Final = _ScriptedMCPServer()
+
+    response: Final = await _gateway_hosted_mcp_request(model, server, drop_params=True)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert _output_types(response.output) == ("message",)
+    assert _sent_tool_names(_sent_body(provider, 0)) == ()
+    assert server.opened == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [_BEDROCK_MODEL, _DEEPSEEK_MODEL])
+@respx.mock
+async def test_an_allowlisted_hosted_mcp_url_runs_on_the_gateway_and_answers_in_openai_mcp_items(
+    monkeypatch: pytest.MonkeyPatch, model: str
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com",))
+    provider: Final = _serve_responses(
+        respx.mock,
+        monkeypatch,
+        (_tool_call_round(model, "deepwiki-ask_question"), _answer_round(model)),
+        _ROUTE_URLS[model],
+    )
+    server: Final = _ScriptedMCPServer()
+    tool: Final = {**_DEEPWIKI_TOOL, "headers": {"X-Caller": "a"}, "authorization": "caller-token"}
+
+    response: Final = await _gateway_hosted_mcp_request(model, server, tool)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    _assert_openai_mcp_output(response.output)
+    assert _item(response.output[2])["content"][0]["text"] == _ASK_ANSWER
+    assert [(opened.headers, hosts) for opened, hosts in server.opened] == [
+        ({"X-Caller": "a", "Authorization": "Bearer caller-token"}, ("mcp.deepwiki.com",))
+    ]
+    assert [(call.name, call.arguments) for call in server.calls] == [("ask_question", _ASK_ARGUMENTS)]
+    assert _sent_tool_names(_sent_body(provider, 0)) == ("deepwiki-ask_question",)
+    assert _ASK_OUTPUT in json.dumps(_sent_body(provider, 1))
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_an_allowlisted_server_receives_the_arguments_a_pre_call_guardrail_rewrote(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy import proxy_server
+
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com",))
+    _serve_responses(
+        respx.mock,
+        monkeypatch,
+        (_tool_call_round(_BEDROCK_MODEL, "deepwiki-ask_question"), _answer_round(_BEDROCK_MODEL)),
+        _ROUTE_URLS[_BEDROCK_MODEL],
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "pre_call_hook",
+        AsyncMock(return_value={"modified_arguments": {"question": "[MASKED]"}}),
+    )
+    server: Final = _ScriptedMCPServer()
+
+    await _gateway_hosted_mcp_request(_BEDROCK_MODEL, server)
+
+    assert [(call.name, call.arguments) for call in server.calls] == [("ask_question", {"question": "[MASKED]"})]
+
+
+def _stream_items(events: Sequence[ResponsesAPIStreamingResponse]) -> tuple[tuple[str, object, object], ...]:
+    return tuple(
+        (_event_type(event), getattr(event, "output_index", None), getattr(getattr(event, "item", None), "type", None))
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_failed", [False, True], ids=["tool_succeeds", "tool_fails"])
+@respx.mock
+async def test_an_allowlisted_hosted_mcp_url_streams_openai_mcp_events_in_order(
+    monkeypatch: pytest.MonkeyPatch, tool_failed: bool
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com",))
+    _serve_responses(respx.mock, monkeypatch, (_streamed_tool_call_round(), _streamed_answer_round()), _DEEPSEEK_URL)
+    server: Final = _ScriptedMCPServer(tool_failed=tool_failed)
+
+    stream: Final = await _gateway_hosted_mcp_request(_DEEPSEEK_MODEL, server, stream=True)
+    events: Final = tuple([event async for event in stream])
+
+    call_outcome: Final = "response.mcp_call.failed" if tool_failed else "response.mcp_call.completed"
+    assert _stream_items(events) == (
+        ("response.created", None, None),
+        ("response.in_progress", None, None),
+        ("response.output_item.added", 0, "mcp_list_tools"),
+        ("response.mcp_list_tools.in_progress", 0, None),
+        ("response.mcp_list_tools.completed", 0, None),
+        ("response.output_item.done", 0, "mcp_list_tools"),
+        ("response.output_item.added", 1, "mcp_call"),
+        ("response.mcp_call.in_progress", 1, None),
+        ("response.mcp_call_arguments.delta", 1, None),
+        ("response.mcp_call_arguments.done", 1, None),
+        (call_outcome, 1, None),
+        ("response.output_item.done", 1, "mcp_call"),
+        ("response.output_item.added", 2, "message"),
+        ("response.content_part.added", 2, None),
+        ("response.output_text.delta", 2, None),
+        ("response.output_text.done", 2, None),
+        ("response.content_part.done", 2, None),
+        ("response.output_item.done", 2, "message"),
+        ("response.completed", None, None),
+    )
+    assert [event.sequence_number for event in events] == list(range(len(events)))
+    assert _item(events[6].item)["status"] == "in_progress"
+    _assert_openai_mcp_output(events[-1].response.output, "failed" if tool_failed else "completed")
+    assert [(call.name, call.arguments) for call in server.calls] == [("ask_question", _ASK_ARGUMENTS)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("approval", ["always", None])
+@respx.mock
+async def test_an_allowlisted_hosted_mcp_tool_that_needs_approval_answers_400_or_is_dropped(
+    monkeypatch: pytest.MonkeyPatch, approval: str | None
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com",))
+    provider: Final = _serve_responses(respx.mock, monkeypatch, (_answer_round(_DEEPSEEK_MODEL),), _DEEPSEEK_URL)
+    server: Final = _ScriptedMCPServer()
+    tool: Final = {**_DEEPWIKI_TOOL, "require_approval": approval}
+
+    with pytest.raises(litellm.BadRequestError) as refused:
+        await _gateway_hosted_mcp_request(_DEEPSEEK_MODEL, server, tool)
+    dropped: Final = await _gateway_hosted_mcp_request(_DEEPSEEK_MODEL, server, tool, drop_params=True)
+
+    assert 'only with `require_approval: "never"`' in str(refused.value)
+    assert isinstance(dropped, ResponsesAPIResponse)
+    assert _output_types(dropped.output) == ("message",)
+    assert _sent_tool_names(_sent_body(provider, 0)) == ()
+    assert server.opened == ()
+
+
+def _deepwiki_registered(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    from litellm.caching.caching import DualCache
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    registered: Final = MCPServer(
+        server_id="srv-deepwiki",
+        name="deepwiki",
+        server_name="deepwiki",
+        url="https://MCP.deepwiki.com/mcp/",
+        transport=MCPTransport.http,
+    )
+    manager: Final = mcp_server_manager.global_mcp_server_manager
+    mcp_client: Final = AsyncMock()
+    mcp_client.list_tools.return_value = [_ASK_TOOL]
+    mcp_client.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text=_ASK_OUTPUT)])
+    monkeypatch.setattr(manager, "registry", {registered.server_id: registered})
+    monkeypatch.setattr(manager, "create_mcp_client", AsyncMock(return_value=mcp_client))
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        SimpleNamespace(
+            general_settings={},
+            master_key="sk-master",
+            proxy_logging_obj=None,
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+        ),
+    )
+    return mcp_client
+
+
+def _key_holding(server_id: str) -> object:
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LitellmUserRoles, UserAPIKeyAuth
+
+    return UserAPIKeyAuth(
+        api_key="sk-caller",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_servers=[server_id]),
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_registered_hosted_mcp_url_runs_through_its_gateway_server_under_the_keys_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ())
+    mcp_client: Final = _deepwiki_registered(monkeypatch)
+    provider: Final = _serve_responses(
+        respx.mock,
+        monkeypatch,
+        (_tool_call_round(_BEDROCK_MODEL, "deepwiki-ask_question"), _answer_round(_BEDROCK_MODEL)),
+        _BEDROCK_URL,
+    )
+    server: Final = _ScriptedMCPServer()
+
+    response: Final = await _gateway_hosted_mcp_request(
+        _BEDROCK_MODEL, server, caller=_key_holding("srv-deepwiki")
+    )
+
+    assert isinstance(response, ResponsesAPIResponse)
+    _assert_openai_mcp_output(response.output)
+    assert mcp_client.call_tool.await_args is not None
+    assert mcp_client.call_tool.await_args.args[0].name == "ask_question"
+    assert _sent_tool_names(_sent_body(provider, 0)) == ("deepwiki-ask_question",)
+    assert server.opened == ()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_registered_hosted_mcp_url_answers_the_gateways_403_for_a_key_without_access(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fastapi import HTTPException
+
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com",))
+    mcp_client: Final = _deepwiki_registered(monkeypatch)
+    provider: Final = _serve_responses(respx.mock, monkeypatch, (), _BEDROCK_URL)
+    server: Final = _ScriptedMCPServer()
+
+    with pytest.raises(HTTPException) as denied:
+        await _gateway_hosted_mcp_request(
+            _BEDROCK_MODEL, server, caller=_key_holding("srv-other")
+        )
+
+    assert denied.value.status_code == 403
+    assert denied.value.detail == {"error": "The key is not allowed to access the requested MCP servers: deepwiki"}
+    assert (server.opened, provider.call_count, mcp_client.call_tool.await_count) == ((), 0, 0)
+
+
+_NATIVE_ROUTES: Final = MappingProxyType(
+    {
+        "openai/gpt-5.6": (r"https://gateway-mcp\.example\.com/v1/responses", "tools", "server_url"),
+        "anthropic/claude-haiku-5-5": (r"https://gateway-mcp\.example\.com/v1/messages", "mcp_servers", "url"),
+    }
+)
+
+
+def _native_answer(model: str) -> httpx.Response:
+    if model.startswith("anthropic/"):
+        return httpx.Response(200, json=_anthropic_message("msg_native", [{"type": "text", "text": "ok"}], "end_turn"))
+    return httpx.Response(
+        200,
+        json=_openai_response(
+            "resp_native",
+            "completed",
+            [
+                {
+                    "type": "message",
+                    "id": "msg_native",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+                }
+            ],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", tuple(_NATIVE_ROUTES))
+@respx.mock
+async def test_a_route_that_runs_hosted_mcp_natively_still_gets_the_tool_with_the_gateway_switch_on(
+    monkeypatch: pytest.MonkeyPatch, model: str
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com",))
+    url, field, url_key = _NATIVE_ROUTES[model]
+    provider: Final = _serve_responses(respx.mock, monkeypatch, (_native_answer(model),), url)
+    server: Final = _ScriptedMCPServer()
+
+    await litellm.aresponses(
+        model=model,
+        input="Ask DeepWiki what LiteLLM is",
+        tools=[dict(_DEEPWIKI_TOOL)],
+        api_key="sk-native",
+        api_base="https://gateway-mcp.example.com/v1"
+        if model.startswith("openai/")
+        else "https://gateway-mcp.example.com",
+        direct_client_factory=server.client_for,
+    )
+
+    assert [entry.get(url_key) for entry in _sent_body(provider, 0)[field]] == [_DEEPWIKI_URL]
+    assert server.opened == ()

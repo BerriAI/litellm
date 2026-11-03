@@ -290,6 +290,9 @@ class BaseConfig(ABC):
             optional_params["response_format"] = value
         return optional_params
 
+    def strips_hosted_mcp_tools(self, model: str) -> bool:
+        return False
+
     @abstractmethod
     def map_openai_params(
         self,

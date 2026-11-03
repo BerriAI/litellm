@@ -1,0 +1,329 @@
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from itertools import chain
+from types import MappingProxyType
+from typing import Final
+
+from mcp.types import Tool as MCPTool
+from pydantic import BaseModel, TypeAdapter, ValidationError
+
+from litellm._uuid import uuid
+from litellm.proxy.mcp_server.utils import strip_known_server_prefix
+from litellm.responses.mcp.direct_url_claims import DirectListing, server_names
+from litellm.responses.mcp.mcp_streaming_iterator import output_items
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+from litellm.types.llms.openai import (
+    MCPCallFailedEvent,
+    MCPListToolsCompletedEvent,
+    MCPListToolsInProgressEvent,
+    OutputItemAddedEvent,
+    OutputItemDoneEvent,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
+    ResponsesAPIStreamingResponse,
+)
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+_TERMINAL_EVENTS: Final = frozenset(
+    {
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ResponsesAPIStreamEvents.RESPONSE_FAILED,
+    }
+)
+_ITEM_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_MESSAGE_PARTS: Final = TypeAdapter(tuple[object, ...])
+_OPENING_EVENTS: Final = frozenset(
+    {ResponsesAPIStreamEvents.RESPONSE_CREATED, ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class GatewayToolName:
+    server_label: str
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class OpenAIMCPItems:
+    """How the tools the gateway runs read in OpenAI's item shapes: one mcp_list_tools item per server, and the
+    caller's server_label and bare tool name for every tool name the model sees."""
+
+    list_items: tuple[Mapping[str, object], ...]
+    names: Mapping[str, GatewayToolName]
+
+
+def _field(item: object, key: str) -> object:
+    if isinstance(item, BaseModel):
+        return getattr(item, key, None)
+    try:
+        return _ITEM_FIELDS.validate_python(item, strict=True).get(key)
+    except ValidationError:
+        return getattr(item, key, None)
+
+
+def _text(item: object, key: str) -> str | None:
+    value: Final = _field(item, key)
+    return value if isinstance(value, str) else None
+
+
+def _registered_name(
+    tool_name: str, server_key: str, server_labels: Mapping[str, str], server_for: Callable[[str], MCPServer | None]
+) -> GatewayToolName:
+    server: Final = server_for(server_key)
+    keys: Final = (server_key, *(server_names(server) if server is not None else ()))
+    label: Final = next((server_labels[key] for key in keys if key in server_labels), server_key)
+    return GatewayToolName(server_label=label, name=strip_known_server_prefix(tool_name, server))
+
+
+def _listed_tool(tool: MCPTool, name: str) -> Mapping[str, object]:
+    return {
+        "name": name,
+        "description": tool.description,
+        "input_schema": tool.input_schema,
+        "annotations": {"read_only": bool(tool.annotations and tool.annotations.read_only_hint)},
+    }
+
+
+def _list_item(server_label: str, tools: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+    return {
+        "id": f"mcpl_{uuid.uuid4().hex}",
+        "type": "mcp_list_tools",
+        "server_label": server_label,
+        "tools": list(tools),
+        "error": None,
+    }
+
+
+def _labels_in_order(names: Sequence[GatewayToolName]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(name.server_label for name in names))
+
+
+def openai_mcp_items(
+    registered_tools: Sequence[MCPTool],
+    tool_server_map: Mapping[str, str],
+    server_labels: Mapping[str, str],
+    server_for: Callable[[str], MCPServer | None],
+    direct: DirectListing,
+) -> OpenAIMCPItems:
+    registered: Final = tuple(
+        (tool, _registered_name(tool.name, tool_server_map.get(tool.name, ""), server_labels, server_for))
+        for tool in registered_tools
+    )
+    direct_names: Final = MappingProxyType(
+        {
+            name: GatewayToolName(server_label=tool.server.server_label, name=tool.tool.name)
+            for name, tool in direct.by_name.items()
+        }
+    )
+    registered_items: Final = tuple(
+        _list_item(label, [_listed_tool(tool, name.name) for tool, name in registered if name.server_label == label])
+        for label in _labels_in_order([name for _, name in registered])
+    )
+    direct_items: Final = tuple(
+        _list_item(label, [_listed_tool(tool, tool.name) for tool in tools])
+        for label, tools in direct.server_tools.items()
+    )
+    return OpenAIMCPItems(
+        list_items=(*registered_items, *direct_items),
+        names=MappingProxyType({**{tool.name: name for tool, name in registered}, **direct_names}),
+    )
+
+
+def mcp_call_item(
+    item_id: str, tool: GatewayToolName, arguments: str, output: str | None, error: str | None
+) -> Mapping[str, object]:
+    return {
+        "id": item_id,
+        "type": "mcp_call",
+        "status": "failed" if error else "completed",
+        "approval_request_id": None,
+        "arguments": arguments,
+        "error": error,
+        "name": tool.name,
+        "output": None if error else output,
+        "server_label": tool.server_label,
+    }
+
+
+def _gateway_name(names: Mapping[str, GatewayToolName], item: object) -> GatewayToolName:
+    name: Final = _text(item, "name") or ""
+    return names.get(name) or GatewayToolName(server_label=_text(item, "server_label") or "unlabeled", name=name)
+
+
+def _is_gateway_function_call(names: Mapping[str, GatewayToolName], item: object) -> bool:
+    return _field(item, "type") == "function_call" and _text(item, "name") in names
+
+
+def _reshaped_item(names: Mapping[str, GatewayToolName], item: object) -> object:
+    return _openai_mcp_call(names, item) if _field(item, "type") == "mcp_call" else item
+
+
+def _openai_mcp_call(names: Mapping[str, GatewayToolName], item: object) -> Mapping[str, object]:
+    return mcp_call_item(
+        item_id=_text(item, "id") or f"mcp_{uuid.uuid4().hex}",
+        tool=_gateway_name(names, item),
+        arguments=_text(item, "arguments") or "",
+        output=_text(item, "output"),
+        error=_text(item, "error"),
+    )
+
+
+def openai_output(items: OpenAIMCPItems, output: Sequence[object]) -> tuple[object, ...]:
+    """A response's output as OpenAI lists it: the mcp_list_tools items first, then every item the model produced
+    with each tool call the gateway ran shown as its mcp_call."""
+    return (
+        *items.list_items,
+        *(_reshaped_item(items.names, item) for item in output if not _is_gateway_function_call(items.names, item)),
+    )
+
+
+def _response_item(item: Mapping[str, object]) -> BaseLiteLLMOpenAIResponseObject:
+    return BaseLiteLLMOpenAIResponseObject(**item)
+
+
+def _list_events(index: int, item: Mapping[str, object]) -> tuple[ResponsesAPIStreamingResponse, ...]:
+    item_id: Final = _text(item, "id") or ""
+    return (
+        OutputItemAddedEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            output_index=index,
+            item=_response_item({**item, "tools": []}),
+        ),
+        MCPListToolsInProgressEvent(
+            type=ResponsesAPIStreamEvents.MCP_LIST_TOOLS_IN_PROGRESS,
+            sequence_number=0,
+            output_index=index,
+            item_id=item_id,
+        ),
+        MCPListToolsCompletedEvent(
+            type=ResponsesAPIStreamEvents.MCP_LIST_TOOLS_COMPLETED,
+            sequence_number=0,
+            output_index=index,
+            item_id=item_id,
+        ),
+        OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            sequence_number=0,
+            output_index=index,
+            item=_response_item(item),
+        ),
+    )
+
+
+def _copied(event: ResponsesAPIStreamingResponse, update: Mapping[str, object]) -> ResponsesAPIStreamingResponse:
+    return event.model_copy(update=dict(update))
+
+
+def _failed(held: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingResponse:
+    output_index: Final = _field(held, "output_index")
+    return MCPCallFailedEvent(
+        type=ResponsesAPIStreamEvents.MCP_CALL_FAILED,
+        sequence_number=0,
+        item_id=_text(held, "item_id") or "",
+        output_index=output_index if isinstance(output_index, int) else 0,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class OpenAIStreamShaper:
+    """Rewrites the gateway's MCP stream into OpenAI's event order. The mcp_list_tools items open the output, the
+    function_call events of a gateway-run tool are dropped since its mcp_call events stand for it, output indexes are
+    renumbered densely, and every event gets the next sequence number."""
+
+    items: OpenAIMCPItems
+    listed: bool = False
+    indexes: Mapping[int, int] = MappingProxyType({})
+    dropped: frozenset[int] = frozenset()
+    held: ResponsesAPIStreamingResponse | None = None
+    sequence: int = 0
+
+    def shape(
+        self, event: ResponsesAPIStreamingResponse
+    ) -> tuple["OpenAIStreamShaper", tuple[ResponsesAPIStreamingResponse, ...]]:
+        opening: Final = _field(event, "type") in _OPENING_EVENTS
+        listing: Final = () if self.listed or opening else self._list_events()
+        listed_state: Final = self if self.listed or opening else replace(self, listed=True)
+        shaped_state, shaped = listed_state._shaped(event)
+        numbered: Final = tuple(
+            _copied(each, {"sequence_number": shaped_state.sequence + offset})
+            for offset, each in enumerate((*listing, *shaped))
+        )
+        return replace(shaped_state, sequence=shaped_state.sequence + len(numbered)), numbered
+
+    def _list_events(self) -> tuple[ResponsesAPIStreamingResponse, ...]:
+        return tuple(chain.from_iterable(_list_events(index, item) for index, item in enumerate(self.items.list_items)))
+
+    def _public_index(self, index: int) -> tuple["OpenAIStreamShaper", int]:
+        if index in self.indexes:
+            return self, self.indexes[index]
+        public: Final = len(self.items.list_items) + len(self.indexes)
+        return replace(self, indexes=MappingProxyType({**self.indexes, index: public})), public
+
+    def _shaped(
+        self, event: ResponsesAPIStreamingResponse
+    ) -> tuple["OpenAIStreamShaper", tuple[ResponsesAPIStreamingResponse, ...]]:
+        event_type: Final = _field(event, "type")
+        index: Final = _field(event, "output_index")
+        item: Final = _field(event, "item")
+        if event_type in _TERMINAL_EVENTS:
+            return self, (self._terminal(event),)
+        if not isinstance(index, int):
+            return self, (event,)
+        if index in self.dropped:
+            return self, ()
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and _is_gateway_function_call(
+            self.items.names, item
+        ):
+            return replace(self, dropped=self.dropped | {index}), ()
+        indexed_state, public = self._public_index(index)
+        moved: Final = _copied(event, {"output_index": public})
+        if event_type == ResponsesAPIStreamEvents.MCP_CALL_COMPLETED:
+            return replace(indexed_state, held=moved), ()
+        if _field(item, "type") != "mcp_call":
+            return indexed_state, (moved,)
+        reshaped: Final = _openai_mcp_call(self.items.names, item)
+        in_progress: Final = (
+            {**reshaped, "status": "in_progress", "output": None}
+            if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+            else reshaped
+        )
+        item_event: Final = _copied(moved, {"item": _response_item(in_progress)})
+        held: Final = indexed_state.held
+        released: Final = () if held is None else ((_failed(held) if _text(item, "error") else held),)
+        return replace(indexed_state, held=None), (*released, item_event)
+
+    def _terminal(self, event: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingResponse:
+        response: Final = _field(event, "response")
+        if not isinstance(response, ResponsesAPIResponse):
+            return event
+        return _copied(
+            event,
+            {
+                "response": response.model_copy(
+                    update={"output": list(openai_output(self.items, output_items(response)))}
+                )
+            },
+        )
+
+
+def _is_answered_call(item: object, answered_call_ids: frozenset[str]) -> bool:
+    return (
+        _field(item, "type") == "function_call" and (_text(item, "call_id") or _text(item, "id")) in answered_call_ids
+    )
+
+
+def _is_empty_message(item: object) -> bool:
+    if _field(item, "type") != "message":
+        return False
+    try:
+        parts: Final = _MESSAGE_PARTS.validate_python(_field(item, "content"))
+    except ValidationError:
+        return False
+    return all(_field(part, "type") == "output_text" and not _text(part, "text") for part in parts)
+
+
+def answered_round_output(output: Sequence[object], answered_call_ids: frozenset[str]) -> tuple[object, ...]:
+    """A tool round's output without the calls the gateway answered and without the empty assistant message a
+    bridged provider adds beside its tool calls, so the composed output reads as OpenAI's."""
+    return tuple(item for item in output if not (_is_answered_call(item, answered_call_ids) or _is_empty_message(item)))

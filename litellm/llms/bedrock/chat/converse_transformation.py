@@ -1061,6 +1061,9 @@ class AmazonConverseConfig(BaseConfig):
         if "meta.llama3-3-70b-instruct-v1:0" in model and non_default_params.get("stream", False) is True:
             optional_params["fake_stream"] = True
 
+    def strips_hosted_mcp_tools(self, model: str) -> bool:
+        return True
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -1070,7 +1073,11 @@ class AmazonConverseConfig(BaseConfig):
         model_info: Mapping[str, object] | None = None,
     ) -> dict:
         request_params: Final = tool_params_without_hosted_mcp(
-            non_default_params, model=model, route="bedrock", drop_params=drop_params
+            non_default_params,
+            model=model,
+            route="bedrock",
+            drop_params=drop_params,
+            strips_hosted_mcp_tools=self.strips_hosted_mcp_tools,
         )
         is_thinking_enabled: Final = self.is_thinking_enabled(request_params)
         base_model: Final = BedrockModelInfo.get_base_model(model)
