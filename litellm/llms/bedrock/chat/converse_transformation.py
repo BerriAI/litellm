@@ -1598,11 +1598,12 @@ class AmazonConverseConfig(BaseConfig):
         self,
         messages: Sequence[AllMessageValues],
         model: str,
+        deployment_model: str,
         drop_params: bool,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
     ) -> Sequence[AllMessageValues]:
-        if not bedrock_model_known_to_accept_cache_points(model):
+        if not bedrock_model_known_to_accept_cache_points(model, deployment_model):
             return messages
         markable: Final = (
             AnthropicCacheControlHook.prompt_cache_breakpoints_dropped_from_tool_results(messages, drop_params, model)
@@ -1613,15 +1614,19 @@ class AmazonConverseConfig(BaseConfig):
             markable,
             drop_params,
             AnthropicCacheControlHook.count_converse_cache_points,
-            lambda: self._tool_cache_points_on_the_wire(model, optional_params, litellm_params),
+            lambda: self._tool_cache_points_on_the_wire(model, deployment_model, optional_params, litellm_params),
         )
 
     def _tool_cache_points_on_the_wire(
-        self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+        self,
+        model: str,
+        deployment_model: str,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> int:
         tools: Final = optional_params.get("tools")
         bedrock_tools, _ = self._process_tools_and_beta(
-            tools if isinstance(tools, list) else [], model, None, {}, litellm_params
+            tools if isinstance(tools, list) else [], model, None, {}, litellm_params, deployment_model
         )
         injects_tool_config_point: Final = bool(bedrock_tools) and any(
             point.get("location") == "tool_config"
@@ -2206,6 +2211,7 @@ class AmazonConverseConfig(BaseConfig):
         marked_messages: Final = self._messages_with_cache_marks(
             messages,
             capability_model,
+            model,
             drops_unsupported_params(litellm_params.get("drop_params")),
             json_optional_params,
             litellm_params,
@@ -2301,6 +2307,7 @@ class AmazonConverseConfig(BaseConfig):
         marked_messages: Final = self._messages_with_cache_marks(
             messages,
             capability_model,
+            model,
             drops_unsupported_params(litellm_params.get("drop_params")),
             json_optional_params,
             litellm_params,

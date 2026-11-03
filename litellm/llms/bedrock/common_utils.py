@@ -1494,16 +1494,17 @@ def bedrock_declared_cache_point_support(model: str) -> bool | None:
     return _mapped_prompt_caching_support(model)
 
 
-def bedrock_model_known_to_accept_cache_points(model: str) -> bool:
+def bedrock_model_known_to_accept_cache_points(model: str, deployment_model: str | None = None) -> bool:
     """Like ``bedrock_model_accepts_cache_points``, but an unmapped model gets no cachePoint: an OpenAI
     ``prompt_cache_breakpoint`` reaches every model of a mixed fleet, not only the ones a client marked for
     Bedrock caching, so an application inference profile ARN opts in through ``supports_prompt_cache_breakpoint``."""
-    if _OPENAI_FAMILY_MODEL_RE.search(model):
-        return False
-    explicit_marker_support: Final = _explicit_cache_point_support(model)
-    if explicit_marker_support is not None:
-        return explicit_marker_support
-    return _mapped_prompt_caching_support(model) is True
+    deployment_declared: Final = (
+        None if deployment_model is None else bedrock_declared_cache_point_support(deployment_model)
+    )
+    declared: Final = (
+        deployment_declared if deployment_declared is not None else bedrock_declared_cache_point_support(model)
+    )
+    return declared is True
 
 
 def _explicit_cache_point_support(model: str) -> bool | None:

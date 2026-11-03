@@ -10248,6 +10248,46 @@ def test_converse_translates_prompt_cache_breakpoint_on_an_unmapped_arn_only_whe
     assert user_content(unflagged_arn, {"ttl": "30m"}) == [{"text": "Hello"}]
 
 
+
+def test_converse_prompt_cache_breakpoint_follows_the_arn_flag_over_its_base_model(local_model_cost_map):
+    from litellm import Router
+
+    opted_in_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-next"
+    opted_out_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-opted-out"
+    Router(
+        model_list=[
+            {
+                "model_name": "opted-in",
+                "litellm_params": {"model": f"bedrock/{opted_in_arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": True},
+            },
+            {
+                "model_name": "opted-out",
+                "litellm_params": {"model": f"bedrock/{opted_out_arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": False},
+            },
+        ]
+    )
+
+    def user_content(model: str, base_model: str, ttl: dict) -> list:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", **ttl}}],
+                }
+            ],
+            optional_params={},
+            litellm_params={"base_model": base_model},
+        )["messages"][0]["content"]
+
+    assert user_content(opted_in_arn, "anthropic.claude-unmapped-v1:0", {}) == [
+        {"text": "Hello"},
+        {"cachePoint": {"type": "default"}},
+    ]
+    assert user_content(opted_out_arn, "anthropic.claude-sonnet-5-5", {"ttl": "30m"}) == [{"text": "Hello"}]
+
 def _converse_request_with_30m_breakpoint(model: str, litellm_params: dict) -> dict:
     return litellm.AmazonConverseConfig()._transform_request(
         model=model,
