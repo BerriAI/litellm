@@ -11062,6 +11062,16 @@ def _moderation_backend_rejected_proxy_key() -> Exception:
             ValueError("unexpected internal error"), False, "ERROR", True, id="unexpected_error_with_traceback"
         ),
         pytest.param(
+            RouterRateLimitError(model="gpt-4", cooldown_time=42.3, enable_pre_call_checks=False, cooldown_list=[]),
+            False,
+            "ERROR",
+            False,
+            id="every_deployment_cooling_down_error",
+        ),
+        pytest.param(
+            RouterRateLimitErrorBasic(model="gpt-4"), False, "ERROR", False, id="no_deployment_available_error"
+        ),
+        pytest.param(
             HTTPException(status_code=400, detail="Invalid model name passed in"),
             True,
             "ERROR",

@@ -175,7 +175,7 @@ async def test_failure_log_carries_the_callers_litellm_call_id(
     call_id = "rerank-call-7836"
     failure = HTTPException(status_code=401, detail={"error": "invalid api key"})
 
-    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         raised = await _rerank_failure(
             failure,
             raised_before_routing=False,

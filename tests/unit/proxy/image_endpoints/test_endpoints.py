@@ -350,7 +350,7 @@ async def test_failure_log_carries_the_callers_litellm_call_id(
         receive,
     )
 
-    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"), pytest.raises(ProxyException) as raised:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"), pytest.raises(ProxyException) as raised:
         await endpoints.image_generation(
             request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth()
         )

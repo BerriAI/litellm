@@ -668,10 +668,10 @@ def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
 
 
 class LevelRoutingStreamHandler(logging.StreamHandler):
-    """Writes records below WARNING and invalid-key warnings to stdout, others to stderr.
+    """Writes records below WARNING and client-caused failure warnings to stdout, others to stderr.
 
     Collectors that derive severity from the stream report every stderr line as an error.
-    Invalid-key warnings route to stdout so LITELLM_LOG=ERROR can suppress them.
+    Client-caused failure warnings route to stdout so LITELLM_LOG=ERROR can suppress them.
     """
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -937,7 +937,7 @@ else:
     handler.setFormatter(formatter)
 
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
-# Malformed virtual key rejections log through this child; LevelRoutingStreamHandler
+# Client-caused request failures log through this child; LevelRoutingStreamHandler
 # writes its WARNING records to stdout. It has no handler or level of its own.
 verbose_proxy_stdout_logger: Final = verbose_proxy_logger.getChild("stdout")
 verbose_router_logger = logging.getLogger("LiteLLM Router")

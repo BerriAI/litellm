@@ -1190,6 +1190,12 @@ def _marked_malformed_key_error() -> HTTPException:
             id="key_over_rate_limit_warning_no_traceback",
         ),
         pytest.param(
+            litellm.BadRequestError(message="Invalid request body", model="gpt-5.4-mini", llm_provider="openai"),
+            False,
+            "WARNING",
+            id="provider_400_warning_no_traceback",
+        ),
+        pytest.param(
             ProxyException(message="DB unavailable", type=ProxyErrorTypes.auth_error, param=None, code=503),
             True,
             "ERROR",

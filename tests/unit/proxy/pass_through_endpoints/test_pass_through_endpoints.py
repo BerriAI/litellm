@@ -8966,7 +8966,7 @@ async def test_chat_completion_pass_through_endpoint_failure_carries_the_callers
         return_value=json.dumps({"model": "unknown-model", "messages": [{"role": "user", "content": "hi"}]}).encode()
     )
 
-    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"), pytest.raises(ProxyException) as raised:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"), pytest.raises(ProxyException) as raised:
         await chat_completion_pass_through_endpoint(
             fastapi_response=Response(),
             request=request,

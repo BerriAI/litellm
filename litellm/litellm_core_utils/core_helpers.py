@@ -273,12 +273,16 @@ def is_client_caused_failure(exception: BaseException | None) -> bool:
     instead of an ERROR an operator gets paged on: the proxy's own 4xx rejections and a provider
     saying the request itself is invalid (400, 413, 422). A guardrail that could not reach a
     verdict, a 4xx from a backend the proxy called itself (``httpx.HTTPStatusError``, e.g. a
-    moderation API rejecting the proxy's own key), and provider auth, permission, not-found and
-    rate-limit errors stay faults.
+    moderation API rejecting the proxy's own key), a router 429 because every deployment is
+    cooling down or at its own limit, and provider auth, permission, not-found and rate-limit
+    errors stay faults.
     """
     from litellm.exceptions import GuardrailRaisedException
+    from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
 
-    if exception is None or isinstance(exception, httpx.HTTPStatusError):
+    if exception is None or isinstance(
+        exception, (httpx.HTTPStatusError, RouterRateLimitError, RouterRateLimitErrorBasic)
+    ):
         return False
     if isinstance(exception, GuardrailRaisedException) and not exception.blocked_content:
         return False

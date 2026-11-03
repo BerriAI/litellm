@@ -218,7 +218,11 @@ class UserAPIKeyAuthExceptionHandler:
                 _auth_failure_log_message(e),
                 requester_ip,
                 _identity_log_suffix(resolved_identity),
-                exc_info=True if litellm.log_client_error_tracebacks or not is_expected_client_error(e) else None,
+                exc_info=(
+                    True
+                    if not is_quiet_log and (litellm.log_client_error_tracebacks or not is_expected_client_error(e))
+                    else None
+                ),
                 extra=log_extra,
             )
 
