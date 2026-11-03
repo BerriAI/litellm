@@ -25578,6 +25578,37 @@ async def test_router_caller_entra_field_keeps_the_shared_deployment():
     assert response._hidden_params["model_id"] == "shared-deployment"
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+async def test_router_non_azure_auth_failure_cools_down_despite_a_caller_entra_field():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "shared-model",
+                "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "revoked-key"},
+                "model_info": {"id": "shared-deployment"},
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="shared-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(
+                message="Incorrect API key provided.", llm_provider="openai", model="gpt-4.1-mini"
+            ),
+            client_id="caller-client",
+        )
+
+    with pytest.raises(litellm.RouterRateLimitError) as excinfo:
+        await router.acompletion(
+            model="shared-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="hi",
+        )
+
+    assert excinfo.value.all_deployments_in_cooldown is True
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_router_get_async_openai_model_client():
     router = Router(
         model_list=[

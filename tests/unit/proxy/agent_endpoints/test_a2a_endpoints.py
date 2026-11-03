@@ -1321,6 +1321,48 @@ async def test_entra_rejecting_the_agent_credential_returns_401_with_only_the_aa
 
 
 @pytest.mark.asyncio
+async def test_upstream_authentication_error_without_an_entra_rejection_stays_an_internal_error():
+    agent = _make_agent_mock()
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(
+        side_effect=litellm.AuthenticationError(
+            message="Incorrect API key provided.", llm_provider="openai", model="gpt-4.1"
+        )
+    )
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
+    )
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(  # test-quality-ok: stands in for the upstream agent rejecting the provider key it was sent
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=mock_handler
+            )
+        )
+        stack.enter_context(
+            patch(  # test-quality-ok: same proxy_logging_obj injection the sibling failure-hook tests use
+                "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=_make_request_mock("tasks/get", {"id": "task-1"}),
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1"),
+        )
+
+    assert response.status_code == 500
+    assert json.loads(response.body.decode())["error"]["code"] == -32603
+
+
+@pytest.mark.asyncio
 async def test_agentcore_invalid_context_id_returns_jsonrpc_invalid_params_400():
     from litellm.proxy._types import UserAPIKeyAuth
 

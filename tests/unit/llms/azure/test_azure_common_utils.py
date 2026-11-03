@@ -2803,6 +2803,26 @@ _REAL_CREDENTIAL_NON_REJECTIONS: Final = {
         429,
         _entra_error("AADSTS50196", "The server terminated an operation because it encountered a client request loop."),
     ),
+    "tenant_throttled_client_secret": (
+        "client_secret",
+        429,
+        _entra_error("AADSTS90055", "There are too many incoming requests."),
+    ),
+    "request_budget_exceeded_client_secret": (
+        "client_secret",
+        400,
+        _entra_error("AADSTS90024", "A transient error has occurred. Try again."),
+    ),
+    "retryable_error_client_secret": (
+        "client_secret",
+        400,
+        _entra_error("AADSTS50033", "A transient error has occurred."),
+    ),
+    "external_server_retryable_client_secret": (
+        "client_secret",
+        400,
+        _entra_error("AADSTS90006", "The service is temporarily unavailable."),
+    ),
     "throttled_without_a_code_through_a_credential_chain": (
         "default_azure_credential_chain",
         429,

@@ -3,7 +3,7 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import closing
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, NoReturn, cast
@@ -86,7 +86,7 @@ class AzureOpenAIError(BaseLLMException):
 
 _GUID: Final = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
 _AADSTS_REASON: Final = re.compile(r"\bAADSTS\d+\b.*?(?:\.(?=[\s'\"]|$)|$)", re.MULTILINE)
-_THROTTLED_AADSTS_CODE: Final = re.compile(r"\bAADSTS50196\b")
+_TRANSIENT_AADSTS_CODE: Final = re.compile(r"\bAADSTS(?:50033|50196|90006|90024|90033|90055)\b")
 
 
 def entra_rejection_as_auth_error(error: Exception) -> AzureOpenAIError | None:
@@ -101,7 +101,7 @@ def entra_rejection_as_auth_error(error: Exception) -> AzureOpenAIError | None:
         return None
     message: Final = str(error)
     reason: Final = _AADSTS_REASON.search(message)
-    if reason is None or _THROTTLED_AADSTS_CODE.search(message):
+    if reason is None or _TRANSIENT_AADSTS_CODE.search(message):
         return None
     return AzureOpenAIError(
         status_code=401,
@@ -116,12 +116,36 @@ def _raise_entra_rejection_as_auth_error(error: Exception) -> NoReturn:
     raise auth_error from error
 
 
+def entra_token(provider: Callable[[], str]) -> str:
+    try:
+        return provider()
+    except entra_rejection_types() as error:
+        _raise_entra_rejection_as_auth_error(error)
+
+
 def entra_rejection_types() -> tuple[type[Exception], ...]:
     try:
         from azure.core.exceptions import ClientAuthenticationError
     except ImportError:
         return ()
     return (ClientAuthenticationError,)
+
+
+_EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
+
+
+def _exception_chain(error: BaseException) -> Iterator[BaseException]:
+    link: BaseException | None = error  # rebind-ok: advances one link of the cause chain per iteration
+    for _ in range(_EXCEPTION_CHAIN_MAX_DEPTH):
+        if link is None:
+            return
+        yield link
+        link = link.__cause__ or link.__context__
+
+
+def caused_by_entra_rejection(error: BaseException) -> bool:
+    rejection_types: Final = entra_rejection_types()
+    return any(isinstance(link, rejection_types) for link in _exception_chain(error))
 
 
 async def _awaited_token(token: Awaitable[str]) -> str:
