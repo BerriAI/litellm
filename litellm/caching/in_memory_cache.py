@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
@@ -303,5 +304,9 @@ class InMemoryCache(BaseCache):
         Get the oldest n keys in the cache
         """
         # sorted ttl dict by ttl
-        sorted_ttl_dict: Final = sorted(self.ttl_dict.items(), key=lambda x: x[1])
+        current_time: Final = self._clock()
+        expirations: Final = MappingProxyType[str, float](self.ttl_dict)
+        sorted_ttl_dict: Final = sorted(
+            (item for item in expirations.items() if item[1] > current_time), key=lambda x: x[1]
+        )
         return [key for key, _ in sorted_ttl_dict[:n]]
