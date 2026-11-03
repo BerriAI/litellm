@@ -7,6 +7,7 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional
 
@@ -330,7 +331,10 @@ async def _resolve_mcp_server_identifiers_to_ids(
             if _mcp_server_identifier_matches(server, identifier):
                 resolved[identifier].add(server.server_id)
 
-    return resolved
+    # An exact server_id grants only that server, matching runtime expand_permission_list,
+    # so another registration whose name or alias equals the ID is not also granted.
+    known_ids: Final = frozenset(chain.from_iterable(resolved.values()))
+    return {identifier: {identifier} if identifier in known_ids else ids for identifier, ids in resolved.items()}
 
 
 _MCP_TOOL_PERMISSIONS_ADAPTER: Final = TypeAdapter(dict[str, list[str] | None])

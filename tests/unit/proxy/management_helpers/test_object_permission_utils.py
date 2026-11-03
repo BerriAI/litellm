@@ -1599,6 +1599,21 @@ async def test_unambiguous_tool_permission_keys_persist_verbatim():
 
 
 @pytest.mark.asyncio
+async def test_exact_server_id_resolves_only_that_server_while_shared_alias_resolves_all():
+    """An exact server_id grants only that server even when another row's alias equals it,
+    matching runtime expansion. A shared alias still resolves to every server using it."""
+    from litellm.proxy.management_helpers.object_permission_utils import _resolve_mcp_server_identifiers_to_ids
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+    with patch(
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", MCPServerManager()
+    ):
+        resolved = await _resolve_mcp_server_identifiers_to_ids({"solo-id", "wiki"}, _make_ambiguity_prisma())
+
+    assert resolved == {"solo-id": {"solo-id"}, "wiki": {"wiki-a-id", "wiki-b-id"}}
+
+
+@pytest.mark.asyncio
 async def test_stored_ambiguous_tool_permission_key_is_grandfathered_until_changed():
     """A shared-alias entry already on the row may be re-sent unchanged so unrelated
     edits succeed, but changing its tool list is rejected."""
