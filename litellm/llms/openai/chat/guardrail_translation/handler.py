@@ -798,8 +798,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         return MappingProxyType({(index, call.index or 0): call.id for index, call in calls if call.id})
 
     @staticmethod
-    def _choice_without(choice: "Choices", unfinished: frozenset[str]) -> "Choices":
-        kept: Final = [call for call in choice.message.tool_calls or () if call.id not in unfinished]
+    def _choice_without(choice: "Choices", unfinished: frozenset[tuple[int, str]]) -> "Choices":
+        kept: Final = [call for call in choice.message.tool_calls or () if (choice.index, call.id) not in unfinished]
         message: Final = choice.message.model_copy(update=MappingProxyType({"tool_calls": kept or None}))
         return choice.model_copy(update=MappingProxyType({"message": message}))
 
@@ -811,12 +811,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         Rebuilding gives a call that never streamed complete arguments an empty JSON object, which
         reads to a guardrail as a real call taking no arguments rather than an unfinished one. The
-        calls are matched by the id they announced, since the rebuilt order need not follow the
-        order the stream gave them.
+        calls are matched by the choice they belong to and the id they announced, since the rebuilt
+        order need not follow the order the stream gave them, and providers number tool calls per
+        choice, so the same id on another choice is another call.
         """
         joined: Final = OpenAIChatCompletionsHandler._joined_streamed_arguments(responses_so_far)
         unfinished: Final = frozenset(
-            call_id
+            (key[0], call_id)
             for key, call_id in OpenAIChatCompletionsHandler._streamed_call_ids(responses_so_far).items()
             if not OpenAIChatCompletionsHandler._parses_as_json(joined.get(key, ""))
         )

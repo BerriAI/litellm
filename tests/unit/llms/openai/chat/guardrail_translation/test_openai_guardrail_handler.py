@@ -1721,6 +1721,29 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         )
         assert len(CountingGuardrail.calls) == 1
 
+    def test_an_id_in_flight_on_one_choice_does_not_prune_another(self) -> None:
+        """Providers number tool calls per choice, so the same id on another choice is another call,
+        and one still in flight must not take a finished call down with it."""
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        def choice(index: int, arguments: str) -> StreamingChoices:
+            return StreamingChoices(
+                index=index,
+                delta=Delta(content="looking", tool_calls=[
+                    {"index": 0, "id": "call_shared", "type": "function",
+                     "function": {"name": "weather", "arguments": arguments}},
+                ]),
+                finish_reason="tool_calls",
+            )
+
+        handler: Final = OpenAIChatCompletionsHandler()
+        chunks: Final = [ModelResponseStream(choices=[choice(0, '{"city": "Pa'), choice(1, '{"city": "Rome"}')])]
+        assembled: Final = handler._rebuild_ended_stream_per_choice(chunks, None)
+        pruned: Final = handler._without_unfinished_tool_calls(assembled, chunks)
+        assert [
+            [call.function.arguments for call in single.message.tool_calls or ()] for single in pruned.choices
+        ] == [[], ['{"city": "Rome"}']]
+
     @pytest.mark.asyncio
     async def test_partial_arguments_stay_out_of_what_each_choice_inspects(self) -> None:
         """Half a JSON object is not a call a guardrail can judge, at any number of choices."""
