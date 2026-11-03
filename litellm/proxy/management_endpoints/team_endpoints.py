@@ -109,6 +109,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     can_org_access_model,
     delete_cache_key_objects,
     delete_cache_team_object,
+    evict_budget_windows_absent_marker,
     get_jwt_key_mapping_cache_keys_for_tokens,
     get_org_object,
     get_team_membership,
@@ -612,6 +613,9 @@ async def refresh_cached_team(
     await publish_auth_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
     if team_table.team_alias is not None:
         await publish_auth_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
+    await evict_budget_windows_absent_marker(
+        entity_type=Litellm_EntityType.TEAM, entity_id=team_row.team_id, user_api_key_cache=user_api_key_cache
+    )
 
 
 _refresh_cached_team: Final = refresh_cached_team

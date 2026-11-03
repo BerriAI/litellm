@@ -92,6 +92,24 @@ impl Error {
         }
     }
 
+    pub fn upstream_headers(&self) -> &[(String, String)] {
+        match self {
+            Self::Http(error) => error.upstream_headers(),
+            _ => &[],
+        }
+    }
+
+    pub fn is_body_read_timeout(&self) -> bool {
+        matches!(self, Self::Http(error) if error.is_body_read_timeout())
+    }
+
+    pub fn is_timeout(&self) -> Option<bool> {
+        match self {
+            Self::Http(error) if error.is_timeout() => Some(error.is_connect_timeout()),
+            _ => None,
+        }
+    }
+
     pub fn upstream_response(&self) -> Option<(u16, &str)> {
         match self {
             Self::Http(error) => error.upstream_response(),
@@ -158,6 +176,10 @@ pub enum ErrorDetail {
         value: String,
         hint: String,
     },
+    #[error(
+        "thinking.budget_tokens must be a number, got {actual}. To drop it, set `litellm.drop_params=True`, or `drop_params: true` under `litellm_settings` on the proxy"
+    )]
+    NonNumericThinkingBudget { actual: &'static str },
     #[error(
         "Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({{LLM_PROVIDER}}_API_KEY) or via params"
     )]

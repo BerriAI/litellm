@@ -15,7 +15,7 @@ from litellm.llms.anthropic.chat.transformation import JsonModeRequest
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
-from litellm.llms.bedrock.common_utils import build_mantle_messages_url
+from litellm.llms.bedrock.common_utils import bedrock_chat_opts_into_native_structured_output, build_mantle_messages_url
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -53,6 +53,14 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
             aws_bedrock_runtime_endpoint=optional_params.get("aws_bedrock_runtime_endpoint"),
             region=region,
         )
+
+    def chat_uses_native_structured_output(
+        self, model: str, thinking_requested: bool, model_info: Mapping[str, object] | None
+    ) -> bool:
+        return bedrock_chat_opts_into_native_structured_output(model, thinking_requested, model_info=model_info)
+
+    def _default_max_tokens_models(self, model: str, litellm_params: Mapping[str, object]) -> tuple[str, ...]:
+        return (f"bedrock_mantle/{model}", *super()._default_max_tokens_models(model, litellm_params))
 
     def validate_environment(
         self,
