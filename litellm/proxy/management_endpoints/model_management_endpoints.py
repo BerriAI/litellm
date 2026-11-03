@@ -2373,9 +2373,8 @@ async def delete_team_models(
 
     async with MODEL_RECONCILE_LOCK:
         proxy_config.remove_auto_router_catalog_entries(frozenset(deleted_model_ids))
-        if llm_router is not None:
-            for model_id in deleted_model_ids:
-                llm_router.apply(ChangeSet(delete=[model_id]))
+        if llm_router is not None and deleted_model_ids:
+            llm_router.apply(ChangeSet(delete=deleted_model_ids))
 
     return deleted_model_ids
 

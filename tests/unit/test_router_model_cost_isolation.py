@@ -20,6 +20,7 @@ import sys
 import threading
 from pathlib import Path
 from types import MappingProxyType
+from collections.abc import Callable
 from typing import Final, cast
 from unittest.mock import Mock, patch
 
@@ -38,6 +39,7 @@ from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.router import router_arguments
+from litellm.router_api import ChangeSet
 from litellm.router_config import build_router_config
 from litellm.router_python_host import Endpoint, PythonHost
 from litellm.types.router import (
@@ -2545,6 +2547,28 @@ def test_deleting_a_flagged_deployment_keeps_the_flag_a_remaining_deployment_set
     assert litellm.model_cost[row].get("max_output_tokens") == _catalog_field(row, "max_output_tokens")
 
 
+def test_deleting_deployments_of_two_models_in_one_change_set_gives_both_shared_rows_back() -> None:
+    micro_model: Final = "bedrock/us.amazon.nova-micro-v1:0"
+    rows: Final = (_shared_cache_point_row(), model_cost_registration_key(micro_model, ""))
+    unseen_limits: Final = tuple(map(_unseen_max_output_tokens, rows))
+    router: Final = Router(
+        model_list=[
+            _cache_point_deployment("plain-lite"),
+            _cache_point_deployment("doomed-lite", max_output_tokens=unseen_limits[0]),
+            _cache_point_deployment("plain-micro", model=micro_model),
+            _cache_point_deployment("doomed-micro", model=micro_model, max_output_tokens=unseen_limits[1]),
+        ]
+    )
+    assert tuple(litellm.model_cost[row].get("max_output_tokens") for row in rows) == unseen_limits
+
+    deleted: Final = router.apply(ChangeSet(delete=("doomed-lite", "doomed-micro"))).deleted
+
+    assert all(deployment is not None for deployment in deleted)
+    assert tuple(litellm.model_cost[row].get("max_output_tokens") for row in rows) == tuple(
+        _catalog_field(row, "max_output_tokens") for row in rows
+    )
+
+
 def test_deleting_a_flagged_deployment_keeps_the_flag_a_deployment_object_in_model_list_sets() -> None:
     flag: Final = not bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)
     router: Final = Router(model_list=[_cache_point_deployment("doomed", **{_CACHE_POINT_FLAG: flag})])
@@ -2756,15 +2780,16 @@ def test_deleting_a_flagged_deployment_keeps_the_flag_another_router_sets() -> N
     assert seen_after is not None and seen_after.get("max_output_tokens") == catalog_limit
 
 
+_ID_COLLISION_BACKEND: Final = "hosted_vllm/withdraw-test-id-collision"
+
+
 def test_deleting_a_flagged_deployment_keeps_what_a_deployment_whose_id_names_the_row_wrote() -> None:
     row: Final = _shared_cache_point_row()
     id_named_limit: Final = _unseen_max_output_tokens(row)
     catalog_answer: Final = bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)
     router: Final = Router(
         model_list=[
-            _cache_point_deployment(
-                row, model="hosted_vllm/withdraw-test-id-collision", max_output_tokens=id_named_limit
-            ),
+            _cache_point_deployment(row, model=_ID_COLLISION_BACKEND, max_output_tokens=id_named_limit),
             _cache_point_deployment("flagged", **{_CACHE_POINT_FLAG: not catalog_answer}),
         ]
     )
@@ -2774,6 +2799,75 @@ def test_deleting_a_flagged_deployment_keeps_what_a_deployment_whose_id_names_th
 
     assert litellm.model_cost[row].get("max_output_tokens") == id_named_limit
     assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is catalog_answer
+
+
+def test_deleting_a_deployment_whose_id_names_a_catalog_row_gives_that_row_back() -> None:
+    row: Final = _shared_cache_point_row()
+    catalog_answer: Final = bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)
+    router: Final = Router(
+        model_list=[
+            _cache_point_deployment(row, model=_ID_COLLISION_BACKEND, **{_CACHE_POINT_FLAG: not catalog_answer})
+        ]
+    )
+    assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is not catalog_answer
+
+    assert router.delete_deployment(id=row) is not None
+
+    assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is catalog_answer
+
+
+def _unmapped_shared_row() -> str:
+    return "withdraw-test-unmapped-shared"
+
+
+def _whole_unmapped_model_row() -> str:
+    return "hosted_vllm/withdraw-test-whole-unmapped-model"
+
+
+@pytest.mark.parametrize("change", ("upsert", "set_model_list"))
+@pytest.mark.parametrize(
+    ("sibling_model", "shared_row"),
+    (
+        (_CACHE_POINT_DEPLOYMENT_MODEL, _shared_cache_point_row),
+        (f"hosted_vllm/{_unmapped_shared_row()}", _unmapped_shared_row),
+        (_whole_unmapped_model_row(), _whole_unmapped_model_row),
+    ),
+)
+def test_changing_a_deployment_whose_id_names_a_row_a_sibling_writes_keeps_that_write(
+    change: str, sibling_model: str, shared_row: Callable[[], str]
+) -> None:
+    row: Final = shared_row()
+    sibling_limit: Final = 987_655
+    sibling: Final = _cache_point_deployment("sibling", model=sibling_model, max_output_tokens=sibling_limit)
+    router: Final = Router(model_list=[_cache_point_deployment(row, model=_ID_COLLISION_BACKEND), sibling])
+    assert litellm.get_model_info(sibling_model).get("max_output_tokens") == sibling_limit
+    edited: Final = _cache_point_deployment(row, model=f"{_ID_COLLISION_BACKEND}-edited")
+
+    if change == "upsert":
+        assert router.upsert_deployment(Deployment(**edited)) is not None
+    else:
+        router.set_model_list([edited, sibling])
+
+    assert litellm.get_model_info(sibling_model).get("max_output_tokens") == sibling_limit
+
+
+@pytest.mark.parametrize("sibling_as_object", (False, True), ids=("dict", "deployment-object"))
+def test_deleting_a_deployment_whose_id_is_a_siblings_model_withdraws_its_write_and_keeps_the_siblings(
+    sibling_as_object: bool,
+) -> None:
+    row: Final = _whole_unmapped_model_row()
+    sibling_limit: Final = 987_655
+    sibling: Final = _cache_point_deployment("sibling", model=row, max_output_tokens=sibling_limit)
+    colliding: Final = _cache_point_deployment(row, model=_ID_COLLISION_BACKEND, max_input_tokens=sibling_limit + 1)
+    router: Final = Router(model_list=[colliding] if sibling_as_object else [sibling, colliding])
+    if sibling_as_object:
+        router.model_list.append(Deployment(**sibling))
+    assert litellm.model_cost[row].get("max_input_tokens") == sibling_limit + 1
+
+    assert router.delete_deployment(id=row) is not None
+
+    left: Final = litellm.model_cost[row]
+    assert (left.get("max_output_tokens"), left.get("max_input_tokens")) == (sibling_limit, None)
 
 
 _ID_ALIAS_BACKEND: Final = "hosted_vllm/withdraw-test-id-alias"

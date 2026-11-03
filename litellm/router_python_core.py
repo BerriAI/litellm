@@ -520,7 +520,7 @@ from litellm.utils import (
     is_region_allowed,
     lookup_model_info_for_registration,
     model_cost_fields_set_in_place,
-    model_cost_keys_written_onto_other_rows,
+    model_cost_keys_written_onto_shared_rows,
     model_cost_registration_key,
     model_cost_row_writers,
     model_cost_rows_written_by,
@@ -1119,8 +1119,13 @@ class _CostRowEntry(TypedDict):
     model_info: ReadOnly[NotRequired[Mapping[str, object] | None]]
 
 
+class _CostRowEntryBackend(TypedDict):
+    litellm_params: ReadOnly[_CostRowEntryParams]
+
+
 _COST_ROW_ENTRY_ADAPTER: Final = TypeAdapter(_CostRowEntry)
 _COST_ROW_ENTRY_PARAMS_ADAPTER: Final = TypeAdapter(_CostRowEntryParams)
+_COST_ROW_ENTRY_BACKEND_ADAPTER: Final = TypeAdapter(_CostRowEntryBackend)
 _MODEL_INFO_COST_WRITE_INPUTS: Final = frozenset(
     ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__ | {"base_model", "pricing_provider"}
 )
@@ -12452,13 +12457,38 @@ class PythonCore(DeprecatedRouterMembers):
 
     @staticmethod
     def _shared_write_keys(writes: Iterable[_SharedCostWrite]) -> frozenset[str]:
-        """The ``register_model`` keys of ``writes`` whose rows other deployments read too: every backend key, and
-        each id whose write landed on a row named otherwise, such as the ``gpt-4o`` row an ``openai/gpt-4o`` id
-        resolves to."""
+        """The ``register_model`` keys of ``writes`` whose rows other deployments read too: every backend key, each id
+        whose write landed on such a row, like the ``gpt-4o`` row an ``openai/gpt-4o`` id resolves to, and each id a
+        live deployment writes as its backend key."""
         listed: Final = tuple(writes)
         ids: Final = frozenset(write.model_id for write in listed if write.model_id is not None)
         backend_keys: Final = chain.from_iterable(write.backend_keys for write in listed)
-        return frozenset(backend_keys) | model_cost_keys_written_onto_other_rows(ids)
+        return (
+            frozenset(backend_keys)
+            | model_cost_keys_written_onto_shared_rows(ids)
+            | PythonCore._ids_written_as_live_backend_keys(ids)
+        )
+
+    @staticmethod
+    def _ids_written_as_live_backend_keys(ids: frozenset[str]) -> frozenset[str]:
+        """Each of ``ids`` that a deployment of a live router writes as its backend key, as an id equal to a sibling's
+        unmapped model string does, which makes that id's row the sibling's shared backend row."""
+        if not ids:
+            return frozenset()
+        entries: Final = chain.from_iterable(router._model_list_entries() for router in _live_routers_oldest_first())
+        return ids.intersection(chain.from_iterable(map(PythonCore._entry_backend_keys, entries)))
+
+    @staticmethod
+    def _entry_backend_keys(entry: object) -> tuple[str, ...]:
+        if isinstance(entry, Deployment):
+            return PythonCore._backend_cost_map_keys(
+                entry.litellm_params.model, entry.litellm_params.custom_llm_provider
+            )
+        try:
+            params: Final = _COST_ROW_ENTRY_BACKEND_ADAPTER.validate_python(entry)["litellm_params"]
+        except ValidationError:
+            return ()
+        return PythonCore._backend_cost_map_keys(params["model"], params.get("custom_llm_provider"))
 
     def _rebuild_rows_a_replaced_model_list_wrote(self, previous: Iterable[object]) -> None:
         """Rebuild the shared rows a replaced ``model_list`` wrote and trim the id rows of the deployments still
@@ -12475,7 +12505,12 @@ class PythonCore(DeprecatedRouterMembers):
         )
 
     def _give_back_id_row_fields(self, model_ids: Iterable[str]) -> None:
-        give_back_fields_left_by_earlier_writes(model_ids)
+        listed: Final = frozenset(model_ids)
+        give_back_fields_left_by_earlier_writes(
+            listed
+            - model_cost_keys_written_onto_shared_rows(listed)
+            - PythonCore._ids_written_as_live_backend_keys(listed)
+        )
         self._invalidate_model_group_info_cache()
 
     @staticmethod
@@ -12577,6 +12612,24 @@ class PythonCore(DeprecatedRouterMembers):
         - The deleted deployment
         - OR None (if deleted deployment not found)
         """
+        return self._core_delete_deployments((id,))[0]
+
+    def _core_delete_deployments(self, ids: Sequence[str]) -> tuple[Deployment | None, ...]:
+        """Remove each of ``ids``, then rebuild the cost-map rows the removed deployments wrote once, which leaves the
+        rows as rebuilding after each removal does."""
+        removed: Final = tuple(map(self._remove_deployment, ids))
+        entries: Final = tuple(item for item in removed if item is not None)
+        if entries:
+            self._rebuild_model_cost_rows(
+                lambda: self._rebuild_cost_rows_written_by(
+                    PythonCore._shared_write_keys(
+                        write for write in map(PythonCore._entry_shared_cost_write, entries) if write is not None
+                    )
+                )
+            )
+        return removed
+
+    def _remove_deployment(self, id: str) -> Deployment | None:
         try:
             with self._deployment_index_lock:
                 deployment_idx: Final = self.model_id_to_deployment_index_map.get(id)
@@ -12590,23 +12643,14 @@ class PythonCore(DeprecatedRouterMembers):
             _budget_limiter: Final = self._core_get_router_deployment_budget_limiter()
             if _budget_limiter is not None:
                 _budget_limiter.unregister_deployment_budget(model_id=id)
-
-            def removed_deployment() -> Deployment:
-                return PythonCore._deployment_from_entry(item)
-
             try:
-                self._unregister_pre_routing_strategy_for_deployment(deployment=removed_deployment())
+                self._unregister_pre_routing_strategy_for_deployment(deployment=PythonCore._deployment_from_entry(item))
             except Exception:
                 verbose_router_logger.exception(
                     "delete_deployment: could not release pre-routing strategies for model_id=%s; "
                     "the deployment is out of the model_list and its indices are repaired",
                     id,
                 )
-            self._rebuild_model_cost_rows(
-                lambda: self._rebuild_cost_rows_written_by(
-                    PythonCore._shared_write_keys((PythonCore._deployment_shared_cost_write(removed_deployment()),))
-                )
-            )
         except Exception:
             return None
         return item

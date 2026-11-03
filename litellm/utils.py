@@ -4193,15 +4193,19 @@ def model_cost_rows_written_by(keys: Collection[str]) -> frozenset[str]:
     )
 
 
-def model_cost_keys_written_onto_other_rows(keys: Collection[str]) -> frozenset[str]:
-    """Each of ``keys`` whose ``register_model`` write landed on a row named otherwise, as an ``openai/gpt-4o``
-    write lands on the ``gpt-4o`` row."""
+def model_cost_keys_written_onto_shared_rows(keys: Collection[str]) -> frozenset[str]:
+    """Each of ``keys`` whose ``register_model`` write landed on a row other deployments read too: a row named
+    otherwise, as an ``openai/gpt-4o`` write lands on the ``gpt-4o`` row, a catalog row, or a row another key
+    wrote."""
     cost_map: Final = _builtin_cost_map()
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
     entries: Final = (entry for entry in tuple(cost_map.values()) if isinstance(entry, AliasedCostEntry))
     writes: Final = itertools.chain.from_iterable(
         ((key, entry) for key in entry.registered_by.intersection(keys)) for entry in entries
     )
-    return frozenset(key for key, entry in writes if cost_map.get(key) is not entry)
+    return frozenset(
+        key for key, entry in writes if cost_map.get(key) is not entry or key in catalog or len(entry.registered_by) > 1
+    )
 
 
 def model_cost_row_writers(rows: Iterable[str]) -> frozenset[str]:
@@ -4672,14 +4676,11 @@ def register_model(
             _runtime_registration_order[_registered_key] = next(_REGISTRATION_TICKS)
 
     for key, value in loaded_model_cost.items():
-        write = _register_on_current_map(
+        write = _register_and_invalidate(
             str(key), value, custom_llm_provider, warning_display_name, saved=persist_across_reloads
         )
         if persist_across_reloads:
             _record_registered_name(write.key, str(key))
-
-        # Invalidate case-insensitive lookup map since model_cost was modified
-        _invalidate_model_cost_lowercase_map()
 
         verbose_logger.debug("added/updated model=%s in litellm.model_cost: %s", write.key, write.key)
         if add_to_provider_model_sets and value.get("litellm_provider") == "openrouter":
@@ -4687,6 +4688,22 @@ def register_model(
     if add_to_provider_model_sets:
         litellm.add_known_models(loaded_model_cost)
     return model_cost
+
+
+def _register_and_invalidate(
+    key: str,
+    value: Mapping[str, object],
+    custom_llm_provider: str | None,
+    warning_display_name: str | None,
+    saved: bool,
+) -> _RegistrationWrite:
+    write: Final = _register_on_current_map(key, value, custom_llm_provider, warning_display_name, saved=saved)
+    lowercase_map: Final = _model_cost_lowercase_map
+    if lowercase_map is not None and lowercase_map.get(write.key.lower()) == write.key:
+        _invalidate_model_cost_values()
+    else:
+        _invalidate_model_cost_lowercase_map()
+    return write
 
 
 def _should_drop_param(k, additional_drop_params) -> bool:
@@ -6977,11 +6994,16 @@ def _invalidate_model_cost_lowercase_map() -> None:
     Call this whenever litellm.model_cost is modified to ensure the map is rebuilt.
     Also clears related LRU caches that depend on model_cost data.
     """
-    global _model_cost_lowercase_map, _model_cost_mutation_generation
+    global _model_cost_lowercase_map
     _model_cost_lowercase_map = None
-    _model_cost_mutation_generation += 1
+    _invalidate_model_cost_values()
 
-    # Clear LRU caches that depend on model_cost data
+
+def _invalidate_model_cost_values() -> None:
+    """Clear what ``litellm.model_cost`` values feed, keeping the case-insensitive lookup map, which only its names
+    feed."""
+    global _model_cost_mutation_generation
+    _model_cost_mutation_generation += 1
     _cached_get_model_info.cache_clear()
     cached_get_model_info_helper.cache_clear()
     cached_cost_map_key.cache_clear()
