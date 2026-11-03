@@ -233,6 +233,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: dict | None = None,
+        read_whole_response: bool = False,
     ) -> object:
         """
         Process output response by applying guardrails to targeted fields.
@@ -242,6 +243,7 @@ class PassThroughEndpointHandler(BaseTranslation):
             guardrail_to_apply: The guardrail instance to apply
             litellm_logging_obj: Optional logging object
             user_api_key_dict: User API key metadata to pass to guardrails
+            read_whole_response: Without targeted fields, read the response as JSON, ids and usage included
         """
         response_fields: Final = as_str_mapping(response)
         if not isinstance(response, dict):
@@ -261,7 +263,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         # Extract text to check
         text_to_check: Final = (
             self._extract_text_for_guardrail(response, field_expressions)
-            if field_expressions
+            if field_expressions or read_whole_response
             else _response_text(response_fields or {})
         )
 

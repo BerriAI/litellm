@@ -56,6 +56,8 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
     SafeRouteAdder,
+    _anthropic_user_id_to_forward,
+    _inherit_auth_guardrails,
     WebsocketFrameModelAllowed,
     WebsocketFrameModelGate,
     WebsocketFrameModelRefused,
@@ -13327,6 +13329,70 @@ class TestInheritAuthGuardrails:
     @staticmethod
     def _chat_body(**extra: object) -> dict[str, object]:
         return {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], **extra}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", [None, False, True, 7, "name"])
+    @pytest.mark.parametrize(
+        ("key_metadata", "body_metadata"),
+        [({"guardrails": ["key-guard"]}, None), ({}, {"guardrails": ["body-guard"]}), ({}, None)],
+        ids=["key-guardrails", "metadata-guardrails", "no-guardrails"],
+    )
+    async def test_a_top_level_guardrails_the_merge_cant_add_to_is_dropped(self, value, key_metadata, body_metadata):
+        body: Final[dict[str, object]] = {
+            **self._chat_body(guardrails=value),
+            **({"metadata": body_metadata} if body_metadata is not None else {}),
+        }
+
+        with patch("litellm.proxy.proxy_server.premium_user", True):
+            await _inherit_auth_guardrails(body, UserAPIKeyAuth(api_key="sk-test", metadata=key_metadata), None, True)
+
+        assert "guardrails" not in body
+        assert (body["metadata"].get("guardrails") or []) == [
+            *key_metadata.get("guardrails", ()),
+            *(body_metadata or {}).get("guardrails", ()),
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", [None, False, 7, "config", ["config"]])
+    async def test_a_guardrail_config_the_merge_cant_add_to_is_dropped(self, value):
+        body: Final[dict[str, object]] = self._chat_body(
+            guardrail_config=value, metadata={"guardrail_config": {"kept": True}}
+        )
+
+        await _inherit_auth_guardrails(body, UserAPIKeyAuth(api_key="sk-test"), None, True)
+
+        assert "guardrail_config" not in body
+        assert body["metadata"]["guardrail_config"] == {"kept": True}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("body_guardrails", "merged"),
+        [(["body-guard"], ["key-guard", "body-guard"]), ({"body-guard": {}}, ["key-guard", "body-guard"])],
+        ids=["list", "object"],
+    )
+    async def test_a_top_level_guardrails_list_or_object_still_merges(self, body_guardrails, merged):
+        body: Final[dict[str, object]] = self._chat_body(guardrails=body_guardrails)
+
+        with patch("litellm.proxy.proxy_server.premium_user", True):
+            await _inherit_auth_guardrails(
+                body, UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]}), None, True
+            )
+
+        assert body["metadata"]["guardrails"] == merged
+
+    @pytest.mark.parametrize(("mode", "forwarded"), [("post_call", "user-1"), ("pre_call", None)])
+    def test_only_a_pipeline_that_runs_before_the_provider_withholds_the_user_id(self, mode, forwarded):
+        pipeline: Final = GuardrailPipeline(mode=mode, steps=[PipelineStep(guardrail="guard")])
+        body: Final = {"model": "claude", "metadata": {"user_id": "user-1", "_guardrail_pipelines": [("p", pipeline)]}}
+
+        with patch.object(litellm, "callbacks", []):
+            user_id: Final = _anthropic_user_id_to_forward(
+                body,
+                "https://api.anthropic.com/v1/messages",
+                ProxyLogging(user_api_key_cache=DualCache()).request_is_scanned_before_the_provider,
+            )
+
+        assert user_id == forwarded
 
     @pytest.mark.asyncio
     async def test_key_team_and_project_guardrails_reach_pre_and_post_call(self):
