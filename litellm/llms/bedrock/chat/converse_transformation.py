@@ -1011,6 +1011,21 @@ class AmazonConverseConfig(BaseConfig):
         )
 
     @staticmethod
+    def _require_strict_text_format(optional_params: dict) -> None:
+        """Set ``additionalModelRequestFields.text.format.strict`` for an OpenAI model on Converse.
+
+        The OpenAI model cards require it next to ``outputConfig.textFormat`` for JSON Schema output;
+        without it the request is not treated as structured output. Other keys the caller already put
+        under ``text`` stay.
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html
+        """
+        text_block = optional_params.get("text")
+        text_block = dict(text_block) if isinstance(text_block, dict) else {}
+        format_block = text_block.get("format")
+        text_block["format"] = {**(format_block if isinstance(format_block, dict) else {}), "strict": True}
+        optional_params["text"] = text_block
+
+    @staticmethod
     def _create_output_config_for_response_format(
         json_schema: dict | None = None,
         name: str | None = None,
@@ -1335,6 +1350,8 @@ class AmazonConverseConfig(BaseConfig):
                 description=description,
             )
             optional_params["outputConfig"] = output_config
+            if self._is_openai_gpt_reasoning_model(model):
+                self._require_strict_text_format(optional_params)
         elif json_schema is not None:
             # Fallback: translate to a synthetic tool call
             # https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode

@@ -11521,3 +11521,65 @@ def test_converse_claude_tool_message_with_several_marked_blocks_counts_as_one_c
 
     assert len(list(_cache_points(request["messages"]))) == 3
     assert messages == messages_before
+
+
+def _native_json_schema_request(model: str) -> dict:
+    config = AmazonConverseConfig()
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "result",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    optional_params = config.map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    return config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize("model", ["global.openai.gpt-6-luna", "bedrock/converse/global.openai.gpt-6-luna"])
+def test_openai_gpt_native_json_schema_sets_text_format_strict(model: str, set_native_structured_output) -> None:
+    """OpenAI models on Converse need ``additionalModelRequestFields.text.format.strict`` next to
+    ``outputConfig.textFormat``; without it Bedrock does not treat the request as structured output."""
+    set_native_structured_output("global.openai.gpt-6-luna", "legacy")
+
+    request = _native_json_schema_request(model)
+
+    assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
+    assert request["additionalModelRequestFields"]["text"] == {"format": {"strict": True}}
+    assert "toolConfig" not in request
+
+
+def test_openai_gpt_strict_text_format_keeps_caller_text_keys() -> None:
+    config = AmazonConverseConfig()
+    optional_params = {"text": {"verbosity": "low", "format": {"name": "result"}}}
+
+    config._require_strict_text_format(optional_params)
+
+    assert optional_params["text"] == {"verbosity": "low", "format": {"name": "result", "strict": True}}
+
+
+def test_anthropic_native_json_schema_does_not_send_text_format_strict(set_native_structured_output) -> None:
+    set_native_structured_output("us.anthropic.claude-sonnet-4-6", "legacy")
+
+    request = _native_json_schema_request("us.anthropic.claude-sonnet-4-6")
+
+    assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
+    assert "text" not in request.get("additionalModelRequestFields", {})
+
