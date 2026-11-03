@@ -1019,3 +1019,114 @@ async def test_failover_reaches_healthy_sibling_when_affinity_pins_failed_deploy
     assert while_a_is_down._hidden_params["model_id"] == "B"
     assert while_a_is_down._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
     assert after_a_recovers._hidden_params["model_id"] == "A"
+
+
+# ---------------------------------------------------------------------------
+# Every endpoint's attempt stamps the failed deployment, so weighted failover
+# covers more than chat completions
+# ---------------------------------------------------------------------------
+
+
+def _two_deployment_router(model: str) -> Router:
+    """Deployment A (always picked first) fails, deployment B answers."""
+    return Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": model, "api_key": "bad", "weight": 1},
+                "model_info": {"id": "A"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": model, "api_key": "good", "weight": 0},
+                "model_info": {"id": "B"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+        num_retries=0,
+        disable_cooldowns=True,
+        enable_weighted_failover=True,
+    )
+
+
+_ENDPOINTS: Final = [
+    ("aembedding", "openai/text-embedding-3-small", {"input": ["hi"]}),
+    ("aimage_generation", "openai/dall-e-3", {"prompt": "a cat"}),
+    ("atranscription", "openai/whisper-1", {"file": b"audio"}),
+    ("aspeech", "openai/tts-1", {"input": "hi", "voice": "alloy"}),
+    ("atext_completion", "openai/gpt-3.5-turbo-instruct", {"prompt": "hi"}),
+    ("arerank", "cohere/rerank-english-v3.0", {"query": "q", "documents": ["d"]}),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("endpoint", "model", "arguments"), _ENDPOINTS, ids=[e[0] for e in _ENDPOINTS])
+async def test_weighted_failover_moves_every_endpoint_to_another_deployment(
+    monkeypatch: pytest.MonkeyPatch, endpoint: str, model: str, arguments: dict[str, object]
+) -> None:
+    """A failed attempt on any endpoint names its deployment, so weighted failover re-picks
+    within the group instead of raising (#27980 only stamped completions and generic calls)."""
+    keys_called: list[object] = []
+    answer: Final = object()
+
+    async def provider(**kwargs: object) -> object:
+        keys_called.append(kwargs.get("api_key"))
+        if kwargs.get("api_key") == "bad":
+            raise litellm.InternalServerError(message="A is down", llm_provider="openai", model=model)
+        return answer
+
+    monkeypatch.setattr(litellm, endpoint, provider)
+    router: Final = _two_deployment_router(model)
+
+    response: Final = await getattr(router, endpoint)(model="test-model", **arguments)
+
+    assert response is answer
+    assert keys_called == ["bad", "good"]
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "attempt", "arguments"),
+    [
+        ("embedding", "_embedding", {"input": ["hi"]}),
+        ("image_generation", "_image_generation", {"prompt": "a cat"}),
+    ],
+)
+def test_a_sync_attempt_stamps_the_failed_deployment(
+    monkeypatch: pytest.MonkeyPatch, endpoint: str, attempt: str, arguments: dict[str, object]
+) -> None:
+    def provider(**kwargs: object) -> object:
+        raise litellm.InternalServerError(message="down", llm_provider="openai", model="m")
+
+    monkeypatch.setattr(litellm, endpoint, provider)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/m", "api_key": "k"},
+                "model_info": {"id": "A"},
+            }
+        ],
+    )
+
+    with pytest.raises(litellm.InternalServerError) as raised:
+        getattr(router, attempt)(model="test-model", **arguments)
+
+    assert getattr(raised.value, "failed_deployment_id", None) == "A"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_pick_stamps_no_deployment() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "k"},
+                "model_info": {"id": "A"},
+            }
+        ],
+    )
+
+    with pytest.raises(Exception) as raised:
+        await router._aembedding(input=["hi"], model="no-such-model")
+
+    assert getattr(raised.value, "failed_deployment_id", None) is None
