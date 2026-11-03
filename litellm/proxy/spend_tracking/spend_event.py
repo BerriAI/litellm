@@ -24,7 +24,9 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
+from litellm.proxy.hooks.model_budget_shared_windows import CapturedModelWindows, captured_model_windows
 from litellm.types.interactions import InteractionsAPIResponse
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import LiteLLMBatch, Usage
@@ -152,6 +154,7 @@ class SpendCallbackKwargs(TypedDict):
     realtime_tool_calls: ReadOnly[Sequence[object] | None]
     tools: ReadOnly[Sequence[_FunctionTool] | None]
     complete_streaming_response: NotRequired[ReadOnly[CompactResponse | None]]
+    accounting_model_windows: NotRequired[ReadOnly[CapturedModelWindows]]
 
 
 _NO_LITELLM_PARAMS: Final[_LitellmParams] = {}
@@ -185,6 +188,7 @@ class SpendEvent(LiteLLMBaseModel):
     realtime_tools: Sequence[object] | None
     realtime_tool_calls: Sequence[object] | None
     request_tool_names: tuple[str, ...]
+    accounting_model_windows: tuple[WindowSpendTransaction, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -378,8 +382,15 @@ def build_spend_event(
         realtime_tools=kwargs.get("realtime_tools"),
         realtime_tool_calls=kwargs.get("realtime_tool_calls"),
         request_tool_names=_request_tool_names(kwargs),
+        accounting_model_windows=captured_model_windows(raw_kwargs),
     )
-    return event.model_dump_json(fallback=_json_fallback).encode() + b"\n"
+    return (
+        event.model_dump_json(
+            fallback=_json_fallback,
+            exclude={"accounting_model_windows"} if not event.accounting_model_windows else None,
+        ).encode()
+        + b"\n"
+    )
 
 
 def decode_spend_event(line: bytes) -> SpendEvent | SpendEventDecodeError:
@@ -394,6 +405,7 @@ def spend_event_callback_args(event: SpendEvent) -> SpendEventCallbackArgs:
     tools: Final = tuple(_function_tool(name) for name in event.request_tool_names)
     kwargs: Final[SpendCallbackKwargs] = {
         "litellm_call_id": event.litellm_call_id,
+        "accounting_model_windows": CapturedModelWindows(event.accounting_model_windows),
         "call_type": event.call_type,
         "model": event.model,
         "custom_llm_provider": event.custom_llm_provider,

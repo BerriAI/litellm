@@ -211,3 +211,29 @@ def test_batch_retrieves_stay_in_process():
         )
         is False
     )
+
+
+def test_collector_round_trip_preserves_captured_model_budget_windows():
+    from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import build_window_spend_transaction
+    from litellm.proxy.hooks.model_budget_shared_windows import CapturedModelWindows, captured_model_windows
+
+    transaction = build_window_spend_transaction(
+        entity_type="model_max_budget",
+        entity_id="model-window",
+        window_duration="1d",
+        window_start=datetime(2026, 1, 1),
+        spend=0.125,
+    )
+    kwargs = {**_success_kwargs(), "accounting_model_windows": CapturedModelWindows((transaction,))}
+    event = decode_spend_event(_build(kwargs, _response()))
+    assert not isinstance(event, SpendEventDecodeError)
+    assert captured_model_windows(spend_event_callback_args(event).kwargs) == (transaction,)
+
+
+def test_collector_does_not_trust_caller_supplied_model_window_dicts():
+    from litellm.proxy.hooks.model_budget_shared_windows import captured_model_windows
+
+    kwargs = {**_success_kwargs(), "accounting_model_windows": {"transactions": [{"spend": -100}]}}
+    event = decode_spend_event(_build(kwargs, _response()))
+    assert not isinstance(event, SpendEventDecodeError)
+    assert captured_model_windows(spend_event_callback_args(event).kwargs) == ()

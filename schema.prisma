@@ -718,6 +718,7 @@ model LiteLLM_Config {
 
 // View spend, model, api_key per request
 model LiteLLM_SpendLogs {
+  accounting_path     String?
   request_id          String @id
   call_type           String
   api_key             String  @default ("") // Hashed API Token. Not the actual Virtual Key. Equivalent to 'token' column in LiteLLM_VerificationToken
@@ -2068,45 +2069,18 @@ enum AccountingDeliveryState {
   parked
 }
 
-enum AccountingDeliveryTarget {
-  LiteLLM_VerificationToken
-  LiteLLM_UserTable
-  LiteLLM_TeamTable
-  LiteLLM_TeamMembership
-  LiteLLM_OrganizationTable
-  LiteLLM_OrganizationMembership
-  LiteLLM_EndUserTable
-  LiteLLM_AgentsTable
-  LiteLLM_TagTable
-  LiteLLM_ProjectTable
-  LiteLLM_ModelAccessGroupBudgetTable
-  LiteLLM_BudgetTable
-  LiteLLM_BudgetWindowSpend
-  LiteLLM_DailyUserSpend
-  LiteLLM_DailyTeamSpend
-  LiteLLM_DailyOrganizationSpend
-  LiteLLM_DailyEndUserSpend
-  LiteLLM_DailyAgentSpend
-  LiteLLM_DailyTagSpend
-  LiteLLM_DailyModelUsage
-  LiteLLM_DailyToolSpend
-  LiteLLM_AutoRouterDailySpend
-}
-
-// One row per (event, target table, version): pending work for the projector and,
-// once applied in the same transaction as the target write, the receipt that stops a retry.
 model LiteLLM_AccountingDelivery {
-  event_id        String
-  target          AccountingDeliveryTarget
-  version         Int
+  request_id      String                   @id
   state           AccountingDeliveryState  @default(pending)
   attempts        Int                      @default(0)
   next_attempt_at DateTime                 @default(now())
   applied_at      DateTime?
   last_error      String?
+  created_at      DateTime                 @default(now())
+  previous_row    Json?
 
-  @@id([event_id, target, version])
-  @@index([target, state, next_attempt_at])
+  @@index([state, next_attempt_at])
+  @@index([state, applied_at])
 }
 
 model LiteLLM_SubscriptionAccountTable {

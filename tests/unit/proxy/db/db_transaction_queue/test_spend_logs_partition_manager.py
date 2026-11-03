@@ -49,12 +49,18 @@ def _wire_tx(db) -> "tuple[list[str], list[int | timedelta | None]]":
         tx = MagicMock()
 
         async def _execute_raw(sql, *args):
+            if sql.startswith("SELECT set_config('"):
+                setting = sql.split("'")[1]
+                session_settings.append(f"SET LOCAL {setting} = {args[0]}")
+                return 0
             if sql.lstrip().upper().startswith("SET LOCAL"):
                 session_settings.append(sql.strip())
                 return 0
             return await db.execute_raw(sql, *args)
 
         async def _query_raw(sql, *args):
+            if sql.startswith("SELECT EXISTS("):
+                return [{"protected": False}]
             return await db.query_raw(sql, *args)
 
         tx.execute_raw = _execute_raw
@@ -192,7 +198,7 @@ async def test_drop_partitions_older_than_drops_expired_only():
 
     assert dropped == ["LiteLLM_SpendLogs_p20260601"]
     executed = " ".join(call.args[0] for call in client.db.execute_raw.call_args_list)
-    assert 'DROP TABLE IF EXISTS "LiteLLM_SpendLogs_p20260601"' in executed
+    assert 'DROP TABLE "LiteLLM_SpendLogs_p20260601"' in executed
     assert "p20260609" not in executed
     assert "pdefault" not in executed
 
@@ -405,7 +411,7 @@ async def test_drop_partitions_continues_when_one_drop_fails():
             },
         ]
     )
-    client.db.execute_raw = AsyncMock(side_effect=[Exception("locked"), 0])
+    client.db.execute_raw = AsyncMock(side_effect=[Exception("locked"), 0, 0])
     _wire_tx(client.db)
 
     cutoff = datetime(2026, 6, 10, 0, 0, 0, tzinfo=timezone.utc)

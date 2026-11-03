@@ -1264,6 +1264,15 @@ def _get_entry_reserved_cost(entry: dict, default_reserved_cost: float) -> float
         return default_reserved_cost
 
 
+def fixed_budget_window(window: object) -> tuple[str, datetime] | None:
+    fields: Final = _coerce_window(window)
+    start: Final = get_budget_window_start(window)
+    duration: Final = fields.get("budget_duration")
+    if not fields.get("reset_at") or not isinstance(duration, str) or start is None:
+        return None
+    return duration, start
+
+
 def get_budget_window_start(window: object) -> datetime | None:
     window_dict: Final = _coerce_window(window)
     budget_duration: Final = window_dict.get("budget_duration")

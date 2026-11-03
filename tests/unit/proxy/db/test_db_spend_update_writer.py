@@ -4380,7 +4380,6 @@ async def test_insert_spend_log_asks_for_an_immediate_flush_only_on_rows_the_bri
     assert prisma.spend_log_flush_requested.is_set() is expects_flush
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.timeout(30)
 async def test_a_chatgpt_responses_row_queues_without_a_default_chatgpt_login(
@@ -4619,7 +4618,7 @@ async def test_update_database_writes_no_ordinary_spend_row_with_spend_logs_disa
     assert db_writer._batch_database_updates.await_count == 1
 
 
-_BATCH_CLAIM_FIELDS = {"request_id", "call_type", "status", "spend", "startTime", "endTime"}
+_BATCH_CLAIM_FIELDS = {"request_id", "call_type", "status", "spend", "startTime", "endTime", "accounting_path"}
 
 
 def _logged_batch_cost_payload() -> dict:
@@ -5452,3 +5451,36 @@ async def test_completed_spend_survives_error_log_suppression(
     assert len(rows) == 1
     assert rows[0]["spend"] == pytest.approx(0.23)
     assert (rows[0]["prompt_tokens"], rows[0]["completion_tokens"]) == (10, 5)
+
+
+@pytest.mark.parametrize("ledger_enabled", [False, True])
+@pytest.mark.asyncio
+async def test_request_error_counts_survive_the_ledger_path_switch(monkeypatch: pytest.MonkeyPatch, ledger_enabled: bool):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db import db_spend_update_writer as writer_module
+    from litellm.proxy.db.request_error_tracking import RequestErrorAccumulator
+    from litellm.types.proxy.request_errors import RequestErrorKey
+
+    accumulator = RequestErrorAccumulator()
+    prisma = _tool_usage_prisma()
+    prisma.get_request_status.return_value = "failure"
+    monkeypatch.setattr(writer_module, "request_error_accumulator", accumulator)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": ledger_enabled})
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+    await DBSpendUpdateWriter().update_database(
+        token="key", user_id="user", team_id=None, org_id=None, end_user_id=None,
+        kwargs={
+            "model": "ledger-test", "call_type": "acompletion", "litellm_call_id": "failed-request",
+            "litellm_params": {"metadata": {
+                "user_api_key": "key", "user_api_key_user_id": "user", "status": "failure",
+                "error_information": {"error_code": "503"},
+            }},
+        },
+        completion_response=None, start_time=now, end_time=now, response_cost=0,
+    )
+    await drain_logging_tasks()
+    assert accumulator.drain() == {RequestErrorKey(
+        date="2026-11-02", api_key=prisma.spend_log_transactions[0]["api_key"], team_id="", user_id="user", model_group="ledger-test", status_code=503,
+    ): 1}

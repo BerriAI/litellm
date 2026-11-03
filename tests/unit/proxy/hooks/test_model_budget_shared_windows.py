@@ -197,3 +197,32 @@ async def test_open_reports_no_shared_window_while_the_database_is_unreachable()
     windows: Final = _database_windows(_Table(error=RuntimeError("database is down")), _Sink())
 
     assert await windows.open(spend_key=SPEND_KEY, budget_duration="1d", now=WINDOW_START.timestamp()) is None
+
+
+@pytest.mark.asyncio
+async def test_captured_database_windows_are_isolated_between_requests(monkeypatch: pytest.MonkeyPatch):
+    import asyncio
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+    from litellm.proxy.hooks.model_budget_shared_windows import capture_model_windows
+    from litellm.proxy.utils import PrismaClient
+
+    client = PrismaClient(database_url="postgresql://unused", proxy_logging_obj=proxy_server.proxy_logging_obj)
+    writer = DBSpendUpdateWriter()
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "db_spend_update_writer", writer)
+    windows = DatabaseSharedWindows()
+
+    async def charge(key: str):
+        with capture_model_windows(True) as captured:
+            await windows.add(key, "1d", WINDOW_START.timestamp(), 0.25)
+            await asyncio.sleep(0)
+            return captured().transactions
+
+    first, second = await asyncio.gather(charge("first"), charge("second"))
+    assert tuple(row["entity_id"] for row in first) == ("first",)
+    assert tuple(row["entity_id"] for row in second) == ("second",)
+    await windows.add("legacy", "1d", WINDOW_START.timestamp(), 0.5)
+    queued = await writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
+    assert tuple((row["entity_id"], row["spend"]) for row in queued) == (("legacy", 0.5),)

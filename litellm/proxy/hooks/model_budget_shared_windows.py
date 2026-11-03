@@ -1,4 +1,6 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Generator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
@@ -57,9 +59,37 @@ def _proxy_prisma_client() -> "PrismaClient | None":
     return prisma_client
 
 
+@dataclass(frozen=True, slots=True)
+class CapturedModelWindows:
+    transactions: tuple[WindowSpendTransaction, ...]
+
+
+_MODEL_WINDOWS: Final[ContextVar[tuple[WindowSpendTransaction, ...] | None]] = ContextVar(
+    "model_budget_database_windows", default=None
+)
+
+
+def captured_model_windows(kwargs: Mapping[str, object] | None) -> tuple[WindowSpendTransaction, ...]:
+    value: Final = kwargs.get("accounting_model_windows") if kwargs is not None else None
+    return value.transactions if isinstance(value, CapturedModelWindows) else ()
+
+
+@contextmanager
+def capture_model_windows(enabled: bool) -> Generator[Callable[[], CapturedModelWindows]]:
+    token: Final = _MODEL_WINDOWS.set(() if enabled else None)
+    try:
+        yield lambda: CapturedModelWindows(_MODEL_WINDOWS.get() or ())
+    finally:
+        _MODEL_WINDOWS.reset(token)
+
+
 async def _queue_on_proxy_spend_writer(transaction: WindowSpendTransaction) -> None:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
+    captured: Final = _MODEL_WINDOWS.get()
+    if captured is not None:
+        _MODEL_WINDOWS.set((*captured, transaction))
+        return
     await proxy_logging_obj.db_spend_update_writer.window_spend_update_queue.add_update(transaction)
 
 

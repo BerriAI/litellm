@@ -2472,6 +2472,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
+    use_spend_logs_ledger: bool = Field(
+        False,
+        description="Apply request accounting from stored SpendLogs deliveries. Enable only after all accounting writers are upgraded and ledger activation gates pass.",
+    )
+
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
         None,
         description="Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.",
@@ -3792,6 +3797,7 @@ class SpendLogsMetadata(TypedDict):
 
 
 class SpendLogsPayload(TypedDict):
+    accounting_path: NotRequired[Literal["legacy", "ledger"]]  # writable-ok: adopt stored stamp
     request_id: str
     call_type: str
     api_key: str

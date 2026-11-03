@@ -213,6 +213,19 @@ class SpendLogsPartitionManager:
             await tx.execute_raw(f"SET LOCAL lock_timeout = {timeout_ms}")
             await tx.execute_raw(statement)
 
+    @staticmethod
+    async def _drop_settled_partition(prisma_client: "PrismaClient", name: str, timeout_ms: int) -> bool:
+        from litellm.accounting.worker import alert_postponed_cleanup
+        from litellm.repositories.table_repositories import SpendLogsRepository
+
+        async with bounded_tx(prisma_client, timeout_ms) as tx:
+            await tx.execute_raw("SELECT set_config('statement_timeout', $1, true)", str(timeout_ms))
+            await tx.execute_raw("SELECT set_config('lock_timeout', $1, true)", str(timeout_ms))
+            dropped: Final = await SpendLogsRepository.drop_settled_partition(tx, name)
+        if not dropped:
+            await alert_postponed_cleanup("partition")
+        return dropped
+
     async def ensure_partitions(
         self, prisma_client: "PrismaClient", remaining_timeout_ms: RemainingTimeoutMs
     ) -> list[str]:
@@ -303,7 +316,8 @@ class SpendLogsPartitionManager:
                 verbose_proxy_logger.info("Run budget spent, leaving the remaining partitions for the next run")
                 return
             try:
-                await self._execute_bounded_ddl(prisma_client, f'DROP TABLE IF EXISTS "{name}"', budget_ms)
+                if not await self._drop_settled_partition(prisma_client, name, budget_ms):
+                    continue
             except Exception as e:  # noqa: BLE001  # a partition this run cannot drop is left for the next one
                 verbose_proxy_logger.warning("Failed to drop spend-log partition %s: %s", name, e)
                 return
@@ -328,7 +342,8 @@ class SpendLogsPartitionManager:
                 verbose_proxy_logger.info("Run budget spent, leaving the remaining partitions for the next run")
                 break
             try:
-                await self._execute_bounded_ddl(prisma_client, f'DROP TABLE IF EXISTS "{name}"', budget_ms)
+                if not await self._drop_settled_partition(prisma_client, name, budget_ms):
+                    continue
                 dropped.append(name)
             except Exception as e:
                 verbose_proxy_logger.warning("Failed to drop spend-log partition %s: %s", name, e)
