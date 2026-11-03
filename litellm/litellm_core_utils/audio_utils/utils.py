@@ -301,7 +301,9 @@ def calculate_request_duration(file: FileTypes) -> float | None:
                 content: Final = file[1]
                 if isinstance(content, bytes):
                     file_content = content
-                elif hasattr(content, "read") and not isinstance(content, (str, os.PathLike)):
+                elif isinstance(content, os.PathLike):
+                    return calculate_request_duration(content)
+                elif hasattr(content, "read") and not isinstance(content, str):
                     # File-like object in tuple
                     current_pos: Final = getattr(content, "tell", lambda: None)()
                     # Seek to start to ensure we read the entire content
