@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 import weakref
-from collections.abc import AsyncIterable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Mapping
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from io import BytesIO
 from types import MappingProxyType
@@ -254,6 +254,29 @@ def _anchor_handler_to(response: httpx.Response, handler: object) -> None:
     each anchor holds it separately.
     """
     weakref.finalize(response, _drop_streaming_anchor, handler)
+
+
+class _SingleUseClientStream(httpx.AsyncByteStream):
+    def __init__(self, stream: httpx.AsyncByteStream, client: httpx.AsyncClient) -> None:
+        self._stream = stream
+        self._client = client
+        self._closed = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        try:
+            async for chunk in self._stream:
+                yield chunk
+        finally:
+            await self.aclose()
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            await self._stream.aclose()
+        finally:
+            await self._client.aclose()
 
 
 def blocked_cookie_jar() -> CookieJar:
@@ -971,20 +994,17 @@ class AsyncHTTPHandler:
         except httpx.ConnectError:
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
-            try:
-                return await self.single_connection_request(
-                    url=url,
-                    method="POST",
-                    client=new_client,
-                    data=data,
-                    json=json,
-                    params=params,
-                    headers=headers,
-                    stream=stream,
-                    content=content,
-                )
-            finally:
-                await new_client.aclose()
+            return await self.single_connection_request(
+                url=url,
+                method="POST",
+                client=new_client,
+                data=data,
+                json=json,
+                params=params,
+                headers=headers,
+                stream=stream,
+                content=content,
+            )
         except httpx.TimeoutException as e:
             _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
@@ -1046,9 +1066,18 @@ class AsyncHTTPHandler:
                     retried.raise_for_status()
                 except httpx.HTTPStatusError as retried_error:
                     await _raise_masked_async_error(retried_error, stream)
-                return retried
-            finally:
+            except BaseException:
                 await new_client.aclose()
+                raise
+            else:
+                if stream and not retried.is_closed:
+                    assert isinstance(retried.stream, httpx.AsyncByteStream), (
+                        "An async retry must return an async stream"
+                    )
+                    retried.stream = _SingleUseClientStream(retried.stream, new_client)
+                else:
+                    await new_client.aclose()
+                return retried
         except httpx.TimeoutException as e:
             _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
@@ -1091,20 +1120,17 @@ class AsyncHTTPHandler:
         except httpx.ConnectError:
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
-            try:
-                return await self.single_connection_request(
-                    url=url,
-                    method="PATCH",
-                    client=new_client,
-                    data=data,
-                    json=json,
-                    params=params,
-                    headers=headers,
-                    stream=stream,
-                    content=content,
-                )
-            finally:
-                await new_client.aclose()
+            return await self.single_connection_request(
+                url=url,
+                method="PATCH",
+                client=new_client,
+                data=data,
+                json=json,
+                params=params,
+                headers=headers,
+                stream=stream,
+                content=content,
+            )
         except httpx.TimeoutException as e:
             _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
@@ -1148,20 +1174,17 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
-            try:
-                return await self.single_connection_request(
-                    url=url,
-                    method="DELETE",
-                    client=new_client,
-                    data=data,
-                    json=json,
-                    params=params,
-                    headers=headers,
-                    stream=stream,
-                    content=content,
-                )
-            finally:
-                await new_client.aclose()
+            return await self.single_connection_request(
+                url=url,
+                method="DELETE",
+                client=new_client,
+                data=data,
+                json=json,
+                params=params,
+                headers=headers,
+                stream=stream,
+                content=content,
+            )
         except httpx.HTTPStatusError as e:
             await _raise_masked_async_error(e, stream)
         except Exception as e:
@@ -1184,21 +1207,29 @@ class AsyncHTTPHandler:
 
         Used for retrying connection client errors.
         """
-        # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
-        request_data, request_content = _prepare_request_data_and_content(data, content)
-
-        req: Final = client.build_request(
-            method,
-            url,
-            data=request_data,
-            json=json,
-            params=params,
-            headers=headers,
-            content=request_content,
-        )
-        response: Final = await client.send(req, stream=stream)
-        response.raise_for_status()
-        return response
+        try:
+            request_data, request_content = _prepare_request_data_and_content(data, content)
+            req: Final = client.build_request(
+                method,
+                url,
+                data=request_data,
+                json=json,
+                params=params,
+                headers=headers,
+                content=request_content,
+            )
+            response: Final = await client.send(req, stream=stream)
+            response.raise_for_status()
+        except BaseException:
+            await client.aclose()
+            raise
+        else:
+            if stream and not response.is_closed:
+                assert isinstance(response.stream, httpx.AsyncByteStream), "An async retry must return an async stream"
+                response.stream = _SingleUseClientStream(response.stream, client)
+            else:
+                await client.aclose()
+            return response
 
     # Strong references to finalizer-scheduled client-close tasks. A bare
     # create_task() result may be garbage-collected before it runs, leaving
