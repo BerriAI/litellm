@@ -6,12 +6,13 @@ Ollama /chat/completion calls handled in llm_http_handler.py
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final, Protocol, TypedDict
+from typing import Final, Protocol, TypedDict
 
 import httpx
 from typing_extensions import NotRequired, ReadOnly
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.types.mcp import has_header
 from litellm.types.utils import EmbeddingResponse
@@ -21,6 +22,14 @@ class TokenEncoder(Protocol):
     """The tokenizer surface used to estimate prompt tokens."""
 
     def encode(self, text: str, /) -> Sequence[int]: ...
+
+
+class _DebugLogger(Protocol):
+    def debug(self, message: str, /) -> object: ...
+
+
+class _WarningLogger(Protocol):
+    def warning(self, message: str, /) -> object: ...
 
 
 class OllamaEmbeddingResponse(TypedDict):
@@ -51,7 +60,7 @@ def _process_ollama_embedding_response(
     prompts: list[str],
     model: str,
     model_response: EmbeddingResponse,
-    logging_obj: Any,
+    logging_obj: object,
     encoding: TokenEncoder | None,
 ) -> EmbeddingResponse:
     output_data: Final = []
@@ -66,11 +75,15 @@ def _process_ollama_embedding_response(
         if encoding is not None:
             input_tokens = len(encoding.encode("".join(prompts)))
             if logging_obj:
-                logging_obj.debug("Ollama response missing prompt_eval_count; estimated with encoding.")
+                require_attributes(logging_obj, _DebugLogger, "debug").debug(
+                    "Ollama response missing prompt_eval_count; estimated with encoding."
+                )
         else:
             input_tokens = 0
             if logging_obj:
-                logging_obj.warning("Missing prompt_eval_count and no encoding provided; defaulted to 0.")
+                require_attributes(logging_obj, _WarningLogger, "warning").warning(
+                    "Missing prompt_eval_count and no encoding provided; defaulted to 0."
+                )
 
     model_response.object = "list"
     model_response.data = output_data

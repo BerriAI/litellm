@@ -27,6 +27,7 @@ from litellm.constants import STREAM_CHUNK_CHOICE_FIELDS, STREAM_FINISH_CHOICE_F
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
+    attribute_or_none,
     chunk_usage,
     provider_reported_usage_cost,
     stamp_litellm_bill_on_usage,
@@ -1850,7 +1851,9 @@ class CustomStreamWrapper:
                             elif delta.tool_calls is not None:
                                 if isinstance(delta.tool_calls, list):
                                     for t in delta.tool_calls:
-                                        if hasattr(t, "functions") and hasattr(getattr(t, "functions"), "arguments"):
+                                        if hasattr(t, "functions") and hasattr(
+                                            attribute_or_none(t, "functions"), "arguments"
+                                        ):
                                             if t.function.arguments is None:
                                                 t.function.arguments = ""
                             _json_delta: Final[_DeltaDumpDict] = delta.model_dump()
@@ -2817,8 +2820,9 @@ class CustomStreamWrapper:
 
     def _record_and_strip_usage_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream | None:
         self.chunks.append(chunk.model_copy())
+        dumped_chunk: Final = MappingProxyType[str, object](chunk.model_dump())
         usage_free_chunk: Final = self.model_response_creator(
-            chunk={key: value for key, value in chunk.model_dump().items() if key != "usage"},
+            chunk={key: value for key, value in dumped_chunk.items() if key != "usage"},
             hidden_params=cast(  # cast-ok: preserve mapping operations on dynamic storage
                 Mapping[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
             ),

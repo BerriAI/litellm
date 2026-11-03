@@ -13,7 +13,7 @@ import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias
 
 from typing_extensions import (
     ReadOnly,
@@ -24,6 +24,7 @@ from typing_extensions import (
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
     from botocore.model import ServiceModel, Shape
+    from botocore.parsers import EventStreamJSONParser
 
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
@@ -33,6 +34,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, require_attributes
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.common_utils import schema_property_count
 from litellm.litellm_core_utils.url_utils import ensure_api_route
@@ -2274,15 +2276,16 @@ class BedrockEventStreamDecoderBase:
                 ),
             )
         response_dict: Final = event.to_response_dict()
-        parsed_response: Final = self.parser.parse(response_dict, response_stream_shape)
+        parsed_response: Final = parse_bedrock_event_stream(self.parser, response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             raise build_bedrock_stream_error(response_dict, response_stream_shape)
-        if "chunk" in parsed_response:
-            chunk = parsed_response.get("chunk")
-            if not chunk:
+        parsed_fields: Final = decoded_json_object(parsed_response)
+        if "chunk" in parsed_fields:
+            event_chunk: Final = parsed_fields.get("chunk")
+            if not event_chunk:
                 return None
-            return chunk.get("bytes").decode()
+            return bedrock_event_chunk_text(event_chunk)
         else:
             chunk = response_dict.get("body")
             if not chunk:
@@ -2297,6 +2300,20 @@ _JSON_VALUE: Final = TypeAdapter(object)
 def _decoded_json_value(raw: str) -> object:
     """Decode a JSON document into an opaque value for isinstance narrowing."""
     return _JSON_VALUE.validate_python(json.loads(raw))
+
+
+class _DecodablePayload(Protocol):
+    def decode(self) -> str: ...
+
+
+def parse_bedrock_event_stream(
+    parser: EventStreamJSONParser, response_dict: Mapping[str, object], response_stream_shape: Shape
+) -> object:
+    return _JSON_VALUE.validate_python(parser.parse(response_dict, response_stream_shape))
+
+
+def bedrock_event_chunk_text(chunk: object) -> str:
+    return require_attributes(decoded_json_object(chunk).get("bytes"), _DecodablePayload, "decode").decode()
 
 
 def get_anthropic_beta_from_headers(headers: dict) -> list[str]:

@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 from collections.abc import Callable, Coroutine
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
 from openai import (
@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
 from litellm.llms.custom_httpx.http_handler import (
@@ -58,6 +59,11 @@ from .image_generation import (
     get_azure_image_generation_config,
 )
 from .image_generation.http_utils import azure_deployment_image_generation_json_body
+
+
+class _HasResponseText(Protocol):
+    @property
+    def text(self) -> str: ...
 
 
 class AzureOpenAIAssistantsAPIConfig:
@@ -853,11 +859,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             error_text = str(e)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-                error_text = error_response.text
+                error_text = require_attributes(error_response, _HasResponseText, "text").text
             raise AzureOpenAIError(
                 status_code=status_code,
                 message=error_text,

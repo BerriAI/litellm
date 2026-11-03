@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from pydantic import TypeAdapter
+
 import litellm
 
 if TYPE_CHECKING:
@@ -113,6 +115,7 @@ def current_dynamic_config() -> RouterDynamicConfig:
     )
 
 
+_LIVE_VALUE: Final = TypeAdapter(object)
 _LIVE_SOURCES: Final = MappingProxyType(
     {
         "num_retries": "num_retries",
@@ -151,7 +154,7 @@ class LiveDynamicConfig:
         source: Final = _LIVE_SOURCES.get(name)
         if source is None:
             raise AttributeError(name)
-        return getattr(litellm, source)
+        return _LIVE_VALUE.validate_python(getattr(litellm, source))
 
 
 live_dynamic_config: Final = LiveDynamicConfig()

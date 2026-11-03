@@ -8,7 +8,7 @@ from datetime import datetime
 from functools import lru_cache
 from itertools import accumulate
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, cast
 
 from httpx import Response
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -23,7 +23,7 @@ from litellm.constants import (
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, billed_usage_cost
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, billed_usage_cost, require_attributes
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
@@ -1095,6 +1095,10 @@ def _model_contains_known_llm_provider(model: str) -> bool:
     return _provider_prefix in LlmProvidersSet
 
 
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
 def _get_response_model(completion_response: object) -> str | None:
     """
     Extract the model name from a completion response object.
@@ -1126,7 +1130,7 @@ _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER: Final[dict] = {
 }
 
 
-def _map_traffic_type_to_service_tier(traffic_type: str | None) -> str | None:
+def _map_traffic_type_to_service_tier(traffic_type: object) -> str | None:
     """
     Map a Gemini usageMetadata.trafficType value to a LiteLLM service_tier string.
 
@@ -1180,11 +1184,13 @@ def _served_service_tier(completion_response: object, usage_object: Usage | None
     usage_tier: Final = _extract_service_tier(usage_object)
     if isinstance(usage_tier, str):
         return usage_tier
-    hidden_params: Final = getattr(completion_response, "_hidden_params", None)
+    hidden_params: Final[object] = getattr(completion_response, "_hidden_params", None)
     if hidden_params is None:
         return None
-    provider_specific: Final = hidden_params.get("provider_specific_fields") or {}
-    raw_traffic_type: Final = provider_specific.get("traffic_type")
+    provider_specific: Final[object] = (
+        require_attributes(hidden_params, _SupportsGet, "get").get("provider_specific_fields") or {}
+    )
+    raw_traffic_type: Final = require_attributes(provider_specific, _SupportsGet, "get").get("traffic_type")
     if not raw_traffic_type:
         return None
     return _map_traffic_type_to_service_tier(raw_traffic_type) or "default"

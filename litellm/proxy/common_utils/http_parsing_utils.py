@@ -2,7 +2,7 @@ import json
 import re
 from collections.abc import Collection, Mapping
 from types import MappingProxyType, UnionType
-from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
+from typing import Annotated, Any, Final, Literal, Protocol, Union, get_args, get_origin
 
 import orjson
 from fastapi import HTTPException, Request, UploadFile, status
@@ -21,6 +21,7 @@ from litellm.constants import (
     MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
 )
 from litellm.integrations.otel.runtime import phase_event
+from litellm.litellm_core_utils.core_helpers import as_object_list, has_attributes, require_attributes
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -35,6 +36,18 @@ _BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobu
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
 _DECODED_JSON: Final = TypeAdapter(object)
 _JSON_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+
+
+class _ReadableUpload(Protocol):
+    async def read(self) -> bytes: ...
+
+
+class _UploadedFileInfo(Protocol):
+    @property
+    def filename(self) -> str | None: ...
+
+    @property
+    def content_type(self) -> str | None: ...
 
 
 def resolve_inference_model(
@@ -197,7 +210,7 @@ def _parse_form_metadata(raw_metadata: str) -> object:
     """The JSON body path rejects a lone surrogate escape (``"\\ud800"``) with a
     400 because no provider or database can encode it. ``json.loads`` accepts
     the escape, so the multipart ``metadata`` field gets the same check."""
-    parsed: Final[object] = json.loads(raw_metadata)
+    parsed: Final = _DECODED_JSON.validate_python(json.loads(raw_metadata))
     try:
         json.dumps(parsed, ensure_ascii=False).encode("utf-8")
     except UnicodeEncodeError as e:
@@ -583,7 +596,7 @@ async def get_form_data(request: Request) -> dict[str, Any]:
 
 
 async def convert_upload_files_to_file_data(
-    form_data: dict[str, Any],
+    form_data: Mapping[str, object],
 ) -> dict[str, Any]:
     """
     Convert FastAPI UploadFile objects to file data tuples for litellm.
@@ -606,21 +619,24 @@ async def convert_upload_files_to_file_data(
     """
     data: Final = {}
     for key, value in form_data.items():
-        if isinstance(value, list):
+        values = as_object_list(value)
+        if values is not None:
             # Check if it's a list of UploadFile objects
-            if value and hasattr(value[0], "read"):
+            if values and has_attributes(values[0], _ReadableUpload, "read"):
                 files = []
-                for f in value:
-                    file_content = await f.read()
+                for f in values:
+                    file_content = await require_attributes(f, _ReadableUpload, "read").read()
+                    file_info = require_attributes(f, _UploadedFileInfo, "filename", "content_type")
                     # Create tuple: (filename, content, content_type)
-                    files.append((f.filename, file_content, f.content_type))
+                    files.append((file_info.filename, file_content, file_info.content_type))
                 data[key] = files
             else:
                 data[key] = value
-        elif hasattr(value, "read"):
+        elif has_attributes(value, _ReadableUpload, "read"):
             # Single UploadFile object - read and convert to list for consistency
             file_content = await value.read()
-            data[key] = [(value.filename, file_content, value.content_type)]
+            upload_info = require_attributes(value, _UploadedFileInfo, "filename", "content_type")
+            data[key] = [(upload_info.filename, file_content, upload_info.content_type)]
         else:
             # Regular form field
             data[key] = value

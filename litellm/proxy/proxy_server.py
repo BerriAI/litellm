@@ -4445,9 +4445,13 @@ async def _add_spend_to_shared_global_proxy_spend(
 async def _add_spend_to_global_proxy_spend(
     cache: UserApiKeyCache, response_cost: float, parent_otel_span: Span | None
 ) -> None:
-    local_before: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    local_before: Final = _UNTYPED_VALUE.validate_python(
+        cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    )
     shared_total: Final = await _add_spend_to_shared_global_proxy_spend(cache, response_cost, parent_otel_span)
-    local_total: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    local_total: Final = _UNTYPED_VALUE.validate_python(
+        cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    )
     if not isinstance(local_total, (int, float)):
         return
     if shared_total is not None and local_total != local_before and shared_total < local_total:
@@ -20396,7 +20400,7 @@ async def update_config_general_settings(
             detail={"error": CommonProxyErrors.not_allowed_access.value},
         )
 
-    requested_value: Final[object] = data.field_value
+    requested_value: Final = _UNTYPED_VALUE.validate_python(data.field_value)
     if data.field_name in _GENERAL_SETTINGS_UI_LITELLM_FIELDS:
         return await _persist_general_settings_ui_litellm_field(data.field_name, requested_value, user_api_key_dict)
 

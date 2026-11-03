@@ -31,6 +31,8 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Generic, TypeVar, overload
 
+from pydantic import TypeAdapter
+
 from litellm.router_api import ASSIGNABLE_ALIASES, SETTING_FIELDS, ChangeSet
 
 if TYPE_CHECKING:
@@ -62,6 +64,8 @@ _T: Final = TypeVar("_T")
 DEPRECATED_ROUTER_MEMBER_USES: Final[Counter[str]] = Counter()  # mutable-ok: the live tally _note increments
 
 _INTERNAL_PREFIX: Final = "litellm.router"
+
+_MEMBER_VALUE: Final = TypeAdapter(object)
 
 
 # Router's own attribute hooks: a write or delete through an old name passes through them first.
@@ -194,7 +198,7 @@ def _enter_override(name: str, override: Callable[..., object]) -> Callable[...,
         ) -> object:
             token: Final = _OVERRIDES_RUNNING.set(_OVERRIDES_RUNNING.get() | {_override_key(router, name)})
             try:
-                return await async_override(router, *args, **kwargs)
+                return _MEMBER_VALUE.validate_python(await async_override(router, *args, **kwargs))
             finally:
                 _OVERRIDES_RUNNING.reset(token)
 
@@ -232,9 +236,6 @@ def _route_override(cls: type, name: str, override: Callable[..., object]) -> Ca
     """
     core: Final = "_core_" + name
 
-    def parent(router: object) -> Callable[..., object]:
-        return getattr(super(cls, router), core)
-
     if inspect.iscoroutinefunction(override):
         async_override: Final[Callable[..., Awaitable[object]]] = override
 
@@ -247,11 +248,10 @@ def _route_override(cls: type, name: str, override: Callable[..., object]) -> Ca
             key: Final = _override_key(router, name)
             running: Final = _OVERRIDES_RUNNING.get()
             if key in running:
-                parent_async: Final[Callable[..., Awaitable[object]]] = getattr(super(cls, router), core)
-                return await parent_async(*args, **kwargs)
+                return _MEMBER_VALUE.validate_python(await getattr(super(cls, router), core)(*args, **kwargs))
             token: Final = _OVERRIDES_RUNNING.set(running | {key})
             try:
-                return await async_override(router, *args, **kwargs)
+                return _MEMBER_VALUE.validate_python(await async_override(router, *args, **kwargs))
             finally:
                 _OVERRIDES_RUNNING.reset(token)
 
@@ -266,7 +266,7 @@ def _route_override(cls: type, name: str, override: Callable[..., object]) -> Ca
         key: Final = _override_key(router, name)
         running: Final = _OVERRIDES_RUNNING.get()
         if key in running:
-            return parent(router)(*args, **kwargs)
+            return _MEMBER_VALUE.validate_python(getattr(super(cls, router), core)(*args, **kwargs))
         token: Final = _OVERRIDES_RUNNING.set(running | {key})
         try:
             return override(router, *args, **kwargs)
@@ -283,7 +283,8 @@ class DeprecatedRouterMembers:
         # A Router subclass that overrides an old member (say async_pre_routing_hook) keeps
         # having its override called by the router, which now calls _core_<name> internally.
         super().__init_subclass__(**kwargs)
-        for name, value in list(vars(cls).items()):
+        own_members: Final = vars(cls)
+        for name, value in list(zip(own_members, map(_MEMBER_VALUE.validate_python, own_members.values()))):
             if (
                 name.startswith("_core_")
                 or name not in vars(DeprecatedRouterMembers)
@@ -953,7 +954,7 @@ def _name_members_after_router() -> None:
     # The old members were Router methods, so errors that name the method (a wrong-arity TypeError,
     # or "litellm.router.Router.<name>() argument after ** must be a mapping") keep naming it the
     # way they did before the members moved here.
-    for member in vars(DeprecatedRouterMembers).values():
+    for member in map(_MEMBER_VALUE.validate_python, vars(DeprecatedRouterMembers).values()):
         function = member.__func__ if isinstance(member, staticmethod) else member
         if inspect.isfunction(function):
             function.__qualname__ = f"Router.{function.__name__}"

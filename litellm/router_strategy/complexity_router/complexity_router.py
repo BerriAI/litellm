@@ -28,7 +28,7 @@ from functools import partial
 from itertools import accumulate, chain, islice, takewhile
 from threading import Lock
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, cast
 
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError, create_model
 from pydantic_core import ErrorDetails
@@ -52,6 +52,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_parent_otel_span_from_kwargs,
     is_codex_user_agent,
+    require_attributes,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
@@ -144,7 +145,7 @@ if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
     from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
     from litellm.router_strategy.savings_baseline import Baseline
-    from litellm.types.router import PreRoutingHookResponse
+    from litellm.types.router import DeploymentTypedDict, PreRoutingHookResponse
 else:
     RoutingContext = Any
     PreRoutingHookResponse = Any
@@ -182,6 +183,15 @@ def _callers_output_cap(request_kwargs: Mapping[str, object]) -> int | None:
 def _built_in_tier_or_none(tier_name: str) -> ComplexityTier | None:
     """The built-in tier a `tiers` key names, or None when the key is an operator-defined name."""
     return ComplexityTier.__members__.get(tier_name)
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def _declared_vision_support(deployment: Mapping[str, object]) -> object:
+    model_info: Final = deployment.get("model_info")
+    return require_attributes(model_info, _SupportsGet, "get").get("supports_vision") if model_info else None
 
 
 _CLASSIFICATION_TIER_CRITERIA: Final[Mapping[ComplexityTier, str]] = MappingProxyType(
@@ -3798,11 +3808,12 @@ class ComplexityRouter(CustomLogger):
                 return True
             return False if is_vision_explicitly_disabled(model) else None
 
-        def deployment_verdict(deployment: Mapping[str, Any]) -> bool | None:
-            declared: Final = (deployment.get("model_info") or EMPTY_MAPPING).get("supports_vision")
+        def deployment_verdict(deployment: DeploymentTypedDict) -> bool | None:
+            declared: Final = _declared_vision_support(deployment)
             if declared is not None:
                 return declared is True
-            return model_verdict((deployment.get("litellm_params") or EMPTY_MAPPING).get("model") or model_name)
+            litellm_params: Final = deployment.get("litellm_params")
+            return model_verdict((litellm_params.get("model") if litellm_params else None) or model_name)
 
         deployments: Final = self.ctx.registry().deployments(model_name=model_name)
         if not deployments:

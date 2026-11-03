@@ -30,6 +30,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.path_utils import is_within, try_safe_join
 from litellm.proxy.guardrails.content_filter_data import (
@@ -147,10 +148,10 @@ class _CategoryConfigView(TypedDict):
 def _streamed_choice_content(choice: StreamingChoices | TextChoices) -> str | None:
     if isinstance(choice, TextChoices):
         return choice.text if isinstance(choice.text, str) else ""
-    delta: Final = getattr(choice, "delta", None)
+    delta: Final = attribute_or_none(choice, "delta")
     if not delta:
         return None
-    content: Final = getattr(delta, "content", None)
+    content: Final = attribute_or_none(delta, "content")
     return content if isinstance(content, str) else ""
 
 

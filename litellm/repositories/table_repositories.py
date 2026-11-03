@@ -7,12 +7,20 @@ These are thin wrappers for tables that do not (yet) need domain-specific query
 methods; richer repositories live in their own modules.
 """
 
-from typing import TYPE_CHECKING, Any, Final, Generic
+from typing import TYPE_CHECKING, Any, Final, Generic, Protocol
 
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models  # noqa: F401  # used by quoted base-class subscripts
+
+
+class _PrismaClientView(Protocol):
+    @property
+    def db(self) -> object: ...
+
+    @property
+    def writer_db(self) -> object: ...
 
 
 class PrismaTableRepository(Generic[RowT_co]):
@@ -34,9 +42,9 @@ class PrismaTableRepository(Generic[RowT_co]):
     def table(self) -> TableActions[RowT_co]:
         from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
 
-        actions: Final[TableActions[RowT_co]] = getattr(
-            self.prisma_client.writer_db if self._use_writer else self.prisma_client.db, self.table_name
-        )
+        client: Final[_PrismaClientView] = self.prisma_client
+        database: Final = client.writer_db if self._use_writer else client.db
+        actions: Final[TableActions[RowT_co]] = getattr(database, self.table_name)
         return wrap_table_actions_for_config_sync(actions=actions, table_name=self.table_name)
 
 

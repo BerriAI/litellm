@@ -85,6 +85,8 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
+    has_attributes,
+    iter_items,
     normalize_drop_params,
     unbind_budget_reservation_from_callbacks,
 )
@@ -6360,26 +6362,41 @@ def count_characters(text: str) -> int:
 _count_characters = count_characters
 
 
+class _ResponsesOutputCarrier(Protocol):
+    @property
+    def output(self) -> object: ...
+
+
+class _ResponsesContentCarrier(Protocol):
+    @property
+    def content(self) -> object: ...
+
+
+class _ResponsesTextCarrier(Protocol):
+    @property
+    def text(self) -> str: ...
+
+
 def get_response_string(response_obj: ModelResponse | ModelResponseStream) -> str:
     # Handle Responses API streaming events
     if hasattr(response_obj, "type") and hasattr(response_obj, "response"):
         # This is a Responses API streaming event (e.g., ResponseCreatedEvent, ResponseCompletedEvent)
         # Extract text from the response object's output if available
-        responses_api_response: Final = getattr(response_obj, "response", None)
-        if responses_api_response and hasattr(responses_api_response, "output"):
+        responses_api_response: Final[object] = getattr(response_obj, "response", None)
+        if responses_api_response and has_attributes(responses_api_response, _ResponsesOutputCarrier, "output"):
             output_list: Final = responses_api_response.output
             # Use list accumulation to avoid O(n^2) string concatenation:
             # repeatedly doing `response_str += part` copies the full string each time
             # because Python strings are immutable, so total work grows with n^2.
             response_output_parts: Final[list[str]] = []
-            for output_item in output_list:
+            for output_item in iter_items(output_list):
                 # Handle output items with content array
-                if hasattr(output_item, "content"):
-                    for content_part in output_item.content:
-                        if hasattr(content_part, "text"):
+                if has_attributes(output_item, _ResponsesContentCarrier, "content"):
+                    for content_part in iter_items(output_item.content):
+                        if has_attributes(content_part, _ResponsesTextCarrier, "text"):
                             response_output_parts.append(content_part.text)
                 # Handle output items with direct text field
-                elif hasattr(output_item, "text"):
+                elif has_attributes(output_item, _ResponsesTextCarrier, "text"):
                     response_output_parts.append(output_item.text)
             return "".join(response_output_parts)
 

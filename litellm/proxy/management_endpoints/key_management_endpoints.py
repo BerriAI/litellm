@@ -40,6 +40,7 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     UI_SESSION_TOKEN_TEAM_ID,
 )
+from litellm.litellm_core_utils.core_helpers import as_object_list
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.credentials import CredentialItem
@@ -2056,7 +2057,7 @@ async def _check_project_key_limits(
 
     # Validate key models are a subset of project models
     if data.models and len(project_obj.models) > 0:
-        for m in data.models:
+        for m in as_object_list(data.models) or ():
             if m not in project_obj.models and m not in _INHERITED_MODEL_SENTINELS:
                 raise HTTPException(
                     status_code=400,

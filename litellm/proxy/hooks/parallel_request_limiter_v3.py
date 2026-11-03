@@ -5456,7 +5456,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 reserved_tokens=reserved_tokens,
             )
         )
-        ptu_skips_socket_usage: Final = kwargs.get("call_type") == CallTypes.aresponses_websocket.value
+        call_type: Final[object] = kwargs.get("call_type")
+        ptu_skips_socket_usage: Final = call_type == CallTypes.aresponses_websocket.value
         pipeline_operations.extend(
             self._build_team_ptu_tpm_ops(
                 standard_logging_metadata,  # pyright: ignore[reportUnknownArgumentType]  # untyped logging metadata

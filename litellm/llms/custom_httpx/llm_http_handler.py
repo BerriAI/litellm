@@ -379,7 +379,10 @@ _GOAWAY_RETRY_MESSAGE: Final = "Vector store search connection was closed by an 
 
 def _closed_by_http2_goaway(error: httpx.RemoteProtocolError) -> bool:
     cause: Final = error.__cause__
-    return cause is not None and any(isinstance(arg, ConnectionTerminated) for arg in cause.args)
+    if cause is None:
+        return False
+    cause_args: Final[tuple[object, ...]] = cause.args
+    return any(isinstance(arg, ConnectionTerminated) for arg in cause_args)
 
 
 async def _asend_with_goaway_retry(send: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
@@ -421,8 +424,12 @@ def _signed_body_kwargs(*, signed_body: bytes | None, data: dict[str, object]) -
     return {"json": data}
 
 
+def _response_content_type(headers: Mapping[str, str]) -> str:
+    return headers.get("content-type", "")
+
+
 def _answered_json(response: httpx.Response) -> bool:
-    return "application/json" in response.headers.get("content-type", "").lower()
+    return "application/json" in _response_content_type(response.headers).lower()
 
 
 def _stream_query_params(stream: bool, starting_after: int | None) -> Mapping[str, object]:
@@ -581,6 +588,7 @@ _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_OBJECTS: Final = TypeAdapter(list[dict[str, object]])
 _DECODED_JSON: Final = TypeAdapter(object)
+_AGENTIC_LOOP_RESULT: Final = TypeAdapter(object)
 
 
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
@@ -6501,16 +6509,18 @@ class BaseLLMHTTPHandler:
                     callback.__class__.async_build_agentic_loop_plan is not CustomLogger.async_build_agentic_loop_plan
                 )
                 if not build_plan_overridden:
-                    agentic_result: object = await callback.async_run_agentic_loop(
-                        tools=tool_calls,
-                        model=model,
-                        messages=messages,
-                        response=response,
-                        anthropic_messages_provider_config=anthropic_messages_provider_config,
-                        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-                        logging_obj=logging_obj,
-                        stream=stream,
-                        kwargs=kwargs_with_provider,
+                    agentic_result: object = _AGENTIC_LOOP_RESULT.validate_python(
+                        await callback.async_run_agentic_loop(
+                            tools=tool_calls,
+                            model=model,
+                            messages=messages,
+                            response=response,
+                            anthropic_messages_provider_config=anthropic_messages_provider_config,
+                            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                            logging_obj=logging_obj,
+                            stream=stream,
+                            kwargs=kwargs_with_provider,
+                        )
                     )
                     return self._maybe_wrap_in_fake_stream(agentic_result, logging_obj, api_surface)
 
@@ -6527,7 +6537,9 @@ class BaseLLMHTTPHandler:
                 )
 
                 if plan.response_override is not None:
-                    return self._maybe_wrap_in_fake_stream(plan.response_override, logging_obj, api_surface)
+                    return self._maybe_wrap_in_fake_stream(
+                        _AGENTIC_LOOP_RESULT.validate_python(plan.response_override), logging_obj, api_surface
+                    )
                 if plan.terminate:
                     verbose_logger.debug(
                         "Agentic loop terminated by callback=%s reason=%s",
@@ -6535,10 +6547,14 @@ class BaseLLMHTTPHandler:
                         plan.stop_reason,
                     )
                     return self._maybe_wrap_in_fake_stream(
-                        await callback.async_post_agentic_loop_response_hook(
-                            response=self._finalize_refused_agentic_response(response=response, tool_calls=tool_calls),
-                            plan=plan,
-                            kwargs=kwargs_with_provider,
+                        _AGENTIC_LOOP_RESULT.validate_python(
+                            await callback.async_post_agentic_loop_response_hook(
+                                response=self._finalize_refused_agentic_response(
+                                    response=response, tool_calls=tool_calls
+                                ),
+                                plan=plan,
+                                kwargs=kwargs_with_provider,
+                            )
                         ),
                         logging_obj,
                         api_surface,

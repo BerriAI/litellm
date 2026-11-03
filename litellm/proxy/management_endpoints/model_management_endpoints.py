@@ -30,6 +30,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.ptu_pricing import (
@@ -1346,7 +1347,9 @@ def legacy_update_model_info_changes(
     value that differs from the stored override resets that override (``None``).
     """
     stored: Final = db_model.model_info.model_dump(exclude_none=True)
-    requested: Final = incoming_model_info.model_dump(exclude_unset=True, exclude_none=True)
+    requested: Final = TypeAdapter(dict[str, object]).validate_python(
+        incoming_model_info.model_dump(exclude_unset=True, exclude_none=True)
+    )
     sent: Final = {k: v for k, v in requested.items() if k not in _LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS and v != ""}
     echoed: Final = frozenset(
         echoed_cost_map_fields(
@@ -1356,7 +1359,7 @@ def legacy_update_model_info_changes(
             discovered_model_info,
         )
     )
-    kept: Final = without_server_derived_pricing(sent)
+    kept: Final[Mapping[str, object]] = without_server_derived_pricing(sent)
     return MappingProxyType(
         {
             **{k: getattr(incoming_model_info, k) for k in kept if k not in echoed},
@@ -3972,19 +3975,20 @@ async def clear_cache() -> ReconcileOutcome:
 
             db_router_names: Final = set()
 
-            for model in current_models:
-                model_info = model.get("model_info", {})
+            for model in as_object_list(current_models) or ():
+                deployment = decoded_json_object(model)
+                model_info = decoded_json_object(deployment.get("model_info", {}))
                 if model_info.get("db_model", False):
                     db_model_ids.append(model_info.get("id"))
                     # Auto-router deployments (and only those) are wiped here, in the
                     # same pass, so the reload rebuilds them -- see the comment below.
-                    model_name = model.get("model_name")
-                    if model_name is not None and str(model.get("litellm_params", {}).get("model", "")).startswith(
-                        "auto_router/"
-                    ):
-                        db_router_names.add(model_name)
+                    deployment_name = deployment.get("model_name")
+                    if isinstance(deployment_name, str) and str(
+                        decoded_json_object(deployment.get("litellm_params", {})).get("model", "")
+                    ).startswith("auto_router/"):
+                        db_router_names.add(deployment_name)
                         router_model_id = model_info.get("id")
-                        if router_model_id is not None:
+                        if isinstance(router_model_id, str):
                             llm_router.apply(ChangeSet(delete=[router_model_id]))
                 else:
                     # This is a config model, preserved by the reconcile below

@@ -14,6 +14,8 @@ from collections.abc import Mapping
 from types import CellType, FunctionType, MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from pydantic import TypeAdapter
+
 from litellm import router_python_core
 from litellm.router_config import RouterConfig, build_router_config
 from litellm.router_core import RouterCore, make_core
@@ -36,6 +38,7 @@ from litellm.types.router import (
 )
 
 _CORE_SIGNATURE: Final = inspect.signature(PythonCore.__init__)
+_PASSED_VALUE: Final = TypeAdapter(object)
 
 
 def router_arguments(
@@ -47,7 +50,13 @@ def router_arguments(
         bound: Final = _CORE_SIGNATURE.bind_partial(None, *args, **kwargs).arguments
     except TypeError as error:
         raise TypeError(f"Router.__init__() {error}") from None
-    return MappingProxyType({name: value for name, value in bound.items() if name != "self"})
+    return MappingProxyType(
+        {
+            name: value
+            for name, value in zip(bound, map(_PASSED_VALUE.validate_python, bound.values()))
+            if name != "self"
+        }
+    )
 
 
 def _class_descriptor(cls: type, name: str) -> bool:
@@ -311,7 +320,7 @@ else:
 
 def __getattr__(name: str) -> object:
     """Module-level helpers that lived in this module before the core moved out."""
-    return getattr(router_python_core, name)
+    return _PASSED_VALUE.validate_python(getattr(router_python_core, name))
 
 
 __all__ = [

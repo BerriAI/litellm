@@ -16,6 +16,7 @@ from litellm.models.user import LiteLLM_UserTable, SCIMPlaceholder
 from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import PrismaTableRepository
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -62,13 +63,11 @@ class _UserTransaction(_UserDb, Protocol):
 
 
 class _PrismaClientView(Protocol):
-    @property
-    def db(self) -> _UserDb: ...
-
-    @property
-    def writer_db(self) -> _UserDb: ...
-
     def tx(self) -> AbstractAsyncContextManager[_UserTransaction]: ...
+
+
+class _UserTable(PrismaTableRepository["prisma_models.LiteLLM_UserTable"]):
+    table_name = "litellm_usertable"
 
 
 async def _count_billable_users(table: TableActions["prisma_models.LiteLLM_UserTable"]) -> int:
@@ -88,9 +87,7 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_UserTable"]:
-        client: Final[_PrismaClientView] = self.prisma_client
-        database: Final = client.writer_db if self._use_writer else client.db
-        return database.litellm_usertable
+        return _UserTable(self._prisma_client, use_writer=self._use_writer).table
 
     @property
     def model_class(self) -> type[LiteLLM_UserTable]:

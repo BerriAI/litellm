@@ -4,6 +4,8 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
@@ -20,6 +22,8 @@ from litellm.types.utils import (
     ModelResponse,
     TextCompletionResponse,
 )
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def split_sse_chunk_into_events(chunk: str | bytes) -> list[str]:
@@ -492,7 +496,7 @@ def _carries_no_data(fields: Sequence[tuple[str, str]]) -> bool:
 
 def _json_mapping(payload: str) -> Mapping[str, object] | None:
     try:
-        value: Final[object] = json.loads(payload)
+        value: Final = _DECODED_JSON.validate_python(json.loads(payload))
     except ValueError:
         return None
     return as_str_mapping(value)
@@ -555,7 +559,7 @@ def is_anthropic_sse_stream(all_chunks: Sequence[object]) -> bool:
 
 def _is_json_no_reader_can_take(payload: str) -> bool:
     try:
-        value: Final[object] = json.loads(payload)
+        value: Final = _DECODED_JSON.validate_python(json.loads(payload))
     except ValueError:
         return False
     if value is None:

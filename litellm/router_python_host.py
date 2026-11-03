@@ -16,6 +16,7 @@ from typing import (
     cast,  # noqa: TID251  # untyped litellm globals: the live config view and the callback lists
 )
 
+from pydantic import TypeAdapter
 from typing_extensions import overload
 
 import litellm
@@ -46,6 +47,8 @@ CallbackList: TypeAlias = Literal[
 ]
 
 Endpoint: TypeAlias = Callable[..., object]
+
+_LITELLM_GLOBAL: Final = TypeAdapter(object)
 
 
 class PythonHost:
@@ -116,7 +119,7 @@ class PythonHost:
         return litellm.logging_callback_manager
 
     def callback_list(self, name: CallbackList) -> list[object]:  # mutable-ok: the process callback list itself
-        value: Final = getattr(litellm, name)
+        value: Final = _LITELLM_GLOBAL.validate_python(getattr(litellm, name))
         return cast(list[object], value)  # cast-ok: the process callback list is an untyped litellm global
 
     def set_callback_list(self, name: CallbackList, value: list[object]) -> None:  # mutable-ok: assigned as given

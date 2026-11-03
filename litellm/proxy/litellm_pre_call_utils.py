@@ -14,6 +14,7 @@ from typing import (
     Any,
     Final,
     Literal,
+    Protocol,
     TypeAlias,
     cast,  # noqa: TID251  # narrows untyped deployment and credential payloads
 )
@@ -49,7 +50,7 @@ from litellm.constants import (
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import merged_guardrail_entries, without_server_streaming_classification
-from litellm.litellm_core_utils.core_helpers import is_codex_user_agent, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import is_codex_user_agent, normalize_drop_params, require_attributes
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
@@ -3562,6 +3563,10 @@ def _warn_stale_team_alias_once(warning_key: str, message: str, *args: str) -> N
     verbose_proxy_logger.warning(message, *args)
 
 
+class _SupportsStartswith(Protocol):
+    def startswith(self, prefix: str, /) -> bool: ...
+
+
 def _update_model_if_team_alias_exists(
     data: dict,
     user_api_key_dict: UserAPIKeyAuth,
@@ -3596,7 +3601,7 @@ def _update_model_if_team_alias_exists(
 
     # Skip alias rewrite if this model resolves to team-specific deployments
     # (team models use team_public_model_name, not model_aliases)
-    aliased_target: Final = user_api_key_dict.team_model_aliases[_model]
+    aliased_target: Final[object] = user_api_key_dict.team_model_aliases[_model]
 
     # Optional bypass for stale aliases from pre-PR deployments:
     # only enabled via feature flag to preserve backwards compatibility.
@@ -3607,7 +3612,9 @@ def _update_model_if_team_alias_exists(
     enable_stale_alias_bypass: Final = _ENABLE_TEAM_STALE_ALIAS_BYPASS
     # Check if the alias points to a team-scoped UUID name
     # (format: "model_name_{team_id}_{uuid}")
-    is_stale_team_alias: Final = aliased_target.startswith(f"model_name_{user_api_key_dict.team_id}_")
+    is_stale_team_alias: Final = require_attributes(aliased_target, _SupportsStartswith, "startswith").startswith(
+        f"model_name_{user_api_key_dict.team_id}_"
+    )
     if is_stale_team_alias and llm_router:
         if aliased_target not in llm_router.registry().index("model_name"):
             _warn_stale_team_alias_once(

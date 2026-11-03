@@ -3,6 +3,7 @@ import os
 from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
@@ -10,6 +11,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -28,6 +30,8 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class PangeaGuardrailMissingSecrets(Exception):
@@ -137,9 +141,13 @@ class PangeaHandler(CustomGuardrail):
         response.raise_for_status()
 
         result: Final = response.json()
+        decoded_result: Final = decoded_json_object(_DECODED_JSON.validate_python(result))
+        verdict: Final = decoded_json_object(decoded_result.get("result", {}))
 
-        if result.get("result", {}).get("blocked"):
-            verbose_proxy_logger.warning("Pangea Guardrail (%s): Request blocked. Response: %s", hook_name, result)
+        if verdict.get("blocked"):
+            verbose_proxy_logger.warning(
+                "Pangea Guardrail (%s): Request blocked. Response: %s", hook_name, decoded_result
+            )
             raise HTTPException(
                 status_code=400,  # Bad Request, indicating violation
                 detail={
@@ -148,7 +156,7 @@ class PangeaHandler(CustomGuardrail):
                 },
             )
         verbose_proxy_logger.debug(
-            "Pangea Guardrail (%s): Request passed. Response: %s", hook_name, result.get("result", {}).get("detectors")
+            "Pangea Guardrail (%s): Request passed. Response: %s", hook_name, verdict.get("detectors")
         )
 
         return result

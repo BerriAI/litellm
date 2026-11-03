@@ -356,8 +356,8 @@ class LazyFeatureMiddleware:
             fastapi_app.state.lazy_locks = {}
 
     @property
-    def _loaded(self) -> set:
-        return self._fastapi_app.state.lazy_loaded
+    def _loaded(self) -> set[str]:
+        return _lazy_loaded(self._fastapi_app)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         # Short-circuit once every feature has loaded.

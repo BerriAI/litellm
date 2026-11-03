@@ -63,6 +63,7 @@ from litellm.litellm_core_utils.bug_report import (
 from litellm.litellm_core_utils.core_helpers import (
     finite_cost,
     get_or_create_metadata_bucket,
+    has_attributes,
     independent_snapshot,
     is_expected_client_error,
     redact_nested_match_and_regex_keys,
@@ -683,6 +684,10 @@ class _DispatchesSuccessHandlers(Protocol):
 
 def _as_success_dispatcher(logging_obj: _DispatchesSuccessHandlers) -> _DispatchesSuccessHandlers:
     return logging_obj
+
+
+class _ClosesAsync(Protocol):
+    def aclose(self) -> Awaitable[object]: ...
 
 
 def serialize_http_exception_detail(
@@ -4600,7 +4605,7 @@ class ProxyBaseLLMRequestProcessing:
                 ):
                     await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
 
-            if hasattr(response, "aclose"):
+            if has_attributes(response, _ClosesAsync, "aclose"):
                 try:
                     await response.aclose()
                 except BaseException as e:  # noqa: BLE001

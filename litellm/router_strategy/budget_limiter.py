@@ -26,7 +26,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import groupby
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from pydantic import TypeAdapter
 
@@ -39,6 +39,7 @@ from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.batch_utils import batch_charged_once_marker_key, batch_id_to_charge_once
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
+    require_attributes,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds_from
 from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
@@ -53,6 +54,10 @@ from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 DEFAULT_REDIS_SYNC_INTERVAL: Final = 1
 _CALLBACK_FIELDS: Final = TypeAdapter(dict[str, object])
 _BATCH_CHARGE_VALUES: Final = TypeAdapter(tuple[object, float])
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
 
 
 class _LiteLLMParamsDictView:
@@ -878,7 +883,7 @@ class RouterBudgetLimiting(CustomLogger):
     @staticmethod
     def should_init_router_budget_limiter(
         provider_budget_config: dict | None,
-        model_list: list[DeploymentTypedDict] | list[dict[str, Any]] | None = None,
+        model_list: Sequence[Mapping[str, object]] | None = None,
     ):
         """
         Returns `True` if the router budget routing settings are set and RouterBudgetLimiting should be initialized
@@ -898,7 +903,7 @@ class RouterBudgetLimiting(CustomLogger):
             return False
 
         for _model in model_list:
-            _litellm_params = _model.get("litellm_params", {})
+            _litellm_params = require_attributes(_model.get("litellm_params", {}), _SupportsGet, "get")
             if _litellm_params.get("max_budget") or _litellm_params.get("budget_duration") is not None:
                 return True
         return False

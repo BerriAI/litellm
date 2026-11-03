@@ -15,6 +15,7 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.base_llm.guardrail_translation.utils import (
@@ -49,6 +50,10 @@ class _GraySwanMonitorResponse(TypedDict):
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
     pass
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
 
 
 class _GraySwanMonitorHTTPResponse(Protocol):
@@ -614,9 +619,12 @@ class GraySwanGuardrail(CustomGuardrail):
         if not headers:
             headers = (request_data.get("metadata") or {}).get("headers")
         if not headers and logging_obj and getattr(logging_obj, "model_call_details", None):
-            headers = (
-                (logging_obj.model_call_details or {}).get("litellm_params", {}).get("metadata", {}).get("headers")
+            litellm_params: Final = require_attributes(
+                _DECODED_JSON.validate_python((logging_obj.model_call_details or {}).get("litellm_params", {})),
+                _SupportsGet,
+                "get",
             )
+            headers = require_attributes(litellm_params.get("metadata", {}), _SupportsGet, "get").get("headers")
         if not isinstance(headers, dict):
             return None
 

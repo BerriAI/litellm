@@ -32,7 +32,7 @@ class HTTPClient:
         uri: str,
         *,
         data: Mapping[str, object] | list | bytes | None = None,
-        json: Mapping[str, object] | list | None = None,
+        json: object = None,
         headers: dict[str, str] | None = None,
         **kwargs: Unpack[_RequestOptions],
     ) -> Any:

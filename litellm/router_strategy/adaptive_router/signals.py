@@ -15,8 +15,9 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import Final, Protocol
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes
 from litellm.router_strategy.adaptive_router.config import (
     LOOP_REPEAT_THRESHOLD,
     MIN_TURNS_FOR_CLEAN_CREDIT,
@@ -174,14 +175,23 @@ def _detect_failure(tool_results: Sequence[Mapping[str, object]]) -> bool:
     return False
 
 
-def _signature(call: Mapping[str, Any]) -> str:
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def _function_field(call: Mapping[str, object], key: str) -> object:
+    return require_attributes(call.get("function", {}), _SupportsGet, "get").get(key, "")
+
+
+def _signature(call: Mapping[str, object]) -> str:
     """Stable signature for loop detection: name + sorted JSON-ish args."""
-    name: Final = call.get("name") or call.get("function", {}).get("name", "")
-    call_args = call.get("arguments")
-    if call_args is None:
-        call_args = call.get("function", {}).get("arguments", "")
-    if isinstance(call_args, dict):
-        call_args = ",".join(f"{k}={call_args[k]}" for k in sorted(call_args.keys()))
+    name: Final = call.get("name") or _function_field(call, "name")
+    raw_args: Final = call.get("arguments")
+    call_args: Final = _function_field(call, "arguments") if raw_args is None else raw_args
+    args_mapping: Final = as_str_mapping(call_args)
+    if args_mapping is not None and isinstance(call_args, dict):
+        joined: Final = ",".join(f"{k}={args_mapping[k]}" for k in sorted(args_mapping.keys()))
+        return f"{name}({joined})"
     return f"{name}({call_args})"
 
 

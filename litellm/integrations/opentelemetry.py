@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -35,6 +35,7 @@ from litellm.integrations.otel.model.metadata import flatten_metadata
 from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.integrations.otel.routing import routing_decision_attributes
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
@@ -127,6 +128,22 @@ def _text_as_stored_on_span(span: Span, key: str, text: str) -> str:
 
 # Cap on credential-scoped providers held at once; each one owns an exporter thread.
 _MAX_DYNAMIC_TRACER_PROVIDERS: Final = 256
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+def _response_field(response_obj: object, key: str) -> object:
+    if not response_obj:
+        return None
+    return require_attributes(response_obj, _SupportsGet, "get").get(key)
+
+
+def _billed_usage(response_obj: object, call_type: str | None, litellm_params: Mapping[str, object] | None) -> object:
+    if not response_obj or is_unbilled_non_inference_call_from_params(call_type, litellm_params, response_obj):
+        return None
+    return _response_field(response_obj, "usage")
 
 
 class _CacheHitView(TypedDict, total=False):
@@ -2410,13 +2427,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     ) -> dict[str, object]:
         kv_pairs: Final[dict[str, object]] = {}
         for idx, tool_call in enumerate(tool_calls):
-            _function = tool_call.get("function")
+            _function: object = tool_call.get("function")
             if not _function:
                 continue
 
             keys = Function.__annotations__.keys()
             for key in keys:
-                _value = _function.get(key)
+                _value = require_attributes(_function, _SupportsGet, "get").get(key)
                 if _value:
                     kv_pairs[f"{SpanAttributes.LLM_COMPLETIONS.value}.{idx}.function_call.{key}"] = _value
 
@@ -2583,7 +2600,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # but Embeddings and Image-gen responses do not.  Fall back to
             # the litellm call ID so every call type can be correlated
             # across LiteLLM UI, Phoenix traces, and provider logs (Issue #8).
-            response_id = (response_obj.get("id") if response_obj else None) or standard_logging_payload.get("id")
+            response_id = _response_field(response_obj, "id") or standard_logging_payload.get("id")
             if response_id:
                 self.safe_set_attribute(
                     span=span,
@@ -2600,42 +2617,37 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 )
 
             # The model used to generate the response.
-            if response_obj and response_obj.get("model"):
+            response_model: Final = _response_field(response_obj, "model")
+            if response_model:
                 self.safe_set_attribute(
                     span=span,
                     key=SpanAttributes.LLM_RESPONSE_MODEL.value,
-                    value=response_obj.get("model"),
+                    value=response_model,
                 )
 
             self._set_service_tier_attributes(span=span, standard_logging_payload=standard_logging_payload)
 
-            usage: Final = (
-                response_obj.get("usage")
-                if response_obj
-                and not is_unbilled_non_inference_call_from_params(
-                    kwargs.get("call_type"), litellm_params, response_obj
-                )
-                else None
-            )
+            usage: Final = _billed_usage(response_obj, kwargs.get("call_type"), litellm_params)
             if usage:
+                usage_fields: Final = require_attributes(usage, _SupportsGet, "get")
                 self.safe_set_attribute(
                     span=span,
                     key=SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS.value,
-                    value=usage.get("total_tokens"),
+                    value=usage_fields.get("total_tokens"),
                 )
 
                 # The number of tokens used in the LLM response (completion).
                 self.safe_set_attribute(
                     span=span,
                     key=SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS.value,
-                    value=usage.get("completion_tokens"),
+                    value=usage_fields.get("completion_tokens"),
                 )
 
                 # The number of tokens used in the LLM prompt.
                 self.safe_set_attribute(
                     span=span,
                     key=SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS.value,
-                    value=usage.get("prompt_tokens"),
+                    value=usage_fields.get("prompt_tokens"),
                 )
 
                 ########################################################################

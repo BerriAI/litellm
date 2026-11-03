@@ -19,7 +19,7 @@ from datetime import datetime as dt_object
 from enum import Enum
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Protocol, cast
 
 from httpx import Response, Timeout
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -87,6 +87,7 @@ from litellm.litellm_core_utils.core_helpers import (
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
     reports_native_messages_cost,
+    require_attributes,
     set_response_cost_in_hidden_params,
     single_log_line,
 )
@@ -666,6 +667,18 @@ class UsageCaptureObservation:
             return cls(serialized, provenance, response_cost)
 
 
+class _A2AUsageSlot(Protocol):
+    usage: Mapping[str, object] | None
+
+
+class _A2AResponseCopier(Protocol):
+    model_copy: Callable[..., _A2AUsageSlot]
+
+
+class _MetadataLookup(Protocol):
+    get: Callable[[str], object]
+
+
 class Logging(LiteLLMLoggingBaseClass):
     usage_capture_callback: ClassVar[
         Callable[
@@ -947,7 +960,9 @@ class Logging(LiteLLMLoggingBaseClass):
         new_call.start_time = start_time
         new_call.litellm_params = litellm_params
         new_call.model_call_details = {
-            **{key: value for key, value in self.model_call_details.items() if not key.startswith("_accounting_")},
+            **{
+                key: value for key, value in self._model_call_details_view.items() if not key.startswith("_accounting_")
+            },
             "litellm_call_id": litellm_call_id,
             "start_time": start_time,
             "first_api_call_start_time": None,
@@ -2963,7 +2978,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 if frame.get("type") == "response.done"
             )
             if not measured:
-                metered: Final = self.model_call_details.get(REALTIME_METERED_USAGE_KEY)
+                metered: Final[object] = self.model_call_details.get(REALTIME_METERED_USAGE_KEY)
                 return {
                     "id": self.litellm_call_id,
                     "usage": {"metered_usage": TypeAdapter(object).dump_python(metered, mode="json")}
@@ -5372,7 +5387,7 @@ class Logging(LiteLLMLoggingBaseClass):
         httpx_response: Final[Response | None] = self.model_call_details.get("httpx_response", None)
         if httpx_response is None:
             raise ValueError("Google GenAI Generate Content: httpx_response is None")
-        dict_result: Final = httpx_response.json()
+        dict_result: Final[GenerateContentResponseBody] = httpx_response.json()
         result = litellm.VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
             completion_response=dict_result,
             model_response=litellm.ModelResponse(),
@@ -5385,7 +5400,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         return result
 
-    def _handle_a2a_response_logging(self, result: Any) -> object:
+    def _handle_a2a_response_logging(self, result: object) -> object:
         """
         Handles logging for A2A (Agent-to-Agent) responses.
 
@@ -5404,7 +5419,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return result
 
         # Deep copy result and add usage
-        result_copy: Final = result.model_copy(deep=True)
+        result_copy: Final = require_attributes(result, _A2AResponseCopier, "model_copy").model_copy(deep=True)
         result_copy.usage = usage.model_dump() if hasattr(usage, "model_dump") else dict(usage)
         return result_copy
 
@@ -7403,7 +7418,7 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def get_standard_logging_payload_trace_id(
         logging_obj: Logging,
-        litellm_params: Mapping[str, Any],
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Returns the `litellm_trace_id` for this request
@@ -7419,9 +7434,13 @@ class StandardLoggingPayloadSetup:
         """
         dynamic_litellm_session_id: Final = litellm_params.get("litellm_session_id")
         dynamic_litellm_trace_id: Final = litellm_params.get("litellm_trace_id")
-        metadata: Final[Mapping[str, object] | None] = litellm_params.get("metadata")
-        metadata_session_id: Final = metadata.get("session_id") if metadata else None
-        metadata_trace_id: Final = metadata.get("trace_id") if metadata else None
+        metadata: Final = litellm_params.get("metadata")
+        metadata_session_id: Final = (
+            require_attributes(metadata, _MetadataLookup, "get").get("session_id") if metadata else None
+        )
+        metadata_trace_id: Final = (
+            require_attributes(metadata, _MetadataLookup, "get").get("trace_id") if metadata else None
+        )
 
         ordered_candidates: Final[tuple[object, object, object, object]] = (
             (dynamic_litellm_trace_id, dynamic_litellm_session_id, metadata_trace_id, metadata_session_id)
@@ -7436,7 +7455,7 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def get_standard_logging_payload_session_id(
         logging_obj: Logging,
-        litellm_params: Mapping[str, Any],
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Returns the end-user/conversation `litellm_session_id` for this request, independent of trace_id.
@@ -7451,8 +7470,10 @@ class StandardLoggingPayloadSetup:
         dynamic_litellm_session_id: Final[object] = litellm_params.get("litellm_session_id")
         if dynamic_litellm_session_id:
             return str(dynamic_litellm_session_id)
-        metadata: Final[Mapping[str, object] | None] = litellm_params.get("metadata")
-        metadata_session_id: Final = metadata.get("session_id") if metadata else None
+        metadata: Final = litellm_params.get("metadata")
+        metadata_session_id: Final = (
+            require_attributes(metadata, _MetadataLookup, "get").get("session_id") if metadata else None
+        )
         if metadata_session_id:
             return str(metadata_session_id)
         return logging_obj.litellm_session_id

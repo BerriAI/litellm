@@ -156,10 +156,12 @@ from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import (
+    attribute_or_none,
     coerce_token_limit,
     get_or_create_metadata_bucket,
     independent_snapshot,
     is_expected_client_error,
+    require_attributes,
 )
 from litellm.litellm_core_utils.deployment_pricing import pricing_models
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
@@ -5381,11 +5383,20 @@ def _config_cache_key(param_name: str) -> str:
     return f"litellm_config:param:{param_name}"
 
 
-def _pack_config_row(row: Any) -> dict[str, object]:
+class _PackableConfigRow(Protocol):
+    @property
+    def param_name(self) -> object: ...
+
+    @property
+    def param_value(self) -> object: ...
+
+
+def _pack_config_row(row: object) -> dict[str, object]:
+    config_row: Final = require_attributes(row, _PackableConfigRow, "param_name", "param_value")
     return {
-        "param_name": row.param_name,
-        "param_value": row.param_value,
-        "reload_revision": getattr(row, "reload_revision", None),
+        "param_name": config_row.param_name,
+        "param_value": config_row.param_value,
+        "reload_revision": attribute_or_none(row, "reload_revision"),
     }
 
 
@@ -5974,7 +5985,7 @@ class PrismaClient:
         """
         stale_read_engine: Final = _StaleReadEngine.observe(self.read_db)
         try:
-            return await self.db.query_first(sql_query, *args)
+            return await _query_first_row(self.db, sql_query, *args)
         except Exception as e:
             if "cached plan must not change result type" not in str(e):
                 raise
@@ -5989,7 +6000,7 @@ class PrismaClient:
                 force_recreate=True,
                 stale_read_engine=stale_read_engine,
             )
-            return await self.db.query_first(sql_query, *args)
+            return await _query_first_row(self.db, sql_query, *args)
 
     @backoff.on_exception(
         backoff.expo,

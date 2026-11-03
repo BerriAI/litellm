@@ -48,7 +48,20 @@ from datetime import datetime, timezone
 from functools import lru_cache, partial
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, TypeAlias, TypeVar, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Generic,
+    Literal,
+    NoReturn,
+    Optional,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    Union,
+    cast,
+)
 
 import anyio
 import httpx
@@ -129,6 +142,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
     get_parent_otel_span_from_kwargs,
+    has_attributes,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
@@ -542,7 +556,6 @@ if TYPE_CHECKING:
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
     )
-    from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
     from litellm.types.llms.openai import (
         ResponseAPIUsage,
         ResponseIncompleteEvent,
@@ -685,6 +698,10 @@ _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
 _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 _DEPLOYMENTS_ADAPTER: Final = TypeAdapter(Sequence[Mapping[str, object]])
+
+
+class _SupportsAclose(Protocol):
+    def aclose(self) -> Awaitable[object]: ...
 
 
 def _extend_trailing_text_block(blocks: Sequence[Mapping[str, object]], text: str) -> Sequence[Mapping[str, object]]:
@@ -1530,8 +1547,8 @@ class PythonCore(DeprecatedRouterMembers):
 
     async def call(self, op: str, request: Mapping[str, object]) -> object:
         """Run one endpoint (``acompletion``, ``aembedding``, ...) with the request's keyword payload."""
-        result: Final = getattr(self, op)(**request)
-        return await result if inspect.isawaitable(result) else result
+        result: Final = _OPAQUE_VALUE_ADAPTER.validate_python(getattr(self, op)(**request))
+        return _OPAQUE_VALUE_ADAPTER.validate_python(await result) if inspect.isawaitable(result) else result
 
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
     tenacity = None
@@ -4056,7 +4073,7 @@ class PythonCore(DeprecatedRouterMembers):
                     )
 
                     # If fallback returns a streaming response, iterate over it
-                    if hasattr(fallback_response, "__aiter__"):
+                    if has_attributes(fallback_response, AsyncIterable[object], "__aiter__"):
                         PythonCore._carry_partial_spend_to_fallback(fallback_response, cut_partial)
                         prepared_fallback_hidden_params = PythonCore._adopt_fallback_response_headers(
                             wrapper_ref, fallback_response
@@ -4111,7 +4128,7 @@ class PythonCore(DeprecatedRouterMembers):
                 with anyio.CancelScope(shield=True):
                     await close_model_response()
                     await held_slot.aclose()
-                    if fallback_response is not None and hasattr(fallback_response, "aclose"):
+                    if fallback_response is not None and has_attributes(fallback_response, _SupportsAclose, "aclose"):
                         try:
                             await fallback_response.aclose()
                         except BaseException as close_error:
@@ -4202,7 +4219,7 @@ class PythonCore(DeprecatedRouterMembers):
 
     @staticmethod
     def _combine_responses_fallback_usage(
-        fallback_item: "BaseLiteLLMOpenAIResponseObject",
+        fallback_item: object,
         partial_usage: "ResponseAPIUsage",
     ) -> None:
         """
@@ -4753,7 +4770,7 @@ class PythonCore(DeprecatedRouterMembers):
                 include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
             )
             prepared_fallback_hidden_params: Final = adopt_headers(fallback_response)
-            if hasattr(fallback_response, "__aiter__"):
+            if has_attributes(fallback_response, AsyncIterable[object], "__aiter__"):
                 async for fallback_item in seam.splice(fallback_response):
                     PythonCore._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                     if partial_usage is not None:
@@ -4772,7 +4789,7 @@ class PythonCore(DeprecatedRouterMembers):
                 raise fallback_error.original_exception from fallback_error
             raise
         finally:
-            if fallback_response is not None and hasattr(fallback_response, "aclose"):
+            if fallback_response is not None and has_attributes(fallback_response, _SupportsAclose, "aclose"):
                 with anyio.CancelScope(shield=True):
                     try:
                         await fallback_response.aclose()
@@ -7458,18 +7475,16 @@ class PythonCore(DeprecatedRouterMembers):
                 )
                 else e
             )
-            fallback_response: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
-                await self.async_function_with_fallbacks_common_utils(
-                    e=fallback_trigger,
-                    disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
-                    fallbacks=fallbacks,
-                    context_window_fallbacks=context_window_fallbacks,
-                    content_policy_fallbacks=content_policy_fallbacks,
-                    model_group=model_group,
-                    args=(),
-                    kwargs=initial_kwargs,
-                    include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
-                )
+            fallback_response: Final = await self.async_function_with_fallbacks_common_utils(
+                e=fallback_trigger,
+                disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
+                fallbacks=fallbacks,
+                context_window_fallbacks=context_window_fallbacks,
+                content_policy_fallbacks=content_policy_fallbacks,
+                model_group=model_group,
+                args=(),
+                kwargs=initial_kwargs,
+                include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
             )
             async for fallback_item in self._aanthropic_messages_yield_recovered(fallback_response, wrapper):
                 yield fallback_item
@@ -9029,7 +9044,7 @@ class PythonCore(DeprecatedRouterMembers):
         args: tuple,
         kwargs: dict,
         input_kwargs: dict,
-    ) -> Any | None:
+    ) -> object | None:
         """Same-model-group retry after a failed deployment; returns None if not applicable."""
         strategy, _ = self._get_routing_context(original_model_group, kwargs)
         if strategy != "simple-shuffle":
@@ -9087,7 +9102,7 @@ class PythonCore(DeprecatedRouterMembers):
             "original_model_group": original_model_group,
         }
         try:
-            return await run_async_fallback(*args, **failover_kwargs)
+            return _OPAQUE_VALUE_ADAPTER.validate_python(await run_async_fallback(*args, **failover_kwargs))
         except (openai.APIError, RouterRateLimitError, RouterRateLimitErrorBasic):
             # Expected model-level failure on the retried deployment. All
             # litellm provider errors derive from openai.APIError; if every
@@ -9202,9 +9217,11 @@ class PythonCore(DeprecatedRouterMembers):
                         "original_model_group": original_model_group,
                     }
                 )
-                response = await run_async_fallback(
-                    *args,
-                    **input_kwargs,
+                response = _OPAQUE_VALUE_ADAPTER.validate_python(
+                    await run_async_fallback(
+                        *args,
+                        **input_kwargs,
+                    )
                 )
                 return response
 
@@ -9235,9 +9252,11 @@ class PythonCore(DeprecatedRouterMembers):
                     }
                 )
 
-                response = await run_async_fallback(
-                    *args,
-                    **input_kwargs,
+                response = _OPAQUE_VALUE_ADAPTER.validate_python(
+                    await run_async_fallback(
+                        *args,
+                        **input_kwargs,
+                    )
                 )
 
                 return response
@@ -9260,9 +9279,11 @@ class PythonCore(DeprecatedRouterMembers):
                         }
                     )
 
-                    response = await run_async_fallback(
-                        *args,
-                        **input_kwargs,
+                    response = _OPAQUE_VALUE_ADAPTER.validate_python(
+                        await run_async_fallback(
+                            *args,
+                            **input_kwargs,
+                        )
                     )
                     return response
 
@@ -9293,9 +9314,11 @@ class PythonCore(DeprecatedRouterMembers):
                         }
                     )
 
-                    response = await run_async_fallback(
-                        *args,
-                        **input_kwargs,
+                    response = _OPAQUE_VALUE_ADAPTER.validate_python(
+                        await run_async_fallback(
+                            *args,
+                            **input_kwargs,
+                        )
                     )
                     return response
                 else:
@@ -9345,9 +9368,11 @@ class PythonCore(DeprecatedRouterMembers):
                     }
                 )
 
-                response = await run_async_fallback(
-                    *args,
-                    **input_kwargs,
+                response = _OPAQUE_VALUE_ADAPTER.validate_python(
+                    await run_async_fallback(
+                        *args,
+                        **input_kwargs,
+                    )
                 )
 
                 return response
@@ -9555,7 +9580,7 @@ class PythonCore(DeprecatedRouterMembers):
         try:
             self._handle_mock_testing_rate_limit_error(model_group=model_group, kwargs=kwargs)
             # if the function call is successful, no exception will be raised and we'll break out of the loop
-            response = await self.make_call(original_function, *args, **kwargs)
+            response = _OPAQUE_VALUE_ADAPTER.validate_python(await self.make_call(original_function, *args, **kwargs))
             response = add_retry_headers_to_response(response=response, attempted_retries=0, max_retries=None)
             return response
         except Exception as e:
@@ -17705,7 +17730,8 @@ def _name_core_members_after_old_names() -> None:
     # An old member that moved to ``_core_<name>`` can still be reached as the function itself
     # (``cached_deployment_model_info`` is an lru_cache over one), so errors that name the method
     # keep the name it had before.
-    for name, member in vars(PythonCore).items():
+    core_members: Final = vars(PythonCore)
+    for name, member in zip(core_members, map(_OPAQUE_VALUE_ADAPTER.validate_python, core_members.values())):
         old_name = name.removeprefix("_core_")
         if old_name != name and inspect.isfunction(member) and hasattr(DeprecatedRouterMembers, old_name):
             member.__qualname__ = f"Router.{old_name}"

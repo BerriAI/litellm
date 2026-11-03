@@ -939,7 +939,7 @@ def _idle_router_groups(
     zero: Final = _summed_agg_row(())
     idle: Final = frozenset(
         key
-        for key in (_strategy_router_key(deployment) for deployment in llm_router.registry().all() or ())
+        for key in map(_strategy_router_key, llm_router.registry().all() or ())
         if key is not None and key not in covered
     )
     return tuple(

@@ -194,6 +194,9 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):
     - /agentCard/v1.0
     """
 
+    if TYPE_CHECKING:
+        base_url: str
+
     async def get_agent_card(
         self,
         relative_card_path: str | None = None,
