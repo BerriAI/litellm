@@ -4624,7 +4624,7 @@ class ProxyBaseLLMRequestProcessing:
     _finalize_streaming_generator_cleanup = finalize_streaming_generator_cleanup
 
     @staticmethod
-    def _add_stream_overhead(logging_obj: LiteLLMLoggingObj | None, chunk_received_at: float) -> None:
+    def add_stream_overhead(logging_obj: LiteLLMLoggingObj | None, chunk_received_at: float) -> None:
         """The proxy's own work on one chunk, summed so the success callback can add it to the stamped overhead."""
         if logging_obj is not None:
             logging_obj.add_streaming_overhead(time.perf_counter() - chunk_received_at)
@@ -4725,7 +4725,7 @@ class ProxyBaseLLMRequestProcessing:
                 delivered_chunk = delivered_chunk or chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
                 serialized = serialize_chunk(chunk)
                 recent_tail = advance_sse_tail(recent_tail, serialized)
-                ProxyBaseLLMRequestProcessing._add_stream_overhead(timing_sink, chunk_received_at)
+                ProxyBaseLLMRequestProcessing.add_stream_overhead(timing_sink, chunk_received_at)
                 yield serialized
             held_tail: Final = flush_tail() if flush_tail is not None else b""
             if held_tail:

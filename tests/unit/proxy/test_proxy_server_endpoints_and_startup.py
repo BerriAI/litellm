@@ -5655,15 +5655,27 @@ def _content_policy_router(**router_kwargs: object) -> litellm.Router:
         model_list=[
             {
                 "model_name": "primary",
-                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "primary answered"},
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake",
+                    "mock_response": "primary answered",
+                },
             },
             {
                 "model_name": "secondary",
-                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "secondary answered"},
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake",
+                    "mock_response": "secondary answered",
+                },
             },
             {
                 "model_name": "backup",
-                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "fake", "mock_response": "backup answered"},
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-nano",
+                    "api_key": "fake",
+                    "mock_response": "backup answered",
+                },
             },
         ],
         num_retries=0,
@@ -5743,7 +5755,9 @@ async def test_db_content_policy_fallbacks_layer_over_the_litellm_settings_rules
     "invalid_rule",
     [{"secondary": "backup"}, ["backup"], dict[str, list[str]](), {"secondary": ["backup"], "primary": ["secondary"]}],
 )
-async def test_an_invalid_db_content_policy_rule_skips_only_itself(monkeypatch: pytest.MonkeyPatch, invalid_rule: object):
+async def test_an_invalid_db_content_policy_rule_skips_only_itself(
+    monkeypatch: pytest.MonkeyPatch, invalid_rule: object
+):
     monkeypatch.setattr(litellm, "content_policy_fallbacks", [{"primary": ["backup"]}])
     router: Final = _content_policy_router()
 
@@ -7497,6 +7511,62 @@ async def test_async_data_generator_cleanup_on_early_exit():
 
     # Verify aclose was called on the response to release the HTTP connection
     mock_response.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_records_per_chunk_work_on_the_logging_object():
+    """The overhead header is stamped before any chunk is read, so the time the proxy spends in the
+    per-chunk hook on a chat stream has to be recorded on the logging object for the success callback."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    logging_obj = Logging(
+        model="gpt-5.4-mini",
+        messages=[{"role": "user", "content": "test"}],
+        stream=True,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="call-stream",
+        function_id="fn",
+    )
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gpt-5.4-mini",
+        "messages": [{"role": "user", "content": "test"}],
+        "litellm_logging_obj": logging_obj,
+    }
+    mock_chunks = [
+        {"choices": [{"delta": {"content": "Hello"}}]},
+        {"choices": [{"delta": {"content": " world"}}]},
+        {"choices": [{"delta": {"content": " more"}}]},
+    ]
+
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+    async def mock_streaming_iterator(*args, **kwargs):
+        for chunk in mock_chunks:
+            yield chunk
+
+    async def slow_hook(**kwargs):
+        await asyncio.sleep(0.02)
+        return kwargs.get("response")
+
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = mock_streaming_iterator
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook = MagicMock(return_value=True)
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(side_effect=slow_hook)
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    mock_response = MagicMock()
+    mock_response.aclose = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        yielded = [
+            data async for data in async_data_generator(mock_response, mock_user_api_key_dict, mock_request_data)
+        ]
+
+    assert len([frame for frame in yielded if frame.startswith("data: {")]) == len(mock_chunks)
+    assert logging_obj.streaming_overhead_ms >= 50
 
 
 def _guarded_chain_logging(chain):

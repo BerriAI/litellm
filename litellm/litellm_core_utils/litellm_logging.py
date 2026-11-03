@@ -913,7 +913,6 @@ class Logging(LiteLLMLoggingBaseClass):
         # Timing for results that cannot carry ``_hidden_params`` (plain-dict /v1/messages
         # responses and the bridge stream wrappers); see ``update_response_metadata``.
         self.response_timing_metrics: Mapping[str, float] = {}
-        # The proxy's own per-chunk work on a stream, added to the stamped overhead in the logging payload
         self.streaming_overhead_ms: float = 0.0
 
         # Passthrough endpoint guardrails config for field targeting
