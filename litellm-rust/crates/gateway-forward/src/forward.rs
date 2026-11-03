@@ -9,6 +9,7 @@ use axum::{
     extract::{ConnectInfo, DefaultBodyLimit, Request, State},
     http::{HeaderValue, StatusCode, Uri, Version, header},
     response::Response,
+    serve::ListenerExt,
 };
 use hyper_util::{
     client::legacy::{Client, connect::HttpConnector},
@@ -45,10 +46,12 @@ impl Forward {
         {
             return Err(Error::Upstream);
         }
+        let mut connector = HttpConnector::new();
+        connector.set_nodelay(true);
         let client = Client::builder(TokioExecutor::new())
             .pool_timer(TokioTimer::new())
             .pool_idle_timeout(upstream_keepalive / 2)
-            .build_http();
+            .build(connector);
         Ok(Self {
             upstream,
             client,
@@ -72,6 +75,11 @@ impl Forward {
         let upgrades = self.upgrades.clone();
         let _close_on_drop = upgrades.close_on_drop();
         let draining = upgrades.clone();
+        let listener = listener.tap_io(|stream| {
+            if let Err(error) = stream.set_nodelay(true) {
+                tracing::warn!(%error, "could not disable Nagle on a client connection");
+            }
+        });
         let result = axum::serve(
             listener,
             self.router()
