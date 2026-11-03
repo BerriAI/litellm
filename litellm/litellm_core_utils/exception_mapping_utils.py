@@ -278,54 +278,43 @@ class _ProviderHTTPException(Protocol):
 _ERROR_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
-def _validated_error_body(error_obj: _ProviderHTTPException) -> Mapping[str, object] | None:
-    """The exception's parsed error body as a dict, or None when it is not one."""
-    raw_body: Final = attribute_or_none(error_obj, "body")
-    if raw_body is None:
-        return None
+def _body_request_id(raw_body: object) -> str | None:
     try:
-        validated: Final = _ERROR_BODY_ADAPTER.validate_python(raw_body)
+        body: Final = _ERROR_BODY_ADAPTER.validate_python(raw_body)
     except ValidationError:
-        return None
-    return validated
-
-
-def _get_error_request_id(error_obj: _ProviderHTTPException) -> str | None:
-    """
-    Return the provider request id carried in an error object's body, if any.
-
-    Checks `body["request_id"]` (a top-level sibling of `error`, e.g.
-    `{"error": {...}, "request_id": "..."}` from DashScope/Bailian) and
-    `body["error"]["request_id"]`.
-    """
-    body: Final = _validated_error_body(error_obj)
-    if body is None:
         return None
 
     body_request_id: Final = body.get("request_id")
     if isinstance(body_request_id, str) and body_request_id:
         return body_request_id
 
-    nested_error: Final = body.get("error")
-    if isinstance(nested_error, dict):
-        nested_request_id: Final = nested_error.get("request_id")
-        if isinstance(nested_request_id, str) and nested_request_id:
-            return nested_request_id
+    nested_error: Final = as_str_mapping(body.get("error"))
+    if nested_error is None:
+        return None
+    nested_request_id: Final = nested_error.get("request_id")
+    return nested_request_id if isinstance(nested_request_id, str) and nested_request_id else None
 
-    return None
+
+def _get_error_request_id(error_obj: _ProviderHTTPException) -> str | None:
+    body_request_id: Final = _body_request_id(attribute_or_none(error_obj, "body"))
+    if body_request_id is not None:
+        return body_request_id
+
+    exception_request_id: Final = attribute_or_none(error_obj, "request_id")
+    if isinstance(exception_request_id, str) and exception_request_id:
+        return exception_request_id
+
+    response: Final = attribute_or_none(error_obj, "response")
+    if not isinstance(response, httpx.Response):
+        return None
+    try:
+        response_body: Final = _ERROR_BODY_ADAPTER.validate_json(response.content)
+    except (ValidationError, httpx.ResponseNotRead):
+        return None
+    return _body_request_id(response_body)
 
 
 def _get_error_message_with_request_id(error_obj: _ProviderHTTPException) -> str | None:
-    """
-    Extract the error message, preserving the provider request id when present.
-
-    Some providers (e.g. DashScope/Bailian) return the request id as a
-    top-level sibling of `error` in the response body, not inside
-    `error.message`. Extracting only the message drops it, leaving users
-    without the provider request id needed to investigate the failure
-    (https://github.com/BerriAI/litellm/issues/47839). Append it to the
-    extracted message when it is available and not already present.
-    """
     extracted_message: Final = get_error_message(error_obj=error_obj)
     if extracted_message is None:
         return None
