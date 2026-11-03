@@ -162,6 +162,11 @@ def _is_model_output(item: object) -> bool:
     return not (isinstance(item, Mapping) and item.get("type") in _MCP_AUTO_EXECUTE_OUTPUT_TYPES)
 
 
+def _input_items(request: Mapping[str, object] | None) -> tuple[object, ...]:
+    items: Final = None if request is None else request.get("input")
+    return tuple(items) if isinstance(items, list) else ()
+
+
 def _stored_responses_api_output(stored_response: object) -> ResponseInputParam | None:
     match stored_response:
         case {"object": "response", "output": list() as output}:
@@ -386,6 +391,26 @@ class ResponsesSessionHandler:
                 client_tool_search_loaded_tools(request.get("input"))
                 for request in stored_turns.proxy_server_requests[:turns]
                 if request is not None
+            )
+        )
+
+    @staticmethod
+    def items_through_previous_response(
+        stored_turns: StoredTurns,
+        previous_response_id: str,
+        client_response_ids: tuple[str, ...] = (),
+    ) -> tuple[object, ...]:
+        """Each stored turn's input items and then its output items, in conversation order, up to the response the
+        follow-up continues."""
+        turns: Final = _turns_through_referenced_response(
+            stored_turns.spend_logs, _referenced_request_ids(previous_response_id, client_response_ids)
+        )
+        return tuple(
+            chain.from_iterable(
+                (*_input_items(request), *(_stored_responses_api_output(_stored_response(spend_log)) or ()))
+                for spend_log, request in zip(
+                    stored_turns.spend_logs[:turns], stored_turns.proxy_server_requests[:turns], strict=True
+                )
             )
         )
 

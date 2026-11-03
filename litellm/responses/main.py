@@ -57,6 +57,7 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
+from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.responses.litellm_completion_transformation.transformation import (
     with_compaction_items_as_params,
 )
@@ -379,7 +380,12 @@ async def aresponses_api_with_mcp(
         None
         if hosted_mcp_claims is None
         else _claimed_mcp_items(
-            hosted_mcp_claims, original_mcp_tools, tool_server_map, direct_listing, mcp_tools_with_litellm_proxy
+            hosted_mcp_claims,
+            original_mcp_tools,
+            tool_server_map,
+            direct_listing,
+            mcp_tools_with_litellm_proxy,
+            await _conversation_items(input, previous_response_id, request_kwargs),
         )
     )
 
@@ -741,22 +747,49 @@ async def _direct_listing(
     )
 
 
+async def _conversation_items(
+    input: str | ResponseInputParam, previous_response_id: str | None, kwargs: Mapping[str, object]
+) -> tuple[object, ...]:
+    """The items the conversation already holds: the stored turns up to the previous response, then the input."""
+    client_ids: Final = previous_response_client_ids(previous_response_id, kwargs)
+    stored: Final = (
+        ()
+        if not previous_response_id
+        else ResponsesSessionHandler.items_through_previous_response(
+            await ResponsesSessionHandler.get_stored_turns_for_previous_response_id(previous_response_id, client_ids),
+            previous_response_id,
+            client_ids,
+        )
+    )
+    return (*stored, *(() if isinstance(input, str) else input))
+
+
 def _claimed_mcp_items(
     claims: "HostedMCPClaims",
     registered_tools: Sequence[MCPTool],
     tool_server_map: Mapping[str, str],
     direct_listing: "DirectListing",
     gateway_tools: Sequence[Mapping[str, object]],
+    conversation: Sequence[object],
 ) -> "OpenAIMCPItems":
-    from litellm.responses.mcp.openai_mcp_items import held_references, openai_mcp_items
+    from litellm.responses.mcp.openai_mcp_items import (
+        caller_labels,
+        held_references,
+        openai_mcp_items,
+        without_listings_the_context_holds,
+    )
 
-    return openai_mcp_items(
-        registered_tools,
-        tool_server_map,
-        claims.server_labels,
-        _registered_mcp_server,
-        direct_listing,
-        held_references(gateway_tools, _registered_mcp_server),
+    return without_listings_the_context_holds(
+        openai_mcp_items(
+            registered_tools,
+            tool_server_map,
+            claims.server_labels,
+            _registered_mcp_server,
+            direct_listing,
+            held_references(gateway_tools, _registered_mcp_server),
+            caller_labels(gateway_tools, _registered_mcp_server),
+        ),
+        conversation,
     )
 
 

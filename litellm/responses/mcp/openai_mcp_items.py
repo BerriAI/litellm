@@ -1,6 +1,6 @@
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from itertools import chain
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final
 
@@ -92,6 +92,43 @@ def held_references(
 
 
 @dataclass(frozen=True, slots=True)
+class CallerLabels:
+    """The server_label the caller gave each server, which OpenAI repeats on every mcp_list_tools and mcp_call item so
+    a client can match the items to its tools. A server takes the label of the first reference or claimed URL naming
+    it. A server listed only through a reference that names no registered server, such as a toolset, an access group
+    or the whole gateway, takes the label of the first such reference."""
+
+    by_server: Mapping[str, str]
+    otherwise: str | None
+
+    def label_for(self, server_keys: Sequence[str]) -> str | None:
+        return next(
+            (self.by_server[key.lower()] for key in server_keys if key.lower() in self.by_server), self.otherwise
+        )
+
+
+def _referenced_server(tool: Mapping[str, object], server_for: Callable[[str], MCPServer | None]) -> MCPServer | None:
+    url: Final = str(tool.get("server_url") or "")
+    return server_for(url.split("/")[-1]) if url.startswith(LITELLM_PROXY_MCP_SERVER_URL_PREFIX) else None
+
+
+def caller_labels(
+    gateway_tools: Sequence[Mapping[str, object]], server_for: Callable[[str], MCPServer | None]
+) -> CallerLabels:
+    """The labels of the gateway tools, where each claimed URL already reads as a reference to its server."""
+    references: Final = tuple(
+        (str(tool.get("server_label") or "unlabeled"), _referenced_server(tool, server_for)) for tool in gateway_tools
+    )
+    named: Final = chain.from_iterable(
+        ((name.lower(), label) for name in server_names(server)) for label, server in references if server is not None
+    )
+    return CallerLabels(
+        by_server=MappingProxyType(dict(reversed(tuple(named)))),
+        otherwise=next((label for label, server in references if server is None), None),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class _RegisteredTool:
     tool: MCPTool
     name: GatewayToolName
@@ -113,15 +150,31 @@ def _text(item: object, key: str) -> str | None:
 
 
 def _registered_tool(
-    tool: MCPTool, server_key: str, server_labels: Mapping[str, str], server_for: Callable[[str], MCPServer | None]
+    tool: MCPTool, server_key: str, labels: CallerLabels, server_for: Callable[[str], MCPServer | None]
 ) -> _RegisteredTool:
     server: Final = server_for(server_key)
     keys: Final = (server_key, *(server_names(server) if server is not None else ()))
-    label: Final = next((server_labels[key] for key in keys if key in server_labels), server_key)
     return _RegisteredTool(
         tool=tool,
-        name=GatewayToolName(server_label=label, name=strip_known_server_prefix(tool.name, server)),
+        name=GatewayToolName(
+            server_label=labels.label_for(keys) or server_key, name=strip_known_server_prefix(tool.name, server)
+        ),
         server_keys=keys,
+    )
+
+
+def _shared_names(names: Iterable[GatewayToolName]) -> frozenset[GatewayToolName]:
+    ordered: Final = sorted(names, key=lambda name: (name.server_label, name.name))
+    return frozenset(name for name, group in groupby(ordered) if len(tuple(group)) > 1)
+
+
+def _named_apart(registered: Sequence[_RegisteredTool]) -> tuple[_RegisteredTool, ...]:
+    """Each tool keeps its gateway name where its bare name would read the same as another tool's under one label,
+    as when a toolset spans two servers that each have a `search` tool."""
+    shared: Final = _shared_names(each.name for each in registered)
+    return tuple(
+        replace(each, name=replace(each.name, name=each.tool.name)) if each.name in shared else each
+        for each in registered
     )
 
 
@@ -155,10 +208,12 @@ def openai_mcp_items(
     server_for: Callable[[str], MCPServer | None],
     direct: DirectListing,
     held: HeldReferences,
+    labels: CallerLabels,
 ) -> OpenAIMCPItems:
-    registered: Final = tuple(
-        _registered_tool(tool, tool_server_map.get(tool.name, ""), server_labels, server_for)
-        for tool in registered_tools
+    registered: Final = _named_apart(
+        tuple(
+            _registered_tool(tool, tool_server_map.get(tool.name, ""), labels, server_for) for tool in registered_tools
+        )
     )
     direct_names: Final = MappingProxyType(
         {
@@ -183,6 +238,30 @@ def openai_mcp_items(
                 **{each.tool.name: each.name for each in registered if held.lets_run(each.server_keys, server_labels)},
                 **direct_names,
             }
+        ),
+    )
+
+
+def _listing(item: object) -> tuple[object, object]:
+    return _field(item, "tools"), _field(item, "error")
+
+
+def without_listings_the_context_holds(items: OpenAIMCPItems, context: Sequence[object]) -> OpenAIMCPItems:
+    """Leaves out a server's mcp_list_tools item when the latest one the conversation already holds for its
+    server_label, in the stored turns or the input, lists the same tools, since OpenAI lists a server once while its
+    list is in context. A listing that changed since, as after a revoke or a narrowed toolset, is listed again so the
+    caller sees the change. The listing itself always comes from the server; the conversation's item only decides
+    whether the caller needs to see it again."""
+    in_context: Final = MappingProxyType(
+        {_text(item, "server_label"): _listing(item) for item in context if _field(item, "type") == "mcp_list_tools"}
+    )
+    return replace(
+        items,
+        list_items=tuple(
+            item
+            for item in items.list_items
+            if _text(item, "server_label") not in in_context
+            or in_context[_text(item, "server_label")] != _listing(item)
         ),
     )
 

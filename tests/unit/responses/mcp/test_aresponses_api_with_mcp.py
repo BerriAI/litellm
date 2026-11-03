@@ -4350,3 +4350,224 @@ async def test_a_round_calling_a_claimed_and_a_held_tool_runs_the_claimed_one_an
         (items[4]["id"], _ASK_OUTPUT),
         ("call_wiki", _HANDED_BACK_OUTPUT),
     ]
+
+
+_DOCS_TOOL: Final = MappingProxyType({**_GITMCP_TOOL, "server_label": "react-docs"})
+
+
+def _labelled_reference(kind: str) -> Mapping[str, object]:
+    name: Final = "research" if kind == "toolset" else "deepwiki"
+    return {"type": "mcp", "server_label": "notes", "server_url": f"litellm_proxy/mcp/{name}", "require_approval": "never"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["toolset", "server"])
+async def test_every_mcp_item_of_a_gateway_reference_carries_the_label_the_caller_gave_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, kind: str
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
+    mcp_client: Final = _deepwiki_registered(monkeypatch)
+    if kind == "toolset":
+        _research_toolset(monkeypatch)
+    _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (_tool_call_round(_DEEPSEEK_MODEL, "deepwiki-ask_question"), _answer_round(_DEEPSEEK_MODEL)),
+        _DEEPSEEK_URL,
+    )
+
+    response: Final = await _gateway_hosted_mcp_request(
+        _DEEPSEEK_MODEL,
+        _ScriptedMCPServer(),
+        _DOCS_TOOL,
+        beside=(_labelled_reference(kind),),
+        caller=_key_holding_research() if kind == "toolset" else _key_holding("srv-deepwiki"),
+    )
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert _output_summary(response.output) == (
+        ("mcp_list_tools", "notes", None),
+        ("mcp_list_tools", "react-docs", None),
+        ("mcp_call", "notes", "ask_question"),
+        ("message", None, None),
+    )
+    assert [tool["name"] for tool in _item(response.output[0])["tools"]] == ["ask_question"]
+    assert mcp_client.call_tool.await_count == 1
+
+
+def _mirror_registered(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager: Final = mcp_server_manager.global_mcp_server_manager
+    mirror: Final = MCPServer(
+        server_id="srv-mirror",
+        name="mirror",
+        server_name="mirror",
+        url="https://mirror.example.com/mcp",
+        transport=MCPTransport.http,
+    )
+    monkeypatch.setattr(manager, "registry", {**manager.registry, mirror.server_id: mirror})
+    monkeypatch.setattr(
+        manager,
+        "resolve_toolset_tool_permissions",
+        AsyncMock(return_value={"srv-deepwiki": ["ask_question"], "srv-mirror": ["ask_question"]}),
+    )
+
+
+def _key_holding_research_on_both_servers() -> object:
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LitellmUserRoles, UserAPIKeyAuth
+
+    return UserAPIKeyAuth(
+        api_key="sk-caller",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-key", mcp_servers=["srv-deepwiki", "srv-mirror"], mcp_toolsets=["ts-research"]
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_toolset_spanning_two_servers_with_the_same_tool_lists_both_under_its_label_by_their_gateway_names(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
+    mcp_client: Final = _deepwiki_registered(monkeypatch)
+    _research_toolset(monkeypatch)
+    _mirror_registered(monkeypatch)
+    _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (_tool_call_round(_DEEPSEEK_MODEL, "mirror-ask_question"), _answer_round(_DEEPSEEK_MODEL)),
+        _DEEPSEEK_URL,
+    )
+
+    response: Final = await _gateway_hosted_mcp_request(
+        _DEEPSEEK_MODEL,
+        _ScriptedMCPServer(),
+        _DOCS_TOOL,
+        beside=(_labelled_reference("toolset"),),
+        caller=_key_holding_research_on_both_servers(),
+    )
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert _output_summary(response.output) == (
+        ("mcp_list_tools", "notes", None),
+        ("mcp_list_tools", "react-docs", None),
+        ("mcp_call", "notes", "mirror-ask_question"),
+        ("message", None, None),
+    )
+    assert sorted(tool["name"] for tool in _item(response.output[0])["tools"]) == [
+        "deepwiki-ask_question",
+        "mirror-ask_question",
+    ]
+    assert mcp_client.call_tool.await_count == 1
+
+
+_ASK_TOOL_LISTED: Final = MappingProxyType(
+    {
+        "name": "ask_question",
+        "description": _ASK_TOOL.description,
+        "input_schema": _ASK_TOOL.input_schema,
+        "annotations": {"read_only": False},
+    }
+)
+
+
+async def _first_turn_with_both_listings(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, server: _ScriptedMCPServer
+) -> tuple[ResponsesAPIResponse, respx.Route, Mapping[str, object]]:
+    _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
+    _deepwiki_registered(monkeypatch)
+    provider: Final = _serve_responses(
+        respx_mock, monkeypatch, (_answer_round(_DEEPSEEK_MODEL), _answer_round(_DEEPSEEK_MODEL)), _DEEPSEEK_URL
+    )
+    recorder: Final = _RoundRecorder()
+    response: Final = await litellm.aresponses(
+        model=_DEEPSEEK_MODEL,
+        input="Which servers can you use?",
+        tools=[dict(_GITMCP_TOOL), dict(_deepwiki_reference("never"))],
+        direct_client_factory=server.client_for,
+        litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
+        litellm_logging_obj=_rounds_logging_obj(recorder, "listed-turn"),
+        **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+    )
+    assert isinstance(response, ResponsesAPIResponse)
+    await _settle(lambda: len(recorder.logged) > 0)
+    return response, provider, recorder.logged[0]["response"]
+
+
+def _unlisted(output: Sequence[object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(item for item in map(_item, output) if item["type"] != "mcp_list_tools")
+
+
+async def _follow_up(
+    monkeypatch: pytest.MonkeyPatch,
+    server: _ScriptedMCPServer,
+    first: ResponsesAPIResponse,
+    stored_response: Mapping[str, object],
+    context: str,
+    listings: Sequence[Mapping[str, object]],
+) -> ResponsesAPIResponse:
+    question: Final = {"type": "message", "role": "user", "content": "Ask again"}
+    spend_logs: Final = _SpendLogs(
+        (
+            {
+                "request_id": first.id,
+                "session_id": "listed-session",
+                "proxy_server_request": {"input": "Which servers can you use?"},
+                "response": {**stored_response, "output": [*listings, *_unlisted(stored_response["output"])]},
+            },
+        )
+    )
+    _proxy_database(monkeypatch, SimpleNamespace(db=spend_logs))
+    follow_up: Final = await litellm.aresponses(
+        model=_DEEPSEEK_MODEL,
+        input=[question] if context == "stored_turn" else [*listings, question],
+        previous_response_id=first.id if context == "stored_turn" else None,
+        tools=[dict(_GITMCP_TOOL), dict(_deepwiki_reference("never"))],
+        direct_client_factory=server.client_for,
+        litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
+        **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+    )
+    assert isinstance(follow_up, ResponsesAPIResponse)
+    return follow_up
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context", ["stored_turn", "input"])
+async def test_a_follow_up_lists_no_server_again_whose_listing_the_conversation_already_holds(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, context: str
+):
+    server: Final = _ScriptedMCPServer()
+    first, provider, stored_response = await _first_turn_with_both_listings(respx_mock, monkeypatch, server)
+    listings: Final = tuple(_item(item) for item in stored_response["output"][:2])
+    assert listings == tuple(_item(item) for item in first.output[:2])
+    assert _output_summary(listings) == (("mcp_list_tools", "deepwiki", None), ("mcp_list_tools", "gitmcp", None))
+
+    follow_up: Final = await _follow_up(monkeypatch, server, first, stored_response, context, listings)
+
+    assert _output_types(follow_up.output) == ("message",)
+    assert len(server.opened) == 2
+    assert _sent_tool_names(_sent_body(provider, 1)) == ("deepwiki-ask_question", "gitmcp-ask_question")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context", ["stored_turn", "input"])
+async def test_a_follow_up_lists_a_server_again_when_its_tools_changed_since_the_conversation_listed_them(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, context: str
+):
+    server: Final = _ScriptedMCPServer()
+    first, provider, stored_response = await _first_turn_with_both_listings(respx_mock, monkeypatch, server)
+    deepwiki_listing, gitmcp_listing = (_item(item) for item in first.output[:2])
+    revoked: Final = {**deepwiki_listing, "tools": [*deepwiki_listing["tools"], {**_ASK_TOOL_LISTED, "name": "drop_repo"}]}
+
+    follow_up: Final = await _follow_up(
+        monkeypatch, server, first, stored_response, context, (revoked, gitmcp_listing)
+    )
+
+    assert _output_summary(follow_up.output) == (("mcp_list_tools", "deepwiki", None), ("message", None, None))
+    assert _item(follow_up.output[0])["tools"] == deepwiki_listing["tools"]
+    assert _item(follow_up.output[0])["id"] != deepwiki_listing["id"]
+    assert len(server.opened) == 2
+
