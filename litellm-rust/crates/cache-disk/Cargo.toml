@@ -12,6 +12,7 @@ rand.workspace = true
 rusqlite = { version = "0.39", features = ["bundled"] }
 serde-pickle = "1.2"
 serde_json.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

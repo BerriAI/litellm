@@ -424,7 +424,7 @@ class RigFactory:
             yield Rig(owned.gateway, owned, model, self.provider, self.sink, self.tenant_sink)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def rig(
     provider: Wire, operator_sink: Collector, tenant_sink: Collector, tmp_path_factory: pytest.TempPathFactory
 ) -> Iterator[Rig]:
@@ -434,7 +434,7 @@ def rig(
     yield from factory.start()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def v2_rig(
     provider: Wire, operator_sink: Collector, tenant_sink: Collector, tmp_path_factory: pytest.TempPathFactory
 ) -> Iterator[Rig]:

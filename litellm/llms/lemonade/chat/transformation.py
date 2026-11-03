@@ -3,7 +3,7 @@ Translate from OpenAI's `/v1/chat/completions` to Lemonade's `/v1/chat/completio
 """
 
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 from urllib.parse import quote
 
 import httpx
@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _STR: Final = TypeAdapter(str)
+_OPAQUE_VALUE: Final = TypeAdapter(object)
 
 
 class _JsonResponse(Protocol):
@@ -123,7 +124,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         return ["lemonade/" + _STR.validate_python(model["id"]) for model in model_list]
 
     @staticmethod
-    def _get_positive_int(value: Any) -> int | None:
+    def _get_positive_int(value: object) -> int | None:
         if isinstance(value, bool):
             return None
         if isinstance(value, int) and value > 0:
@@ -163,7 +164,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
             provider_specific_entry.get("context_window"),
             provider_specific_entry.get("max_context_window"),
         ):
-            parsed = self._get_positive_int(value)
+            parsed = self._get_positive_int(_OPAQUE_VALUE.validate_python(value))
             if parsed is not None:
                 return parsed
         return None

@@ -79,7 +79,7 @@ fn s(value: &str) -> redis::Value {
 }
 
 fn unknown_index_error() -> redis::RedisError {
-    redis::RedisError::from((redis::ErrorKind::Extension, "Unknown index name"))
+    support::server_error("Unknown index name")
 }
 
 fn info_missing(index: &str) -> MockCmd {
@@ -320,7 +320,7 @@ fn store_writes_the_redisvl_hash(
 #[case::below_distance_threshold("key1", "0.05", None, Ok(Some(entry())))]
 #[case::above_distance_threshold("key1", "0.5", None, Ok(None))]
 #[case::other_cache_key("other", "0.05", None, Ok(None))]
-#[case::malformed_response("key1", "0.05", Some(b"not json!".as_slice()), Err(Error::InvalidEntry))]
+#[case::malformed_response("key1", "0.05", Some(b"not json!".as_slice()), Err(Error::InvalidEntry(None)))]
 fn lookup_applies_threshold_scope_and_codec(
     #[case] stored_tag: &str,
     #[case] distance: &str,
@@ -343,7 +343,10 @@ fn lookup_applies_threshold_scope_and_codec(
         FakeEmbedder::new(&[]),
     );
 
-    assert_eq!(cache.get_cache("key1", &context), expected);
+    let kind = |result: Result<Option<Value>, Error>| {
+        result.map_err(|error| std::mem::discriminant(&error))
+    };
+    assert_eq!(kind(cache.get_cache("key1", &context)), kind(expected));
 }
 
 #[rstest]
@@ -451,10 +454,7 @@ fn create_index_race_rechecks_schema_and_stores(entry: Value, context: SemanticC
             info_missing(INDEX),
             MockCmd::new(
                 create_index_command(INDEX, 3),
-                Err::<&str, _>(redis::RedisError::from((
-                    redis::ErrorKind::Extension,
-                    "Index already exists",
-                ))),
+                Err::<&str, _>(support::server_error("Index already exists")),
             ),
             info(INDEX, compatible_info(3)),
             hset(INDEX, PROMPT, "key1", &VECTOR, &entry),
@@ -673,10 +673,10 @@ fn shared_base_index_across_dimensions_replaces_the_isolated_index(entry: Value)
         .set_cache("key1", entry.clone(), &context())
         .unwrap();
 
-    assert_eq!(
-        worker_b.get_cache("key1", &context()).unwrap_err(),
-        Error::Unavailable
-    );
+    assert!(matches!(
+        worker_b.get_cache("key1", &context()),
+        Err(Error::Unavailable(Some(_)))
+    ));
 }
 
 #[fixture]
@@ -732,10 +732,10 @@ fn live_shared_index_is_replaced_across_dimensions(redis_stack_url: Option<Strin
         .set_cache("key1", entry.clone(), &context())
         .unwrap();
 
-    assert_eq!(
-        worker_b.get_cache("key1", &context()).unwrap_err(),
-        Error::Unavailable
-    );
+    assert!(matches!(
+        worker_b.get_cache("key1", &context()),
+        Err(Error::Unavailable(Some(_)))
+    ));
 
     let mut connection = redis::Client::open(url).unwrap().get_connection().unwrap();
     for index in [&base, &isolated] {

@@ -208,11 +208,14 @@ class StandardBuiltInToolCostTracking:
             usage=usage, response_object=response_object
         )
 
+        response_model: Final = _output_item_field(response_object, "model")
         if model_info is not None and resolved_usage is not None and resolved_provider is not None:
             result: Final = get_cost_for_web_search_request(
                 custom_llm_provider=resolved_provider,
                 usage=resolved_usage,
                 model_info=model_info,
+                response_model=response_model if isinstance(response_model, str) else None,
+                lookup_model_info=StandardBuiltInToolCostTracking._safe_get_model_info,
             )
             if result is not None:
                 return result
@@ -450,7 +453,7 @@ class StandardBuiltInToolCostTracking:
     def _get_code_interpreter_cost(
         model_info: ModelInfo | None,
         custom_llm_provider: str | None,
-        standard_built_in_tools_params: StandardBuiltInToolsParams,
+        standard_built_in_tools_params: Mapping[str, object],
     ) -> float:
         """Calculate code interpreter cost."""
         code_interpreter_sessions: Final = standard_built_in_tools_params.get("code_interpreter_sessions", None)

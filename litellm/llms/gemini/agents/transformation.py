@@ -10,47 +10,30 @@ Proxies the Gemini v1beta Agents API:
 """
 
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
 from litellm.types.agents import (
+    AgentCreateRequest,
     AgentCreateResponse,
     AgentDeleteResult,
     AgentListResponse,
     AgentVersionsResponse,
 )
 
-# Keys inside litellm_params that should be forwarded to the Gemini
-# create-agent body verbatim.
-_GEMINI_AGENT_BODY_KEYS: Final = ("base_agent", "instructions", "base_environment")
 
-# LiteLLM-internal keys that must never be forwarded to Gemini.
-_LITELLM_INTERNAL_KEYS: Final = frozenset(
-    {
-        "custom_llm_provider",
-        "api_key",
-        "api_base",
-        "make_public",
-        "cost_per_query",
-        "input_cost_per_token",
-        "output_cost_per_token",
-        "require_trace_id_on_calls_to_agent",
-        "require_trace_id_on_calls_by_agent",
-        "max_iterations",
-        "max_budget_per_session",
-        "guardrails",
-        "is_public",
-        "agent_name",
-        "agent_id",
-        "agent_card_params",
-        "provider_agent_response",
-    }
-)
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
 
 
 class GeminiAgentsConfig(BaseAgentsAPIConfig):
@@ -133,14 +116,9 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
 
     def transform_create_request(
         self,
-        name: str,
-        litellm_params: Mapping[str, object],
-    ) -> dict[str, object]:
-        body: Final[dict[str, object]] = {"name": name}
-        for key in _GEMINI_AGENT_BODY_KEYS:
-            value = litellm_params.get(key)
-            if value is not None:
-                body[key] = value
+        create_request: AgentCreateRequest,
+    ) -> Mapping[str, object]:
+        body: Final[Mapping[str, object]] = create_request.model_dump(mode="json", exclude_none=True)
         verbose_logger.debug("GeminiAgentsConfig create body: %s", body)
         return body
 
@@ -156,18 +134,19 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         """
         self._raise_for_status(raw_response)
         try:
-            data: dict[str, Any] = raw_response.json()
+            decoded: object = _json_body(raw_response)
         except Exception:
             verbose_logger.warning(
                 "GeminiAgentsConfig: non-JSON create response (status=%d).",
                 raw_response.status_code,
             )
-            data = {"id": name}
+            decoded = {"id": name}
+        data: Final = dict(decoded_json_object(decoded))
         # Gemini uses "id" as the identifier; normalise to both fields.
         data.setdefault("id", name)
         data.setdefault("name", data["id"])
         verbose_logger.debug("GeminiAgentsConfig create response: %s", data)
-        return AgentCreateResponse(**data)
+        return AgentCreateResponse.model_validate(data)
 
     # ------------------------------------------------------------------ #
     # LIST                                                                 #
@@ -192,13 +171,16 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
     ) -> AgentListResponse:
         self._raise_for_status(raw_response)
         try:
-            data = raw_response.json()
+            decoded: object = _json_body(raw_response)
         except Exception:
-            data = {}
+            decoded = {}
+        data: Final = decoded_json_object(decoded)
         verbose_logger.debug("GeminiAgentsConfig list response: %s", data)
-        return AgentListResponse(
-            agents=data.get("agents", []),
-            next_page_token=data.get("nextPageToken"),
+        return AgentListResponse.model_validate(
+            {
+                "agents": data.get("agents", []),
+                "next_page_token": data.get("nextPageToken"),
+            }
         )
 
     # ------------------------------------------------------------------ #
@@ -222,13 +204,14 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         """Same shape as create response — Gemini returns "id" as identifier."""
         self._raise_for_status(raw_response)
         try:
-            data = raw_response.json()
+            decoded: object = _json_body(raw_response)
         except Exception:
-            data = {"id": name}
+            decoded = {"id": name}
+        data: Final = dict(decoded_json_object(decoded))
         data.setdefault("id", name)
         data.setdefault("name", data["id"])
         verbose_logger.debug("GeminiAgentsConfig get response: %s", data)
-        return AgentCreateResponse(**data)
+        return AgentCreateResponse.model_validate(data)
 
     # ------------------------------------------------------------------ #
     # DELETE                                                               #
@@ -285,11 +268,14 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         """
         self._raise_for_status(raw_response)
         try:
-            data = raw_response.json()
+            decoded: object = _json_body(raw_response)
         except Exception:
-            data = {}
+            decoded = {}
+        data: Final = decoded_json_object(decoded)
         verbose_logger.debug("GeminiAgentsConfig list_versions response for '%s': %s", name, data)
-        return AgentVersionsResponse(
-            agent_versions=data.get("agentVersions", []),
-            next_page_token=data.get("nextPageToken"),
+        return AgentVersionsResponse.model_validate(
+            {
+                "agent_versions": data.get("agentVersions", []),
+                "next_page_token": data.get("nextPageToken"),
+            }
         )

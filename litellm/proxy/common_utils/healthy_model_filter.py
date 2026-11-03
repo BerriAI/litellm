@@ -70,7 +70,7 @@ async def get_hidden_unhealthy_model_names(
     """
     if llm_router is None or not is_healthy_only_enabled(healthy_only, general_settings):
         return set()
-    unhealthy_names: Final = await llm_router.async_get_fully_unhealthy_model_names()
+    unhealthy_names: Final = await llm_router.health().fully_unhealthy_model_names()
     if not unhealthy_names:
         verbose_proxy_logger.debug(
             "healthy-only model listing is enabled but no unhealthy deployment state is "

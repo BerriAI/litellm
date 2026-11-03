@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SearchToolTester } from "./SearchToolTester";
@@ -271,7 +271,15 @@ describe("SearchToolTester", () => {
   });
 
   it("should handle search errors and show notification", async () => {
-    const error = new Error("Search failed");
+    const error = new Error(
+      JSON.stringify({
+        error: {
+          message: "User not allowed to access search tool: exa-search-2",
+          type: "user_search_tool_access_denied",
+          code: "403",
+        },
+      }),
+    );
     vi.mocked(networking.searchToolQueryCall).mockRejectedValue(error);
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const user = userEvent.setup();
@@ -281,8 +289,26 @@ describe("SearchToolTester", () => {
     const searchButton = screen.getByRole("button", { name: /search/i });
     await user.click(searchButton);
     await waitFor(() => {
-      expect(toast.fromError).toHaveBeenCalledWith("Failed to query search tool");
+      expect(toast.fromError).toHaveBeenCalledWith(error);
     });
+    consoleSpy.mockRestore();
+  });
+
+  it("should not show empty results or add history when search fails", async () => {
+    vi.mocked(networking.searchToolQueryCall).mockRejectedValue(new Error("Search failed"));
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const user = userEvent.setup();
+    render(<SearchToolTester {...defaultProps} />);
+    const input = screen.getByPlaceholderText("Enter your search query...");
+    fireEvent.change(input, { target: { value: "test query" } });
+    await user.click(screen.getByRole("button", { name: /search/i }));
+
+    await waitFor(() => {
+      expect(toast.fromError).toHaveBeenCalled();
+    });
+    expect(screen.queryByText("No results found")).not.toBeInTheDocument();
+    expect(screen.queryByText("test query")).not.toBeInTheDocument();
+    expect(screen.getByText("Test your search tool")).toBeInTheDocument();
     consoleSpy.mockRestore();
   });
 
