@@ -264,7 +264,7 @@ class AmazonConverseConfig(BaseConfig):
             return messages
 
         # Find all consecutive user messages at the end
-        consecutive_user_message_indices: Final = []
+        consecutive_user_message_indices: Final[list[int]] = []
         for i in range(len(messages) - 1, -1, -1):
             if messages[i].get("role") == "user":
                 consecutive_user_message_indices.append(i)
@@ -1646,27 +1646,23 @@ class AmazonConverseConfig(BaseConfig):
         )
         return sum(1 for tool in bedrock_tools if "cachePoint" in tool) + int(injects_tool_config_point)
 
-    def _guarded_user_messages(
+    def _guarded_text_keeps_cache_marks(
         self,
-        messages: list[AllMessageValues],
+        messages: Sequence[AllMessageValues],
         system_content_blocks: Sequence[SystemContentBlock],
         model: str,
         deployment_model: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> list[AllMessageValues]:
+    ) -> bool:
         if "guardrailConfig" not in optional_params:
-            return messages
+            return False
         cache_points: Final = (
             sum(1 for block in system_content_blocks if "cachePoint" in block)
             + sum(map(AnthropicCacheControlHook.count_converse_cache_points, messages))
-            + self._tool_cache_points_on_the_wire(
-                model, deployment_model, _JSON_OBJECT.validate_python(optional_params), litellm_params
-            )
+            + self._tool_cache_points_on_the_wire(model, deployment_model, optional_params, litellm_params)
         )
-        return self._convert_consecutive_user_messages_to_guarded_text(
-            messages, optional_params, keeps_cache_marks=cache_points <= MAX_CACHE_CONTROL_BLOCKS
-        )
+        return cache_points <= MAX_CACHE_CONTROL_BLOCKS
 
     def _transform_system_message(
         self, messages: list[AllMessageValues], model: str | None = None, deployment_model: str | None = None
@@ -2261,13 +2257,13 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
-        messages = self._guarded_user_messages(
-            self._handle_orphaned_tool_blocks(messages, optional_params),
-            system_content_blocks,
-            capability_model,
-            model,
+        guard_input: Final = self._handle_orphaned_tool_blocks(messages, optional_params)
+        messages = self._convert_consecutive_user_messages_to_guarded_text(
+            guard_input,
             optional_params,
-            litellm_params,
+            keeps_cache_marks=self._guarded_text_keeps_cache_marks(
+                guard_input, system_content_blocks, capability_model, model, json_optional_params, litellm_params
+            ),
         )
         ## TRANSFORMATION ##
 
@@ -2362,13 +2358,13 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
-        messages = self._guarded_user_messages(
-            self._handle_orphaned_tool_blocks(messages, optional_params),
-            system_content_blocks,
-            capability_model,
-            model,
+        guard_input: Final = self._handle_orphaned_tool_blocks(messages, optional_params)
+        messages = self._convert_consecutive_user_messages_to_guarded_text(
+            guard_input,
             optional_params,
-            litellm_params,
+            keeps_cache_marks=self._guarded_text_keeps_cache_marks(
+                guard_input, system_content_blocks, capability_model, model, json_optional_params, litellm_params
+            ),
         )
 
         _data: Final[CommonRequestObject] = self._transform_request_helper(
