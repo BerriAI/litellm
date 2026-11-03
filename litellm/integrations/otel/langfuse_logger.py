@@ -33,7 +33,7 @@ class LangfuseOpenTelemetryV2(OpenTelemetryV2):
         if root is not None and root.is_recording():
             root.set_attributes(
                 LangfuseMapper.trace_attributes(
-                    caller_trace_controls(kwargs),
+                    caller_trace_controls(kwargs, langfuse_defaults="request"),
                     as_str(kwargs.get("call_type")) if self._derives_trace_name(root, kwargs) else None,
                 )
             )

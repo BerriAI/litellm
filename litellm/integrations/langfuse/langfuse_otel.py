@@ -4,18 +4,24 @@ import os
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from itertools import chain
-from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from opentelemetry import trace
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations._types.open_inference import ErrorAttributes
 from litellm.integrations.arize import _utils
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
+    Gettable as _Gettable,
+)
+from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
+    default_langfuse_tags,
     serialize_langfuse_datetime,
+)
+from litellm.integrations.langfuse.langfuse_otel_attributes import (
+    as_gettable as _as_gettable,
 )
 from litellm.integrations.opentelemetry import (
     HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
@@ -58,23 +64,8 @@ _ERROR_ATTRIBUTES: Final = frozenset(
 )
 
 
-@runtime_checkable
-class _Gettable(Protocol):
-    def get(self, key: str, default: object = None) -> object: ...
-
-
-def _as_gettable(value: object) -> _Gettable | None:
-    return value if isinstance(value, _Gettable) else None
-
-
 def _attr(item: object, name: str, default: object = None) -> object:
     return getattr(item, name, default)
-
-
-def _preset_cache_key(kwargs: Mapping[str, object]) -> object:
-    if litellm.cache is None:
-        return None
-    return litellm.cache.get_preset_cache_key_from_kwargs(**kwargs)
 
 
 def _mask_flag(value: object) -> bool:
@@ -253,31 +244,10 @@ class LangfuseOtelLogger(OpenTelemetry):
     def _trace_tags(kwargs: Mapping[str, object], metadata: Mapping[str, object]) -> tuple[str, ...]:
         caller_tags: Final = metadata.get("tags")
         request_tags: Final = (_as_gettable(kwargs.get("standard_logging_object")) or {}).get("request_tags")
-        default_tags: Final = litellm.langfuse_default_tags
-
-        def _default_tag(key: str) -> str | None:
-            if key == "cache_hit":
-                return f"cache_hit:{kwargs.get('cache_hit', False)}"
-            if key == "cache_key":
-                hidden_params: Final = _as_gettable(metadata.get("hidden_params", {})) or {}
-                cache_key: Final = (
-                    hidden_params.get("cache_key")
-                    if hidden_params.get("cache_key") is not None
-                    else _preset_cache_key(kwargs)
-                )
-                return f"cache_key:{cache_key}"
-            if key == "proxy_base_url":
-                proxy_base_url: Final = os.environ.get("PROXY_BASE_URL")
-                return f"proxy_base_url:{proxy_base_url}" if proxy_base_url is not None else None
-            if key in metadata and metadata[key] is not None:
-                return f"{key}:{metadata[key]}"
-            return None
-
-        expanded: Final = tuple(_default_tag(key) for key in default_tags) if isinstance(default_tags, list) else ()
         candidates: Final = (
             _caller_tag_list(caller_tags)
             + (tuple(tag for tag in request_tags if isinstance(tag, str)) if isinstance(request_tags, list) else ())
-            + tuple(tag for tag in expanded if tag is not None)
+            + default_langfuse_tags(kwargs, metadata)
         )
         return tuple(dict.fromkeys(candidates))
 

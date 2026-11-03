@@ -278,12 +278,12 @@ class LLMCallEvent:
         return not self.is_no_upstream_call and self.payload is not None and (self.upstream_started or self.cache_hit)
 
     @classmethod
-    def from_dict(cls, kwargs: Mapping[str, object]) -> LLMCallEvent:
+    def from_dict(cls, kwargs: Mapping[str, object], *, langfuse_defaults: bool = False) -> LLMCallEvent:
         raw_payload: Final = kwargs.get("standard_logging_object")
         payload: Final = cast("StandardLoggingPayload", raw_payload) if raw_payload else None
         operation: Final = resolve_operation(as_str(kwargs.get("call_type")), kwargs.get(PASSTHROUGH_OPERATION_KEY))
         model: Final = as_str(kwargs.get("model")) or ""
-        trace: Final = caller_trace_controls(kwargs)
+        trace: Final = caller_trace_controls(kwargs, langfuse_defaults="completed" if langfuse_defaults else None)
         return cls(
             call_id=_call_id(payload, kwargs),
             payload=payload,

@@ -348,6 +348,8 @@ def _run_named_request(
     exporter: InMemorySpanExporter,
     litellm_params: Mapping[str, object],
     parent_context: Context | None = None,
+    *,
+    cache_hit: bool = False,
 ) -> tuple[Mapping[str, object], Mapping[str, object]]:
     response: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="pong"))])
     root: Final = _start_root(logger, parent_context)
@@ -370,7 +372,10 @@ def _run_named_request(
     }
     asyncio.run(
         logger.async_log_success_event(
-            {"standard_logging_object": payload, "litellm_params": litellm_params}, response, None, None
+            {"standard_logging_object": payload, "litellm_params": litellm_params, "cache_hit": cache_hit},
+            response,
+            None,
+            None,
         )
     )
     generation: Final = next(
@@ -538,6 +543,28 @@ def test_body_metadata_user_session_and_tags_land_on_the_root_and_the_generation
         assert tuple(attrs["langfuse.trace.tags"]) == ("prod", "eval", "nightly")
     assert root_attrs[TRACE_NAME_ATTR] == "litellm-acompletion"
     assert TRACE_NAME_ATTR not in generation_attrs
+
+
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize(
+    ("caller_tags", "cache_hit"), [([], False), (["caller-tag", "user_api_key_alias:team-a"], True)]
+)
+def test_langfuse_default_tags_are_added_to_the_request_and_generation(
+    monkeypatch, metadata_key, caller_tags, cache_hit
+):
+    monkeypatch.setattr(litellm, "langfuse_default_tags", ["user_api_key_alias", "cache_hit", "missing"])
+    logger, exporter = _logger(capture="no_content")
+
+    root_attrs, generation_attrs = _run_named_request(
+        logger,
+        exporter,
+        {metadata_key: {"user_api_key_alias": "team-a", "tags": caller_tags}},
+        cache_hit=cache_hit,
+    )
+
+    request_tags = tuple(dict.fromkeys([*caller_tags, "user_api_key_alias:team-a"]))
+    assert tuple(root_attrs["langfuse.trace.tags"]) == request_tags
+    assert tuple(generation_attrs["langfuse.trace.tags"]) == (*request_tags, f"cache_hit:{cache_hit}")
 
 
 def test_langfuse_user_and_session_headers_beat_body_metadata_on_both_spans():

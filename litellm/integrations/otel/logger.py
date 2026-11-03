@@ -532,7 +532,7 @@ class OpenTelemetryV2(CustomLogger):
         rejected at the gate or blocked by a pre-call guardrail before any upstream
         call — so there is nothing to record and no phantom span.
         """
-        call: Final = LLMCallEvent.from_dict(kwargs)
+        call: Final = LLMCallEvent.from_dict(kwargs, langfuse_defaults="langfuse" in self.config.mapper_names)
         call_id: Final = call.call_id
         # ``pop`` is the dedup: this method runs from both the success and failure
         # paths, and whichever fires first removes the carrier and closes the span.
