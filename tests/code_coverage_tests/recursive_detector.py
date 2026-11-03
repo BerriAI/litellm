@@ -3,6 +3,7 @@ import os
 
 IGNORE_FUNCTIONS = [
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
+    "detached",  # router_config: copies only the plain containers of the router's own constructor arguments, once per build or changeset
     "_format_type",
     "remove_additional_properties",
     "remove_strict_from_schema",

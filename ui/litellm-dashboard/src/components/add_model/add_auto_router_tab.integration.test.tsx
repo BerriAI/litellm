@@ -113,8 +113,9 @@ const { mockFetchAvailableModels, mockFetchAllModelDeployments } = vi.hoisted(()
   mockFetchAllModelDeployments: vi.fn(),
 }));
 
-const { validateAutoRouterConfig } = vi.hoisted(() => ({
+const { validateAutoRouterConfig, getRouterSettingsCall } = vi.hoisted(() => ({
   validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+  getRouterSettingsCall: vi.fn(),
 }));
 
 vi.mock("../networking", () => ({
@@ -129,6 +130,7 @@ vi.mock("../networking", () => ({
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
   testAutoRouterRouting: vi.fn(),
   validateAutoRouterConfig,
+  getRouterSettingsCall,
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
@@ -196,6 +198,7 @@ describe("AddAutoRouterTab", () => {
     testQueryClient.clear();
     mockFetchAvailableModels.mockResolvedValue([]);
     mockFetchAllModelDeployments.mockResolvedValue([]);
+    getRouterSettingsCall.mockResolvedValue({ current_values: {} });
     vi.mocked(modelCostMap).mockResolvedValue({});
   });
 
@@ -2192,6 +2195,102 @@ describe("AddAutoRouterTab", () => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
       expect(optionByLabel("Anthropic Family")!).toHaveTextContent(/Matches your deployments/);
+    });
+
+    it("enables a preset whose models a bare-star catch-all lists over a partial wildcard", async () => {
+      mockFetchAvailableModels.mockResolvedValue(
+        [...getRequiredModelsInPreset(ANTHROPIC_PRESET)].map((model) => ({
+          model_group: model.replace(/^claude-/, ""),
+          mode: "chat",
+          providers: ["anthropic"],
+        })),
+      );
+      mockFetchAllModelDeployments.mockResolvedValue([
+        { model_name: "*", litellm_params: { model: "anthropic/claude-*" } },
+      ]);
+
+      renderAdvanced(<Harness />);
+      openTemplateDropdown();
+
+      await waitFor(() => {
+        expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
+      });
+    });
+
+    it("names a preset model missing when an alias over its listed id routes elsewhere", async () => {
+      mockFetchAvailableModels.mockResolvedValue(
+        [...getRequiredModelsInPreset(ANTHROPIC_PRESET)].map((model) => ({
+          model_group: model.replace(/^claude-/, ""),
+          mode: "chat",
+          providers: ["anthropic"],
+        })),
+      );
+      mockFetchAllModelDeployments.mockResolvedValue([
+        { model_name: "*", litellm_params: { model: "anthropic/claude-*" } },
+        { model_name: "corp-opus", litellm_params: { model: "anthropic/claude-opus-5-5" } },
+      ]);
+      getRouterSettingsCall.mockResolvedValue({ current_values: { model_group_alias: { "haiku-4-5": "corp-opus" } } });
+
+      renderAdvanced(<Harness />);
+      openTemplateDropdown();
+
+      await waitFor(() => {
+        expect(optionByLabel("Anthropic Family")!).toHaveTextContent(/Missing: claude-haiku-4-5$/);
+      });
+      expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true);
+    });
+
+    it("withholds templates until the alias over a listed id has loaded", async () => {
+      let completeSettings: ((settings: unknown) => void) | undefined;
+      getRouterSettingsCall.mockReturnValue(
+        new Promise((resolve) => {
+          completeSettings = resolve;
+        }),
+      );
+      mockFetchAvailableModels.mockResolvedValue(
+        [...getRequiredModelsInPreset(ANTHROPIC_PRESET)].map((model) => ({
+          model_group: model.replace(/^claude-/, ""),
+          mode: "chat",
+          providers: ["anthropic"],
+        })),
+      );
+      mockFetchAllModelDeployments.mockResolvedValue([
+        { model_name: "*", litellm_params: { model: "anthropic/claude-*" } },
+        { model_name: "corp-opus", litellm_params: { model: "anthropic/claude-opus-5-5" } },
+      ]);
+
+      renderAdvanced(<Harness />);
+      openTemplateDropdown();
+      await waitFor(() => expect(screen.getByLabelText("Auto Router Name")).toHaveValue("auto-router"));
+
+      expect(optionByLabel("Anthropic Family")!).toHaveTextContent("Checking model availability...");
+      expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true);
+
+      completeSettings?.({ current_values: { model_group_alias: { "haiku-4-5": "corp-opus" } } });
+      await waitFor(() => {
+        expect(optionByLabel("Anthropic Family")!).toHaveTextContent(/Missing: claude-haiku-4-5$/);
+      });
+    });
+
+    it("credits a catch-all's listed ids for a non-admin without reading admin-only router settings", async () => {
+      mockFetchAvailableModels.mockResolvedValue(
+        [...getRequiredModelsInPreset(ANTHROPIC_PRESET)].map((model) => ({
+          model_group: model.replace(/^claude-/, ""),
+          mode: "chat",
+          providers: ["anthropic"],
+        })),
+      );
+      mockFetchAllModelDeployments.mockResolvedValue([
+        { model_name: "*", litellm_params: { model: "anthropic/claude-*" } },
+      ]);
+
+      renderAdvanced(<AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Internal User" />);
+      openTemplateDropdown();
+
+      await waitFor(() => {
+        expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
+      });
+      expect(getRouterSettingsCall).not.toHaveBeenCalled();
     });
 
     it("prefills the expanded group names and submits them", async () => {

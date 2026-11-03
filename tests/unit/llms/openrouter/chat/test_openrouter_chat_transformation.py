@@ -1,5 +1,8 @@
 
+import copy
 import json
+from collections.abc import Iterator
+from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -8,7 +11,7 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openrouter.chat.transformation import (
     OpenRouterChatCompletionStreamingHandler,
@@ -739,7 +742,11 @@ def test_openrouter_completion_with_non_object_usage_raises_api_connection_error
 
 
 @respx.mock
-def test_openrouter_streaming_completion_assembles_text_and_finish_reason() -> None:
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("requested_model", ["openrouter/openai/gpt-4o-mini", "openrouter/auto"])
+async def test_openrouter_streaming_completion_assembles_text_and_finish_reason(
+    async_stream: bool, requested_model: str
+) -> None:
     chunks: Final = (
         {
             "id": "gen-stream-model",
@@ -782,14 +789,20 @@ def test_openrouter_streaming_completion_assembles_text_and_finish_reason() -> N
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "How does a case reach the Supreme Court?"},
     ]
-    stream: Final = litellm.completion(
-        model="openrouter/openai/gpt-4o-mini",
+    kwargs: Final = dict(
+        model=requested_model,
         messages=messages,
         stream=True,
         max_tokens=50,
         api_key="test-openrouter-key",
     )
-    stream_chunks: Final = tuple(stream)
+    client: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+    try:
+        stream: Final = await litellm.acompletion(**kwargs, client=client) if async_stream else litellm.completion(**kwargs)
+        stream_chunks: Final = tuple([chunk async for chunk in stream]) if async_stream else tuple(stream)
+    finally:
+        await client.client.aclose()
+    assert {chunk.model for chunk in stream_chunks} == {chunks[0]["model"]}
     assert stream_chunks[0].choices[0].delta.role == "assistant"
     assert tuple(
         chunk.choices[0].finish_reason for chunk in stream_chunks if chunk.choices[0].finish_reason is not None
@@ -799,6 +812,7 @@ def test_openrouter_streaming_completion_assembles_text_and_finish_reason() -> N
     ) == "The Supreme Court hears federal cases."
     assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
     assert assembled is not None
+    assert assembled.model == chunks[0]["model"]
     assert assembled.choices[0].message.content == "The Supreme Court hears federal cases."
     assert assembled.choices[0].finish_reason == "stop"
 
@@ -872,6 +886,58 @@ def test_openrouter_streaming_reasoning_is_preserved() -> None:
     assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
     assert assembled is not None
     assert assembled.choices[0].message.reasoning_content == "Consider the evidence. Apply the rule."
+
+
+def _five_message_level_cache_hints() -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": "system prompt", "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": "turn 1", "cache_control": {"type": "ephemeral"}},
+        {"role": "assistant", "content": "answer 1", "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": "turn 2", "cache_control": {"type": "ephemeral"}},
+        {"role": "assistant", "content": "answer 2"},
+        {"role": "user", "content": "turn 3", "cache_control": {"type": "ephemeral"}},
+    ]
+
+
+def _cached_texts(node: object) -> Iterator[str]:
+    if isinstance(node, dict):
+        yield from ((node["text"],) if "cache_control" in node and "text" in node else ())
+        yield from chain.from_iterable(map(_cached_texts, node.values()))
+    elif isinstance(node, list):
+        yield from chain.from_iterable(map(_cached_texts, node))
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected_cached_texts"),
+    [
+        (True, ["answer 1", "turn 1", "turn 2", "turn 3"]),
+        ("true", ["answer 1", "turn 1", "turn 2", "turn 3"]),
+        (False, ["answer 1", "system prompt", "turn 1", "turn 2", "turn 3"]),
+    ],
+    ids=[
+        "drop_params_keeps_the_newest_four",
+        "string_drop_params_keeps_the_newest_four",
+        "without_drop_params_all_five_pass_through",
+    ],
+)
+def test_openrouter_claude_request_over_the_cache_control_cap_drops_the_oldest_hints_only_under_drop_params(
+    drop_params: bool | str, expected_cached_texts: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = _five_message_level_cache_hints()
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = OpenrouterConfig().transform_request(
+        model="anthropic/claude-haiku-5.5",
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": drop_params, "custom_llm_provider": "openrouter"},
+        headers={},
+    )
+
+    assert sorted(_cached_texts(body["messages"])) == expected_cached_texts
+    assert json.dumps(body).count('"cache_control"') == len(expected_cached_texts)
+    assert messages == messages_before
 
 
 def _transform_openrouter_response(body: dict[str, object]) -> litellm.ModelResponse:

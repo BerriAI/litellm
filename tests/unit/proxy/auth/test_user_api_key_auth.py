@@ -932,6 +932,43 @@ async def test_user_api_key_auth_live_websocket_ignores_query_model():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auth_name", "path"),
+    [("user_api_key_auth_websocket", "/v1/responses"), ("user_api_key_auth_realtime_websocket", "/v1/realtime")],
+)
+async def test_websocket_without_a_model_is_refused_for_a_role_limited_to_other_models(
+    auth_name: str, path: str
+) -> None:
+    from litellm.proxy._types import RoleBasedPermissions, UserAPIKeyAuth
+    from litellm.proxy.auth import user_api_key_auth as auth_module
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+
+    async def role_limited_auth(request, api_key: str) -> UserAPIKeyAuth:
+        JWTAuthManager.can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.INTERNAL_USER,
+            general_settings={
+                "role_permissions": [RoleBasedPermissions(role=LitellmUserRoles.INTERNAL_USER, models=["chat"])]
+            },
+            model=json.loads(await request.body())["model"],
+        )
+        return UserAPIKeyAuth(api_key=api_key)
+
+    websocket: Final = MagicMock(spec=WebSocket)
+    websocket.query_params = {}
+    websocket.headers = {"authorization": "Bearer some_api_key"}
+    websocket.scope = {"type": "websocket", "path": path, "headers": [(b"authorization", b"Bearer some_api_key")]}
+    websocket.url = URL(url=path)
+    websocket.close = AsyncMock()
+
+    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", side_effect=role_limited_auth):
+        with pytest.raises(HTTPException) as raised:
+            await getattr(auth_module, auth_name)(websocket)
+
+    assert raised.value.status_code == 403
+    websocket.close.assert_awaited_once_with(code=status.WS_1008_POLICY_VIOLATION)
+
+
+@pytest.mark.asyncio
 async def test_accepted_websocket_reauthorizes_the_frame_model_without_closing():
     from litellm.proxy._types import ProxyException
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_accepted_websocket_for_model
