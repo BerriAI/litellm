@@ -39,7 +39,12 @@
 - Pipeline ops take one key each. A multi-key op would span slots inside one group. An op can send more than one command for that key (`INCRBYFLOAT` then `EXPIRE`), and settles from the first reply, failing if any of its replies failed
 - Command builders live in `commands.rs` and are shared by `RedisClient` and `Pipeline`, so a command is written once
 
-## Tests
+## Batches
+- `RedisBatch` is litellm's `RedisBatch` (`litellm/caching/redis_batch.py`). It keeps each declared op as data and, on a standalone or Sentinel Redis, sends them later as one `Pipeline`, so it inherits every pipeline rule above. On a cluster it never pipelines and runs each op on its own, concurrently, the way `_settle_alone` calls the `RedisCache` method behind it. An increment there keeps a TTL the key already has, as `async_increment` does, where the pipelined one refreshes it like `_Increment`
+- `mget` is one `MGET` of the keys in order with repeats read once, like `_MGet`. Use it instead of one `get` per key whenever Python reads several keys in one call It knows nothing about requests. The host that owns a request (Axum handler, pyo3 adapter) builds one and passes it down as a value, never through a task-local
+- Each op returns a `Declared<T>` backed by a oneshot. `flush` sends everything declared so far, one flush at a time, and an empty flush makes no round trip. `resolve` flushes only when its op has not gone out yet, so an op declared after another caller resolved costs a second round trip. Stages that know their reads up front declare all of them and call `flush` once
+- An op whose flush was cancelled resolves as `Transport`, because it may already have reached Redis
+- `settled` waits for whichever flush carries the op and never sends one itself, for follow-ups that must not force a flush. `RedisClient::same_client` tells clones of one client apart from a second connection, so a host can keep one batch per client
 - Against real Redis from `litellm-redis-testing`, never a mocked wire or asserted command bytes
 - Tests that only need the public API live in `tests/<module>.rs`, with client builders in `tests/support`. Inline `#[cfg(test)]` modules are only for private items (`error.rs`, `namespace.rs`)
 - Observe connections from the server side (`RedisDeployment::clients`, `cli_on_every_node`), never by reaching into `RedisClient`'s connection

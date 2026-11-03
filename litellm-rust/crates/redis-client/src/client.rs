@@ -4,12 +4,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use litellm_circuit_breaker::{Admission, Breaker, Failure};
+use litellm_circuit_breaker::{Admission, Breaker, Failure, State};
 use redis::{Cmd, FromRedisValue, RedisError, ToRedisArgs, ToSingleRedisArg, Value};
 
 use crate::{
     Amount, CallEvent, ConnectError, Error, Expiry, FailureKind, Namespace, Operation, Outcome,
-    Pipeline, RedisConfig, RedisEvents, Script, commands, connection::Connection,
+    Pipeline, RedisBatch, RedisConfig, RedisEvents, Script, commands, connection::Connection,
 };
 
 #[derive(Clone)]
@@ -39,6 +39,11 @@ impl RedisClient {
             health_check: config.health_check,
             last_used: Arc::new(Mutex::new(Instant::now())),
         })
+    }
+
+    /// The breaker's current state, or none when the breaker is disabled.
+    pub fn breaker_state(&self) -> Option<State> {
+        self.breaker.as_ref().map(Breaker::state)
     }
 
     pub async fn ping(&self) -> Result<(), Error> {
@@ -121,6 +126,19 @@ impl RedisClient {
         .await
     }
 
+    /// `INCRBYFLOAT` alone, `_incrbyfloat_with_ttl` without a TTL.
+    pub(crate) async fn incr_by_float_without_ttl(
+        &self,
+        key: &str,
+        amount: Amount,
+    ) -> Result<f64, Error> {
+        self.query(
+            "INCRBYFLOAT",
+            &commands::incr_by_float(self.key(key), amount),
+        )
+        .await
+    }
+
     /// `RedisCache.async_increment`: `INCRBYFLOAT` and its TTL command in one round trip, and for
     /// [`Expiry::KeepExisting`] a third, `EXPIRE`, only when the key has no TTL.
     pub async fn incr_by_float(
@@ -178,6 +196,18 @@ impl RedisClient {
 
     pub fn pipeline(&self) -> Pipeline {
         Pipeline::new(self.namespace.clone())
+    }
+
+    pub fn same_client(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.last_used, &other.last_used)
+    }
+
+    pub fn is_cluster(&self) -> bool {
+        matches!(self.connection, Connection::Cluster(_))
+    }
+
+    pub fn batch(&self) -> RedisBatch {
+        RedisBatch::new(self.clone())
     }
 
     pub async fn run(&self, pipeline: &Pipeline) -> Vec<Result<Value, Error>> {
