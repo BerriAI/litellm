@@ -27,12 +27,14 @@ class ResponseSpec:
     delay: float = 0
     chunk_delay: float = 0
     events: tuple[tuple[str, object], ...] = ()
+    # Splits a non-stream body into this many writes, `chunk_delay` apart, so it trickles in.
+    body_chunks: int = 1
 
     def payloads(self) -> tuple[bytes, ...]:
-        if isinstance(self.body, bytes):
-            return (self.body,)
         if not self.events:
-            return (json.dumps(self.body).encode(),)
+            body: Final = self.body if isinstance(self.body, bytes) else json.dumps(self.body).encode()
+            size: Final = max(-(-len(body) // max(self.body_chunks, 1)), 1)
+            return tuple(body[start : start + size] for start in range(0, len(body), size)) or (body,)
         return tuple(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in self.events)
 
 
