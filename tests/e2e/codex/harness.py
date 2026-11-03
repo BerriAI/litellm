@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from itertools import chain
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 from cli_harness.lockdown import isolated_home, locked_down_env
@@ -14,6 +15,7 @@ from cli_harness.rate_limiter import RateBucket, RateLimiter
 from codex.rollout import Compaction, rollout_compactions
 from codex.run import CodexRun, codex_run
 from e2e_metadata import step
+from pydantic import BaseModel, ConfigDict
 
 CODEX_CLI: Final = "codex"
 EXEC_TIMEOUT_SECONDS: Final = 600.0
@@ -35,6 +37,19 @@ env_key = "{api_key_env}"
 wire_api = "responses"
 model_catalog_url = "{gateway}/v1/models"
 """
+
+
+class _CatalogModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    slug: str
+    tool_mode: str | None = None
+
+
+class _Catalog(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    models: tuple[_CatalogModel, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,14 +90,32 @@ class CodexHarness:
         rollouts: Final = sorted(self.codex_home.glob(f"sessions/**/rollout-*-{thread_id}.jsonl"))
         return tuple(chain.from_iterable(rollout_compactions(rollout.read_text()) for rollout in rollouts))
 
+    @step("Read the tool mode Codex gives each model in its catalog, bundled={bundled}")
+    def tool_modes(self, *, bundled: bool = False) -> Mapping[str, str | None]:
+        completed: Final = subprocess.run(
+            (self.cli, "debug", "models", *(("--bundled",) if bundled else ())),
+            cwd=self.home,
+            env=self._env(),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout_seconds,
+            check=True,
+        )
+        catalog: Final = _Catalog.model_validate_json(completed.stdout)
+        return MappingProxyType({model.slug: model.tool_mode for model in catalog.models})
+
+    def _env(self) -> Mapping[str, str]:
+        return locked_down_env(
+            home=self.home, overrides={"CODEX_HOME": str(self.codex_home), _API_KEY_ENV: self.api_key}
+        )
+
     def _run(self, subcommand: tuple[str, ...], args: tuple[str, ...], cwd: Path) -> CodexRun:
         _ = self.limiter.acquire(self.rate_bucket)
         completed: Final = subprocess.run(
             (self.cli, *subcommand, "--json", "--skip-git-repo-check", *args),
             cwd=cwd,
-            env=locked_down_env(
-                home=self.home, overrides={"CODEX_HOME": str(self.codex_home), _API_KEY_ENV: self.api_key}
-            ),
+            env=self._env(),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,

@@ -18,6 +18,9 @@ class TestCodexUnderTheRealModelName:
     def test_answers_with_what_a_command_printed(
         self, real_name_codex: CodexHarness, real_name_setup: ModelSetup
     ) -> None:
+        served_by_gateway: Final = real_name_codex.tool_modes()
+        bundled_with_codex: Final = real_name_codex.tool_modes(bundled=True)
+        assert served_by_gateway[real_name_setup.model] == bundled_with_codex.get(real_name_setup.model)
         marker: Final = unique_marker()
         workspace: Final = real_name_codex.new_workspace(files={"secret.txt": marker})
         run: Final = real_name_codex.exec(
