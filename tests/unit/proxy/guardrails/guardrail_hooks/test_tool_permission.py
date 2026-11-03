@@ -671,6 +671,42 @@ class TestToolPermissionGuardrail:
         assert "Tool 'mcp__weather__lookup' denied by rule 'deny_mcp'" in (message.content or "")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("decision", "default_action", "kept"),
+        [("allow", "deny", ["weather__get_weather"]), ("deny", "allow", [])],
+        ids=["bare_name_allowed", "bare_name_denied"],
+    )
+    async def test_post_call_judges_a_returned_qualified_member_name_by_the_member_names_pre_call_judged(
+        self, decision: Literal["allow", "deny"], default_action: Literal["allow", "deny"], kept: list[str]
+    ) -> None:
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="post-weather",
+            rules=[{"id": "get_weather", "tool_name": r"^get_weather$", "decision": decision}],
+            default_action=default_action,
+            on_disallowed_action="rewrite",
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        namespace = {"type": "namespace", "name": "weather", "tools": [{"type": "function", "name": "get_weather"}]}
+        top_level = {"type": "function", "function": {"name": "get_weather"}}
+        function = Function(name="weather__get_weather", arguments='{"city": "Istanbul"}')
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    message={"tool_calls": [{"id": "call_weather", "type": "function", "function": function}]},
+                )
+            ]
+        )
+
+        await guardrail.async_post_call_success_hook(
+            data={"guardrails": ["post-weather"], "tools": [namespace, top_level]},
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=response,
+        )
+
+        assert [call.function.name for call in response.choices[0].message.tool_calls or ()] == kept
+
+    @pytest.mark.asyncio
     async def test_async_post_call_success_hook_missing_arguments_blocks_param_rule(
         self,
     ):

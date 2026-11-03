@@ -5,6 +5,7 @@ import json
 import re
 import threading
 import time
+from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import lru_cache, partial
@@ -35,7 +36,11 @@ from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAcc
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
-from litellm.litellm_core_utils.tool_fields import declared_function_name, tool_params_without_hosted_mcp
+from litellm.litellm_core_utils.tool_fields import (
+    declared_function_name,
+    qualified_member_name,
+    tool_params_without_hosted_mcp,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -578,33 +583,56 @@ def _declarable_names_in(tools: tuple[JsonValue, ...]) -> tuple[str | None, ...]
     return tuple(chain.from_iterable(map(_declarable_names, tools)))
 
 
-def _inlines_members(tool: JsonValue, declarable: tuple[str | None, ...]) -> bool:
+def _inlines_members(tool: JsonValue, declarable: Counter[str | None]) -> bool:
     members: Final = _namespace_members_or_tool(tool)
     return _is_namespace(tool) and all(
-        name is None or declarable.count(name) == 1 for name in map(declared_function_name, members)
+        name is None or declarable[name] == 1 for name in map(declared_function_name, members)
     )
+
+
+def _qualified_member(namespace: str, member: JsonValue) -> JsonValue:
+    function: Final = member.get("function") if isinstance(member, dict) else None
+    name: Final = declared_function_name(member)
+    if not isinstance(member, dict) or not isinstance(function, dict) or name is None:
+        return member
+    return {**member, "function": {**function, "name": qualified_member_name(namespace, name)}}
+
+
+def _as_declared(tool: JsonValue, declarable: Counter[str | None]) -> tuple[JsonValue, ...]:
+    if _inlines_members(tool, declarable):
+        return _namespace_members_or_tool(tool)
+    namespace: Final = declared_function_name(tool)
+    if not _is_namespace(tool) or namespace is None:
+        return (tool,)
+    return tuple(_qualified_member(namespace, member) for member in _namespace_members_or_tool(tool))
 
 
 def _with_namespace_members_inlined(tools: JsonValue, outside_declarations: JsonValue = None) -> JsonValue:
     if not isinstance(tools, list) or not any(map(_is_namespace, tools)):
         return tools
-    declarable: Final = _declarable_names_in((*tools, *_listed(outside_declarations)))
-    return list(
-        chain.from_iterable(
-            _namespace_members_or_tool(tool) if _inlines_members(tool, declarable) else (tool,) for tool in tools
-        )
-    )
+    declarable: Final = Counter(_declarable_names_in((*tools, *_listed(outside_declarations))))
+    return list(chain.from_iterable(_as_declared(tool, declarable) for tool in tools))
+
+
+def _qualified_names_of(member_name: str, tool: JsonValue, declarable: Counter[str | None]) -> tuple[str, ...]:
+    namespace: Final = declared_function_name(tool)
+    holds_member: Final = member_name in map(declared_function_name, _namespace_members_or_tool(tool))
+    if not _is_namespace(tool) or namespace is None or not holds_member or _inlines_members(tool, declarable):
+        return ()
+    return (qualified_member_name(namespace, member_name),)
 
 
 def _forced_function_names(name: str, tools: JsonValue) -> tuple[str, ...]:
     candidates: Final = _listed(tools)
     if any(not _is_namespace(tool) and declared_function_name(tool) == name for tool in candidates):
         return (name,)
+    declarable: Final = Counter(_declarable_names_in(candidates))
     named: Final = next((tool for tool in candidates if _is_namespace(tool) and _member_name_of(tool) == name), None)
-    if named is None or not _inlines_members(named, _declarable_names_in(candidates)):
-        return (name,)
-    members: Final = map(declared_function_name, _namespace_members_or_tool(named))
-    return tuple(member for member in members if member is not None) or (name,)
+    if named is not None:
+        declared: Final = map(declared_function_name, _as_declared(named, declarable))
+        return tuple(member for member in declared if member is not None) or (name,)
+    qualified: Final = chain.from_iterable(_qualified_names_of(name, tool, declarable) for tool in candidates)
+    return tuple(qualified) or (name,)
 
 
 def _member_name_of(tool: JsonValue) -> JsonValue:

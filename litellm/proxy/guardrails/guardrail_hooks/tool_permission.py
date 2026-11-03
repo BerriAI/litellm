@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from functools import partial, reduce
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import Any, Final, Literal, TypeAlias, TypedDict
+from typing import Any, Final, Literal, TypeAlias, TypedDict, TypeVar
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter
@@ -23,7 +23,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
-from litellm.litellm_core_utils.tool_fields import declared_function_name
+from litellm.litellm_core_utils.tool_fields import declared_function_name, qualified_member_name
 from litellm.llms.base_llm.guardrail_translation.utils import anthropic_tool_names
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
@@ -74,6 +74,8 @@ _NAMED_CHOICE_TYPES: Final = frozenset({"tool", "function", "custom", "allowed_t
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
 _REQUEST_DATA: Final = TypeAdapter(object)
 _ToolTarget: TypeAlias = tuple[str | None, str | None]
+_JudgedCalls: TypeAlias = Mapping[str, tuple[tuple[str, str], ...]]
+_GroupedT: Final = TypeVar("_GroupedT")
 
 
 def _snake_case(name: str) -> str:
@@ -163,29 +165,23 @@ def _namespace_members(tool: object) -> Sequence[object]:
     return members or ()
 
 
-def _qualified_member_name(namespace: str, name: str) -> str:
-    return f"{namespace}__{name}"
-
-
 def _returned_namespace(tool_call: ChatCompletionMessageToolCall) -> str | None:
     tags: Final = as_str_mapping(attribute_or_none(tool_call, "provider_specific_fields"))
     return _non_empty_string(tags.get("namespace")) if tags is not None else None
 
 
 def _judged_call_names(
-    tool_call: ChatCompletionMessageToolCall, returned_name: str, judged_names: Mapping[str, tuple[str, ...]]
-) -> tuple[str, ...]:
+    tool_call: ChatCompletionMessageToolCall, returned_name: str, judged_names: _JudgedCalls
+) -> tuple[tuple[str, str], ...]:
     namespace: Final = _returned_namespace(tool_call)
     if namespace is not None:
-        return (_qualified_member_name(namespace, returned_name),)
+        return ((qualified_member_name(namespace, returned_name), returned_name),)
     return judged_names.get(returned_name, ())
 
 
 def _qualified_target(namespace: str | None, target: _ToolTarget) -> _ToolTarget:
     name, tool_type = target
-    return (
-        (_qualified_member_name(namespace, name), tool_type) if namespace is not None and name is not None else target
-    )
+    return (qualified_member_name(namespace, name), tool_type) if namespace is not None and name is not None else target
 
 
 def _member_name(member: object) -> str | None:
@@ -257,11 +253,11 @@ def _carries_tools(items: Sequence[object]) -> bool:
     return any(_input_item_tools(item) is not None for item in items)
 
 
-def _pair_key(pair: tuple[str, str]) -> str:
+def _pair_key(pair: tuple[str, object]) -> str:
     return pair[0]
 
 
-def _grouped_values(pairs: Iterable[tuple[str, str]]) -> Mapping[str, tuple[str, ...]]:
+def _grouped_values(pairs: Iterable[tuple[str, _GroupedT]]) -> Mapping[str, tuple[_GroupedT, ...]]:
     groups: Final = groupby(sorted(pairs, key=_pair_key), key=_pair_key)
     return MappingProxyType({key: tuple(dict.fromkeys(value for _, value in group)) for key, group in groups})
 
@@ -1007,37 +1003,44 @@ class ToolPermissionGuardrail(CustomGuardrail):
             tool_call for block in content if (tool_call := self._anthropic_tool_use_to_tool_call(block)) is not None
         )
 
-    def _returned_call_names(self, data: Mapping[str, object]) -> Mapping[str, tuple[str, ...]]:
+    def _returned_call_names(self, data: Mapping[str, object]) -> _JudgedCalls:
         sent_tools: Final = _sent_tools(_REQUEST_DATA.validate_python(data))
         member_names: Final = tuple(chain.from_iterable(map(self._bare_member_names, sent_tools)))
         if not member_names:
             return MappingProxyType({})
         top_level_tools: Final = (tool for tool in sent_tools if not _is_namespace(tool))
         top_level_names: Final = frozenset(name for name in map(declared_function_name, top_level_tools) if name)
-        member_bare_names: Final = _grouped_values(
-            (bare, name) for name, bare in member_names if bare not in top_level_names
-        )
         listed: Final = frozenset(name for name, _ in self._collect_request_tools(data) if name is not None)
+        own_names: Final = frozenset(bare for _, bare in member_names if bare in listed) | top_level_names
+        returned_members: Final = _grouped_values(
+            chain(
+                ((bare, (name, bare)) for name, bare in member_names if bare not in top_level_names),
+                ((name, (name, bare)) for name, bare in member_names),
+            )
+        )
         return MappingProxyType(
-            {bare: (*qualified, *((bare,) if bare in listed else ())) for bare, qualified in member_bare_names.items()}
+            {
+                name: (*members, *(((name, name),) if name in own_names else ()))
+                for name, members in returned_members.items()
+            }
         )
 
-    def _judged_name(self, tool_call: ChatCompletionMessageToolCall, bare: str, name: str) -> str:
-        return name if name == bare else self._deciding_member_name(name, bare, "function", tool_call)
+    def _judged_name(self, tool_call: ChatCompletionMessageToolCall, qualified: str, bare: str) -> str:
+        return qualified if qualified == bare else self._deciding_member_name(qualified, bare, "function", tool_call)
 
     def _judge_tool_call(
-        self, tool_call: ChatCompletionMessageToolCall, judged_names: Mapping[str, tuple[str, ...]]
+        self, tool_call: ChatCompletionMessageToolCall, judged_names: _JudgedCalls
     ) -> tuple[bool, str | None, str | None]:
         returned_name: Final = tool_call.function.name if tool_call.function else None
         names: Final = _judged_call_names(tool_call, returned_name, judged_names) if returned_name is not None else ()
         if returned_name is None or not names:
             return self._get_permission_for_tool_call(tool_call)
-        judged: Final = dict.fromkeys(self._judged_name(tool_call, returned_name, name) for name in names)
+        judged: Final = dict.fromkeys(self._judged_name(tool_call, qualified, bare) for qualified, bare in names)
         results: Final = tuple(self._get_permission_for_tool_call(tool_call, name) for name in judged)
         return next((result for result in results if not result[0]), results[0])
 
     def _evaluate_tool_calls(
-        self, tool_calls: Sequence[ChatCompletionMessageToolCall], judged_names: Mapping[str, tuple[str, ...]]
+        self, tool_calls: Sequence[ChatCompletionMessageToolCall], judged_names: _JudgedCalls
     ) -> tuple[tuple[ChatCompletionMessageToolCall, PermissionError], ...]:
         checked: Final = tuple((tool_call, *self._judge_tool_call(tool_call, judged_names)) for tool_call in tool_calls)
 
@@ -1122,7 +1125,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if namespace is None or not members:
             return ()
         targets: Final = chain.from_iterable(map(self._unqualified_member_targets, members))
-        return tuple((_qualified_member_name(namespace, name), name) for name, _ in targets if name is not None)
+        return tuple((qualified_member_name(namespace, name), name) for name, _ in targets if name is not None)
 
     def _get_request_tool_targets(self, tool: object) -> tuple[_ToolTarget, ...]:
         group: Final = _member_group(tool, self._namespace_member_targets)
@@ -1669,7 +1672,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self,
         anthropic_response: ModelResponse,
         source_chunks: Sequence[object],
-        judged_names: Mapping[str, tuple[str, ...]],
+        judged_names: _JudgedCalls,
     ) -> Sequence[object]:
         """The frames the client gets: on a failed upstream only what the check read, never the upstream's own.
 
@@ -1684,7 +1687,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         return anthropic_sse_chunks_from_response(anthropic_response, source_chunks, keep_explanations=True)
 
     def _check_assembled_stream(
-        self, assembled: ModelResponse, judged_names: Mapping[str, tuple[str, ...]]
+        self, assembled: ModelResponse, judged_names: _JudgedCalls
     ) -> tuple[tuple[ChatCompletionMessageToolCall, PermissionError], ...]:
         verbose_proxy_logger.debug("Tool Permission Guardrail: Checking response")
         tool_calls: Final = self._extract_tool_calls_from_response(assembled)

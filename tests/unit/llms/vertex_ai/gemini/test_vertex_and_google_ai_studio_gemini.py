@@ -1832,14 +1832,18 @@ _TOP_LEVEL_GET_WEATHER = {"type": "function", "function": {k: v for k, v in _GET
     [
         (
             [{"type": "namespace", "name": "forecast", "tools": [_GET_WEATHER]}, _WEATHER_NAMESPACE],
-            ["forecast", "weather"],
+            ["forecast__get_weather", "weather__get_weather"],
         ),
-        ([_TOP_LEVEL_GET_WEATHER, _WEATHER_NAMESPACE], ["get_weather", "weather"]),
-        ([_WEATHER_NAMESPACE, _TOP_LEVEL_GET_WEATHER], ["weather", "get_weather"]),
+        ([_TOP_LEVEL_GET_WEATHER, _WEATHER_NAMESPACE], ["get_weather", "weather__get_weather"]),
+        ([_WEATHER_NAMESPACE, _TOP_LEVEL_GET_WEATHER], ["weather__get_weather", "get_weather"]),
+        (
+            [{"type": "namespace", "name": "delete_db", "tools": [_GET_WEATHER, _GET_WEATHER]}],
+            ["delete_db__get_weather", "delete_db__get_weather"],
+        ),
     ],
-    ids=["namespaces_share_a_member", "top_level_first", "namespace_first"],
+    ids=["namespaces_share_a_member", "top_level_first", "namespace_first", "namespace_repeats_a_member"],
 )
-def test_vertex_ai_map_tools_declares_a_namespace_by_its_own_name_when_another_tool_declares_a_member_name(
+def test_vertex_ai_map_tools_declares_qualified_member_names_when_another_tool_declares_a_member_name(
     tools: list[dict], declared: list[str]
 ) -> None:
     mapped = VertexGeminiConfig().map_function(value=tools, optional_params={})
@@ -1847,7 +1851,7 @@ def test_vertex_ai_map_tools_declares_a_namespace_by_its_own_name_when_another_t
     assert [declaration["name"] for declaration in mapped[0]["function_declarations"]] == declared
 
 
-def test_vertex_ai_map_openai_params_declares_a_namespace_by_its_own_name_when_functions_repeat_a_member() -> None:
+def test_vertex_ai_map_openai_params_declares_qualified_member_names_when_functions_repeat_a_member() -> None:
     mapped = VertexGeminiConfig().map_openai_params(
         non_default_params={
             "tools": [{"type": "namespace", "name": "mcp__weather", "tools": [{"type": "function", "name": "lookup"}]}],
@@ -1859,7 +1863,7 @@ def test_vertex_ai_map_openai_params_declares_a_namespace_by_its_own_name_when_f
     )
 
     declared = [declaration["name"] for tool in mapped["tools"] for declaration in tool["function_declarations"]]
-    assert declared == ["mcp__weather", "lookup"]
+    assert declared == ["mcp__weather__lookup", "lookup"]
 
 
 def test_vertex_ai_map_tools_keeps_repeated_chat_tools_when_no_namespace_is_sent() -> None:
@@ -1879,13 +1883,23 @@ def test_vertex_ai_map_tools_keeps_repeated_chat_tools_when_no_namespace_is_sent
         ("github", [], ["create_issue", "close_issue"]),
         ("close_issue", [], ["close_issue"]),
         ("github", [{"type": "function", "function": {"name": "github"}}], ["github"]),
-        ("github", [{"type": "function", "function": {"name": "close_issue"}}], ["github"]),
+        (
+            "github",
+            [{"type": "function", "function": {"name": "close_issue"}}],
+            ["github__create_issue", "github__close_issue"],
+        ),
+        (
+            "close_issue",
+            [{"type": "namespace", "name": "gitlab", "tools": [{"type": "function", "name": "close_issue"}]}],
+            ["github__close_issue", "gitlab__close_issue"],
+        ),
     ],
     ids=[
         "names_the_namespace",
         "names_a_member",
         "names_a_function_sharing_the_namespace_name",
         "names_a_namespace_whose_member_a_function_repeats",
+        "names_a_member_two_namespaces_share",
     ],
 )
 def test_vertex_ai_tool_choice_forces_only_functions_gemini_is_sent(

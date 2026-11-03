@@ -67,6 +67,10 @@ def declared_function_name(tool: object) -> str | None:
     return name if isinstance(name, str) and name else None
 
 
+def qualified_member_name(namespace: str, name: str) -> str:
+    return f"{namespace}__{name}"
+
+
 @dataclass(frozen=True, slots=True)
 class DropPolicy:
     drop_params: bool
