@@ -1406,6 +1406,7 @@ async def test_create__exception_carries_the_litellm_call_id(harness, openai_env
 
 
 _UPSTREAM_BATCH_CREATE: Final = httpx.Request("POST", "https://api.openai.com/v1/batches")
+_INPUT_FILE_DOWNLOAD: Final = httpx.Request("GET", "https://storage.test/batch-input/input.jsonl")
 
 
 def _raised_from(error: Exception, cause: Exception) -> Exception:
@@ -1416,7 +1417,7 @@ def _raised_from(error: Exception, cause: Exception) -> Exception:
 
 
 _BATCH_MAY_EXIST_NOTICE: Final = (
-    "\n\nThe provider may already have created this batch, so list your batches before you send it again"
+    "\n\nThe provider may already have created this batch, so check your newest batches before you send it again"
 )
 
 
@@ -1475,6 +1476,20 @@ _BATCH_MAY_EXIST_NOTICE: Final = (
             ),
             None,
             id="rejected-with-should-retry-false",
+        ),
+        pytest.param(
+            lambda: httpx.ReadTimeout("the input file did not download in time", request=_INPUT_FILE_DOWNLOAD),
+            None,
+            id="input-download-timed-out",
+        ),
+        pytest.param(
+            lambda: httpx.HTTPStatusError(
+                "the storage gateway gave up waiting",
+                request=_INPUT_FILE_DOWNLOAD,
+                response=httpx.Response(504, request=_INPUT_FILE_DOWNLOAD),
+            ),
+            None,
+            id="input-download-504",
         ),
     ],
 )

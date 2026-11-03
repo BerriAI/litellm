@@ -63,7 +63,11 @@ _CAUSES_THAT_CANNOT_HAVE_CREATED_ANYTHING: Final = (
     httpx.PoolTimeout,
     httpx.ProxyError,
     httpx.WriteTimeout,
+    httpx.WriteError,
+    httpx.LocalProtocolError,
+    httpx.UnsupportedProtocol,
 )
+_METHODS_THAT_CREATE_NOTHING: Final = frozenset({"GET", "HEAD", "OPTIONS"})
 _STATUSES_THE_SDK_RETRIES: Final = frozenset({408, 409, 429})
 _REQUEST_TIMEOUT: Final = 408
 _GATEWAY_TIMEOUT: Final = 504
@@ -123,9 +127,33 @@ def _cause_chain(error: BaseException | None, links_left: int = _LONGEST_CAUSE_C
     return (error, *_cause_chain(_error_it_wraps(error), links_left - 1))
 
 
+class CreatedOnSomeDeployments(Exception):
+    def __init__(self, failure: BaseException) -> None:
+        super().__init__(str(failure))
+        self.status_code: Final[object] = getattr(failure, "status_code", 500)
+
+
+def _request_it_sent(failure: httpx.TransportError | httpx.HTTPStatusError) -> httpx.Request | None:
+    try:
+        return failure.request
+    except RuntimeError:
+        return None
+
+
+def _failed_on_a_read(failure: BaseException) -> bool:
+    if not isinstance(failure, (httpx.TransportError, httpx.HTTPStatusError)):
+        return False
+    request: Final = _request_it_sent(failure)
+    return request is not None and request.method in _METHODS_THAT_CREATE_NOTHING
+
+
 def create_may_already_exist(error: BaseException) -> bool:
     chain: Final = _cause_chain(error)
+    if any(isinstance(link, CreatedOnSomeDeployments) for link in chain):
+        return True
     wire_failures: Final = tuple(link for link in chain if isinstance(link, _WIRE_FAILURES))
+    if wire_failures and _failed_on_a_read(wire_failures[-1]):
+        return False
     match wire_failures[-1] if wire_failures else None:
         case openai.APIStatusError(response=response) | httpx.HTTPStatusError(response=response):
             return _answer_says_it_may_exist(response)

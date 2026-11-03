@@ -215,8 +215,8 @@ def with_litellm_call_id(exc: ProxyException, litellm_call_id: str | None) -> Pr
 
 _CREATE_MAY_EXIST_NOTICES: Final[Mapping[Literal["file", "batch"], str]] = MappingProxyType(
     {
-        "file": "The provider may already have created this file, so list your files before you send it again",
-        "batch": "The provider may already have created this batch, so list your batches before you send it again",
+        "file": "The provider may already have created this file, so check your newest files before you send it again",
+        "batch": "The provider may already have created this batch, so check your newest batches before you send it again",
     }
 )
 

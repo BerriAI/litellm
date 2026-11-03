@@ -5,7 +5,9 @@ from contextlib import contextmanager
 from typing import Final
 
 import httpx
+import pytest
 from integration._support.client import Gateway
+from integration._support.openai_wire import openai_error
 from integration._support.wire import Reply, Request, Wire, wire_server
 
 CALLER_TIMEOUT_SECONDS: Final = 0.5
@@ -19,7 +21,10 @@ BATCH_INPUT: Final = json.dumps(
 ).encode()
 
 
-def _answer_after(released: threading.Event) -> Callable[[Request], Reply]:
+Failure = Callable[[threading.Event], Callable[[Request], Reply]]
+
+
+def _no_answer_in_time(released: threading.Event) -> Callable[[Request], Reply]:
     def respond(_request: Request) -> Reply:
         released.wait(timeout=30)
         return Reply(status=500)
@@ -27,10 +32,25 @@ def _answer_after(released: threading.Event) -> Callable[[Request], Reply]:
     return respond
 
 
+def _gateway_timeout(_released: threading.Event) -> Callable[[Request], Reply]:
+    return lambda _request: openai_error(504)
+
+
+def _connection_dropped_after_the_send(_released: threading.Event) -> Callable[[Request], Reply]:
+    return lambda _request: Reply(drop_connection=True)
+
+
+FAILURES_AFTER_THE_SEND: Final = (
+    pytest.param(_no_answer_in_time, id="no-answer-in-time"),
+    pytest.param(_gateway_timeout, id="504"),
+    pytest.param(_connection_dropped_after_the_send, id="connection-dropped-after-the-send"),
+)
+
+
 @contextmanager
-def _upstream_that_never_answers_in_time() -> Iterator[Wire]:
+def _failing_upstream(failure: Failure) -> Iterator[Wire]:
     released: Final = threading.Event()
-    with wire_server(_answer_after(released)) as wire:
+    with wire_server(failure(released)) as wire:
         try:
             yield wire
         finally:
@@ -48,8 +68,9 @@ def _assert_sent_once_with_the_notice(response: httpx.Response, posts: tuple[Req
     assert "may already have created" in response.text, response.text
 
 
-def test_a_file_upload_that_times_out_is_sent_upstream_once(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario, _upstream_that_never_answers_in_time() as wire:
+@pytest.mark.parametrize("failure", FAILURES_AFTER_THE_SEND)
+def test_a_file_upload_that_fails_after_the_send_is_sent_upstream_once(gateway: Gateway, failure: Failure) -> None:
+    with gateway.scenario() as scenario, _failing_upstream(failure) as wire:
         model: Final = scenario.model(api_base=wire.url + "/v1")
         response: Final = gateway.client.post(
             "/v1/files",
@@ -60,8 +81,9 @@ def test_a_file_upload_that_times_out_is_sent_upstream_once(gateway: Gateway) ->
         _assert_sent_once_with_the_notice(response, _posts_to(wire, "/v1/files"))
 
 
-def test_a_batch_create_that_times_out_is_sent_upstream_once(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario, _upstream_that_never_answers_in_time() as wire:
+@pytest.mark.parametrize("failure", FAILURES_AFTER_THE_SEND)
+def test_a_batch_create_that_fails_after_the_send_is_sent_upstream_once(gateway: Gateway, failure: Failure) -> None:
+    with gateway.scenario() as scenario, _failing_upstream(failure) as wire:
         model: Final = scenario.model(api_base=wire.url + "/v1")
         response: Final = gateway.client.post(
             "/v1/batches",

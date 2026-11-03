@@ -17,6 +17,7 @@ import litellm
 from litellm import Router
 from litellm.constants import ANTHROPIC_DEFAULT_FILE_LIST_LIMIT
 from litellm.files.types import FileContentStreamingResult
+from litellm.llms.openai.common_utils import CreatedOnSomeDeployments
 from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
@@ -595,7 +596,7 @@ def _raised_from(error: Exception, cause: Exception) -> Exception:
 
 
 _FILE_MAY_EXIST_NOTICE: Final = (
-    "\n\nThe provider may already have created this file, so list your files before you send it again"
+    "\n\nThe provider may already have created this file, so check your newest files before you send it again"
 )
 
 
@@ -652,6 +653,15 @@ _FILE_MAY_EXIST_NOTICE: Final = (
             401,
             None,
             id="rejected-with-should-retry-false",
+        ),
+        pytest.param(
+            lambda: _raised_from(
+                CreatedOnSomeDeployments(openai.APIConnectionError(request=_UPSTREAM_FILE_UPLOAD)),
+                openai.APIConnectionError(request=_UPSTREAM_FILE_UPLOAD),
+            ),
+            500,
+            "false",
+            id="refused-by-one-deployment-after-another-created-it",
         ),
     ],
 )

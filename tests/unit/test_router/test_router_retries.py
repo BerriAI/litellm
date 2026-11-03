@@ -14,6 +14,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.openai.common_utils import create_may_already_exist
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.router import AllowedFailsPolicy, RetryPolicy
 import os
@@ -1353,3 +1354,22 @@ async def test_an_upload_that_times_out_on_one_deployment_is_not_hidden_by_a_fas
         await _create(_batch_router((rate_limited_base, slow_base), num_retries=2, orders=(1, 1)), "file")
 
     assert slow_route.call_count == 1
+
+
+async def test_an_upload_that_one_deployment_refused_is_not_resent_to_a_deployment_that_created_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "calculate_retry_after", lambda **_: 0.0)
+    refused_base: Final = "https://router-file-refused.test"
+    healthy_base: Final = "https://router-file-healthy.test"
+    respx_mock.post(url__startswith=refused_base).mock(side_effect=httpx.ConnectError("connection refused"))
+    healthy_route: Final = respx_mock.post(url__startswith=healthy_base).mock(
+        return_value=httpx.Response(200, json=_CREATED_OBJECTS["file"])
+    )
+
+    with pytest.raises(Exception, match="Connection error") as raised:
+        await _create(_batch_router((refused_base, healthy_base), num_retries=2, orders=(1, 1)), "file")
+
+    assert healthy_route.call_count == 1
+    assert create_may_already_exist(raised.value)

@@ -237,6 +237,9 @@ _ANSWERS_A_RESEND_CANNOT_DUPLICATE: Final = (
     pytest.param(lambda: httpx.ConnectTimeout("no connection in time"), id="connect-timeout"),
     pytest.param(lambda: httpx.ProxyError("the egress proxy refused the connection"), id="proxy-error"),
     pytest.param(lambda: httpx.WriteTimeout("the body was not written in time"), id="write-timeout"),
+    pytest.param(lambda: httpx.WriteError("the connection reset while the body was sent"), id="write-error"),
+    pytest.param(lambda: httpx.LocalProtocolError("the request could not be sent"), id="local-protocol-error"),
+    pytest.param(lambda: httpx.UnsupportedProtocol("the URL scheme is not supported"), id="unsupported-protocol"),
 )
 
 _ANSWERS_AFTER_THE_PROVIDER_MAY_HAVE_CREATED_IT: Final = (

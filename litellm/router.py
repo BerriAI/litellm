@@ -175,7 +175,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
 )
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
-from litellm.llms.openai.common_utils import create_may_already_exist
+from litellm.llms.openai.common_utils import CreatedOnSomeDeployments, create_may_already_exist
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
     MODEL_INFO_DISCOVERY_PROVIDERS,
@@ -7708,7 +7708,10 @@ class Router(DeprecatedRouterMembers):
             )
             failures: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, BaseException))
             if failures:
-                raise next((failure for failure in failures if create_may_already_exist(failure)), failures[0])
+                failure: Final = next((each for each in failures if create_may_already_exist(each)), failures[0])
+                if len(failures) < len(outcomes):
+                    raise CreatedOnSomeDeployments(failure) from failure
+                raise failure
             responses: Final = [outcome for outcome in outcomes if not isinstance(outcome, BaseException)]
 
             if len(responses) == 0:
