@@ -587,10 +587,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         auto_summary_level: str = "detailed",
         *,
         drop_params: bool = True,
+        declares_parallel_tool_calls: bool = True,
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
         litellm.responses() / litellm.aresponses() kwargs.
+
+        ``declares_parallel_tool_calls`` says whether the provider's Responses API accepts
+        ``parallel_tool_calls``; ``tool_choice.disable_parallel_tool_use`` maps onto it only then.
 
         ``include_encrypted_reasoning`` asks the provider for ``reasoning.encrypted_content``
         on every call, so a reasoning model's items can be replayed intact next turn even
@@ -656,9 +660,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # tool_choice
         tool_choice: Final = anthropic_request.get("tool_choice")
         if tool_choice:
-            responses_kwargs["tool_choice"] = self.translate_tool_choice_to_responses_api(
-                cast(AnthropicMessagesToolChoice, tool_choice)
-            )
+            anthropic_tool_choice: Final = cast(AnthropicMessagesToolChoice, tool_choice)
+            responses_kwargs["tool_choice"] = self.translate_tool_choice_to_responses_api(anthropic_tool_choice)
+            if anthropic_tool_choice.get("disable_parallel_tool_use") is True and declares_parallel_tool_calls:
+                responses_kwargs["parallel_tool_calls"] = False
 
         # thinking -> reasoning
         thinking: Final = anthropic_request.get("thinking")
