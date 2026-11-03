@@ -1332,13 +1332,21 @@ def _prepare_provider_registration_update(
 
     validated: Final = _validate_provider_registration_update(stored, data, fields_set)
     _validate_mcp_config_registration_write(validated.model_dump())
-    supplied_fields: Final = fields_set if fields_set is not None else data.model_fields_set
+    requested_fields: Final = fields_set if fields_set is not None else data.model_fields_set
+    # A changed allowlist rewrites stored tool metadata too, so entries for removed tools are dropped.
+    pruned_metadata: Final[frozenset[str]] = (
+        frozenset(field for field in _TOOL_METADATA_FIELDS if getattr(stored, field, None) is not None)
+        - requested_fields
+        if "allowed_tools" in requested_fields
+        else frozenset()
+    )
+    supplied_fields: Final[set[str]] = {*requested_fields, *pruned_metadata}
     normalized_patch: Final = UpdateMCPServerRequest.model_validate(
         validated.model_dump(
             include=set(supplied_fields & ProviderMCPRegistration.model_fields.keys()) | {"server_id", "mcp_info"}
         )
     )
-    serialized: Final = _prepare_mcp_server_data(normalized_patch, exclude_unset=True, fields_set=set(supplied_fields))
+    serialized: Final = _prepare_mcp_server_data(normalized_patch, exclude_unset=True, fields_set=supplied_fields)
     return {
         **serialized,
         "updated_by": touched_by,
