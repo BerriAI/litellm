@@ -1,5 +1,6 @@
 import json, litellm
 from pathlib import Path
+from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -108,6 +109,27 @@ def test_validate_environment_entra_minter_failure_names_the_options():
     assert "BING_GROUNDING_TOKEN" in message
     assert "https://ai.azure.com/.default" in message
     assert "no az login" in message
+
+
+def test_default_entra_minter_reuses_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+
+    from litellm.llms.azure import common_utils
+    from litellm.llms.azure.search.transformation import _default_entra_token_minter
+
+    provider_module: Final = importlib.import_module("litellm.secret_managers.get_azure_ad_token_provider")
+    provider_factory: Final = Mock(side_effect=lambda **_: lambda: "entra-token")
+    common_utils._cached_azure_ad_token_refresh_provider.cache_clear()
+    monkeypatch.setattr(common_utils, "get_azure_ad_token_provider", provider_factory)
+    monkeypatch.setattr(provider_module, "get_azure_ad_token_provider", provider_factory)
+
+    try:
+        first: Final = _default_entra_token_minter()
+        second: Final = _default_entra_token_minter()
+        assert first == second == "entra-token"
+        assert provider_factory.call_count == 1
+    finally:
+        common_utils._cached_azure_ad_token_refresh_provider.cache_clear()
 
 
 def test_validate_environment_does_not_mutate_and_is_idempotent():

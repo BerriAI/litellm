@@ -2,7 +2,7 @@
 OpenAI Image Variations Handler
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import httpx
@@ -14,27 +14,58 @@ from litellm.utils import ProviderConfigManager
 
 from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ...custom_httpx.llm_http_handler import LiteLLMLoggingObj
-from ..common_utils import OpenAIAsyncHTTPClient, OpenAIError, OpenAIHTTPClient
+from ..common_utils import OpenAIError, upstream_error_response
+from ..workload_identity import build_async_openai_client, build_openai_client
 
 
 class OpenAIImageVariationsHandler:
     def get_sync_client(
         self,
         client: OpenAI | None,
-        init_client_params: dict,
-    ):
+        api_key: str | None,
+        api_base: str,
+        timeout: float | httpx.Timeout | None,
+        max_retries: int,
+        organization: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> OpenAI:
         if client is not None:
             return client
-        return OpenAI(**init_client_params, http_client=litellm.client_session or OpenAIHTTPClient())
+        return build_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            litellm_params=litellm_params,
+            static_key_http_client_factory=lambda: litellm.client_session,
+        )
 
-    def get_async_client(self, client: AsyncOpenAI | None, init_client_params: dict) -> AsyncOpenAI:
+    def get_async_client(
+        self,
+        client: AsyncOpenAI | None,
+        api_key: str | None,
+        api_base: str,
+        timeout: float | httpx.Timeout | None,
+        max_retries: int,
+        organization: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> AsyncOpenAI:
         if client is not None:
             return client
-        return AsyncOpenAI(**init_client_params, http_client=litellm.aclient_session or OpenAIAsyncHTTPClient())
+        return build_async_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            litellm_params=litellm_params,
+            static_key_http_client_factory=lambda: litellm.aclient_session,
+        )
 
     async def async_image_variations(
         self,
-        api_key: str,
+        api_key: str | None,
         api_base: str,
         organization: str | None,
         client: AsyncOpenAI | None,
@@ -51,15 +82,15 @@ class OpenAIImageVariationsHandler:
         provider_config: BaseImageVariationConfig,
     ) -> ImageResponse:
         try:
-            init_client_params: Final = {
-                "api_key": api_key,
-                "base_url": api_base,
-                "timeout": timeout,
-                "max_retries": max_retries,
-                "organization": organization,
-            }
-
-            client = self.get_async_client(client=client, init_client_params=init_client_params)
+            client = self.get_async_client(
+                client=client,
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                organization=organization,
+                litellm_params=litellm_params,
+            )
 
             raw_response: Final = await client.images.with_raw_response.create_variation(**data)
             response: Final = raw_response.parse()
@@ -98,12 +129,17 @@ class OpenAIImageVariationsHandler:
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise OpenAIError(
+                status_code=status_code,
+                message=error_text,
+                response=upstream_error_response(e),
+                headers=error_headers,
+            )
 
     def image_variations(
         self,
         model_response: ImageResponse,
-        api_key: str,
+        api_key: str | None,
         api_base: str,
         model: str | None,
         image: FileTypes,
@@ -120,7 +156,7 @@ class OpenAIImageVariationsHandler:
     ) -> ImageResponse:
         try:
             provider_config: Final = ProviderConfigManager.get_provider_image_variation_config(
-                model=model or "",  # openai defaults to dall-e-2
+                model=model or "",
                 provider=LlmProviders.OPENAI,
             )
 
@@ -167,15 +203,15 @@ class OpenAIImageVariationsHandler:
                     litellm_params=litellm_params,
                 )
 
-            init_client_params: Final = {
-                "api_key": api_key,
-                "base_url": api_base,
-                "timeout": timeout,
-                "max_retries": max_retries,
-                "organization": organization,
-            }
-
-            client = self.get_sync_client(client=client, init_client_params=init_client_params)
+            client = self.get_sync_client(
+                client=client,
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                organization=organization,
+                litellm_params=litellm_params,
+            )
 
             raw_response: Final = client.images.with_raw_response.create_variation(**json_data)
             response: Final = raw_response.parse()
@@ -214,4 +250,9 @@ class OpenAIImageVariationsHandler:
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise OpenAIError(
+                status_code=status_code,
+                message=error_text,
+                response=upstream_error_response(e),
+                headers=error_headers,
+            )

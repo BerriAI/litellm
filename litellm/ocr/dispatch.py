@@ -9,7 +9,14 @@ from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
-from litellm.rust_bridge.public_call import NativeCall, native_call, native_call_hook, optional_str, signature
+from litellm.rust_bridge.public_call import (
+    AsyncFlag,
+    NativeCall,
+    native_call,
+    native_call_hook,
+    optional_str,
+    signature,
+)
 
 __all__ = ("aocr", "ocr")
 
@@ -39,6 +46,7 @@ def _bind_request(
 
 
 _OCR: Final = signature(_bind_request)
+_FLAG: Final = AsyncFlag("aocr", sync=_OCR)
 
 
 def _public_request(name: str, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NativeCall:
@@ -59,7 +67,6 @@ _DISPATCH: Final = PublicDispatch(
     route=Route.OCR,
     request=lambda args, kwargs: _public_request("ocr", args, kwargs),
     context=_context,
-    bypass=lambda request: request.kwargs.get("aocr") is True,
 )
 
 _ADISPATCH: Final = PublicDispatch(
@@ -73,9 +80,11 @@ def ocr(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public OCR call shape
 ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
+    if _FLAG.requested(kwargs):
+        return aocr(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=runtime.NO_PYTHON,
         binding=NATIVE_OCR,
         native=native_call_hook,
@@ -85,7 +94,7 @@ def ocr(
 async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: preserve the public OCR call shape
     return await _ADISPATCH.arun(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=runtime.NO_PYTHON,
         binding=NATIVE_AOCR,
         native=native_call_hook,

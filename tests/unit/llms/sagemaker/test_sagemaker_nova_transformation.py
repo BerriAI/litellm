@@ -543,8 +543,9 @@ def test_nova_streaming_sends_stream_flag_and_parses_chunks_and_usage(respx_mock
         "stream": True,
         "stream_options": {"include_usage": True},
     }
-    assert tuple(chunk.choices[0].delta.content for chunk in chunks) == ("Nova ", "stream", None, None)
-    assert tuple(chunk.choices[0].finish_reason for chunk in chunks) == (None, None, "stop", None)
+    assert tuple(chunk.choices[0].delta.content for chunk in chunks[:-1]) == ("Nova ", "stream", None)
+    assert chunks[-1].choices == []
+    assert tuple(chunk.choices[0].finish_reason for chunk in chunks[:-1]) == (None, None, "stop")
     assert (chunks[-1].usage.prompt_tokens, chunks[-1].usage.completion_tokens, chunks[-1].usage.total_tokens) == (
         2,
         1,

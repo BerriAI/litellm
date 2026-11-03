@@ -6,19 +6,22 @@ from integration.translation.case import (
     SSEFrame,
     StreamingTranslationTestCase,
 )
-from integration.translation.chat_completions.cross_model.contracts import followup_request
 from integration.translation.chat_completions.bases.vertex_ai import (
     CLAUDE_FABLE_5_1_TEST_CASE,
     CLAUDE_FABLE_5_TEST_CASE,
     CLAUDE_HAIKU_4_5_TEST_CASE,
     CLAUDE_OPUS_5_5_TEST_CASE,
     CLAUDE_OPUS_5_TEST_CASE,
+    CLAUDE_SONNET_5_5_TEST_CASE,
+    GEMINI_3_1_PRO_PREVIEW_TEST_CASE,
+    GEMINI_3_8_FLASH_TEST_CASE,
     GEMINI_4_ARGON_TEST_CASE,
 )
+from integration.translation.chat_completions.cross_model.contracts import followup_request
 from integration.translation.chat_completions.templates import (
     CODING_AGENT_REQUEST,
-    coding_agent_stream_message,
     CODING_AGENT_RESPONSE,
+    coding_agent_stream_message,
 )
 from integration.translation.templates.anthropic import (
     ANTHROPIC_AGENT_REQUEST,
@@ -1717,6 +1720,1214 @@ CLAUDE_OPUS_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
         },
         "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+    },
+)
+
+
+CLAUDE_SONNET_5_5_AGENT_TEST_CASE: Final = replace(
+    CLAUDE_SONNET_5_5_TEST_CASE,
+    scenario="agent_tools",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "vertex_ai/claude-sonnet-5-5@default"},
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/anthropic/models/claude-sonnet-5-5@default:rawPredict",
+    expected_provider_headers={
+        "authorization": "Bearer scripted-token",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "x-api-key": "scripted-token",
+    },
+    expected_provider_request={
+        **ANTHROPIC_AGENT_REQUEST,
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "low"},
+        "anthropic_version": "vertex-2023-10-16",
+    },
+    mock_provider_response={
+        **ANTHROPIC_AGENT_RESPONSE,
+        "model": "claude-sonnet-5-5",
+        "id": "msg_vrtx_011Cg63qBoZy88hTvxUdtSEr",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_vrtx_01AtmBHyfEtHxHSJs8imPFWJ",
+                "name": "search_code",
+                "input": {"query": "retries_remaining"},
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_vrtx_019seNAPMm8gmCrNPf8Fwzvf",
+                "name": "run_tests",
+                "input": {"path": "tests/test_retry.py"},
+            },
+        ],
+        "stop_reason": "tool_use",
+        "usage": {
+            "input_tokens": 1184,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 105,
+            "output_tokens_details": {"thinking_tokens": 0},
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "vertex_ai/claude-sonnet-5-5@default",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "toolu_vrtx_01AtmBHyfEtHxHSJs8imPFWJ",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "toolu_vrtx_019seNAPMm8gmCrNPf8Fwzvf",
+                            "type": "function",
+                        },
+                    ],
+                    "provider_specific_fields": {"citations": None, "thinking_blocks": None},
+                    "content": None,
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 105,
+            "prompt_tokens": 1184,
+            "total_tokens": 1289,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1184,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
+
+
+CLAUDE_SONNET_5_5_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
+    CLAUDE_SONNET_5_5_AGENT_TEST_CASE,
+    scenario="agent_followup",
+    litellm_request=followup_request(
+        CLAUDE_SONNET_5_5_AGENT_TEST_CASE.litellm_request, CLAUDE_SONNET_5_5_AGENT_TEST_CASE.expected_litellm_response
+    ),
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/anthropic/models/claude-sonnet-5-5@default:rawPredict",
+    expected_provider_request={
+        **ANTHROPIC_AGENT_REQUEST,
+        "messages": [
+            *list_value(ANTHROPIC_AGENT_REQUEST["messages"]),
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_vrtx_01AtmBHyfEtHxHSJs8imPFWJ",
+                        "name": "search_code",
+                        "input": {"query": "retries_remaining"},
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_vrtx_019seNAPMm8gmCrNPf8Fwzvf",
+                        "name": "run_tests",
+                        "input": {"path": "tests/test_retry.py"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_vrtx_01AtmBHyfEtHxHSJs8imPFWJ",
+                        "content": '{"matches": [{"path": "src/worker.py", "line": 12, "text": "remaining = '
+                        'retries_remaining(3, attempts)"}]}',
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_vrtx_019seNAPMm8gmCrNPf8Fwzvf",
+                        "content": '{"exit_code": 1, "output": "FAILED tests/test_retry.py::test_retries_remaining - assert '
+                        '4 == 2"}',
+                    },
+                    {
+                        "type": "text",
+                        "text": "Stop after these diagnostics. Do not call more tools or change files. Summarize the "
+                        "bug, the caller found and the failed test in two short sentences.",
+                    },
+                ],
+            },
+        ],
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "low"},
+        "anthropic_version": "vertex-2023-10-16",
+    },
+    mock_provider_response={
+        **ANTHROPIC_AGENT_RESPONSE,
+        "model": "claude-sonnet-5-5",
+        "id": "msg_vrtx_011Cg63wSU3MbRaa6kwyvRLk",
+        "content": [
+            {
+                "type": "text",
+                "text": "The bug is that `retries_remaining` in `src/retry.py` returns `limit + attempts` "
+                "instead of `max(0, limit - attempts)`, so it overcounts and can't be clamped at zero. "
+                "The one other caller is `src/worker.py` line 12 (`retries_remaining(3, attempts)`), and "
+                "`tests/test_retry.py::test_retries_remaining` fails with `assert 4 == 2`.",
+            }
+        ],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 1492,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 138,
+            "output_tokens_details": {"thinking_tokens": 0},
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "vertex_ai/claude-sonnet-5-5@default",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "The bug is that `retries_remaining` in `src/retry.py` returns `limit + attempts` "
+                    "instead of `max(0, limit - attempts)`, so it overcounts and can't be clamped at zero. "
+                    "The one other caller is `src/worker.py` line 12 (`retries_remaining(3, attempts)`), and "
+                    "`tests/test_retry.py::test_retries_remaining` fails with `assert 4 == 2`.",
+                    "role": "assistant",
+                    "provider_specific_fields": {"citations": None, "thinking_blocks": None},
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 138,
+            "prompt_tokens": 1492,
+            "total_tokens": 1630,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 138},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1492,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
+
+CLAUDE_SONNET_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
+    scenario="agent_streaming",
+    litellm_endpoint=CLAUDE_SONNET_5_5_AGENT_TEST_CASE.litellm_endpoint,
+    litellm_request={
+        **CLAUDE_SONNET_5_5_AGENT_TEST_CASE.litellm_request,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    expected_provider_headers=CLAUDE_SONNET_5_5_AGENT_TEST_CASE.expected_provider_headers,
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/anthropic/models/claude-sonnet-5-5@default:streamRawPredict?alt=sse",
+    expected_provider_request={
+        **ANTHROPIC_AGENT_REQUEST,
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "low"},
+        "anthropic_version": "vertex-2023-10-16",
+        "stream": True,
+    },
+    mock_provider_frames=(
+        SSEFrame(
+            data={
+                "type": "message_start",
+                "message": {
+                    "model": "claude-sonnet-5-5",
+                    "id": "msg_vrtx_011Cg63qMXiZfvJr7NuvT9B1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "container": None,
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "stop_details": None,
+                    "usage": {
+                        "input_tokens": 1184,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                        "output_tokens": 16,
+                    },
+                },
+            },
+            event="message_start",
+        ),
+        SSEFrame(data={"type": "ping"}, event="ping"),
+        SSEFrame(
+            data={
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_vrtx_01EJMuteinVLQX3UQ8bxJEps",
+                    "name": "search_code",
+                    "input": {},
+                },
+            },
+            event="content_block_start",
+        ),
+        SSEFrame(
+            data={"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": ""}},
+            event="content_block_delta",
+        ),
+        SSEFrame(
+            data={
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"query'},
+            },
+            event="content_block_delta",
+        ),
+        SSEFrame(
+            data={
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '": "ret'},
+            },
+            event="content_block_delta",
+        ),
+        SSEFrame(
+            data={
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "ries_re"},
+            },
+            event="content_block_delta",
+        ),
+        SSEFrame(
+            data={
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "maining"},
+            },
+            event="content_block_delta",
+        ),
+        SSEFrame(
+            data={
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '"}'},
+            },
+            event="content_block_delta",
+        ),
+        SSEFrame(data={"type": "content_block_stop", "index": 0}, event="content_block_stop"),
+        SSEFrame(
+            data={
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_vrtx_015Mb3cdfYTHCA9QowGSX2RP",
+                    "name": "run_tests",
+                    "input": {},
+                },
+            },
+            event="content_block_start",
+        ),
+        SSEFrame(
+            data={"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": ""}},
+            event="content_block_delta",
+        ),
+        SSEFrame(
+            data={
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": '{"path"'},
+            },
+            event="content_block_delta",
+        ),
+        SSEFrame(
+            data={
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": ': "test'},
+            },
+            event="content_block_delta",
+        ),
+        SSEFrame(
+            data={
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": "s/test_"},
+            },
+            event="content_block_delta",
+        ),
+        SSEFrame(
+            data={
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": "retry.p"},
+            },
+            event="content_block_delta",
+        ),
+        SSEFrame(
+            data={
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": 'y"}'},
+            },
+            event="content_block_delta",
+        ),
+        SSEFrame(data={"type": "content_block_stop", "index": 1}, event="content_block_stop"),
+        SSEFrame(
+            data={
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use", "stop_sequence": None, "stop_details": None, "container": None},
+                "usage": {
+                    "input_tokens": 1184,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 105,
+                    "output_tokens_details": {"thinking_tokens": 0},
+                },
+            },
+            event="message_delta",
+        ),
+        SSEFrame(data={"type": "message_stop"}, event="message_stop"),
+    ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("toolu_vrtx_01EJMuteinVLQX3UQ8bxJEps", "toolu_vrtx_015Mb3cdfYTHCA9QowGSX2RP")
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 1184,
+        "completion_tokens": 105,
+        "total_tokens": 1289,
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1184,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+    },
+)
+
+
+GEMINI_3_1_PRO_PREVIEW_AGENT_TEST_CASE: Final = replace(
+    GEMINI_3_1_PRO_PREVIEW_TEST_CASE,
+    scenario="agent_tools",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "vertex_ai/gemini-3.1-pro-preview"},
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/google/models/gemini-3.1-pro-preview:generateContent",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer scripted-token"},
+    expected_provider_request={**VERTEX_AI_AGENT_REQUEST},
+    mock_provider_response={
+        **VERTEX_AI_AGENT_RESPONSE,
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "text": "**My Thought Process on Addressing the `retries_remaining` Issue**\n"
+                            "\n"
+                            "Alright, so my immediate priority is to tackle the `retries_remaining` function. The "
+                            "core of the problem, as I see it, lies in its current implementation where it seems to "
+                            "be adding `limit` and `attempts` rather than performing the correct subtraction to "
+                            "determine remaining retries. This, of course, is a fundamental logic error. "
+                            "Furthermore, I've identified a critical oversight: the function doesn't account for "
+                            "scenarios where the number of `attempts` might actually exceed the `limit`. This is a "
+                            "potential edge case that could lead to unexpected behavior and incorrect results, so it "
+                            "absolutely needs to be addressed.\n"
+                            "\n"
+                            "My proposed solution is a straightforward fix: `return max(0, limit - attempts)`. This "
+                            "ensures that we're correctly calculating the difference between the allowed `limit` and "
+                            "the current `attempts`. Crucially, by wrapping this subtraction within `max(0, ...)`, "
+                            "I'm enforcing a floor of zero. This elegantly handles the situation where `attempts` "
+                            "might be greater than or equal to `limit`, ensuring that the function will never return "
+                            "a negative number of remaining retries, which would be nonsensical in this context.\n"
+                            "\n"
+                            "With that fix in mind, my plan is to proceed with the original request: I will first "
+                            "execute the tests, specifically `tests/test_retry.py`, and run them concurrently for "
+                            "efficiency. Immediately after, I'll perform a thorough search for all call sites of the "
+                            "`retries_remaining` function. This two-pronged approach will allow me to verify the "
+                            "correctness of my proposed fix and understand the broader impact of this change across "
+                            "the codebase.\n"
+                            "\n",
+                            "thought": True,
+                        },
+                        {
+                            "functionCall": {
+                                "name": "run_tests",
+                                "args": {"path": "tests/test_retry.py"},
+                                "id": "call_2861166",
+                            },
+                            "thoughtSignature": "synthetic-signature",
+                        },
+                        {
+                            "functionCall": {
+                                "name": "search_code",
+                                "args": {"query": "retries_remaining"},
+                                "id": "call_2861167",
+                            }
+                        },
+                    ],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 404,
+            "candidatesTokenCount": 41,
+            "totalTokenCount": 551,
+            "trafficType": "ON_DEMAND",
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 404}],
+            "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 41}],
+            "thoughtsTokenCount": 106,
+        },
+        "modelVersion": "gemini-3.1-pro-preview",
+        "createTime": "2026-10-16T14:10:08.649083Z",
+        "responseId": "QDDSavvOJ6-q_9MP5byA4Qo",
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "id": "QDDSavvOJ6-q_9MP5byA4Qo",
+        "model": "vertex_ai/gemini-3.1-pro-preview",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "provider_specific_fields": {"thought_signature": "synthetic-signature"},
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "call_2861166__thought__synthetic-signature",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "call_2861167",
+                            "type": "function",
+                        },
+                    ],
+                    "images": [],
+                    "reasoning_content": "**My Thought Process on Addressing the `retries_remaining` Issue**\n"
+                    "\n"
+                    "Alright, so my immediate priority is to tackle the `retries_remaining` function. The "
+                    "core of the problem, as I see it, lies in its current implementation where it seems to "
+                    "be adding `limit` and `attempts` rather than performing the correct subtraction to "
+                    "determine remaining retries. This, of course, is a fundamental logic error. "
+                    "Furthermore, I've identified a critical oversight: the function doesn't account for "
+                    "scenarios where the number of `attempts` might actually exceed the `limit`. This is a "
+                    "potential edge case that could lead to unexpected behavior and incorrect results, so it "
+                    "absolutely needs to be addressed.\n"
+                    "\n"
+                    "My proposed solution is a straightforward fix: `return max(0, limit - attempts)`. This "
+                    "ensures that we're correctly calculating the difference between the allowed `limit` and "
+                    "the current `attempts`. Crucially, by wrapping this subtraction within `max(0, ...)`, "
+                    "I'm enforcing a floor of zero. This elegantly handles the situation where `attempts` "
+                    "might be greater than or equal to `limit`, ensuring that the function will never return "
+                    "a negative number of remaining retries, which would be nonsensical in this context.\n"
+                    "\n"
+                    "With that fix in mind, my plan is to proceed with the original request: I will first "
+                    "execute the tests, specifically `tests/test_retry.py`, and run them concurrently for "
+                    "efficiency. Immediately after, I'll perform a thorough search for all call sites of the "
+                    "`retries_remaining` function. This two-pronged approach will allow me to verify the "
+                    "correctness of my proposed fix and understand the broader impact of this change across "
+                    "the codebase.\n"
+                    "\n",
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": "**My Thought Process on Addressing the `retries_remaining` Issue**\n"
+                            "\n"
+                            "Alright, so my immediate priority is to tackle the `retries_remaining` function. The "
+                            "core of the problem, as I see it, lies in its current implementation where it seems to "
+                            "be adding `limit` and `attempts` rather than performing the correct subtraction to "
+                            "determine remaining retries. This, of course, is a fundamental logic error. "
+                            "Furthermore, I've identified a critical oversight: the function doesn't account for "
+                            "scenarios where the number of `attempts` might actually exceed the `limit`. This is a "
+                            "potential edge case that could lead to unexpected behavior and incorrect results, so it "
+                            "absolutely needs to be addressed.\n"
+                            "\n"
+                            "My proposed solution is a straightforward fix: `return max(0, limit - attempts)`. This "
+                            "ensures that we're correctly calculating the difference between the allowed `limit` and "
+                            "the current `attempts`. Crucially, by wrapping this subtraction within `max(0, ...)`, "
+                            "I'm enforcing a floor of zero. This elegantly handles the situation where `attempts` "
+                            "might be greater than or equal to `limit`, ensuring that the function will never return "
+                            "a negative number of remaining retries, which would be nonsensical in this context.\n"
+                            "\n"
+                            "With that fix in mind, my plan is to proceed with the original request: I will first "
+                            "execute the tests, specifically `tests/test_retry.py`, and run them concurrently for "
+                            "efficiency. Immediately after, I'll perform a thorough search for all call sites of the "
+                            "`retries_remaining` function. This two-pronged approach will allow me to verify the "
+                            "correctness of my proposed fix and understand the broader impact of this change across "
+                            "the codebase.\n"
+                            "\n",
+                        }
+                    ],
+                    "provider_specific_fields": {"thought_signatures": ["synthetic-signature"]},
+                    "content": None,
+                },
+                "provider_specific_fields": {"native_finish_reason": "STOP"},
+            }
+        ],
+        "usage": {
+            "completion_tokens": 147,
+            "prompt_tokens": 404,
+            "total_tokens": 551,
+            "completion_tokens_details": {"reasoning_tokens": 106, "text_tokens": 41},
+            "prompt_tokens_details": {"text_tokens": 404},
+        },
+        "vertex_ai_grounding_metadata": [],
+        "vertex_ai_url_context_metadata": [],
+        "vertex_ai_safety_results": [],
+        "vertex_ai_citation_metadata": [],
+    },
+)
+
+
+GEMINI_3_1_PRO_PREVIEW_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
+    GEMINI_3_1_PRO_PREVIEW_AGENT_TEST_CASE,
+    scenario="agent_followup",
+    litellm_request=followup_request(
+        GEMINI_3_1_PRO_PREVIEW_AGENT_TEST_CASE.litellm_request,
+        GEMINI_3_1_PRO_PREVIEW_AGENT_TEST_CASE.expected_litellm_response,
+    ),
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/google/models/gemini-3.1-pro-preview:generateContent",
+    expected_provider_request={
+        **VERTEX_AI_AGENT_REQUEST,
+        "contents": [
+            *list_value(VERTEX_AI_AGENT_REQUEST["contents"]),
+            {
+                "role": "model",
+                "parts": [
+                    {
+                        "thought": True,
+                        "text": "**My Thought Process on Addressing the `retries_remaining` Issue**\n"
+                        "\n"
+                        "Alright, so my immediate priority is to tackle the `retries_remaining` function. The "
+                        "core of the problem, as I see it, lies in its current implementation where it seems to "
+                        "be adding `limit` and `attempts` rather than performing the correct subtraction to "
+                        "determine remaining retries. This, of course, is a fundamental logic error. "
+                        "Furthermore, I've identified a critical oversight: the function doesn't account for "
+                        "scenarios where the number of `attempts` might actually exceed the `limit`. This is a "
+                        "potential edge case that could lead to unexpected behavior and incorrect results, so it "
+                        "absolutely needs to be addressed.\n"
+                        "\n"
+                        "My proposed solution is a straightforward fix: `return max(0, limit - attempts)`. This "
+                        "ensures that we're correctly calculating the difference between the allowed `limit` and "
+                        "the current `attempts`. Crucially, by wrapping this subtraction within `max(0, ...)`, "
+                        "I'm enforcing a floor of zero. This elegantly handles the situation where `attempts` "
+                        "might be greater than or equal to `limit`, ensuring that the function will never return "
+                        "a negative number of remaining retries, which would be nonsensical in this context.\n"
+                        "\n"
+                        "With that fix in mind, my plan is to proceed with the original request: I will first "
+                        "execute the tests, specifically `tests/test_retry.py`, and run them concurrently for "
+                        "efficiency. Immediately after, I'll perform a thorough search for all call sites of the "
+                        "`retries_remaining` function. This two-pronged approach will allow me to verify the "
+                        "correctness of my proposed fix and understand the broader impact of this change across "
+                        "the codebase.\n"
+                        "\n",
+                    },
+                    {
+                        "function_call": {
+                            "name": "run_tests",
+                            "args": {"path": "tests/test_retry.py"},
+                            "id": "call_2861166",
+                        },
+                        "thoughtSignature": "synthetic-signature",
+                    },
+                    {
+                        "function_call": {
+                            "name": "search_code",
+                            "args": {"query": "retries_remaining"},
+                            "id": "call_2861167",
+                        }
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "function_response": {
+                            "name": "run_tests",
+                            "response": {
+                                "exit_code": 1,
+                                "output": "FAILED tests/test_retry.py::test_retries_remaining - assert 4 == 2",
+                            },
+                            "id": "call_2861166",
+                        }
+                    },
+                    {
+                        "function_response": {
+                            "name": "search_code",
+                            "response": {
+                                "matches": [
+                                    {
+                                        "path": "src/worker.py",
+                                        "line": 12,
+                                        "text": "remaining = retries_remaining(3, attempts)",
+                                    }
+                                ]
+                            },
+                            "id": "call_2861167",
+                        }
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": "Stop after these diagnostics. Do not call more tools or change files. Summarize the "
+                        "bug, the caller found and the failed test in two short sentences."
+                    }
+                ],
+            },
+        ],
+    },
+    mock_provider_response={
+        **VERTEX_AI_AGENT_RESPONSE,
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "text": "**My Debugging Session**\n"
+                            "\n"
+                            "It appears I've stumbled upon a rather straightforward arithmetic error within the "
+                            "`retries_remaining` function. My current understanding is that it's incorrectly adding "
+                            "the `limit` and `attempts` parameters instead of performing a subtraction, and "
+                            "consequently, it's not ensuring the result is capped at zero. I've identified that "
+                            "`src/worker.py` is a caller of this function, and specifically, the "
+                            "`tests/test_retry.py::test_retries_remaining` test is failing because, for instance, "
+                            "`retries_remaining(3, 1)` is returning 4 when it should be returning 2.\n"
+                            "\n",
+                            "thought": True,
+                        },
+                        {
+                            "text": "The bug in `retries_remaining` is that it adds `limit` and `attempts` instead of "
+                            "calculating `max(0, limit - attempts)`. This causes `tests/test_retry.py` to fail, "
+                            "which was verified, and the function is called by `src/worker.py`.",
+                            "thoughtSignature": "synthetic-signature",
+                        },
+                    ],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 525,
+            "candidatesTokenCount": 64,
+            "totalTokenCount": 706,
+            "trafficType": "ON_DEMAND",
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 525}],
+            "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 64}],
+            "thoughtsTokenCount": 117,
+        },
+        "modelVersion": "gemini-3.1-pro-preview",
+        "createTime": "2026-10-16T14:11:28.565345Z",
+        "responseId": "kDDSauHAIq6d4_UPv9qnMQ",
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "id": "kDDSauHAIq6d4_UPv9qnMQ",
+        "model": "vertex_ai/gemini-3.1-pro-preview",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "The bug in `retries_remaining` is that it adds `limit` and `attempts` instead of "
+                    "calculating `max(0, limit - attempts)`. This causes `tests/test_retry.py` to fail, "
+                    "which was verified, and the function is called by `src/worker.py`.",
+                    "role": "assistant",
+                    "images": [],
+                    "reasoning_content": "**My Debugging Session**\n"
+                    "\n"
+                    "It appears I've stumbled upon a rather straightforward arithmetic error within the "
+                    "`retries_remaining` function. My current understanding is that it's incorrectly adding "
+                    "the `limit` and `attempts` parameters instead of performing a subtraction, and "
+                    "consequently, it's not ensuring the result is capped at zero. I've identified that "
+                    "`src/worker.py` is a caller of this function, and specifically, the "
+                    "`tests/test_retry.py::test_retries_remaining` test is failing because, for instance, "
+                    "`retries_remaining(3, 1)` is returning 4 when it should be returning 2.\n"
+                    "\n",
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": "**My Debugging Session**\n"
+                            "\n"
+                            "It appears I've stumbled upon a rather straightforward arithmetic error within the "
+                            "`retries_remaining` function. My current understanding is that it's incorrectly adding "
+                            "the `limit` and `attempts` parameters instead of performing a subtraction, and "
+                            "consequently, it's not ensuring the result is capped at zero. I've identified that "
+                            "`src/worker.py` is a caller of this function, and specifically, the "
+                            "`tests/test_retry.py::test_retries_remaining` test is failing because, for instance, "
+                            "`retries_remaining(3, 1)` is returning 4 when it should be returning 2.\n"
+                            "\n",
+                        }
+                    ],
+                    "provider_specific_fields": {"thought_signatures": ["synthetic-signature"]},
+                },
+                "provider_specific_fields": {"native_finish_reason": "STOP"},
+            }
+        ],
+        "usage": {
+            "completion_tokens": 181,
+            "prompt_tokens": 525,
+            "total_tokens": 706,
+            "completion_tokens_details": {"reasoning_tokens": 117, "text_tokens": 64},
+            "prompt_tokens_details": {"text_tokens": 525},
+        },
+        "vertex_ai_grounding_metadata": [],
+        "vertex_ai_url_context_metadata": [],
+        "vertex_ai_safety_results": [],
+        "vertex_ai_citation_metadata": [],
+    },
+)
+
+GEMINI_3_1_PRO_PREVIEW_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
+    scenario="agent_streaming",
+    litellm_endpoint=GEMINI_3_1_PRO_PREVIEW_AGENT_TEST_CASE.litellm_endpoint,
+    litellm_request={
+        **GEMINI_3_1_PRO_PREVIEW_AGENT_TEST_CASE.litellm_request,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    expected_provider_headers=GEMINI_3_1_PRO_PREVIEW_AGENT_TEST_CASE.expected_provider_headers,
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse",
+    expected_provider_request={**VERTEX_AI_AGENT_REQUEST},
+    mock_provider_frames=(
+        SSEFrame(
+            data={
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [
+                                {
+                                    "functionCall": {
+                                        "name": "run_tests",
+                                        "args": {"path": "tests/test_retry.py"},
+                                        "id": "call_1016270",
+                                    },
+                                    "thoughtSignature": "synthetic-signature",
+                                }
+                            ],
+                        }
+                    }
+                ],
+                "usageMetadata": {"trafficType": "ON_DEMAND"},
+                "modelVersion": "gemini-3.1-pro-preview",
+                "createTime": "2026-10-16T14:10:13.305463Z",
+                "responseId": "RTDSarfSEuXG4_UP_a-tuQo",
+            }
+        ),
+        SSEFrame(
+            data={
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [
+                                {
+                                    "functionCall": {
+                                        "name": "search_code",
+                                        "args": {"query": "retries_remaining"},
+                                        "id": "call_1016276",
+                                    }
+                                }
+                            ],
+                        }
+                    }
+                ],
+                "usageMetadata": {"trafficType": "ON_DEMAND"},
+                "modelVersion": "gemini-3.1-pro-preview",
+                "createTime": "2026-10-16T14:10:13.305463Z",
+                "responseId": "RTDSarfSEuXG4_UP_a-tuQo",
+            }
+        ),
+        SSEFrame(
+            data={
+                "candidates": [{"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "STOP"}],
+                "usageMetadata": {
+                    "promptTokenCount": 404,
+                    "candidatesTokenCount": 41,
+                    "totalTokenCount": 473,
+                    "trafficType": "ON_DEMAND",
+                    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 404}],
+                    "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 41}],
+                    "thoughtsTokenCount": 28,
+                },
+                "modelVersion": "gemini-3.1-pro-preview",
+                "createTime": "2026-10-16T14:10:13.305463Z",
+                "responseId": "RTDSarfSEuXG4_UP_a-tuQo",
+            }
+        ),
+    ),
+    expected_litellm_message={
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1016270__thought__synthetic-signature",
+                "type": "function",
+                "function": {"name": "run_tests", "arguments": '{"path": "tests/test_retry.py"}'},
+            },
+            {
+                "id": "call_1016276",
+                "type": "function",
+                "function": {"name": "search_code", "arguments": '{"query": "retries_remaining"}'},
+            },
+        ],
+        "reasoning_content": None,
+        "thinking_blocks": [],
+        "reasoning_items": [],
+    },
+    expected_litellm_usage={
+        "prompt_tokens": 404,
+        "completion_tokens": 69,
+        "total_tokens": 473,
+        "prompt_tokens_details": {"text_tokens": 404},
+        "completion_tokens_details": {"reasoning_tokens": 28, "text_tokens": 41},
+    },
+)
+
+
+GEMINI_3_8_FLASH_AGENT_TEST_CASE: Final = replace(
+    GEMINI_3_8_FLASH_TEST_CASE,
+    scenario="agent_tools",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "vertex_ai/gemini-3.8-flash"},
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer scripted-token"},
+    expected_provider_request={**VERTEX_AI_AGENT_REQUEST},
+    mock_provider_response={
+        **VERTEX_AI_AGENT_RESPONSE,
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "name": "search_code",
+                                "args": {"query": "retries_remaining"},
+                                "id": "call_1969624",
+                            },
+                            "thoughtSignature": "synthetic-signature",
+                        },
+                        {
+                            "functionCall": {
+                                "name": "run_tests",
+                                "args": {"path": "tests/test_retry.py"},
+                                "id": "call_1969625",
+                            }
+                        },
+                    ],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 404,
+            "candidatesTokenCount": 41,
+            "totalTokenCount": 445,
+            "trafficType": "ON_DEMAND",
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 404}],
+            "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 41}],
+        },
+        "modelVersion": "gemini-3.8-flash",
+        "createTime": "2026-10-16T14:10:02.505616Z",
+        "responseId": "OjDSapDuHpCG9LsPreTxQA",
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "id": "OjDSapDuHpCG9LsPreTxQA",
+        "model": "vertex_ai/gemini-3.8-flash",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "provider_specific_fields": {"thought_signature": "synthetic-signature"},
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "call_1969624__thought__synthetic-signature",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "call_1969625",
+                            "type": "function",
+                        },
+                    ],
+                    "images": [],
+                    "thinking_blocks": [],
+                    "provider_specific_fields": {"thought_signatures": ["synthetic-signature"]},
+                    "content": None,
+                },
+                "provider_specific_fields": {"native_finish_reason": "STOP"},
+            }
+        ],
+        "usage": {
+            "completion_tokens": 41,
+            "prompt_tokens": 404,
+            "total_tokens": 445,
+            "completion_tokens_details": {"text_tokens": 41},
+            "prompt_tokens_details": {"text_tokens": 404},
+        },
+        "vertex_ai_grounding_metadata": [],
+        "vertex_ai_url_context_metadata": [],
+        "vertex_ai_safety_results": [],
+        "vertex_ai_citation_metadata": [],
+    },
+)
+
+
+GEMINI_3_8_FLASH_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
+    GEMINI_3_8_FLASH_AGENT_TEST_CASE,
+    scenario="agent_followup",
+    litellm_request=followup_request(
+        GEMINI_3_8_FLASH_AGENT_TEST_CASE.litellm_request, GEMINI_3_8_FLASH_AGENT_TEST_CASE.expected_litellm_response
+    ),
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
+    expected_provider_request={
+        **VERTEX_AI_AGENT_REQUEST,
+        "contents": [
+            *list_value(VERTEX_AI_AGENT_REQUEST["contents"]),
+            {
+                "role": "model",
+                "parts": [
+                    {
+                        "function_call": {
+                            "name": "search_code",
+                            "args": {"query": "retries_remaining"},
+                            "id": "call_1969624",
+                        },
+                        "thoughtSignature": "synthetic-signature",
+                    },
+                    {
+                        "function_call": {
+                            "name": "run_tests",
+                            "args": {"path": "tests/test_retry.py"},
+                            "id": "call_1969625",
+                        }
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "function_response": {
+                            "name": "search_code",
+                            "response": {
+                                "matches": [
+                                    {
+                                        "path": "src/worker.py",
+                                        "line": 12,
+                                        "text": "remaining = retries_remaining(3, attempts)",
+                                    }
+                                ]
+                            },
+                            "id": "call_1969624",
+                        }
+                    },
+                    {
+                        "function_response": {
+                            "name": "run_tests",
+                            "response": {
+                                "exit_code": 1,
+                                "output": "FAILED tests/test_retry.py::test_retries_remaining - assert 4 == 2",
+                            },
+                            "id": "call_1969625",
+                        }
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": "Stop after these diagnostics. Do not call more tools or change files. Summarize the "
+                        "bug, the caller found and the failed test in two short sentences."
+                    }
+                ],
+            },
+        ],
+    },
+    mock_provider_response={
+        **VERTEX_AI_AGENT_RESPONSE,
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "text": "`retries_remaining` erroneously adds `limit` and `attempts` instead of calculating "
+                            "`max(0, limit - attempts)`, causing `assert retries_remaining(3, 1) == 2` to fail with "
+                            "`assert 4 == 2`. Aside from its unit test, `src/worker.py` (line 12) was found as the "
+                            "only other caller in the repository.",
+                            "thoughtSignature": "synthetic-signature",
+                        }
+                    ],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 525,
+            "candidatesTokenCount": 85,
+            "totalTokenCount": 610,
+            "trafficType": "ON_DEMAND",
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 525}],
+            "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 85}],
+        },
+        "modelVersion": "gemini-3.8-flash",
+        "createTime": "2026-10-16T14:11:25.313560Z",
+        "responseId": "jTDSatiRE9ap4_UPuPC7wQo",
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "id": "jTDSatiRE9ap4_UPuPC7wQo",
+        "model": "vertex_ai/gemini-3.8-flash",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "`retries_remaining` erroneously adds `limit` and `attempts` instead of calculating "
+                    "`max(0, limit - attempts)`, causing `assert retries_remaining(3, 1) == 2` to fail with "
+                    "`assert 4 == 2`. Aside from its unit test, `src/worker.py` (line 12) was found as the "
+                    "only other caller in the repository.",
+                    "role": "assistant",
+                    "images": [],
+                    "thinking_blocks": [],
+                    "provider_specific_fields": {"thought_signatures": ["synthetic-signature"]},
+                },
+                "provider_specific_fields": {"native_finish_reason": "STOP"},
+            }
+        ],
+        "usage": {
+            "completion_tokens": 85,
+            "prompt_tokens": 525,
+            "total_tokens": 610,
+            "completion_tokens_details": {"text_tokens": 85},
+            "prompt_tokens_details": {"text_tokens": 525},
+        },
+        "vertex_ai_grounding_metadata": [],
+        "vertex_ai_url_context_metadata": [],
+        "vertex_ai_safety_results": [],
+        "vertex_ai_citation_metadata": [],
+    },
+)
+
+GEMINI_3_8_FLASH_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
+    scenario="agent_streaming",
+    litellm_endpoint=GEMINI_3_8_FLASH_AGENT_TEST_CASE.litellm_endpoint,
+    litellm_request={
+        **GEMINI_3_8_FLASH_AGENT_TEST_CASE.litellm_request,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    expected_provider_headers=GEMINI_3_8_FLASH_AGENT_TEST_CASE.expected_provider_headers,
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/google/models/gemini-3.8-flash:streamGenerateContent?alt=sse",
+    expected_provider_request={**VERTEX_AI_AGENT_REQUEST},
+    mock_provider_frames=(
+        SSEFrame(
+            data={
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [
+                                {
+                                    "functionCall": {
+                                        "name": "search_code",
+                                        "args": {"query": "retries_remaining"},
+                                        "id": "call_302633",
+                                    },
+                                    "thoughtSignature": "synthetic-signature",
+                                }
+                            ],
+                        }
+                    }
+                ],
+                "usageMetadata": {"trafficType": "ON_DEMAND"},
+                "modelVersion": "gemini-3.8-flash",
+                "createTime": "2026-10-16T14:10:05.862754Z",
+                "responseId": "PTDSaqLUNOXG4_UP_a-tuQo",
+            }
+        ),
+        SSEFrame(
+            data={
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [
+                                {
+                                    "functionCall": {
+                                        "name": "run_tests",
+                                        "args": {"path": "tests/test_retry.py"},
+                                        "id": "call_302642",
+                                    }
+                                }
+                            ],
+                        }
+                    }
+                ],
+                "usageMetadata": {"trafficType": "ON_DEMAND"},
+                "modelVersion": "gemini-3.8-flash",
+                "createTime": "2026-10-16T14:10:05.862754Z",
+                "responseId": "PTDSaqLUNOXG4_UP_a-tuQo",
+            }
+        ),
+        SSEFrame(
+            data={
+                "candidates": [{"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "STOP"}],
+                "usageMetadata": {
+                    "promptTokenCount": 404,
+                    "candidatesTokenCount": 41,
+                    "totalTokenCount": 445,
+                    "trafficType": "ON_DEMAND",
+                    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 404}],
+                    "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 41}],
+                },
+                "modelVersion": "gemini-3.8-flash",
+                "createTime": "2026-10-16T14:10:05.862754Z",
+                "responseId": "PTDSaqLUNOXG4_UP_a-tuQo",
+            }
+        ),
+    ),
+    expected_litellm_message=coding_agent_stream_message(("call_302633__thought__synthetic-signature", "call_302642")),
+    expected_litellm_usage={
+        "prompt_tokens": 404,
+        "completion_tokens": 41,
+        "total_tokens": 445,
+        "prompt_tokens_details": {"text_tokens": 404},
+        "completion_tokens_details": {"text_tokens": 41},
     },
 )
 

@@ -22,7 +22,7 @@ from integration._support.upstream import JsonResponse, SseResponse, delete_scen
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 Surface = Literal["chat", "chat-stream", "messages", "messages-stream", "responses", "responses-stream"]
 
@@ -408,7 +408,7 @@ def test_flag_on_keeps_end_user_out_of_spend_rows_and_lens_export_with_cache_twi
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         team: Final = scenario.team()
         model: Final = _model(scenario, surface)
         key: Final = scenario.key(models=[model], team_id=team)
@@ -455,7 +455,7 @@ def test_flag_on_failed_request_creates_no_customer_and_logs_no_end_user(rig: _R
         configured: Final = upstream.post(f"/__scripts/{provider_model}", json={"statuses": [status] * 4})
         assert configured.status_code == 200, configured.text
         scenario.cleanups.callback(upstream.delete, f"/__scripts/{provider_model}")
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         team: Final = scenario.team()
         model: Final = scenario.model(model=f"openai/{provider_model}")
         key: Final = scenario.key(models=[model], team_id=team)
@@ -521,7 +521,7 @@ def test_flag_on_header_sent_twice_and_body_user_are_none_attributed(rig: _Rig) 
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         team: Final = scenario.team()
         model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
         key: Final = scenario.key(models=[model], team_id=team)
@@ -565,7 +565,7 @@ def test_flag_on_still_refuses_an_end_user_over_budget_at_auth(rig: _Rig) -> Non
         )
         assert created.status_code == 200, created.text
         _forget_customers(scenario, (end_user,))
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
 
         denied: Final = gateway.request(
             "POST",
@@ -695,6 +695,7 @@ def test_flag_on_burst_lands_each_row_once_through_sink_outage_and_worker_kill(r
         before_kill: Final = _burst(rig, models, key, calls[: len(_SURFACES) * 2])
         _assert_burst_landed_once(rig, models, before_kill)
         assert not rig.lens.outages.acquire(blocking=False), "the Lens sink outage was never hit"
+        _team_requests_flushed(team, len(before_kill))
         victim: Final = min(rig.proxy.worker_pids())
         replacement: Final = rig.proxy.kill_worker(victim)
         assert replacement != victim, (victim, replacement)

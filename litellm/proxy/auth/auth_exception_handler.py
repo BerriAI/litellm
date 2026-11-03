@@ -12,7 +12,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger, verbose_proxy_stdout_logger
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.otel.runtime import seed_request_identity
-from litellm.litellm_core_utils.core_helpers import is_expected_client_error
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, is_expected_client_error
 from litellm.proxy._types import (
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
@@ -24,11 +24,13 @@ from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module expor
     _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_ip_address,
     is_invalid_virtual_key_error,
+    is_unauthorized_error,
     mark_invalid_virtual_key_error,
     normalize_request_route,
 )
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -41,7 +43,7 @@ DB_UNAVAILABLE_FALLBACK_USER_ID: Final = "__db_unavailable_fallback__"
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 
@@ -60,14 +62,14 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
             message=str(e.detail),
             internal_message=e.internal_message,
             type=ProxyErrorTypes.auth_error,
-            param="None",
+            param=None,
             code=e.status_code,
         )
     if isinstance(e, HTTPException):
         return ProxyException(
             message=getattr(e, "detail", f"Authentication Error({e})"),
             type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
         )
     if isinstance(e, ProxyException):
@@ -77,7 +79,7 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
     return ProxyException(
         message="Authentication Error, " + str(e),
         type=ProxyErrorTypes.auth_error,
-        param=getattr(e, "param", "None"),
+        param=openai_error_param(e),
         code=status.HTTP_401_UNAUTHORIZED,
     )
 
@@ -139,7 +141,7 @@ class UserAPIKeyAuthExceptionHandler:
     async def handle_authentication_error(
         e: Exception,
         request: Request,
-        request_data: dict[str, object],
+        request_data: object,
         route: str,
         parent_otel_span: Span | None,
         api_key: str,
@@ -190,6 +192,8 @@ class UserAPIKeyAuthExceptionHandler:
                 request_route=route,
             )
         else:
+            request_mapping: Final = as_str_mapping(request_data)
+            request_context: Final[dict[str, object]] = dict(request_mapping) if request_mapping is not None else {}
             # raise the exception to the caller
             requester_ip: Final = get_request_ip_address(
                 request=request,
@@ -198,11 +202,11 @@ class UserAPIKeyAuthExceptionHandler:
             user_agent: Final = _get_user_agent(request)
 
             # Log authentication failures before identity seeding and callbacks, so the log
-            # survives a raising callback pipeline. Classify and route malformed virtual-key
-            # rejections to WARNING on stdout (suppressible via LITELLM_LOG=ERROR).
+            # survives a raising callback pipeline. Route 401 rejections to WARNING on stdout
+            # (suppressible via LITELLM_LOG=ERROR); anything else is unexpected and logs at ERROR.
             log_extra: Final = {"requester_ip": requester_ip}
             is_invalid_virtual_key: Final = is_invalid_virtual_key_error(e)
-            is_quiet_log: Final = is_invalid_virtual_key and not litellm.log_client_error_tracebacks
+            is_quiet_log: Final = is_unauthorized_error(e) and not litellm.log_client_error_tracebacks
             logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger
             logger.log(
                 logging.WARNING if is_quiet_log else logging.ERROR,
@@ -229,7 +233,7 @@ class UserAPIKeyAuthExceptionHandler:
             # without this the failed trace would carry no team/key attributes.
             seed_request_identity(
                 user_api_key_dict,
-                model=request_data.get("model"),
+                model=request_context.get("model"),
             )
 
             # Budget checks live in tenant-scoped helpers (key / team / org / tag)
@@ -242,14 +246,14 @@ class UserAPIKeyAuthExceptionHandler:
                     resolve_llm_provider_for_rate_limit,
                 )
 
-                budget_model: Final = request_data.get("model")
+                budget_model: Final = request_context.get("model")
                 _, e.llm_provider = resolve_llm_provider_for_rate_limit(
                     budget_model if isinstance(budget_model, str) else None
                 )
 
             # Allow callbacks to transform the error response
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
-                request_data=_with_client_context(request_data, requester_ip, user_agent),
+                request_data=_with_client_context(request_context, requester_ip, user_agent),
                 original_exception=e,
                 user_api_key_dict=user_api_key_dict,
                 error_type=ProxyErrorTypes.auth_error,

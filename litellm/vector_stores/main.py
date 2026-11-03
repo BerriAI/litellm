@@ -5,7 +5,7 @@ LiteLLM SDK Functions for Creating and Searching Vector Stores
 import asyncio
 import builtins
 import contextvars
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Iterator, Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Final
 
@@ -31,7 +31,7 @@ from litellm.types.vector_stores import (
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
-from litellm.utils import ProviderConfigManager, client
+from litellm.utils import ProviderConfigManager, client, load_credentials_from_list
 from litellm.vector_stores.utils import VectorStoreRequestUtils
 
 if TYPE_CHECKING:
@@ -51,6 +51,10 @@ def _direct_vector_store_embedding_executor(
     return BaseQueryEmbeddingVectorStoreConfig.query_embedding_executor(
         value, router, vector_store_request_metadata(request_kwargs)
     )
+
+
+def _items_without_key(values: Mapping[str, object], excluded_key: str) -> Iterator[tuple[str, object]]:
+    return ((key, value) for key, value in values.items() if key != excluded_key)
 
 
 def mock_vector_store_search_response(
@@ -307,7 +311,7 @@ async def asearch(
     embedding_executor: Final = _direct_vector_store_embedding_executor(
         kwargs.pop("_direct_vector_store_embedding_executor", None), router, kwargs
     )
-    local_vars: Final = {key: value for key, value in locals().items() if key != "embedding_executor"}
+    local_vars: Final = dict(_items_without_key(locals(), "embedding_executor"))
 
     try:
         loop: Final = asyncio.get_event_loop()
@@ -391,7 +395,7 @@ def search(
     embedding_executor: Final = _direct_vector_store_embedding_executor(
         kwargs.pop("_direct_vector_store_embedding_executor", None), router, kwargs
     )
-    local_vars: Final = {key: value for key, value in locals().items() if key != "embedding_executor"}
+    local_vars: Final = dict(_items_without_key(locals(), "embedding_executor"))
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
@@ -403,6 +407,7 @@ def search(
                 kwargs.update(registry_credentials)
             except Exception:
                 pass
+            load_credentials_from_list(kwargs)
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
@@ -693,7 +698,7 @@ def list(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-):
+) -> Mapping[str, object] | Coroutine[object, object, Mapping[str, object]]:
     """
     List vector stores.
 
@@ -991,7 +996,7 @@ def delete(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-):
+) -> Mapping[str, object] | Coroutine[object, object, Mapping[str, object]]:
     """
     Delete a vector store.
 

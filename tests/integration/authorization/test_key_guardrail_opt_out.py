@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import pytest
 import yaml
 
 from integration._support.client import Gateway, Scenario, object_value, string_value
@@ -15,6 +16,8 @@ from integration.authorization._guardrail_opt_out import (
     non_admin_caller,
     stored_metadata,
 )
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 _KEY_ROUTES: Final = ["/key/generate", "/key/update", "/key/regenerate", "/v1/chat/completions"]
 

@@ -492,6 +492,10 @@ def s3_media_url(media_uri: str, aws_region_name: str) -> str | None:
     return f"https://{bucket}.s3.{aws_region_name}.{dns_suffix}/{quote(key)}"
 
 
+def _header_or_default(headers: Mapping[str, str], name: str, default: str) -> str:
+    return headers.get(name, default)
+
+
 def media_predates_job(headers: Mapping[str, str], job_created_at: float) -> bool:
     try:
         modified_at: Final = parsedate_to_datetime(headers["last-modified"]).timestamp()
@@ -501,7 +505,7 @@ def media_predates_job(headers: Mapping[str, str], job_created_at: float) -> boo
 
 
 async def write_media_within_limit(response: httpx.Response, media_file: IO[bytes], max_bytes: int) -> bool:
-    if int(response.headers.get("content-length", "0")) > max_bytes:
+    if int(_header_or_default(response.headers, "content-length", "0")) > max_bytes:
         return False
     async for chunk in response.aiter_bytes():
         _ = media_file.write(chunk)
@@ -591,8 +595,7 @@ class TranscribePassthroughLoggingHandler:
 
     @staticmethod
     def _operation_from_response(httpx_response: httpx.Response) -> str:
-        headers: Final[Mapping[str, str]] = httpx_response.request.headers
-        target: Final[str] = headers.get("x-amz-target", "")
+        target: Final = _header_or_default(httpx_response.request.headers, "x-amz-target", "")
         return target.split(".")[-1]
 
     @staticmethod

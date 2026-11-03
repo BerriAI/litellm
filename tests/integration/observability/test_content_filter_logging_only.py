@@ -27,6 +27,8 @@ from integration._support.otlp_sink import AuditConfigWriter, SpanSinks, recorde
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 AWS_KEY: Final = "AKIA" + "SYNTHETIC0000000"
 GITHUB_TOKEN: Final = "ghp_" + "a1" * 18
 FORBIDDEN_WORD: Final = "synthetic-forbidden-word"

@@ -1,12 +1,11 @@
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_http::request::string_headers as shared_string_headers;
-pub(super) use litellm_http::request::truncate_error_body;
 use litellm_llms::tencent::messages::transformation::TENCENT_MESSAGES_CONFIG;
 use litellm_llms::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
     base_llm::messages::transformation::BaseMessagesConfig,
-    bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+    bedrock::messages::invoke_transformations::anthropic_claude_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
     deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
     edenai::messages::transformation::EDENAI_MESSAGES_CONFIG,
     minimax::messages::transformation::MINIMAX_MESSAGES_CONFIG,
@@ -35,6 +34,14 @@ impl MessagesProvider {
 
     pub(crate) fn config(self) -> &'static dyn BaseMessagesConfig {
         self.config
+    }
+
+    /// Python's `MESSAGES_SERVICE_TIER_PROVIDERS`: everyone else has `service_tier` dropped.
+    pub(crate) fn accepts_service_tier(self) -> bool {
+        matches!(
+            self.provider,
+            LlmProviders::Anthropic | LlmProviders::AzureAi | LlmProviders::BedrockMantle
+        )
     }
 }
 
@@ -77,22 +84,22 @@ mod tests {
 
     use rstest::rstest;
 
-    use super::{messages_provider, string_headers, truncate_error_body};
+    use super::{messages_provider, string_headers};
     use crate::Error;
     use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 
     #[rstest]
-    #[case::tencent("tencent")]
-    #[case::anthropic("anthropic")]
-    #[case::azure_ai("azure_ai")]
-    #[case::bedrock("bedrock")]
-    #[case::deepseek("deepseek")]
-    #[case::edenai("edenai")]
-    #[case::minimax("minimax")]
-    #[case::vertex_ai("vertex_ai")]
-    fn provider_keeps_its_python_name(#[case] name: &str) {
-        let provider =
-            messages_provider(name.parse::<LlmProviders>().unwrap(), "claude-sonnet-4-5").unwrap();
+    #[case::tencent(LlmProviders::Tencent, "tencent")]
+    #[case::anthropic(LlmProviders::Anthropic, "anthropic")]
+    #[case::azure_ai(LlmProviders::AzureAi, "azure_ai")]
+    #[case::bedrock(LlmProviders::Bedrock, "bedrock")]
+    #[case::deepseek(LlmProviders::Deepseek, "deepseek")]
+    #[case::edenai(LlmProviders::Edenai, "edenai")]
+    #[case::minimax(LlmProviders::Minimax, "minimax")]
+    #[case::vertex_ai(LlmProviders::VertexAi, "vertex_ai")]
+    #[case::openrouter(LlmProviders::Openrouter, "openrouter")]
+    fn provider_keeps_its_python_name(#[case] provider: LlmProviders, #[case] name: &str) {
+        let provider = messages_provider(provider, "claude-sonnet-4-5").unwrap();
         assert_eq!(provider.as_str(), name);
     }
 
@@ -107,19 +114,6 @@ mod tests {
     }
 
     #[test]
-    fn truncate_error_body_caps_long_payloads() {
-        let body = "x".repeat(400);
-        let truncated = truncate_error_body(&body);
-        assert!(truncated.ends_with("... (truncated)"));
-        let prefix_chars = truncated
-            .strip_suffix("... (truncated)")
-            .expect("truncated marker present")
-            .chars()
-            .count();
-        assert_eq!(prefix_chars, 256);
-    }
-
-    #[test]
     fn string_headers_rejects_non_string_values() {
         let headers = json!({"x-count": 3}).as_object().unwrap().clone();
         let err = string_headers(Some(headers)).expect_err("non-string header rejected");
@@ -131,5 +125,71 @@ mod tests {
                 actual: "number",
             })
         );
+    }
+}
+
+/// Python's `_merge_messages_header_sources`: later sources win per header name, except
+/// `anthropic-beta` (any casing), whose values from every source are unioned, deduplicated and
+/// sorted into one lowercase `anthropic-beta` entry.
+pub fn merge_messages_header_sources(
+    sources: impl IntoIterator<Item = Map<String, Value>>,
+) -> Map<String, Value> {
+    let mut merged = Map::new();
+    let mut betas = std::collections::BTreeSet::new();
+    for (name, value) in sources.into_iter().flatten() {
+        if !name.eq_ignore_ascii_case("anthropic-beta") {
+            merged.insert(name, value);
+            continue;
+        }
+        let values: Vec<&str> = match &value {
+            Value::String(text) => vec![text.as_str()],
+            Value::Array(entries) => entries.iter().filter_map(Value::as_str).collect(),
+            _ => Vec::new(),
+        };
+        betas.extend(
+            values
+                .iter()
+                .flat_map(|value| value.split(','))
+                .map(str::trim)
+                .filter(|beta| !beta.is_empty())
+                .map(str::to_owned),
+        );
+    }
+    if !betas.is_empty() {
+        merged.insert(
+            "anthropic-beta".to_owned(),
+            Value::String(betas.into_iter().collect::<Vec<_>>().join(",")),
+        );
+    }
+    merged
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use serde_json::{Map, Value, json};
+
+    use super::merge_messages_header_sources;
+
+    fn map(value: Value) -> Map<String, Value> {
+        value.as_object().cloned().unwrap()
+    }
+
+    #[test]
+    fn later_sources_win_except_anthropic_beta_which_is_unioned_and_sorted() {
+        let merged = merge_messages_header_sources([
+            map(json!({"x-a": "1", "anthropic-beta": "b-2, a-1"})),
+            map(json!({"x-a": "2", "Anthropic-Beta": ["c-3", 7, "a-1"]})),
+            map(json!({"anthropic-beta": 5})),
+        ]);
+        assert_eq!(
+            Value::Object(merged),
+            json!({"x-a": "2", "anthropic-beta": "a-1,b-2,c-3"})
+        );
+    }
+
+    #[test]
+    fn no_beta_values_leave_no_beta_header() {
+        let merged = merge_messages_header_sources([map(json!({"anthropic-beta": ""}))]);
+        assert!(merged.is_empty());
     }
 }

@@ -349,7 +349,7 @@ class SlackAlerting(CustomBatchLogger):
         except Exception:
             return 0
 
-    async def send_daily_reports(self, router) -> bool:
+    async def send_daily_reports(self, router: Router) -> bool:
         """
         Send a daily report on:
         - Top 5 deployments with most failed requests
@@ -365,7 +365,7 @@ class SlackAlerting(CustomBatchLogger):
             False -> if not sent
         """
 
-        ids: Final = router.get_model_ids()
+        ids: Final = router.registry().names(kind="ids")
 
         # get keys
         failed_request_keys: Final = [f"{id}:{SlackAlertingCacheKeys.failed_requests_key.value}" for id in ids]
@@ -430,7 +430,7 @@ class SlackAlerting(CustomBatchLogger):
             message += "\tNone\n"
         for i in range(len(top_5_failed)):
             key = failed_request_keys[top_5_failed[i]].split(":")[0]
-            _deployment = router.get_model_info(key)
+            _deployment = router.registry().deployment_dict(key)
             if isinstance(_deployment, dict):
                 deployment_name = _deployment["litellm_params"].get("model", "")
             else:
@@ -452,7 +452,7 @@ class SlackAlerting(CustomBatchLogger):
             message += "\tNone\n"
         for i in range(len(top_5_slowest)):
             key = latency_keys[top_5_slowest[i]].split(":")[0]
-            _deployment = router.get_model_info(key)
+            _deployment = router.registry().deployment_dict(key)
             if _deployment is not None:
                 deployment_name = _deployment["litellm_params"].get("model", "")
             else:
@@ -802,7 +802,7 @@ class SlackAlerting(CustomBatchLogger):
         if self.llm_router is None:
             return
 
-        deployment: Final = self.llm_router.get_deployment(model_id=deployment_id)
+        deployment: Final = self.llm_router.registry().deployment(deployment_id)
 
         if deployment is None:
             return
@@ -953,7 +953,7 @@ class SlackAlerting(CustomBatchLogger):
                 return
 
             ### EXTRACT MODEL DETAILS ###
-            deployment: Final = self.llm_router.get_deployment(model_id=deployment_id)
+            deployment: Final = self.llm_router.registry().deployment(deployment_id)
             if deployment is None:
                 return
 

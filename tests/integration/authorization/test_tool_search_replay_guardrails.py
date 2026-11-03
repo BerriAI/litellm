@@ -18,7 +18,7 @@ from pydantic import JsonValue
 
 from tests.integration.caching.response_cache_case import await_entry, redis_store
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 _POLICY: Final = "integration-tool-policy"
 _BLOCK: Final = "tool-permission-block"
