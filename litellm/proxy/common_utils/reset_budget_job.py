@@ -1036,14 +1036,17 @@ class ResetBudgetJob:
             db_span("reset_spend_rows", "LiteLLM_VerificationToken"),
             spend_reset_unit_of_work(self._new_batch) as uow,
         ):
+            tokens: list[str] = []
             for k in updated_keys:
                 if k.row.token is None:
                     continue
+                tokens.append(k.row.token)
                 uow.keys.queue_spend_reset(
                     token=k.row.token,
                     budget_reset_at=k.row.budget_reset_at,
                     spend_decrement=k.spend_decrement,
                 )
+            uow.keys.queue_clamp_negative_spend(tokens)
 
     async def _write_user_reset_updates(self, updated_users: Sequence[_RowReset[LiteLLM_UserTable]]) -> None:
         """
@@ -1063,12 +1066,17 @@ class ResetBudgetJob:
             db_span("reset_spend_rows", "LiteLLM_UserTable"),
             spend_reset_unit_of_work(self._new_batch) as uow,
         ):
+            user_ids: list[str] = []
             for u in updated_users:
+                if u.row.user_id is None:
+                    continue
+                user_ids.append(u.row.user_id)
                 uow.users.queue_spend_reset(
                     user_id=u.row.user_id,
                     budget_reset_at=u.row.budget_reset_at,
                     spend_decrement=u.spend_decrement,
                 )
+            uow.users.queue_clamp_negative_spend(user_ids)
 
     async def _write_team_reset_updates(self, updated_teams: Sequence[_RowReset[LiteLLM_TeamTable]]) -> None:
         """
@@ -1088,12 +1096,17 @@ class ResetBudgetJob:
             db_span("reset_spend_rows", "LiteLLM_TeamTable"),
             spend_reset_unit_of_work(self._new_batch) as uow,
         ):
+            team_ids: list[str] = []
             for t in updated_teams:
+                if t.row.team_id is None:
+                    continue
+                team_ids.append(t.row.team_id)
                 uow.teams.queue_spend_reset(
                     team_id=t.row.team_id,
                     budget_reset_at=t.row.budget_reset_at,
                     spend_decrement=t.spend_decrement,
                 )
+            uow.teams.queue_clamp_negative_spend(team_ids)
 
     def _emit_phase_failure(
         self,

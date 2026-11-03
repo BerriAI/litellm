@@ -211,3 +211,44 @@ async def test_membership_total_spend_repair_is_queued_on_the_cascade_batch_ahea
     assert repair[0] == "execute_raw"
     assert repair[2] == {"args": (["budget-1", "budget-2"],)}
     assert reset == ("litellm_teammembership.update_many", {"budget_id": "budget-1"}, {"spend": 0})
+
+
+async def test_queue_clamp_negative_spend_across_tables():
+    batch = FakeBatch()
+
+    async with spend_reset_unit_of_work(lambda: batch) as uow:
+        uow.keys.queue_clamp_negative_spend(["tok-1", "tok-2"])
+        uow.users.queue_clamp_negative_spend(["user-1"])
+        uow.teams.queue_clamp_negative_spend(["team-1", "team-2"])
+        # Empty calls should be no-ops
+        uow.keys.queue_clamp_negative_spend([])
+        uow.users.queue_clamp_negative_spend([])
+        uow.teams.queue_clamp_negative_spend([])
+
+    assert batch.commit_count == 1
+    assert batch.calls == [
+        ("litellm_verificationtoken.update_many", {"token": {"in": ["tok-1", "tok-2"]}, "spend": {"lt": 0}}, {"spend": 0}),
+        ("litellm_usertable.update_many", {"user_id": {"in": ["user-1"]}, "spend": {"lt": 0}}, {"spend": 0}),
+        ("litellm_teamtable.update_many", {"team_id": {"in": ["team-1", "team-2"]}, "spend": {"lt": 0}}, {"spend": 0}),
+    ]
+
+
+def test_models_clamp_negative_fractional_spend():
+    from litellm.models.team import LiteLLM_TeamTable
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.models.verification_token import LiteLLM_VerificationToken
+
+    # Negative epsilon spend from budget reset floating-point decrement is clamped to 0.0
+    team = LiteLLM_TeamTable(team_id="team-neg", spend=-2.7e-17)
+    assert team.spend == 0.0
+
+    user = LiteLLM_UserTable(user_id="user-neg", spend=-1.5e-16)
+    assert user.spend == 0.0
+
+    token = LiteLLM_VerificationToken(token="tok-neg", spend=-3.1e-17)
+    assert token.spend == 0.0
+
+    # Normal non-negative spend remains unchanged
+    assert LiteLLM_TeamTable(team_id="team-pos", spend=10.5).spend == 10.5
+    assert LiteLLM_UserTable(user_id="user-pos", spend=5.25).spend == 5.25
+    assert LiteLLM_VerificationToken(token="tok-pos", spend=1.5).spend == 1.5

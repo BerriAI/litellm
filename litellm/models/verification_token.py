@@ -7,13 +7,22 @@ Canonical definition for ``litellm_verificationtoken``. Re-exported from
 
 from datetime import datetime
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, model_validator, field_validator
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
 class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
+    @model_validator(mode="before")
+    @classmethod
+    def clamp_negative_spend(cls, values):
+        if isinstance(values, dict):
+            spend = values.get("spend")
+            if spend is not None and isinstance(spend, (int, float)) and spend < 0:
+                values["spend"] = 0.0
+        return values
+
     token: str | None = None
     key_name: str | None = None
     key_alias: str | None = None
@@ -64,6 +73,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     router_settings: dict | None = None
     budget_limits: list[dict] | None = None
     model_config = ConfigDict(protected_namespaces=())
+
 
 
 class LiteLLM_DeletedVerificationToken(LiteLLM_VerificationToken):
