@@ -530,6 +530,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
+from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
@@ -1672,6 +1673,8 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
             decoded_worker_config: Final = as_str_mapping(_UNTYPED_VALUE.validate_python(json.loads(worker_config)))
             if decoded_worker_config is not None:
                 await initialize_from_worker_config(decoded_worker_config)
+
+    enforce_fips_mode(general_settings_view())
 
     async with AsyncExitStack() as boot_database:
         enforce_master_key_boot_verdict(
