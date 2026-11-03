@@ -12,6 +12,7 @@ import json
 import os
 import random
 import time
+import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -157,6 +158,15 @@ def _turn_chains_through_the_db(payload: Mapping[str, object], llm_router: "Rout
 
 def _org_member_transaction_key(org_id: str, user_id: str) -> str:
     return f"organization_id::{quote(org_id, safe='')}::user_id::{quote(user_id, safe='')}"
+
+
+def _persistable_api_key(token: str | None, logged_api_key: str) -> str | None:
+    from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _redact_logged_api_key
+
+    if token is None or token == logged_api_key or is_valid_sha256_hash(token):
+        return token
+    return _redact_logged_api_key(token)
 
 
 def _is_batch_cost_row(payload: SpendLogsPayload) -> bool:
@@ -709,12 +719,14 @@ class DBSpendUpdateWriter:
             from litellm.accounting.snapshot import build_accounting_payload
 
             payload["accounting_path"] = accounting_path
+            if accounting_path == "ledger" and not _is_batch_cost_row(payload):
+                payload["accounting_delivery_id"] = uuid.uuid4().hex
 
             async def prepare_ledger() -> None:
                 payload["accounting_payload"] = build_accounting_payload(
                     payload,
                     entities={
-                        "api_key": hashed_token,
+                        "api_key": _persistable_api_key(hashed_token, payload.get("api_key") or ""),
                         "user": user_id,
                         "end_user": end_user_id,
                         "team_id": team_id,

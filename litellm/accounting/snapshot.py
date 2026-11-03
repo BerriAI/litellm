@@ -87,11 +87,16 @@ def build_accounting_payload(
         "accounting_model_access_groups": model_access_groups,
         "accounting_windows": windows,
     }
-    return {
-        **{
-            key: value.isoformat() if isinstance(value, datetime) else value
-            for key, value in payload.items()
-            if key in _ACCOUNTING_FIELDS
-        },
-        "metadata": _FIELDS.validate_python(safe_json_structure(accounting_metadata, non_finite_as_null=True)),
-    }
+    return _FIELDS.validate_python(
+        safe_json_structure(
+            {
+                **{
+                    key: value.isoformat() if isinstance(value, datetime) else value
+                    for key, value in payload.items()
+                    if key in _ACCOUNTING_FIELDS
+                },
+                "metadata": accounting_metadata,
+            },
+            non_finite_as_null=True,
+        )
+    )

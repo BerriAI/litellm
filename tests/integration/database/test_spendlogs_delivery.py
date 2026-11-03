@@ -50,8 +50,9 @@ def _insert(connection: psycopg.Connection[tuple[object, ...]], rows: Sequence[M
         for row in rows:
             if row["request_id"] in inserted and row.get("accounting_path") == "ledger":
                 connection.execute(
-                    'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch) VALUES (%s, %s, %s)',
-                    (row["request_id"], Jsonb(dict(row)), row.get("call_type") == "aretrieve_batch"),
+                    'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, accounting_payload, is_batch) '
+                    "VALUES (%s, %s, %s, %s)",
+                    (row["request_id"], row["request_id"], Jsonb(dict(row)), row.get("call_type") == "aretrieve_batch"),
                 )
 
 

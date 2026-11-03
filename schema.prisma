@@ -2143,7 +2143,8 @@ model LiteLLM_AccountingDelivery {
 }
 
 model LiteLLM_SpendLogDelivery {
-  request_id         String                  @id
+  delivery_id        String                  @id @default(dbgenerated("gen_random_uuid()::text"))
+  request_id         String
   state              AccountingDeliveryState @default(pending)
   accounting_payload Json
   previous_payload   Json?
@@ -2156,6 +2157,7 @@ model LiteLLM_SpendLogDelivery {
 
   @@index([state, next_attempt_at])
   @@index([state, applied_at])
+  @@index([request_id])
 }
 
 model LiteLLM_SubscriptionAccountTable {

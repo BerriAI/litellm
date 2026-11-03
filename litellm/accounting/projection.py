@@ -24,6 +24,7 @@ from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 _FIELDS: Final = TypeAdapter(dict[str, object])
 _STRINGS: Final = TypeAdapter(tuple[str, ...])
+_VALUES: Final = TypeAdapter(tuple[object, ...])
 _ROWS: Final = TypeAdapter(tuple[dict[str, object], ...])
 _TASK_TYPES: Final = frozenset(load_model_insight_tasks())
 
@@ -54,7 +55,8 @@ def _tags(row: Mapping[str, object]) -> tuple[str, ...]:
     value: Final = row.get("request_tags")
     if value is None:
         return ()
-    return _STRINGS.validate_json(value) if isinstance(value, str) else _STRINGS.validate_python(value)
+    parsed: Final = _VALUES.validate_json(value) if isinstance(value, str) else _VALUES.validate_python(value)
+    return tuple(tag for tag in parsed if isinstance(tag, str))
 
 
 def _date(row: Mapping[str, object]) -> str | None:

@@ -8423,8 +8423,11 @@ async def enqueue_spend_logs(
             else tuple(prisma_client.spend_log_transactions) + tuple(logs)
         )
         kept, kept_bytes = spend_log_queue_within_budget(queued, PrismaClient.spend_log_queue_bytes + added, max_bytes)
-        prisma_client.spend_log_transactions[:] = kept
-        PrismaClient.spend_log_queue_bytes = kept_bytes
+        rescued: Final = tuple(
+            accounting_only_spend_log(row) for row in queued[: len(queued) - len(kept)] if _carries_a_charge(row)
+        )
+        prisma_client.spend_log_transactions[:] = (*rescued, *kept)
+        PrismaClient.spend_log_queue_bytes = kept_bytes + sum(spend_log_row_bytes(row) for row in rescued)
     if len(kept) < len(queued):
         verbose_proxy_logger.error(
             "Spend tracking - spend log queue is at its %d byte budget; dropped the %d oldest spend logs",
@@ -8644,7 +8647,11 @@ class ProxyUpdateSpend:
 
 def _spend_log_export_rows(rows: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
     return tuple(
-        {key: value for key, value in row.items() if key not in {"accounting_payload", "accounting_log_disabled"}}
+        {
+            key: value
+            for key, value in row.items()
+            if key not in {"accounting_payload", "accounting_log_disabled", "accounting_delivery_id"}
+        }
         for row in rows
         if row.get("accounting_log_disabled") is not True
     )
@@ -9146,6 +9153,37 @@ def _is_transient_spend_log_write_error(e: Exception) -> bool:
     )
 
 
+_ACCOUNTING_ONLY_KEYS: Final = frozenset(
+    {"request_id", "call_type", "accounting_path", "accounting_payload", "accounting_delivery_id"}
+)
+
+
+def _carries_a_charge(row: Mapping[str, object]) -> bool:
+    return row.get("accounting_path") == "ledger"
+
+
+def accounting_only_spend_log(row: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **{key: value for key, value in row.items() if key in _ACCOUNTING_ONLY_KEYS},
+        "accounting_log_disabled": True,
+    }
+
+
+async def _keep_charges_of_dropped_logs(repo: SpendLogsRepository, rows: Sequence[Mapping[str, object]]) -> None:
+    charged: Final = tuple(accounting_only_spend_log(row) for row in rows if _carries_a_charge(row))
+    if not charged:
+        return
+    try:
+        await repo.insert_with_deliveries(charged)
+    except Exception as e:  # noqa: BLE001  # the request log is already lost; keep the flush going for other rows
+        spend_log_error(
+            "Spend tracking - could not keep the charges of %d dropped spend log rows. error=%s",
+            len(charged),
+            str(e),
+            exc=e,
+        )
+
+
 async def _create_spend_logs_with_poison_isolation(
     repo: SpendLogsRepository,
     rows: Sequence[Mapping[str, object]],
@@ -9192,6 +9230,7 @@ async def _create_spend_logs_with_poison_isolation(
                 str(e),
                 exc=e,
             )
+            await _keep_charges_of_dropped_logs(repo, rows)
             return budget_left
         if budget_left <= 0:
             spend_log_error(
@@ -9199,6 +9238,7 @@ async def _create_spend_logs_with_poison_isolation(
                 "isolation failure budget exhausted for this flush",
                 len(rows),
             )
+            await _keep_charges_of_dropped_logs(repo, rows)
             return 0
         mid: Final = len(rows) // 2
         remaining: Final = await _create_spend_logs_with_poison_isolation(repo, rows[:mid], budget_left)
@@ -9208,6 +9248,7 @@ async def _create_spend_logs_with_poison_isolation(
                 "isolation failure budget exhausted for this flush",
                 len(rows) - mid,
             )
+            await _keep_charges_of_dropped_logs(repo, rows[mid:])
             return 0
         return await _create_spend_logs_with_poison_isolation(repo, rows[mid:], remaining)
 

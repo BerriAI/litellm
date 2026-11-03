@@ -39,7 +39,7 @@ class LedgerDatabase(Protocol):
 class _Delivery(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    request_id: str
+    delivery_id: str
     attempts: int
     accounting_payload: JsonValue
     previous_payload: JsonValue = None
@@ -72,19 +72,19 @@ class DeliveryMetrics(BaseModel):
 _DELIVERIES: Final = TypeAdapter(tuple[_Delivery, ...])
 _PAYLOAD: Final = TypeAdapter(dict[str, object])
 _TIMEOUT: Final = timedelta(seconds=60)
-_CLAIM: Final = """SELECT request_id, attempts, accounting_payload, previous_payload FROM "LiteLLM_SpendLogDelivery"
+_CLAIM: Final = """SELECT delivery_id, attempts, accounting_payload, previous_payload FROM "LiteLLM_SpendLogDelivery"
 WHERE state = 'pending' AND next_attempt_at <= CURRENT_TIMESTAMP
   AND (attempts > 0) = $2::boolean
-ORDER BY next_attempt_at, request_id LIMIT $1::integer FOR UPDATE SKIP LOCKED"""
+ORDER BY next_attempt_at, delivery_id LIMIT $1::integer FOR UPDATE SKIP LOCKED"""
 _APPLIED: Final = """UPDATE "LiteLLM_SpendLogDelivery"
 SET state = 'applied', applied_at = CURRENT_TIMESTAMP, previous_payload = NULL, last_error = NULL
-WHERE request_id = ANY($1::text[]) AND state = 'pending' """
+WHERE delivery_id = ANY($1::text[]) AND state = 'pending' """
 _FAILED: Final = """UPDATE "LiteLLM_SpendLogDelivery"
 SET attempts = attempts + 1, last_error = $3,
     next_attempt_at = CURRENT_TIMESTAMP + make_interval(secs => LEAST(300, power(2, LEAST(attempts, 8)))::integer),
     state = $4::"AccountingDeliveryState"
-WHERE request_id = $1 AND state = 'pending' AND attempts = $2::integer
-RETURNING request_id, attempts, accounting_payload, previous_payload"""
+WHERE delivery_id = $1 AND state = 'pending' AND attempts = $2::integer
+RETURNING delivery_id, attempts, accounting_payload, previous_payload"""
 
 
 class AccountingDeliveryRepository:
@@ -108,10 +108,10 @@ class AccountingDeliveryRepository:
             raise ValueError("Delivery retention and cleanup batch size must be positive")
         async with self._database.tx(timeout=_TIMEOUT) as transaction:
             return await transaction.execute_raw(
-                'DELETE FROM "LiteLLM_SpendLogDelivery" WHERE request_id IN ('
-                'SELECT request_id FROM "LiteLLM_SpendLogDelivery" '
+                'DELETE FROM "LiteLLM_SpendLogDelivery" WHERE delivery_id IN ('
+                'SELECT delivery_id FROM "LiteLLM_SpendLogDelivery" '
                 "WHERE state = 'applied' AND NOT is_batch AND applied_at < CURRENT_TIMESTAMP - make_interval(days => $1::integer) "
-                "ORDER BY applied_at, request_id LIMIT $2::integer FOR UPDATE SKIP LOCKED)",
+                "ORDER BY applied_at, delivery_id LIMIT $2::integer FOR UPDATE SKIP LOCKED)",
                 retention_days,
                 batch_size,
             )
@@ -153,7 +153,7 @@ class AccountingDeliveryRepository:
                         for delivery in claimed
                     ),
                 )
-                await transaction.execute_raw(_APPLIED, tuple(delivery.request_id for delivery in claimed))
+                await transaction.execute_raw(_APPLIED, tuple(delivery.delivery_id for delivery in claimed))
             return DeliveryBatchResult(applied=len(claimed))
         except Exception as error:  # noqa: BLE001  # roll back all destinations before recording a retry
             if not claimed:
@@ -182,6 +182,6 @@ class AccountingDeliveryRepository:
         transaction: LedgerTransaction, delivery: _Delivery, error: str, state: Literal["pending", "parked"]
     ) -> tuple[str, ...]:
         updated: Final = _DELIVERIES.validate_python(
-            await transaction.query_raw(_FAILED, delivery.request_id, delivery.attempts, error, state)
+            await transaction.query_raw(_FAILED, delivery.delivery_id, delivery.attempts, error, state)
         )
-        return tuple(row.request_id for row in updated) if state == "parked" else ()
+        return tuple(row.delivery_id for row in updated) if state == "parked" else ()

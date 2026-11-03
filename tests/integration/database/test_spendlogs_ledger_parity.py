@@ -1,3 +1,4 @@
+import contextlib
 import asyncio
 import json
 import os
@@ -159,7 +160,7 @@ async def test_model_window_charge_survives_redacted_callback_copies(
                       start_time=_NOW, litellm_call_id="redacted-window", function_id="redacted-window")
     logging.update_environment_variables(
         optional_params={}, custom_llm_provider="openai",
-        litellm_params={"metadata": {"user_api_key": "key", "user_api_key_model_max_budget": {
+        litellm_params={"metadata": {"user_api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683", "user_api_key_model_max_budget": {
             "ledger-test": {"max_budget": 100, "budget_duration": "1d"}
         }}},
     )
@@ -170,7 +171,7 @@ async def test_model_window_charge_survives_redacted_callback_copies(
     try:
         await logging.async_success_handler(response, _NOW, _NOW, standard_logging_object={
             "model": "ledger-test", "model_group": "ledger-test", "response_cost": 0.25,
-            "metadata": {"user_api_key_hash": "key"},
+            "metadata": {"user_api_key_hash": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683"},
             "model_map_information": {}, "hidden_params": {}, "request_tags": [],
         })
         assert consumer.received is not None
@@ -180,7 +181,7 @@ async def test_model_window_charge_survives_redacted_callback_copies(
         if payload_failure:
             consumer.received["standard_logging_object"].pop("model_map_information")
         assert await writer.update_database(
-            token="key", user_id="user", end_user_id=None, team_id=None, org_id=None,
+            token="2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683", user_id="user", end_user_id=None, team_id=None, org_id=None,
             kwargs=consumer.received, completion_response=response, start_time=_NOW, end_time=_NOW, response_cost=0.25,
         )
         await drain_logging_tasks()
@@ -229,7 +230,7 @@ async def test_registered_proxy_callbacks_charge_model_windows_before_persisting
     logging, _ = function_setup("acompletion", Rules(), _NOW, model="ledger-test", messages=[], litellm_call_id="registered-window")
     logging.update_environment_variables(
         optional_params={}, custom_llm_provider="openai",
-        litellm_params={"metadata": {"user_api_key": "key", "user_api_key_model_max_budget": {
+        litellm_params={"metadata": {"user_api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683", "user_api_key_model_max_budget": {
             "ledger-test": {"max_budget": 100, "budget_duration": "1d"}
         }}},
     )
@@ -239,7 +240,7 @@ async def test_registered_proxy_callbacks_charge_model_windows_before_persisting
     try:
         await logging.async_success_handler(response, _NOW, _NOW, standard_logging_object={
             "model": "ledger-test", "model_group": "ledger-test", "response_cost": 0.25,
-            "metadata": {"user_api_key_hash": "key"},
+            "metadata": {"user_api_key_hash": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683"},
             "model_map_information": {}, "hidden_params": {}, "request_tags": [],
         })
         await drain_logging_tasks()
@@ -295,7 +296,7 @@ def parity_database(ledger_schema: str) -> Iterator[str]:
         connection.execute(
             "INSERT INTO \"LiteLLM_OrganizationMembership\" (organization_id, user_id) VALUES ('org', 'user')"
         )
-        connection.execute("INSERT INTO \"LiteLLM_VerificationToken\" (token) VALUES ('key')")
+        connection.execute("INSERT INTO \"LiteLLM_VerificationToken\" (token) VALUES ('2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683')")
         connection.execute("INSERT INTO \"LiteLLM_EndUserTable\" (user_id) VALUES ('end-user')")
         connection.execute(
             'INSERT INTO "LiteLLM_AgentsTable" '
@@ -395,7 +396,7 @@ async def _assert_legacy_database_parity(
             monkeypatch.setattr(proxy_server.proxy_logging_obj, "db_spend_update_writer", writer)
             monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
             monkeypatch.setattr(proxy_server, "spend_counter_cache", DualCache())
-            for cache_key in ("key", "team_id:team"):
+            for cache_key in ("2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683", "team_id:team"):
                 await proxy_server.user_api_key_cache.async_set_cache(
                     key=cache_key,
                     value={
@@ -413,7 +414,7 @@ async def _assert_legacy_database_parity(
                     "model": "ledger-test",
                     "model_group": "ledger-test",
                     "metadata": {
-                        "user_api_key_hash": "key",
+                        "user_api_key_hash": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
                         "usage_object": {
                             "prompt_tokens": 10,
                             "completion_tokens": 5,
@@ -442,7 +443,7 @@ async def _assert_legacy_database_parity(
                 "user": "end-user",
                 "litellm_params": {
                     "metadata": {
-                        "user_api_key": "key",
+                        "user_api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
                         "user_api_key_model_max_budget": {"ledger-test": {"max_budget": 100, "budget_duration": "1d"}},
                         "user_api_key_user_id": "user",
                         "user_api_key_team_id": "team",
@@ -470,7 +471,7 @@ async def _assert_legacy_database_parity(
             if status == "success":
                 await limiter.async_log_success_event(request_kwargs, None, _NOW, _NOW)
             charged = await writer.update_database(
-                token="key",
+                token="2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
                 user_id="user",
                 end_user_id="end-user",
                 team_id="team",
@@ -486,7 +487,7 @@ async def _assert_legacy_database_parity(
             )
             assert charged
             await proxy_server.increment_spend_counters(
-                token="key",
+                token="2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
                 team_id="team",
                 user_id="user",
                 response_cost=cost,
@@ -678,7 +679,7 @@ async def _apply_reset(reset_kind: str, client: PrismaClient) -> None:
         await global_spend_reset()
     elif reset_kind == "key":
         await reset_key_spend_fn(
-            key="key", data=ResetSpendRequest(reset_to=0), user_api_key_dict=admin, litellm_changed_by=None
+            key="2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683", data=ResetSpendRequest(reset_to=0), user_api_key_dict=admin, litellm_changed_by=None
         )
     elif reset_kind == "team_member":
         await reset_team_member_spend_fn(
@@ -884,7 +885,7 @@ async def test_batch_claim_failure_queues_an_atomic_retry_and_repeated_retrieve_
         await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
         await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
         with psycopg.connect(parity_database) as connection:
-            assert connection.execute('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=\'key\'').fetchone() == (0.25,)
+            assert connection.execute('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=\'2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683\'').fetchone() == (0.25,)
             assert connection.execute('SELECT spend FROM "LiteLLM_UserTable" WHERE user_id=\'user\'').fetchone() == (0.25,)
             assert connection.execute('SELECT state::text FROM "LiteLLM_SpendLogDelivery"').fetchall() == [("applied",)]
             assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogs"').fetchone() == (int(not disable_logs),)
@@ -929,7 +930,7 @@ async def test_failed_claim_over_a_legacy_zero_batch_row_still_charges_it_once(
         assert await _retrieve_batch(writer, 0.25) is False
         await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
         with psycopg.connect(parity_database) as connection:
-            assert connection.execute('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=\'key\'').fetchone() == (0.25,)
+            assert connection.execute('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=\'2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683\'').fetchone() == (0.25,)
             assert connection.execute(
                 'SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id=\'batch_batch_cost\''
             ).fetchall() == [(0.25,)]
@@ -1022,10 +1023,10 @@ async def test_worker_skips_another_leader_and_releases_its_redis_lock_after_ret
 
 async def _retrieve_batch(writer: DBSpendUpdateWriter, cost: float) -> bool:
     return await writer.update_database(
-        token="key", user_id="user", end_user_id=None, team_id="team", org_id=None,
+        token="2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683", user_id="user", end_user_id=None, team_id="team", org_id=None,
         kwargs={
             "model": "ledger-test", "call_type": "aretrieve_batch", "litellm_call_id": "batch",
-            "litellm_params": {"metadata": {"status": "success", "user_api_key": "key"}},
+            "litellm_params": {"metadata": {"status": "success", "user_api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683"}},
         },
         completion_response={"id": "batch", "status": "completed"},
         start_time=_NOW, end_time=_NOW, response_cost=cost,
@@ -1210,10 +1211,10 @@ async def test_spend_logs_url_without_an_export_client_keeps_local_logs_and_char
     await client.db.connect()
     try:
         assert await writer.update_database(
-            token="key", user_id="user", end_user_id=None, team_id="team", org_id=None,
+            token="2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683", user_id="user", end_user_id=None, team_id="team", org_id=None,
             kwargs={
                 "model": "ledger-test", "call_type": "acompletion", "litellm_call_id": "url-request",
-                "litellm_params": {"metadata": {"status": "success", "user_api_key": "key"}},
+                "litellm_params": {"metadata": {"status": "success", "user_api_key": "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683"}},
             },
             completion_response=ModelResponse(
                 id="url-request", model="ledger-test", usage=Usage(prompt_tokens=10, completion_tokens=5)
@@ -1233,9 +1234,167 @@ async def test_spend_logs_url_without_an_export_client_keeps_local_logs_and_char
                 'SELECT accounting_path, spend FROM "LiteLLM_SpendLogs" WHERE request_id=\'url-request\''
             ).fetchall() == [("ledger", 0.25)]
             assert connection.execute('SELECT state::text FROM "LiteLLM_SpendLogDelivery"').fetchall() == [("applied",)]
-            assert connection.execute('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=\'key\'').fetchone() == (0.25,)
+            assert connection.execute('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=\'2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683\'').fetchone() == (0.25,)
     finally:
         await client.db.disconnect()
+
+
+@contextlib.asynccontextmanager
+async def _ledger_client(parity_database: str, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    client = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    client.spend_log_transactions = []
+    client.model_usage_transactions = []
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": True})
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    await client.db.connect()
+    try:
+        yield client
+    finally:
+        await client.db.disconnect()
+
+
+async def _record_call(
+    writer: DBSpendUpdateWriter, call_id: str, *, token: str = "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683", user: str = "user", tags: object = None
+) -> None:
+    metadata = {"status": "success", "user_api_key": token, **({"tags": tags} if tags is not None else {})}
+    assert await writer.update_database(
+        token=token, user_id=user, end_user_id=None, team_id="team", org_id=None,
+        kwargs={
+            "model": "ledger-test", "call_type": "aembedding", "litellm_call_id": call_id,
+            "litellm_params": {"metadata": metadata},
+        },
+        completion_response=None, start_time=_NOW, end_time=_NOW, response_cost=0.25,
+    )
+    await drain_logging_tasks()
+
+
+def _wire(rows) -> list[dict[str, object]]:
+    return [
+        {key: value.isoformat() if isinstance(value, datetime) else value for key, value in row.items()}
+        for row in rows
+    ]
+
+
+async def _flush(writer: DBSpendUpdateWriter, client: PrismaClient) -> None:
+    from litellm.accounting.worker import flush_accounting_deliveries
+    from litellm.proxy.utils import ProxyUpdateSpend
+
+    rows = _wire(client.spend_log_transactions)
+    client.spend_log_transactions = []
+    await ProxyUpdateSpend.update_spend_logs(0, client, None, proxy_server.proxy_logging_obj, rows)
+    await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
+
+
+def _key_spend(parity_database: str) -> object:
+    with psycopg.connect(parity_database) as connection:
+        return connection.execute(
+            'SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', ("2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",)
+        ).fetchone()
+
+
+@pytest.mark.asyncio
+async def test_requests_sharing_a_client_call_id_are_each_charged_but_a_replay_is_not(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch
+):
+    async with _ledger_client(parity_database, monkeypatch) as client:
+        writer = DBSpendUpdateWriter()
+        await _record_call(writer, "shared-call-id")
+        await _record_call(writer, "shared-call-id")
+        buffered = _wire(client.spend_log_transactions)
+        await _flush(writer, client)
+        assert await SpendLogsRepository(client).insert_with_deliveries(buffered) == 0
+        await _flush(writer, client)
+        assert _key_spend(parity_database) == (0.5,)
+        with psycopg.connect(parity_database) as connection:
+            assert connection.execute(
+                'SELECT request_id, state::text FROM "LiteLLM_SpendLogDelivery"'
+            ).fetchall() == [("shared-call-id", "applied"), ("shared-call-id", "applied")]
+            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogs"').fetchone() == (1,)
+
+
+@pytest.mark.asyncio
+async def test_an_opaque_bearer_token_is_never_stored_in_a_delivery(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch
+):
+    async with _ledger_client(parity_database, monkeypatch) as client:
+        writer = DBSpendUpdateWriter()
+        await _record_call(writer, "opaque-call", token="opaque-bearer-secret")
+        await _flush(writer, client)
+        with psycopg.connect(parity_database) as connection:
+            stored = connection.execute('SELECT accounting_payload::text, state::text FROM "LiteLLM_SpendLogDelivery"').fetchall()
+        assert [state for _, state in stored] == ["applied"]
+        assert "opaque-bearer-secret" not in stored[0][0]
+
+
+@pytest.mark.asyncio
+async def test_an_evicted_spend_log_still_charges_its_request(parity_database: str, monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy.utils import enqueue_spend_logs
+
+    async with _ledger_client(parity_database, monkeypatch) as client:
+        writer = DBSpendUpdateWriter()
+        await _record_call(writer, "evicted-call")
+        await _record_call(writer, "kept-call")
+        queued = tuple(client.spend_log_transactions)
+        client.spend_log_transactions = []
+        await enqueue_spend_logs(client, queued, max_bytes=1)
+        assert [row.get("accounting_log_disabled") for row in client.spend_log_transactions] == [True, False]
+        await _flush(writer, client)
+        assert _key_spend(parity_database) == (0.5,)
+        with psycopg.connect(parity_database) as connection:
+            assert connection.execute('SELECT request_id FROM "LiteLLM_SpendLogs"').fetchall() == [("kept-call",)]
+
+
+@pytest.mark.parametrize("isolation_budget", [5, 0], ids=["isolated", "budget_exhausted"])
+@pytest.mark.asyncio
+async def test_a_spend_log_postgres_rejects_still_charges_its_request_and_the_rest_of_the_batch(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch, isolation_budget: int
+):
+    from prisma.errors import DataError
+
+    from litellm.accounting.worker import flush_accounting_deliveries
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    class RejectsOneLog:
+        def __init__(self, repository: SpendLogsRepository) -> None:
+            self.repository = repository
+
+        async def insert_with_deliveries(self, rows, *, write_spend_logs: bool = True) -> int:
+            if any(row["request_id"] == "poison-call" and not row.get("accounting_log_disabled") for row in rows):
+                raise DataError({"user_facing_error": {"message": 'invalid byte sequence for encoding "UTF8": 0x00'}})
+            return await self.repository.insert_with_deliveries(rows, write_spend_logs=write_spend_logs)
+
+    async with _ledger_client(parity_database, monkeypatch) as client:
+        writer = DBSpendUpdateWriter()
+        await _record_call(writer, "poison-call")
+        await _record_call(writer, "clean-call")
+        rows = tuple(client.jsonify_object(row) for row in client.spend_log_transactions)
+        client.spend_log_transactions = []
+        await _create_spend_logs_with_poison_isolation(RejectsOneLog(SpendLogsRepository(client)), rows, isolation_budget)
+        await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
+        assert _key_spend(parity_database) == (0.5,)
+        with psycopg.connect(parity_database) as connection:
+            assert connection.execute('SELECT request_id FROM "LiteLLM_SpendLogs"').fetchall() == (
+                [("clean-call",)] if isolation_budget else []
+            )
+            assert connection.execute(
+                'SELECT state::text, COUNT(*) FROM "LiteLLM_SpendLogDelivery" GROUP BY 1'
+            ).fetchall() == [("applied", 2)]
+
+
+@pytest.mark.asyncio
+async def test_a_request_with_a_non_text_tag_is_still_charged(parity_database: str, monkeypatch: pytest.MonkeyPatch):
+    async with _ledger_client(parity_database, monkeypatch) as client:
+        writer = DBSpendUpdateWriter()
+        await _record_call(writer, "tagged-call", tags=[None, "real-tag"])
+        await _flush(writer, client)
+        assert _key_spend(parity_database) == (0.25,)
+        with psycopg.connect(parity_database) as connection:
+            assert connection.execute(
+                'SELECT tag, spend FROM "LiteLLM_DailyTagSpend" WHERE tag=\'real-tag\''
+            ).fetchall() == [("real-tag", 0.25)]
 
 
 @pytest.mark.parametrize("threshold", ["count", "bytes"])

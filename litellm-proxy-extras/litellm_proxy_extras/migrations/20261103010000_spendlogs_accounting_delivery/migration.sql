@@ -12,7 +12,8 @@ BEGIN
     END IF;
 END $$;
 CREATE TABLE IF NOT EXISTS "LiteLLM_SpendLogDelivery" (
-    "request_id" TEXT PRIMARY KEY,
+    "delivery_id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    "request_id" TEXT NOT NULL,
     "state" "AccountingDeliveryState" NOT NULL DEFAULT 'pending',
     "attempts" INTEGER NOT NULL DEFAULT 0,
     "next_attempt_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -27,3 +28,5 @@ CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogDelivery_state_next_attempt_at_idx"
     ON "LiteLLM_SpendLogDelivery" ("state", "next_attempt_at");
 CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogDelivery_state_applied_at_idx"
     ON "LiteLLM_SpendLogDelivery" ("state", "applied_at");
+CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogDelivery_request_id_idx"
+    ON "LiteLLM_SpendLogDelivery" ("request_id");
