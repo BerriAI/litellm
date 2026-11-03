@@ -2486,65 +2486,64 @@ async def test_apply_guardrail_forwards_metadata_and_messages_together(mocker):
     )
 
 
-class TestGuardrailRequestMetadata:
-    """What a guardrail is told about the caller on /apply_guardrail."""
+def test_the_authenticated_key_identity_replaces_the_caller_version() -> None:
+    metadata: Final = _guardrail_request_metadata(
+        {"forbidden_topics": ["tax"], "user_api_key_alias": "someone-else"},
+        {"user_api_key_alias": "billing-app", "user_api_key_user_id": "u-1"},
+    )
+    assert metadata == {
+        "forbidden_topics": ["tax"],
+        "user_api_key_alias": "billing-app",
+        "user_api_key_user_id": "u-1",
+    }
 
-    def test_the_authenticated_key_identity_replaces_the_caller_version(self) -> None:
-        metadata: Final = _guardrail_request_metadata(
-            {"forbidden_topics": ["tax"], "user_api_key_alias": "someone-else"},
-            {"user_api_key_alias": "billing-app", "user_api_key_user_id": "u-1"},
-        )
-        assert metadata == {
-            "forbidden_topics": ["tax"],
-            "user_api_key_alias": "billing-app",
-            "user_api_key_user_id": "u-1",
-        }
 
-    def test_the_bare_key_hash_cannot_come_from_the_caller(self) -> None:
-        metadata: Final = _guardrail_request_metadata({"user_api_key": "spoof"}, {"user_api_key": "hashed"})
-        assert metadata == {"user_api_key": "hashed"}
+def test_the_bare_key_hash_cannot_come_from_the_caller() -> None:
+    metadata: Final = _guardrail_request_metadata({"user_api_key": "spoof"}, {"user_api_key": "hashed"})
+    assert metadata == {"user_api_key": "hashed"}
 
-    def test_the_caller_owns_the_end_user(self) -> None:
-        """The end user describes the call the caller is asking about, as it does on every LLM route."""
-        metadata: Final = _guardrail_request_metadata({"user_api_key_end_user_id": "customer-42"}, {})
-        assert metadata == {"user_api_key_end_user_id": "customer-42"}
 
-    def test_no_request_route_reaches_the_guardrail(self) -> None:
-        """A route makes the tool policy guardrail read the request instead of the replayed tools,
-        so neither the caller's nor the endpoint's own route may reach it."""
-        metadata: Final = _guardrail_request_metadata(
-            {"user_api_key_request_route": "/v1/chat/completions", "topic": "tax"},
-            {"user_api_key_request_route": "/apply_guardrail"},
-        )
-        assert metadata == {"topic": "tax"}
+def test_the_caller_owns_the_end_user() -> None:
+    metadata: Final = _guardrail_request_metadata({"user_api_key_end_user_id": "customer-42"}, {})
+    assert metadata == {"user_api_key_end_user_id": "customer-42"}
 
-    def test_identity_fields_outside_the_key_namespace_are_reserved_too(self) -> None:
-        """The proxy sets who is calling and from where. A caller cannot claim another's."""
-        metadata: Final = _guardrail_request_metadata(
-            {
-                "requester_ip_address": "203.0.113.9",
-                "user_agent": "forged/1.0",
-                "agent_id": "someone-elses-agent",
-                "topic": "tax",
-            },
-            {
-                "requester_ip_address": "198.51.100.4",
-                "user_agent": "litellm-cli/2.3",
-                "agent_id": "billing-agent",
-            },
-        )
-        assert metadata == {
+
+def test_no_request_route_reaches_the_guardrail() -> None:
+    """A route makes the tool policy guardrail read the request instead of the replayed tools."""
+    metadata: Final = _guardrail_request_metadata(
+        {"user_api_key_request_route": "/v1/chat/completions", "topic": "tax"},
+        {"user_api_key_request_route": "/apply_guardrail"},
+    )
+    assert metadata == {"topic": "tax"}
+
+
+def test_identity_fields_outside_the_key_namespace_are_reserved_too() -> None:
+    metadata: Final = _guardrail_request_metadata(
+        {
+            "requester_ip_address": "203.0.113.9",
+            "user_agent": "forged/1.0",
+            "agent_id": "someone-elses-agent",
             "topic": "tax",
+        },
+        {
             "requester_ip_address": "198.51.100.4",
             "user_agent": "litellm-cli/2.3",
             "agent_id": "billing-agent",
-        }
+        },
+    )
+    assert metadata == {
+        "topic": "tax",
+        "requester_ip_address": "198.51.100.4",
+        "user_agent": "litellm-cli/2.3",
+        "agent_id": "billing-agent",
+    }
 
-    def test_a_guardrail_can_annotate_what_it_is_handed(self) -> None:
-        """OpenAI moderation and Presidio write their detection details into this mapping."""
-        metadata: Final = _guardrail_request_metadata({}, {"user_api_key_alias": "billing-app"})
-        metadata["moderation_model"] = "omni-moderation-latest"
-        assert metadata == {"user_api_key_alias": "billing-app", "moderation_model": "omni-moderation-latest"}
+
+def test_a_guardrail_can_annotate_what_it_is_handed() -> None:
+    """OpenAI moderation and Presidio write their detection details into this mapping."""
+    metadata: Final = _guardrail_request_metadata({}, {"user_api_key_alias": "billing-app"})
+    metadata["moderation_model"] = "omni-moderation-latest"
+    assert metadata == {"user_api_key_alias": "billing-app", "moderation_model": "omni-moderation-latest"}
 
 
 @pytest.mark.asyncio
@@ -2638,7 +2637,7 @@ async def test_apply_guardrail_attaches_key_identity_when_caller_sends_no_metada
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_sends_the_key_identity_when_the_caller_sends_no_metadata(mocker):
+async def test_apply_guardrail_sends_the_key_identity_when_the_caller_sends_no_metadata(mocker: MockerFixture) -> None:
     """A caller that sends no metadata still arrives with the key's identity attached, because
     pre-call processing fills it in. An empty request_data is not a shape the pipeline produces."""
     mock_guardrail = _patch_apply_guardrail_env(
