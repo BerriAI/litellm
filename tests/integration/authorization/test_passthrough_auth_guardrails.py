@@ -22,6 +22,7 @@ GUARDRAIL: Final = "passthrough-auth-guardrail"
 GLOBAL_POST_CALL: Final = "passthrough-global-post-call"
 KEY_POST_CALL: Final = "passthrough-key-post-call"
 GENERIC_POST_CALL: Final = "passthrough-generic-post-call"
+BLOCKING_POST_CALL: Final = "passthrough-post-call-blocks-every-reply"
 MODEL_POST_CALL: Final = "passthrough-model-post-call"
 GUARDED_MODEL: Final = "passthrough-guarded-model"
 POST_CALL_GUARDED_MODEL: Final = "passthrough-post-call-guarded-model"
@@ -74,6 +75,10 @@ def _pipeline_policy(mode: str, guardrail: str, on_fail: str) -> dict[str, JsonV
 def _verdict(request: Request) -> Reply:
     action: Final = "BLOCKED" if BLOCK_MARKER.encode() in request.body else "NONE"
     return Reply(body=json.dumps({"action": action, "blocked_reason": "synthetic block"}).encode())
+
+
+def _block_every_reply(_request: Request) -> Reply:
+    return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": "synthetic block"}).encode())
 
 
 _OPENAI_BODY: Final = json.dumps(
@@ -147,6 +152,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
         post_call_vendor: Final = stack.enter_context(wire_server(_lakera_clean))
         key_post_call_vendor: Final = stack.enter_context(wire_server(_lakera_flagged))
         generic_post_call_vendor: Final = stack.enter_context(wire_server(_verdict))
+        blocking_post_call_vendor: Final = stack.enter_context(wire_server(_block_every_reply))
         model_post_call_vendor: Final = stack.enter_context(wire_server(_verdict))
         upstreams: Final = MappingProxyType(
             {
@@ -233,6 +239,16 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                                 "mode": "post_call",
                                 "default_on": False,
                                 "api_base": key_post_call_vendor.url,
+                                "api_key": "synthetic-guardrail-key",
+                            },
+                        },
+                        {
+                            "guardrail_name": BLOCKING_POST_CALL,
+                            "litellm_params": {
+                                "guardrail": "generic_guardrail_api",
+                                "mode": "post_call",
+                                "default_on": False,
+                                "api_base": blocking_post_call_vendor.url,
                                 "api_key": "synthetic-guardrail-key",
                             },
                         },
@@ -590,7 +606,7 @@ def _tagged_body(route: str, tag: str) -> dict[str, JsonValue]:
     return {**_route_body(route, "What is the capital of France?"), "metadata": {"tags": [tag]}}
 
 
-@pytest.mark.parametrize("route", [OPENAI_ROUTE, ANTHROPIC_ROUTE, GEMINI_ROUTE])
+@pytest.mark.parametrize("route", [OPENAI_ROUTE, ANTHROPIC_ROUTE])
 def test_post_call_policy_pipeline_blocks_a_flagged_pass_through_response(rig: AuthGuardrailRig, route: str) -> None:
     gateway: Final = rig.owned.gateway
     with gateway.scenario() as scenario:
@@ -630,13 +646,39 @@ def test_pre_call_policy_pipeline_relays_the_provider_bytes(rig: AuthGuardrailRi
         assert len(rig.vendor.drain()) == 1
 
 
-@pytest.mark.parametrize("route", [ANTHROPIC_ROUTE, GEMINI_ROUTE])
-def test_response_a_post_call_guardrail_blocks_still_charges_the_provider_call(
-    rig: AuthGuardrailRig, route: str
-) -> None:
+def test_lakera_post_call_has_nothing_to_read_on_a_gemini_body(rig: AuthGuardrailRig) -> None:
     gateway: Final = rig.owned.gateway
     with gateway.scenario() as scenario:
         key: Final = scenario.key(metadata={"guardrails": [KEY_POST_CALL]})
+        _drain(rig)
+
+        response: Final = _send(gateway, GEMINI_ROUTE, _route_body(GEMINI_ROUTE, "What is the capital of France?"), key)
+
+        assert response.status_code == 200, response.text
+        assert rig.key_post_call_vendor.drain() == ()
+        assert len(rig.upstreams[GEMINI_ROUTE].drain()) == 1
+
+
+def test_post_call_policy_pipeline_lakera_step_has_nothing_to_read_on_a_gemini_body(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        _drain(rig)
+
+        response: Final = _send(gateway, GEMINI_ROUTE, _tagged_body(GEMINI_ROUTE, PIPELINE_BLOCKS), key)
+
+        assert response.status_code == 200, response.text
+        assert rig.key_post_call_vendor.drain() == ()
+        assert len(rig.upstreams[GEMINI_ROUTE].drain()) == 1
+
+
+@pytest.mark.parametrize(("route", "guardrail"), [(ANTHROPIC_ROUTE, KEY_POST_CALL), (GEMINI_ROUTE, BLOCKING_POST_CALL)])
+def test_response_a_post_call_guardrail_blocks_still_charges_the_provider_call(
+    rig: AuthGuardrailRig, route: str, guardrail: str
+) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": [guardrail]})
         _drain(rig)
 
         response: Final = _send(gateway, route, _route_body(route, "What is the capital of France?"), key)
