@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.azure_ai.common_utils import (
@@ -21,6 +22,7 @@ from litellm.llms.azure_ai.common_utils import (
     has_azure_entra_params,
     resolve_azure_ai_agent_auth_header,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 ENTRA_PARAMS = {"azure_ad_token": "entra-token"}
@@ -306,6 +308,12 @@ OPENAI_CHAT_COMPLETION: Final = {
     "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
 }
+OPENAI_EMBEDDING: Final = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+    "model": "cohere-embed-v3-english",
+    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+}
 ANTHROPIC_MESSAGE: Final = {
     "id": "msg_test",
     "type": "message",
@@ -318,6 +326,15 @@ ANTHROPIC_MESSAGE: Final = {
 }
 
 
+class _PreCallOptionalParamsCapture(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.optional_params: tuple[dict[str, object], ...] = ()
+
+    def log_pre_api_call(self, model: str, messages: list[object], kwargs: dict[str, dict[str, object]]) -> None:
+        self.optional_params = (*self.optional_params, kwargs["optional_params"])
+
+
 @pytest.mark.parametrize(
     ("model", "provider_response"),
     [
@@ -326,8 +343,10 @@ ANTHROPIC_MESSAGE: Final = {
     ],
 )
 def test_completion_sends_the_entra_token_only_as_the_bearer_header(
-    model: str, provider_response: Mapping[str, object]
+    model: str, provider_response: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
 ):
+    capture: Final = _PreCallOptionalParamsCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
     sent: Final[queue.Queue[httpx.Request]] = queue.Queue()
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -346,3 +365,23 @@ def test_completion_sends_the_entra_token_only_as_the_bearer_header(
     assert request.headers["Authorization"] == "Bearer entra-token"
     assert "azure_ad_token" not in json.loads(request.content)
     assert response.choices[0].message.content == "OK"
+    assert capture.optional_params
+    assert "entra-token" not in json.dumps(capture.optional_params, default=str)
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_embedding_sends_the_entra_token_only_as_the_bearer_header(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(url__startswith="https://example-resource.services.ai.azure.com").mock(
+        return_value=httpx.Response(200, json=OPENAI_EMBEDDING)
+    )
+
+    litellm.embedding(
+        model="azure_ai/cohere-embed-v3-english",
+        api_base="https://example-resource.services.ai.azure.com",
+        azure_ad_token="entra-token",
+        input=["hello"],
+    )
+
+    request: Final = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer entra-token"
+    assert "azure_ad_token" not in json.loads(request.content)
