@@ -95,6 +95,40 @@ async def test_azure_decisions_uses_entra_token_and_openai_wire_format(
     assert response._hidden_params["custom_llm_provider"] == "azure"
 
 
+async def test_azure_decisions_send_the_caller_body_and_return_the_answers_as_sent(
+    respx_mock: respx.MockRouter,
+) -> None:
+    sent_input: Final = [
+        {"type": "message", "role": "developer", "content": "Judge exports only."},
+        {"role": "user", "content": [{"type": "input_json", "json": {"job": "export", "state": "hung"}}]},
+    ]
+    sent_questions: Final = [
+        {"type": "predicate", "name": "defect", "instructions": "Is this a defect?", "rubric": "crashes only"}
+    ]
+    upstream_response: Final = {**_RESPONSE, "id": "decision_1", "answers": [{"type": "ranking", "name": "defect"}]}
+    route: Final = respx_mock.post(_URL).respond(json=upstream_response)
+
+    response: Final = await litellm.adecisions(
+        model="azure/luna-deployment",
+        api_base=_BASE,
+        azure_ad_token="synthetic-entra",
+        input=sent_input,
+        questions=sent_questions,
+        prompt_cache_key="exports",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "luna-deployment",
+        "input": sent_input,
+        "questions": sent_questions,
+        "prompt_cache_key": "exports",
+    }
+    assert response.model_dump(mode="json", exclude={"usage"}) == {
+        key: value for key, value in upstream_response.items() if key != "usage"
+    }
+    assert response._hidden_params["custom_llm_provider"] == "azure"
+
+
 @pytest.mark.parametrize("is_async", (False, True))
 @pytest.mark.parametrize("systemone", (False, True))
 async def test_default_credential_refreshes_without_opt_in(

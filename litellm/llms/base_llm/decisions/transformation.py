@@ -431,6 +431,14 @@ class DecisionsResponseValidationError(BaseLLMException):
     pass
 
 
+def unexpected_response_error(custom_llm_provider: str, error: ValidationError) -> DecisionsResponseValidationError:
+    return DecisionsResponseValidationError(
+        status_code=500,
+        message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
+        f"{error.title} {_validation_summary(error)}",
+    )
+
+
 def _lacks_confidence(answer: DecisionsIRAnswer) -> bool:
     return isinstance(answer, (DecisionsIRChoiceAnswer, DecisionsIRScoreAnswer)) and answer.confidence is None
 
@@ -690,11 +698,7 @@ class BaseDecisionsConfig(ABC):
             payload: Final[object] = _PAYLOAD_ADAPTER.validate_json(raw_response.content)
             response: Final = self.parse_response(payload, request)
         except ValidationError as error:
-            raise DecisionsResponseValidationError(
-                status_code=500,
-                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
-                f"{error.title} {_validation_summary(error)}",
-            ) from error
+            raise unexpected_response_error(custom_llm_provider, error) from error
         if not self.confidence_optional and any(_lacks_confidence(answer) for answer in response.answers):
             raise DecisionsResponseValidationError(
                 status_code=500,

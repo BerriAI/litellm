@@ -11,6 +11,7 @@ from litellm.decisions.call import (
     DecisionsAudioClips,
     DecisionsCall,
     DecisionsVideoClips,
+    NativeOpenAIDecisionsCall,
     OpenAIDecisionQuestions,
     OpenAIDecisionRequestFields,
     RequestFields,
@@ -27,9 +28,6 @@ from litellm.utils import client
 
 _STATE_ADAPTER: Final[TypeAdapter[DecisionsJSON | None]] = TypeAdapter(DecisionsJSON | None)
 _SYSTEMONE_QUESTIONS_ADAPTER: Final[TypeAdapter[SystemOneQuestions | None]] = TypeAdapter(SystemOneQuestions | None)
-_OPENAI_QUESTIONS_ADAPTER: Final[TypeAdapter[OpenAIDecisionQuestions | None]] = TypeAdapter(
-    OpenAIDecisionQuestions | None
-)
 _SYSTEMONE_FIELDS: Final = frozenset({"state", "images", "assets"})
 
 
@@ -45,7 +43,7 @@ def _request_fields(
         reject_images_next_to_input(model=model, kwargs=kwargs)
         return OpenAIDecisionRequestFields(
             input=decision_input,
-            questions=_OPENAI_QUESTIONS_ADAPTER.validate_python(questions),
+            questions=questions,
             audio=audio,
             videos=videos,
         )
@@ -78,7 +76,7 @@ def _prepare_decisions_call(
     custom_llm_provider: str | None,
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
-) -> DecisionsCall:
+) -> DecisionsCall | NativeOpenAIDecisionsCall:
     log_caller_request(
         kwargs,
         {

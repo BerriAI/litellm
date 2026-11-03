@@ -4,7 +4,7 @@ from typing import Annotated, Final, Literal, TypeAlias
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse  # pyright: ignore[reportDeprecated]  # required endpoint contract
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
@@ -15,7 +15,6 @@ from litellm.types.decisions import (
     DecisionsRequestBody,
     DecisionsResponse,
     OpenAIDecisionRequest,
-    OpenAIDecisionRequestBody,
     OpenAIDecisionResponse,
 )
 from litellm.types.extraction import ExtractionRequest, ExtractionRequestBody, ExtractionResponse
@@ -23,9 +22,15 @@ from litellm.types.extraction import ExtractionRequest, ExtractionRequestBody, E
 router: Final = APIRouter()
 _REQUEST_DATA_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _DECISIONS_REQUEST_BODY_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
-_OPENAI_DECISION_REQUEST_BODY_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(
-    OpenAIDecisionRequestBody
-)
+
+
+class _OpenAIFormatBody(BaseModel):
+    state: None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True, title="OpenAI format Decisions request")
+
+
+_OPENAI_FORMAT_BODY_ADAPTER: Final[TypeAdapter[_OpenAIFormatBody]] = TypeAdapter(_OpenAIFormatBody)
 _EXTRACTION_REQUEST_BODY_ADAPTER: Final[TypeAdapter[ExtractionRequestBody]] = TypeAdapter(ExtractionRequestBody)
 _GENERAL_SETTINGS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
@@ -139,7 +144,7 @@ async def _process_decisions(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
     body_adapter: (
-        TypeAdapter[DecisionsRequestBody] | TypeAdapter[OpenAIDecisionRequestBody] | TypeAdapter[ExtractionRequestBody]
+        TypeAdapter[DecisionsRequestBody] | TypeAdapter[_OpenAIFormatBody] | TypeAdapter[ExtractionRequestBody]
     ),
     route_type: _RouteType,
 ) -> object:
@@ -272,14 +277,15 @@ async def decisions(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
-    Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
+    Judge an `input` against one or more `questions` and get the answers back in the same order.
 
     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
     `probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the
-    `instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before
-    any provider is called. `model` is any decision model in the proxy
-    model list. System One decision models accept this format too, LiteLLM translates the request and the
-    answers. Streaming is not supported.
+    `instructions` describe, with `confidence`). `model` is any decision model in the proxy model list. OpenAI
+    and Azure decision models get the request body as sent, minus LiteLLM settings and with `model` set to the
+    deployment's model, and return OpenAI's answers as sent, so any field OpenAI adds works without a LiteLLM
+    update. System One decision models accept this format too, LiteLLM translates the request and the answers and
+    rejects a request it cannot translate with a 400 before calling the provider. Streaming is not supported.
 
     [Docs](https://docs.litellm.ai/docs/decisions)
     """
@@ -287,7 +293,7 @@ async def decisions(
         request=request,
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
-        body_adapter=_OPENAI_DECISION_REQUEST_BODY_ADAPTER,
+        body_adapter=_OPENAI_FORMAT_BODY_ADAPTER,
         route_type="adecisions",
     )
 

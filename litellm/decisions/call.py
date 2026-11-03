@@ -1,7 +1,7 @@
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from functools import partial
+from functools import partial, reduce
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
@@ -35,7 +35,11 @@ from litellm.llms.base_llm.decisions.transformation import (
     with_inlined_images,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
+from litellm.llms.openai.decisions.transformation import (
+    OpenAIDecisionsConfig,
+    ir_to_openai_response,
+    openai_request_to_ir,
+)
 from litellm.types.decisions import (
     DecisionQuestion,
     DecisionsAsset,
@@ -56,15 +60,18 @@ from litellm.types.decisions import (
     DecisionsRequestBody,
     DecisionsResponse,
     DecisionsVideo,
+    OpenAIDecisionAnswer,
     OpenAIDecisionInput,
     OpenAIDecisionQuestion,
     OpenAIDecisionRequestBody,
     OpenAIDecisionResponse,
+    OpenAIRefusalAnswer,
     UnsupportedDecisionsRequest,
 )
 from litellm.types.llms.openai import ChatCompletionUserMessage
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders, ProviderSpecificHeader, is_decisions_model_mode
-from litellm.utils import ProviderConfigManager, get_model_cost_key
+from litellm.utils import ProviderConfigManager, filter_out_litellm_params, get_model_cost_key
 
 SystemOneQuestions: TypeAlias = Mapping[str, DecisionQuestion | Mapping[str, object]]
 OpenAIDecisionQuestions: TypeAlias = Sequence[OpenAIDecisionQuestion | Mapping[str, object]]
@@ -76,6 +83,9 @@ DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequest
 
 _SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _OPENAI_REQUEST_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(OpenAIDecisionRequestBody)
+_OPENAI_QUESTIONS_ADAPTER: Final[TypeAdapter[OpenAIDecisionQuestions | None]] = TypeAdapter(
+    OpenAIDecisionQuestions | None
+)
 _SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
     str | None, config=ConfigDict(title="safety_identifier")
 )
@@ -86,18 +96,19 @@ _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None]
 ] = TypeAdapter(ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None)
 _HANDLER: Final = BaseLLMHTTPHandler()
+_LITELLM_SETTINGS: Final = frozenset((*GenericLiteLLMParams.model_fields, "base_url", "additional_drop_params", "user"))
 _BASE64_MARKER: Final = ";base64,"
 
 
 _IMAGE_ADAPTER: Final[TypeAdapter[DecisionsImage]] = TypeAdapter(DecisionsImage, config=ConfigDict(title="images"))
-_IMAGE_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _ASSETS_ADAPTER: Final[TypeAdapter[DecisionsAssets | None]] = TypeAdapter(
     DecisionsAssets | None, config=ConfigDict(title="assets")
 )
 _ASSET_ENTRY_ADAPTER: Final[TypeAdapter[tuple[DecisionsAssetReference, DecisionsAsset]]] = TypeAdapter(
     tuple[DecisionsAssetReference, DecisionsAsset]
 )
-_ASSET_ENTRIES_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def _valid_image(image: object) -> DecisionsImage | None:
@@ -107,9 +118,9 @@ def _valid_image(image: object) -> DecisionsImage | None:
         return None
 
 
-def _image_entries(images: object) -> tuple[object, ...]:
+def _entries(value: object) -> tuple[object, ...]:
     try:
-        return _IMAGE_ENTRIES_ADAPTER.validate_python(images)
+        return _ENTRIES_ADAPTER.validate_python(value)
     except ValidationError:
         return ()
 
@@ -129,9 +140,9 @@ def _valid_asset(entry: tuple[str, object]) -> tuple[str, DecisionsAsset] | None
         return None
 
 
-def _asset_entries(assets: object) -> Mapping[str, object]:
+def _fields(value: object) -> Mapping[str, object]:
     try:
-        return _ASSET_ENTRIES_ADAPTER.validate_python(assets)
+        return _FIELDS_ADAPTER.validate_python(value)
     except ValidationError:
         return MappingProxyType({})
 
@@ -140,7 +151,7 @@ def _request_assets(assets: object, drops_params: bool) -> Mapping[str, Decision
     if not drops_params:
         return _ASSETS_ADAPTER.validate_python(assets)
     valid: Final = MappingProxyType(
-        dict(entry for entry in map(_valid_asset, _asset_entries(assets).items()) if entry is not None)
+        dict(entry for entry in map(_valid_asset, _fields(assets).items()) if entry is not None)
     )
     return valid or None
 
@@ -148,7 +159,7 @@ def _request_assets(assets: object, drops_params: bool) -> Mapping[str, Decision
 def _request_images(images: object, drops_params: bool) -> tuple[DecisionsImage, ...]:
     if not drops_params:
         return _IMAGES_ADAPTER.validate_python(images) or ()
-    return tuple(image for image in map(_valid_image, _image_entries(images)) if image is not None)
+    return tuple(image for image in map(_valid_image, _entries(images)) if image is not None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,7 +187,7 @@ class SystemOneRequestFields:
 @dataclass(frozen=True, slots=True)
 class OpenAIDecisionRequestFields:
     input: OpenAIDecisionInput | None
-    questions: OpenAIDecisionQuestions | None
+    questions: object
     audio: DecisionsAudioClips | None = None
     videos: DecisionsVideoClips | None = None
 
@@ -210,6 +221,28 @@ class DecisionsCall:
     timeout: float | httpx.Timeout | None
     litellm_params: Mapping[str, object] = field(repr=False)
     caller_questions: tuple[DecisionsIRQuestion, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DroppedQuestion:
+    position: int
+    name: str | None
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class NativeOpenAIDecisionsCall:
+    model: str
+    requested_model: str
+    custom_llm_provider: str
+    provider_config: OpenAIDecisionsConfig
+    body: Mapping[str, object]
+    dropped_questions: tuple[DroppedQuestion, ...]
+    api_base: str
+    api_key: str | None = field(repr=False)
+    logging_obj: LiteLLMLoggingObj | None
+    headers: Mapping[str, str]
+    timeout: float | httpx.Timeout | None
+    litellm_params: Mapping[str, object] = field(repr=False)
 
 
 def supported_decisions_providers() -> tuple[str, ...]:
@@ -505,18 +538,23 @@ def log_caller_request(kwargs: Mapping[str, object], caller_request: object) -> 
         logging_obj.update_messages([_logged_request_message(caller_request)])
 
 
-def prepare_call(
-    *,
+@dataclass(frozen=True, slots=True, repr=False)
+class _Route:
+    requested_model: str
+    model: str
+    custom_llm_provider: str
+    provider_config: BaseDecisionsConfig
+    api_base: str | None
+    api_key: str | None = field(repr=False)
+
+
+def _route(
     model: str,
-    fields: RequestFields,
-    safety_identifier: str | None,
-    api_key: str | None,
-    api_base: str | None,
-    timeout: float | httpx.Timeout | None,
     custom_llm_provider: str | None,
-    extra_headers: Mapping[str, str] | None,
+    api_base: str | None,
+    api_key: str | None,
     kwargs: Mapping[str, object],
-) -> DecisionsCall:
+) -> _Route:
     base_url_alias: Final = kwargs.get("base_url")
     call_api_base: Final = (
         base_url_alias if api_base is None and isinstance(base_url_alias, str) and base_url_alias else api_base
@@ -538,40 +576,118 @@ def prepare_call(
         canonical_model: Final = provider_config.canonical_model(upstream_model)
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
+    return _Route(
+        requested_model=model,
+        model=canonical_model,
+        custom_llm_provider=provider,
+        provider_config=provider_config,
+        api_base=dynamic_api_base or call_api_base,
+        api_key=dynamic_api_key or api_key,
+    )
+
+
+def _invalid_request(error: ValueError | TypeError, route: _Route) -> litellm.BadRequestError:
+    return litellm.BadRequestError(
+        message=f"Invalid Decisions request: {error}",
+        model=route.requested_model,
+        llm_provider=route.custom_llm_provider,
+    )
+
+
+def _connection(route: _Route, kwargs: Mapping[str, object]) -> tuple[str, str | None]:
     try:
-        headers: Final = decisions_outbound_headers(extra_headers, provider, kwargs)
-        support: Final = _resolved_support(provider_config, canonical_model, provider, headers, kwargs, fields)
+        resolved_api_base, static_api_key = route.provider_config.resolve_connection(route.api_base, route.api_key)
+    except (ValueError, httpx.InvalidURL) as error:
+        raise litellm.BadRequestError(
+            message=str(error), model=route.requested_model, llm_provider=route.custom_llm_provider
+        ) from error
+    if resolved_api_base is None:
+        raise litellm.BadRequestError(
+            message=route.provider_config.missing_api_base_message(route.custom_llm_provider),
+            model=route.requested_model,
+            llm_provider=route.custom_llm_provider,
+        )
+    resolved_api_key: Final = route.provider_config.resolve_credential(static_api_key, resolved_api_base, kwargs)
+    if resolved_api_key is None and route.provider_config.api_key_required:
+        raise litellm.AuthenticationError(
+            message=f"Missing API key for Decisions provider '{route.custom_llm_provider}'",
+            model=route.requested_model,
+            llm_provider=route.custom_llm_provider,
+        )
+    return resolved_api_base, resolved_api_key
+
+
+def _unsupported_params_error(names: Sequence[str], route: _Route) -> litellm.UnsupportedParamsError:
+    return litellm.UnsupportedParamsError(
+        message=(
+            f"{route.custom_llm_provider} does not support parameters: {list(names)}, "
+            f"for model={route.requested_model}. "
+            "To drop these, set `litellm.drop_params=True` or for proxy:\n\n"
+            "`litellm_settings:\n drop_params: true`\n"
+        ),
+        model=route.requested_model,
+        llm_provider=route.custom_llm_provider,
+    )
+
+
+def _nothing_left_error(nothing_left: _NothingLeftAfterDrop, route: _Route) -> litellm.BadRequestError:
+    return litellm.BadRequestError(
+        message=(
+            f"{route.custom_llm_provider} does not support parameters: {list(nothing_left.names)}, "
+            f"for model={route.requested_model}, and dropping them leaves no {nothing_left.missing}"
+        ),
+        model=route.requested_model,
+        llm_provider=route.custom_llm_provider,
+    )
+
+
+def _call_logging_obj(route: _Route, api_base: str, kwargs: Mapping[str, object]) -> LiteLLMLoggingObj | None:
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
+        return None
+    logging_obj.update_from_kwargs(
+        kwargs=dict(kwargs),
+        model=route.model,
+        litellm_params={
+            "litellm_call_id": kwargs.get("litellm_call_id"),
+            "api_base": route.provider_config.get_complete_url(api_base, route.model),
+            "input_cost_per_query": (
+                kwargs.get("input_cost_per_query")
+                if route.custom_llm_provider in QUERY_PRICED_DECISIONS_PROVIDERS
+                else None
+            ),
+        },
+        custom_llm_provider=route.custom_llm_provider,
+    )
+    return logging_obj
+
+
+def _ir_call(
+    route: _Route,
+    fields: RequestFields,
+    safety_identifier: str | None,
+    timeout: float | httpx.Timeout | None,
+    extra_headers: Mapping[str, str] | None,
+    kwargs: Mapping[str, object],
+) -> DecisionsCall:
+    provider_config: Final = route.provider_config
+    checked_fields: Final = (
+        replace(fields, questions=_OPENAI_QUESTIONS_ADAPTER.validate_python(fields.questions))
+        if isinstance(fields, OpenAIDecisionRequestFields)
+        else fields
+    )
+    try:
+        headers: Final = decisions_outbound_headers(extra_headers, route.custom_llm_provider, kwargs)
+        support: Final = _resolved_support(
+            provider_config, route.model, route.custom_llm_provider, headers, kwargs, checked_fields
+        )
         request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
-        request: Final = _fields_without_unsupported_media(fields, support, kwargs).validate(
+        request: Final = _fields_without_unsupported_media(checked_fields, support, kwargs).validate(
             safety_identifier=request_safety_identifier, drops_params=_drops_params(kwargs)
         )
     except ValidationError as error:
-        raise litellm.BadRequestError(
-            message=f"Invalid Decisions request: {error}",
-            model=model,
-            llm_provider=provider,
-        ) from error
-
-    try:
-        resolved_api_base, static_api_key = provider_config.resolve_connection(
-            dynamic_api_base or call_api_base, dynamic_api_key or api_key
-        )
-    except (ValueError, httpx.InvalidURL) as error:
-        raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
-    if resolved_api_base is None:
-        raise litellm.BadRequestError(
-            message=provider_config.missing_api_base_message(provider),
-            model=model,
-            llm_provider=provider,
-        )
-    resolved_api_key: Final = provider_config.resolve_credential(static_api_key, resolved_api_base, kwargs)
-    if resolved_api_key is None and provider_config.api_key_required:
-        raise litellm.AuthenticationError(
-            message=f"Missing API key for Decisions provider '{provider}'",
-            model=model,
-            llm_provider=provider,
-        )
-
+        raise _invalid_request(error, route) from error
+    resolved_api_base, resolved_api_key = _connection(route, kwargs)
     caller_ir_request: Final = _without_malformed_images(
         _ir_request(request, request_safety_identifier), _drops_params(kwargs)
     )
@@ -581,60 +697,178 @@ def prepare_call(
                 f"Invalid Decisions request: {caller_ir_request.count} input_image part(s) have an image_url that is "
                 "neither a data:image/...;base64, URL nor an http(s) URL"
             ),
-            model=model,
-            llm_provider=provider,
+            model=route.requested_model,
+            llm_provider=route.custom_llm_provider,
         )
     ir_request: Final = _provider_ir_request(
         caller_ir_request, provider_config=provider_config, headers=headers, support=support, kwargs=kwargs
     )
     if isinstance(ir_request, _UnsupportedParams):
-        raise litellm.UnsupportedParamsError(
-            message=(
-                f"{provider} does not support parameters: {list(ir_request.names)}, for model={model}. "
-                "To drop these, set `litellm.drop_params=True` or for proxy:\n\n"
-                "`litellm_settings:\n drop_params: true`\n"
-            ),
-            model=model,
-            llm_provider=provider,
-        )
+        raise _unsupported_params_error(ir_request.names, route)
     if isinstance(ir_request, _NothingLeftAfterDrop):
-        raise litellm.BadRequestError(
-            message=(
-                f"{provider} does not support parameters: {list(ir_request.names)}, for model={model}, "
-                f"and dropping them leaves no {ir_request.missing}"
-            ),
-            model=model,
-            llm_provider=provider,
-        )
-    logging_obj: Final = kwargs.get("litellm_logging_obj")
-    if isinstance(logging_obj, LiteLLMLoggingObj):
-        logging_obj.update_from_kwargs(
-            kwargs=dict(kwargs),
-            model=canonical_model,
-            litellm_params={
-                "litellm_call_id": kwargs.get("litellm_call_id"),
-                "api_base": provider_config.get_complete_url(resolved_api_base, canonical_model),
-                "input_cost_per_query": (
-                    kwargs.get("input_cost_per_query") if provider in QUERY_PRICED_DECISIONS_PROVIDERS else None
-                ),
-            },
-            custom_llm_provider=provider,
-        )
+        raise _nothing_left_error(ir_request, route)
     return DecisionsCall(
-        model=canonical_model,
-        requested_model=model,
-        custom_llm_provider=provider,
+        model=route.model,
+        requested_model=route.requested_model,
+        custom_llm_provider=route.custom_llm_provider,
         provider_config=provider_config,
         request=request,
         ir_request=ir_request,
         api_base=resolved_api_base,
         api_key=resolved_api_key,
-        logging_obj=logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None,
+        logging_obj=_call_logging_obj(route, resolved_api_base, kwargs),
         headers=headers,
         timeout=timeout,
         litellm_params=kwargs,
         caller_questions=caller_ir_request.questions,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeQuestions:
+    sent: object
+    dropped: tuple[DroppedQuestion, ...]
+
+
+def _question_name(question: object) -> str | None:
+    name: Final = _fields(question).get("name")
+    return name if isinstance(name, str) else None
+
+
+def _native_questions(
+    questions: object, support: _ResolvedSupport, fields: OpenAIDecisionRequestFields, kwargs: Mapping[str, object]
+) -> _NativeQuestions | _UnsupportedParams | _NothingLeftAfterDrop:
+    entries: Final = _entries(questions)
+    box_positions: Final = frozenset(
+        position for position, question in enumerate(entries) if _fields(question).get("type") == "box"
+    )
+    refuses_box_questions: Final = bool(box_positions) and not support.box_questions
+    unsupported: Final = (
+        *(("box questions",) if refuses_box_questions else ()),
+        *(("audio",) if fields.audio and not support.audio else ()),
+        *(("videos",) if fields.videos and not support.videos else ()),
+    )
+    if not unsupported:
+        return _NativeQuestions(sent=questions, dropped=())
+    if not _drops_params(kwargs):
+        return _UnsupportedParams(names=unsupported)
+    if not refuses_box_questions:
+        return _NativeQuestions(sent=questions, dropped=())
+    kept: Final = tuple(question for position, question in enumerate(entries) if position not in box_positions)
+    if not kept:
+        return _NothingLeftAfterDrop(names=unsupported, missing="questions to answer")
+    return _NativeQuestions(
+        sent=kept,
+        dropped=tuple(
+            DroppedQuestion(position=position, name=_question_name(entries[position]))
+            for position in sorted(box_positions)
+        ),
+    )
+
+
+def _plain_mapping(value: object) -> Mapping[str, object]:
+    if isinstance(value, Mapping):
+        return _FIELDS_ADAPTER.validate_python(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _sent_fields(
+    route: _Route, fields: OpenAIDecisionRequestFields, kwargs: Mapping[str, object]
+) -> Mapping[str, object]:
+    explicit: Final = (
+        ("input", fields.input),
+        ("questions", fields.questions),
+        ("audio", fields.audio),
+        ("videos", fields.videos),
+    )
+    sent: Final = MappingProxyType(
+        {
+            **{name: value for name, value in explicit if value is not None},
+            **filter_out_litellm_params(kwargs=kwargs, excluding=_LITELLM_SETTINGS),
+        }
+    )
+    try:
+        return _FIELDS_ADAPTER.validate_python(to_jsonable_python(sent, exclude_none=True, fallback=_plain_mapping))
+    except (TypeError, ValueError) as error:
+        raise _invalid_request(error, route) from error
+
+
+def _native_body(
+    model: str, sent: Mapping[str, object], questions: object, safety_identifier: str | None, support: _ResolvedSupport
+) -> Mapping[str, object]:
+    unsupported_media: Final = frozenset(
+        name for name, supported in (("audio", support.audio), ("videos", support.videos)) if not supported
+    )
+    return MappingProxyType(
+        {
+            "model": model,
+            **{name: value for name, value in sent.items() if name not in unsupported_media},
+            **({} if questions is None else {"questions": questions}),
+            **({} if safety_identifier is None else {"safety_identifier": safety_identifier}),
+        }
+    )
+
+
+def _native_openai_call(
+    route: _Route,
+    provider_config: OpenAIDecisionsConfig,
+    fields: OpenAIDecisionRequestFields,
+    safety_identifier: str | None,
+    timeout: float | httpx.Timeout | None,
+    extra_headers: Mapping[str, str] | None,
+    kwargs: Mapping[str, object],
+) -> NativeOpenAIDecisionsCall:
+    try:
+        headers: Final = decisions_outbound_headers(extra_headers, route.custom_llm_provider, kwargs)
+        support: Final = _resolved_support(
+            provider_config, route.model, route.custom_llm_provider, headers, kwargs, fields
+        )
+        request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
+    except ValidationError as error:
+        raise _invalid_request(error, route) from error
+    resolved_api_base, resolved_api_key = _connection(route, kwargs)
+    sent: Final = _sent_fields(route, fields, kwargs)
+    questions: Final = _native_questions(sent.get("questions"), support, fields, kwargs)
+    if isinstance(questions, _UnsupportedParams):
+        raise _unsupported_params_error(questions.names, route)
+    if isinstance(questions, _NothingLeftAfterDrop):
+        raise _nothing_left_error(questions, route)
+    return NativeOpenAIDecisionsCall(
+        model=route.model,
+        requested_model=route.requested_model,
+        custom_llm_provider=route.custom_llm_provider,
+        provider_config=provider_config,
+        body=_native_body(
+            provider_config.request_model(route.model), sent, questions.sent, request_safety_identifier, support
+        ),
+        dropped_questions=questions.dropped,
+        api_base=resolved_api_base,
+        api_key=resolved_api_key,
+        logging_obj=_call_logging_obj(route, resolved_api_base, kwargs),
+        headers=headers,
+        timeout=timeout,
+        litellm_params=kwargs,
+    )
+
+
+def prepare_call(
+    *,
+    model: str,
+    fields: RequestFields,
+    safety_identifier: str | None,
+    api_key: str | None,
+    api_base: str | None,
+    timeout: float | httpx.Timeout | None,
+    custom_llm_provider: str | None,
+    extra_headers: Mapping[str, str] | None,
+    kwargs: Mapping[str, object],
+) -> DecisionsCall | NativeOpenAIDecisionsCall:
+    route: Final = _route(model, custom_llm_provider, api_base, api_key, kwargs)
+    if isinstance(fields, OpenAIDecisionRequestFields) and isinstance(route.provider_config, OpenAIDecisionsConfig):
+        return _native_openai_call(
+            route, route.provider_config, fields, safety_identifier, timeout, extra_headers, kwargs
+        )
+    return _ir_call(route, fields, safety_identifier, timeout, extra_headers, kwargs)
 
 
 def _remote_image_urls(call: DecisionsCall) -> tuple[str, ...]:
@@ -753,8 +987,8 @@ def _request_body(call: DecisionsCall) -> Mapping[str, object]:
     return body
 
 
-def _pricing_model(response: DecisionsIRResponse, call: DecisionsCall) -> str:
-    returned: Final = get_model_cost_key(f"{call.custom_llm_provider}/{response.model}")
+def _pricing_model(returned_model: str | None, call: DecisionsCall | NativeOpenAIDecisionsCall) -> str:
+    returned: Final = get_model_cost_key(f"{call.custom_llm_provider}/{returned_model}")
     if returned is not None and cost_map_key_prices_anything(returned):
         return returned
     return f"{call.custom_llm_provider}/{call.model}"
@@ -767,7 +1001,7 @@ def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> Deci
         {
             "model": f"{call.custom_llm_provider}/{call.model}",
             "custom_llm_provider": call.custom_llm_provider,
-            "provider_response_model": _pricing_model(response, call),
+            "provider_response_model": _pricing_model(response.model, call),
             **({"additional_headers": {RESPONSE_COST_HEADER: provider_cost}} if provider_cost is not None else {}),
         }
     )
@@ -798,7 +1032,7 @@ def _formatted_response(
             assert_never(call.request)
 
 
-def _map_upstream_exception(error: Exception, call: DecisionsCall) -> Exception:
+def _map_upstream_exception(error: Exception, call: DecisionsCall | NativeOpenAIDecisionsCall) -> Exception:
     provider_label: Final = f"{call.custom_llm_provider[0].upper()}{call.custom_llm_provider[1:]}Exception"
     model: Final = f"{call.custom_llm_provider}/{call.model}"
     match error:
@@ -816,7 +1050,7 @@ def _map_upstream_exception(error: Exception, call: DecisionsCall) -> Exception:
             )
 
 
-async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
+async def _asend_ir(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
     supported: Final = _checked_image_count(_checked_image_types(call))
     inlined: Final = _checked_image_sizes(_checked_image_types(await _async_with_remote_images_inlined(supported)))
     body: Final = _request_body(inlined)
@@ -840,7 +1074,7 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
     return _format_response(response, inlined)
 
 
-def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
+def _send_ir(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
     supported: Final = _checked_image_count(_checked_image_types(call))
     inlined: Final = _checked_image_sizes(_checked_image_types(_with_remote_images_inlined(supported)))
     body: Final = _request_body(inlined)
@@ -862,6 +1096,90 @@ def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
     except Exception as error:
         raise _map_upstream_exception(error, inlined) from error
     return _format_response(response, inlined)
+
+
+def _with_refusal(
+    answers: tuple[OpenAIDecisionAnswer, ...], dropped: DroppedQuestion
+) -> tuple[OpenAIDecisionAnswer, ...]:
+    return (*answers[: dropped.position], OpenAIRefusalAnswer(name=dropped.name), *answers[dropped.position :])
+
+
+def _format_native_response(
+    response: OpenAIDecisionResponse, call: NativeOpenAIDecisionsCall
+) -> OpenAIDecisionResponse:
+    formatted: Final = response.model_copy(
+        update={"answers": reduce(_with_refusal, call.dropped_questions, response.answers)}
+    )
+    formatted.set_hidden_params(
+        {
+            "model": f"{call.custom_llm_provider}/{call.model}",
+            "custom_llm_provider": call.custom_llm_provider,
+            "provider_response_model": _pricing_model(response.model, call),
+        }
+    )
+    return formatted
+
+
+async def _asend_native(call: NativeOpenAIDecisionsCall) -> OpenAIDecisionResponse:
+    try:
+        raw_response: Final = await _HANDLER.apost_decisions(
+            model=call.model,
+            custom_llm_provider=call.custom_llm_provider,
+            logging_obj=call.logging_obj,
+            provider_config=call.provider_config,
+            body=call.body,
+            logged_body=call.body,
+            api_base=call.api_base,
+            api_key=call.api_key,
+            headers=call.headers,
+            timeout=call.timeout,
+            litellm_params=call.litellm_params,
+        )
+        response: Final = call.provider_config.parse_native_response(call.custom_llm_provider, raw_response)
+    except Exception as error:
+        raise _map_upstream_exception(error, call) from error
+    return _format_native_response(response, call)
+
+
+def _send_native(call: NativeOpenAIDecisionsCall) -> OpenAIDecisionResponse:
+    try:
+        raw_response: Final = _HANDLER.post_decisions(
+            model=call.model,
+            custom_llm_provider=call.custom_llm_provider,
+            logging_obj=call.logging_obj,
+            provider_config=call.provider_config,
+            body=call.body,
+            logged_body=call.body,
+            api_base=call.api_base,
+            api_key=call.api_key,
+            headers=call.headers,
+            timeout=call.timeout,
+            litellm_params=call.litellm_params,
+        )
+        response: Final = call.provider_config.parse_native_response(call.custom_llm_provider, raw_response)
+    except Exception as error:
+        raise _map_upstream_exception(error, call) from error
+    return _format_native_response(response, call)
+
+
+async def asend(call: DecisionsCall | NativeOpenAIDecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
+    match call:
+        case NativeOpenAIDecisionsCall():
+            return await _asend_native(call)
+        case DecisionsCall():
+            return await _asend_ir(call)
+        case _:
+            assert_never(call)
+
+
+def send(call: DecisionsCall | NativeOpenAIDecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
+    match call:
+        case NativeOpenAIDecisionsCall():
+            return _send_native(call)
+        case DecisionsCall():
+            return _send_ir(call)
+        case _:
+            assert_never(call)
 
 
 def reject_other_format(*, model: str, kwargs: Mapping[str, object], field_name: str, other_function: str) -> None:

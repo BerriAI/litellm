@@ -7,6 +7,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.decisions.call import NativeOpenAIDecisionsCall
 from litellm.decisions.main import _prepare_decisions_call
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.systemone.main import _prepare_systemone_call
@@ -59,6 +60,43 @@ def test_systemone_logs_every_request_field_the_caller_sent():
     assert logged["state"] == {"message": "My card was charged twice."}
     assert logged["questions"]["billing"]["instructions"] == QUESTION_TEXT
     assert set(logged) == {"state", "questions"}
+
+
+def test_an_openai_body_carries_the_caller_fields_and_none_of_the_settings_litellm_owns(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    question: Final = {"type": "predicate", "instructions": QUESTION_TEXT, "rubric": "strict"}
+
+    call: Final = _prepare_decisions_call(
+        **{**CONNECTION, "model": "openai/gpt-6-luna", "api_base": None},
+        decision_input="My card was charged twice.",
+        questions=[question],
+        audio=None,
+        videos=None,
+        kwargs={
+            "prompt_cache_key": "billing-v1",
+            "user": "key-hash",
+            "drop_params": True,
+            "organization": "org-1",
+            "base_url": "https://elsewhere.example/v1",
+            "additional_drop_params": ["temperature"],
+            "aws_region_name": "us-east-1",
+            "vertex_project": "project-1",
+            "azure_ad_token": "token-1",
+            "metadata": {"tags": ["billing"]},
+        },
+    )
+
+    assert isinstance(call, NativeOpenAIDecisionsCall)
+    assert call.body == {
+        "model": "gpt-6-luna",
+        "input": "My card was charged twice.",
+        "questions": [question],
+        "prompt_cache_key": "billing-v1",
+    }
 
 
 def test_decisions_logs_every_request_field_the_caller_sent():

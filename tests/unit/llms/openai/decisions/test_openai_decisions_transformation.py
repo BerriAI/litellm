@@ -97,7 +97,7 @@ def _openai_ir(raw: Mapping[str, object]) -> DecisionsIRRequest:
     return openai_request_to_ir(_OPENAI_BODY.validate_python(raw))
 
 
-def test_an_openai_request_reaches_openai_unchanged() -> None:
+def test_an_openai_request_round_trips_through_the_ir_unchanged() -> None:
     assert ir_to_openai_request("gpt-6-luna", _openai_ir(_OPENAI_REQUEST)) == {
         "model": "gpt-6-luna",
         **_OPENAI_REQUEST,

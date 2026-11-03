@@ -737,23 +737,7 @@ def test_openai_format_decisions_reach_an_openai_deployment_unchanged_including_
     response: Final = client.post("/v1/decisions", json=request_body)
 
     assert response.status_code == 200, response.text
-    assert json.loads(upstream.calls[0].request.content) == {
-        "model": "gpt-6-luna",
-        "input": [
-            {
-                "type": "message",
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": "The package arrived with a broken screen."},
-                    {"type": "input_text", "text": "I want a refund."},
-                ],
-            },
-            {"type": "message", "role": "user", "content": "Order 1234."},
-            image_message,
-        ],
-        "questions": _OPENAI_FORMAT_REQUEST["questions"],
-        "safety_identifier": "end-user-1",
-    }
+    assert json.loads(upstream.calls[0].request.content) == {**request_body, "model": "gpt-6-luna"}
     body: Final = response.json()
     assert body["answers"] == _OPENAI_FORMAT_ANSWERS
     assert body["usage"] == upstream_usage
@@ -763,6 +747,62 @@ def test_openai_format_decisions_reach_an_openai_deployment_unchanged_including_
     )
     assert expected_cost > 0
     assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
+
+
+_UNTRANSLATABLE_OPENAI_FORMAT_REQUEST: Final[Mapping[str, object]] = {
+    "model": "decider",
+    "input": [
+        {"type": "message", "role": "developer", "content": "Judge for the refunds team."},
+        {"role": "user", "content": [{"type": "input_json", "json": {"order": 1234}}]},
+    ],
+    "questions": [
+        {"type": "choice", "instructions": "Pick one", "choices": [{"value": True}, {"value": "true"}]},
+    ],
+    "prompt_cache_key": "refunds-v2",
+}
+_UNTRANSLATABLE_OPENAI_FORMAT_ANSWERS: Final = [
+    {
+        "type": "choice",
+        "name": None,
+        "choice": True,
+        "probabilities": [{"value": True, "probability": 1.0}],
+        "confidence": 0.9,
+    }
+]
+
+
+@pytest.mark.parametrize("model", ("openai/gpt-6-luna", "perplexity/pplx-decider-v1-27b"), ids=("openai", "translated"))
+def test_only_a_deployment_that_cannot_take_an_openai_format_body_as_sent_refuses_it(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    model: str,
+) -> None:
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    _route_decider_to(monkeypatch, {"model": model, "api_key": "k"})
+    openai_upstream: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(
+        json={
+            "model": "gpt-6-luna",
+            "answers": _UNTRANSLATABLE_OPENAI_FORMAT_ANSWERS,
+            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 1, "total_tokens": _INPUT_TOKENS + 1},
+        }
+    )
+    perplexity_upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post("/v1/decisions", json=_UNTRANSLATABLE_OPENAI_FORMAT_REQUEST)
+
+    if model.startswith("perplexity/"):
+        assert response.status_code == 400, response.text
+        assert not perplexity_upstream.called
+        return
+    assert response.status_code == 200, response.text
+    assert json.loads(openai_upstream.calls[0].request.content) == {
+        **_UNTRANSLATABLE_OPENAI_FORMAT_REQUEST,
+        "model": "gpt-6-luna",
+    }
+    assert response.json()["answers"] == _UNTRANSLATABLE_OPENAI_FORMAT_ANSWERS
 
 
 _CLEF_OMNI_MEDIA: Final[Mapping[str, object]] = {

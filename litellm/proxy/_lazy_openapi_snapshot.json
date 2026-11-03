@@ -10638,6 +10638,7 @@
           "type": "object"
         },
         "OpenAIBoxAnswer": {
+          "additionalProperties": true,
           "properties": {
             "box": {
               "$ref": "#/components/schemas/DecisionsBox"
@@ -10680,6 +10681,7 @@
           "type": "object"
         },
         "OpenAIChoiceAnswer": {
+          "additionalProperties": true,
           "properties": {
             "choice": {
               "anyOf": [
@@ -10737,6 +10739,7 @@
           "type": "object"
         },
         "OpenAIChoiceProbability": {
+          "additionalProperties": true,
           "properties": {
             "probability": {
               "title": "Probability",
@@ -10762,6 +10765,7 @@
           "type": "object"
         },
         "OpenAIDecisionInputTokensDetails": {
+          "additionalProperties": true,
           "properties": {
             "cache_write_tokens": {
               "default": 0,
@@ -10778,6 +10782,7 @@
           "type": "object"
         },
         "OpenAIDecisionOutputTokensDetails": {
+          "additionalProperties": true,
           "properties": {
             "reasoning_tokens": {
               "default": 0,
@@ -10793,16 +10798,6 @@
           "properties": {
             "answers": {
               "items": {
-                "discriminator": {
-                  "mapping": {
-                    "box": "#/components/schemas/OpenAIBoxAnswer",
-                    "choice": "#/components/schemas/OpenAIChoiceAnswer",
-                    "predicate": "#/components/schemas/OpenAIPredicateAnswer",
-                    "refusal": "#/components/schemas/OpenAIRefusalAnswer",
-                    "score": "#/components/schemas/OpenAIScoreAnswer"
-                  },
-                  "propertyName": "type"
-                },
                 "oneOf": [
                   {
                     "$ref": "#/components/schemas/OpenAIPredicateAnswer"
@@ -10818,6 +10813,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/OpenAIRefusalAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OpenAIUnknownAnswer"
                   }
                 ]
               },
@@ -10841,6 +10839,7 @@
           "type": "object"
         },
         "OpenAIDecisionUsage": {
+          "additionalProperties": true,
           "properties": {
             "input_tokens": {
               "title": "Input Tokens",
@@ -10877,6 +10876,7 @@
           "type": "object"
         },
         "OpenAIPredicateAnswer": {
+          "additionalProperties": true,
           "properties": {
             "name": {
               "anyOf": [
@@ -10908,6 +10908,7 @@
           "type": "object"
         },
         "OpenAIRefusalAnswer": {
+          "additionalProperties": true,
           "properties": {
             "name": {
               "anyOf": [
@@ -10934,6 +10935,7 @@
           "type": "object"
         },
         "OpenAIScoreAnswer": {
+          "additionalProperties": true,
           "properties": {
             "confidence": {
               "anyOf": [
@@ -10984,6 +10986,7 @@
           "type": "object"
         },
         "OpenAIScoreProbability": {
+          "additionalProperties": true,
           "properties": {
             "label": {
               "title": "Label",
@@ -11004,6 +11007,31 @@
             "probability"
           ],
           "title": "OpenAIScoreProbability",
+          "type": "object"
+        },
+        "OpenAIUnknownAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "OpenAIUnknownAnswer",
           "type": "object"
         },
         "ScoreAnswer": {
@@ -11070,7 +11098,7 @@
     "paths": {
       "/decisions": {
         "post": {
-          "description": "Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the\n`instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before\nany provider is called. `model` is any decision model in the proxy\nmodel list. System One decision models accept this format too, LiteLLM translates the request and the\nanswers. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge an `input` against one or more `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the\n`instructions` describe, with `confidence`). `model` is any decision model in the proxy model list. OpenAI\nand Azure decision models get the request body as sent, minus LiteLLM settings and with `model` set to the\ndeployment's model, and return OpenAI's answers as sent, so any field OpenAI adds works without a LiteLLM\nupdate. System One decision models accept this format too, LiteLLM translates the request and the answers and\nrejects a request it cannot translate with a 400 before calling the provider. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "decisions_decisions_post",
           "requestBody": {
             "content": {
@@ -12476,7 +12504,7 @@
       },
       "/v1/decisions": {
         "post": {
-          "description": "Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the\n`instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before\nany provider is called. `model` is any decision model in the proxy\nmodel list. System One decision models accept this format too, LiteLLM translates the request and the\nanswers. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge an `input` against one or more `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the\n`instructions` describe, with `confidence`). `model` is any decision model in the proxy model list. OpenAI\nand Azure decision models get the request body as sent, minus LiteLLM settings and with `model` set to the\ndeployment's model, and return OpenAI's answers as sent, so any field OpenAI adds works without a LiteLLM\nupdate. System One decision models accept this format too, LiteLLM translates the request and the answers and\nrejects a request it cannot translate with a 400 before calling the provider. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "decisions_v1_decisions_post",
           "requestBody": {
             "content": {

@@ -1,11 +1,16 @@
 from collections.abc import Mapping, Sequence
 from typing import Final
 
-from pydantic import TypeAdapter
+import httpx
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
-from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, decisions_text
+from litellm.llms.base_llm.decisions.transformation import (
+    BaseDecisionsConfig,
+    decisions_text,
+    unexpected_response_error,
+)
 from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
@@ -374,3 +379,9 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
 
     def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
         return openai_response_to_ir(_OPENAI_RESPONSE_ADAPTER.validate_python(payload), request)
+
+    def parse_native_response(self, custom_llm_provider: str, raw_response: httpx.Response) -> OpenAIDecisionResponse:
+        try:
+            return _OPENAI_RESPONSE_ADAPTER.validate_json(raw_response.content)
+        except ValidationError as error:
+            raise unexpected_response_error(custom_llm_provider, error) from error

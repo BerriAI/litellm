@@ -1751,13 +1751,12 @@ class BaseLLMHTTPHandler:
             )
         return url, outbound_headers, data
 
-    def decisions(
+    def post_decisions(
         self,
         model: str,
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj | None,
         provider_config: BaseDecisionsConfig,
-        request: DecisionsIRRequest,
         body: Mapping[str, object],
         logged_body: Mapping[str, object],
         api_base: str,
@@ -1766,7 +1765,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None,
         litellm_params: Mapping[str, object],
         client: HTTPHandler | None = None,
-    ) -> DecisionsIRResponse:
+    ) -> httpx.Response:
         url, outbound_headers, data = self._prepare_decisions_request(
             model=model,
             logging_obj=logging_obj,
@@ -1788,7 +1787,7 @@ class BaseLLMHTTPHandler:
         )
         sync_httpx_client: Final = client if client is not None else get_httpx_client()
         try:
-            response: Final = sync_httpx_client.post(
+            return sync_httpx_client.post(
                 url,
                 content=signed_body,
                 json=dict(data) if signed_body is None else None,
@@ -1798,17 +1797,13 @@ class BaseLLMHTTPHandler:
             )
         except httpx.HTTPError as e:
             raise self._handle_error(e=e, provider_config=provider_config)
-        return provider_config.transform_decisions_response(
-            model=model, custom_llm_provider=custom_llm_provider, raw_response=response, request=request
-        )
 
-    async def adecisions(
+    async def apost_decisions(
         self,
         model: str,
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj | None,
         provider_config: BaseDecisionsConfig,
-        request: DecisionsIRRequest,
         body: Mapping[str, object],
         logged_body: Mapping[str, object],
         api_base: str,
@@ -1817,7 +1812,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None,
         litellm_params: Mapping[str, object],
         client: AsyncHTTPHandler | None = None,
-    ) -> DecisionsIRResponse:
+    ) -> httpx.Response:
         url, outbound_headers, data = await self._aprepare_decisions_request(
             model=model,
             logging_obj=logging_obj,
@@ -1847,7 +1842,7 @@ class BaseLLMHTTPHandler:
             else get_async_httpx_client(llm_provider=litellm.LlmProviders(custom_llm_provider))
         )
         try:
-            response: Final = await async_httpx_client.post(
+            return await async_httpx_client.post(
                 url,
                 content=signed_body,
                 json=dict(data) if signed_body is None else None,
@@ -1857,6 +1852,71 @@ class BaseLLMHTTPHandler:
             )
         except httpx.HTTPError as e:
             raise self._handle_error(e=e, provider_config=provider_config)
+
+    def decisions(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseDecisionsConfig,
+        request: DecisionsIRRequest,
+        body: Mapping[str, object],
+        logged_body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        timeout: float | httpx.Timeout | None,
+        litellm_params: Mapping[str, object],
+        client: HTTPHandler | None = None,
+    ) -> DecisionsIRResponse:
+        response: Final = self.post_decisions(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            body=body,
+            logged_body=logged_body,
+            api_base=api_base,
+            api_key=api_key,
+            headers=headers,
+            timeout=timeout,
+            litellm_params=litellm_params,
+            client=client,
+        )
+        return provider_config.transform_decisions_response(
+            model=model, custom_llm_provider=custom_llm_provider, raw_response=response, request=request
+        )
+
+    async def adecisions(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseDecisionsConfig,
+        request: DecisionsIRRequest,
+        body: Mapping[str, object],
+        logged_body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        timeout: float | httpx.Timeout | None,
+        litellm_params: Mapping[str, object],
+        client: AsyncHTTPHandler | None = None,
+    ) -> DecisionsIRResponse:
+        response: Final = await self.apost_decisions(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            body=body,
+            logged_body=logged_body,
+            api_base=api_base,
+            api_key=api_key,
+            headers=headers,
+            timeout=timeout,
+            litellm_params=litellm_params,
+            client=client,
+        )
         return provider_config.transform_decisions_response(
             model=model, custom_llm_provider=custom_llm_provider, raw_response=response, request=request
         )

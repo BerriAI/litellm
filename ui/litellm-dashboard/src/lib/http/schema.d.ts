@@ -4764,14 +4764,15 @@ export interface paths {
         put?: never;
         /**
          * Ask questions about an input (OpenAI Decisions format)
-         * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
+         * @description Judge an `input` against one or more `questions` and get the answers back in the same order.
          *
          *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
          *     `probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the
-         *     `instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before
-         *     any provider is called. `model` is any decision model in the proxy
-         *     model list. System One decision models accept this format too, LiteLLM translates the request and the
-         *     answers. Streaming is not supported.
+         *     `instructions` describe, with `confidence`). `model` is any decision model in the proxy model list. OpenAI
+         *     and Azure decision models get the request body as sent, minus LiteLLM settings and with `model` set to the
+         *     deployment's model, and return OpenAI's answers as sent, so any field OpenAI adds works without a LiteLLM
+         *     update. System One decision models accept this format too, LiteLLM translates the request and the answers and
+         *     rejects a request it cannot translate with a 400 before calling the provider. Streaming is not supported.
          *
          *     [Docs](https://docs.litellm.ai/docs/decisions)
          */
@@ -20222,14 +20223,15 @@ export interface paths {
         put?: never;
         /**
          * Ask questions about an input (OpenAI Decisions format)
-         * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
+         * @description Judge an `input` against one or more `questions` and get the answers back in the same order.
          *
          *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
          *     `probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the
-         *     `instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before
-         *     any provider is called. `model` is any decision model in the proxy
-         *     model list. System One decision models accept this format too, LiteLLM translates the request and the
-         *     answers. Streaming is not supported.
+         *     `instructions` describe, with `confidence`). `model` is any decision model in the proxy model list. OpenAI
+         *     and Azure decision models get the request body as sent, minus LiteLLM settings and with `model` set to the
+         *     deployment's model, and return OpenAI's answers as sent, so any field OpenAI adds works without a LiteLLM
+         *     update. System One decision models accept this format too, LiteLLM translates the request and the answers and
+         *     rejects a request it cannot translate with a 400 before calling the provider. Streaming is not supported.
          *
          *     [Docs](https://docs.litellm.ai/docs/decisions)
          */
@@ -40354,10 +40356,13 @@ export interface components {
             /** Name */
             name: string | null;
             /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
+             * Type
+             * @default box
+             * @constant
              */
             type: "box";
+        } & {
+            [key: string]: unknown;
         };
         /** OpenAIChoiceAnswer */
         OpenAIChoiceAnswer: {
@@ -40370,10 +40375,13 @@ export interface components {
             /** Probabilities */
             probabilities: components["schemas"]["OpenAIChoiceProbability"][];
             /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
+             * Type
+             * @default choice
+             * @constant
              */
             type: "choice";
+        } & {
+            [key: string]: unknown;
         };
         /** OpenAIChoiceProbability */
         OpenAIChoiceProbability: {
@@ -40381,6 +40389,8 @@ export interface components {
             probability: number;
             /** Value */
             value: string | boolean;
+        } & {
+            [key: string]: unknown;
         };
         /** OpenAIDecisionInputTokensDetails */
         OpenAIDecisionInputTokensDetails: {
@@ -40394,6 +40404,8 @@ export interface components {
              * @default 0
              */
             cached_tokens: number;
+        } & {
+            [key: string]: unknown;
         };
         /** OpenAIDecisionOutputTokensDetails */
         OpenAIDecisionOutputTokensDetails: {
@@ -40402,11 +40414,13 @@ export interface components {
              * @default 0
              */
             reasoning_tokens: number;
+        } & {
+            [key: string]: unknown;
         };
         /** OpenAIDecisionResponse */
         OpenAIDecisionResponse: {
             /** Answers */
-            answers: (components["schemas"]["OpenAIPredicateAnswer"] | components["schemas"]["OpenAIChoiceAnswer"] | components["schemas"]["OpenAIScoreAnswer"] | components["schemas"]["OpenAIBoxAnswer"] | components["schemas"]["OpenAIRefusalAnswer"])[];
+            answers: (components["schemas"]["OpenAIPredicateAnswer"] | components["schemas"]["OpenAIChoiceAnswer"] | components["schemas"]["OpenAIScoreAnswer"] | components["schemas"]["OpenAIBoxAnswer"] | components["schemas"]["OpenAIRefusalAnswer"] | components["schemas"]["OpenAIUnknownAnswer"])[];
             /** Model */
             model: string;
             usage: components["schemas"]["OpenAIDecisionUsage"];
@@ -40434,6 +40448,8 @@ export interface components {
             output_tokens_details: components["schemas"]["OpenAIDecisionOutputTokensDetails"];
             /** Total Tokens */
             total_tokens: number;
+        } & {
+            [key: string]: unknown;
         };
         /** OpenAIPredicateAnswer */
         OpenAIPredicateAnswer: {
@@ -40442,20 +40458,26 @@ export interface components {
             /** Probability */
             probability: number;
             /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
+             * Type
+             * @default predicate
+             * @constant
              */
             type: "predicate";
+        } & {
+            [key: string]: unknown;
         };
         /** OpenAIRefusalAnswer */
         OpenAIRefusalAnswer: {
             /** Name */
             name: string | null;
             /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
+             * Type
+             * @default refusal
+             * @constant
              */
             type: "refusal";
+        } & {
+            [key: string]: unknown;
         };
         /** OpenAIScoreAnswer */
         OpenAIScoreAnswer: {
@@ -40468,10 +40490,13 @@ export interface components {
             /** Score */
             score: number;
             /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
+             * Type
+             * @default score
+             * @constant
              */
             type: "score";
+        } & {
+            [key: string]: unknown;
         };
         /** OpenAIScoreProbability */
         OpenAIScoreProbability: {
@@ -40481,6 +40506,8 @@ export interface components {
             probability: number;
             /** Value */
             value: number;
+        } & {
+            [key: string]: unknown;
         };
         /** OpenAIToolSearchToolParam */
         OpenAIToolSearchToolParam: {
@@ -40491,6 +40518,15 @@ export interface components {
              * @constant
              */
             type: "tool_search";
+        };
+        /** OpenAIUnknownAnswer */
+        OpenAIUnknownAnswer: {
+            /** Name */
+            name?: string | null;
+            /** Type */
+            type: string;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * OpenIdConnectSecurityScheme

@@ -11,6 +11,7 @@ from litellm.decisions.call import (
     DecisionsCall,
     DecisionsImages,
     DecisionsVideoClips,
+    NativeOpenAIDecisionsCall,
     SystemOneQuestions,
     SystemOneRequestFields,
     asend,
@@ -39,7 +40,7 @@ def _prepare_systemone_call(
     custom_llm_provider: str | None,
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
-) -> DecisionsCall:
+) -> DecisionsCall | NativeOpenAIDecisionsCall:
     fields: Final = SystemOneRequestFields(
         state=state, questions=questions, images=images, assets=assets, audio=audio, videos=videos
     )

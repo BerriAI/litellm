@@ -134,12 +134,13 @@ _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
     ),
 )
 
+_OPENAI_RESPONSE_ANSWERS: Final[tuple[Mapping[str, object], ...]] = (
+    {"type": "predicate", "name": "is_defect", "probability": 0.9},
+    {"type": "refusal", "name": "sentiment"},
+)
 _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
     "model": "gpt-6-luna",
-    "answers": [
-        {"type": "predicate", "name": "is_defect", "probability": 0.9},
-        {"type": "refusal", "name": "sentiment"},
-    ],
+    "answers": list(_OPENAI_RESPONSE_ANSWERS),
     "usage": {
         "input_tokens": _INPUT_TOKENS,
         "input_tokens_details": {"cached_tokens": _CACHED_TOKENS, "cache_write_tokens": _CACHE_WRITE_TOKENS},
@@ -2364,22 +2365,20 @@ def openai_default_base(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
 
 
-@pytest.mark.usefixtures("cloudflare_account", "openai_default_base")
-@pytest.mark.parametrize(
-    ("model", "upstream"),
-    (("cloudflare/clef", f"{_CLOUDFLARE_RUN_URL}/clef"), ("openai/gpt-6-luna", _OPENAI_DECISIONS_URL)),
-    ids=("clef", "luna"),
-)
+@pytest.mark.usefixtures("cloudflare_account")
 @pytest.mark.parametrize("image_url", _MALFORMED_IMAGE_URLS, ids=_MALFORMED_IMAGE_URL_IDS)
 def test_malformed_input_image_urls_are_rejected_before_http(
-    model: str, upstream: str, image_url: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    image_url: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    route: Final = respx_mock.post(upstream).respond(json=_RESPONSE)
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
 
     with pytest.raises(litellm.BadRequestError, match=r"Invalid Decisions request: 1 input_image") as caught:
         litellm.decisions(
-            model=model, api_key="caller-key", input=_screen_messages(image_url), questions=_PREDICATE_QUESTIONS
+            model="cloudflare/clef",
+            api_key="caller-key",
+            input=_screen_messages(image_url),
+            questions=_PREDICATE_QUESTIONS,
         )
 
     assert caught.value.status_code == 400
@@ -4085,20 +4084,194 @@ async def test_an_openai_format_deployment_that_advertises_media_is_still_refuse
     assert not route.called
 
 
-def test_dropping_every_question_answers_400_before_http(respx_mock: respx.MockRouter) -> None:
-    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+@pytest.mark.usefixtures("openai_default_base")
+@pytest.mark.parametrize(
+    ("model", "upstream"),
+    (("perplexity/pplx-decider-v1-27b", _PERPLEXITY_DECISIONS_URL), ("openai/gpt-6-luna", _OPENAI_DECISIONS_URL)),
+    ids=("translated", "openai_native"),
+)
+def test_dropping_every_question_answers_400_before_http(
+    model: str, upstream: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(upstream).respond(json=_RESPONSE)
 
     with pytest.raises(litellm.BadRequestError, match="leaves no questions to answer") as caught:
         litellm.decisions(
-            model="perplexity/pplx-decider-v1-27b",
+            model=model,
             input="review",
             questions=[{"type": "box", "name": "crack", "instructions": "the crack on the screen"}],
             api_key="caller-key",
             drop_params=True,
+            model_info={"supports_box_questions": False},
         )
 
     assert caught.value.status_code == 400
     assert not route.called
+
+
+_NATIVE_OPENAI_INPUT: Final[tuple[Mapping[str, object], ...]] = (
+    {"type": "message", "role": "developer", "content": "Judge for the refunds team."},
+    {"role": "user", "content": [{"type": "input_json", "json": {"order": 1234, "status": "damaged"}}]},
+)
+_NATIVE_OPENAI_QUESTIONS: Final[tuple[Mapping[str, object], ...]] = (
+    {"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?", "rubric": "visible damage only"},
+    {"type": "ranking", "name": "remedy", "instructions": "Rank the remedies", "options": ["refund", "replace"]},
+)
+_NATIVE_OPENAI_FIELDS: Final[Mapping[str, object]] = MappingProxyType(
+    {"prompt_cache_key": "refunds-v2", "prompt_cache_options": {"retention": "24h"}}
+)
+_NATIVE_OPENAI_RESPONSE: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "id": "decision_123",
+        "model": "gpt-6-luna",
+        "answers": [
+            {"type": "predicate", "name": "is_defect", "probability": 0.9, "rationale": "The screen is cracked."},
+            {"type": "ranking", "name": "remedy", "ranking": ["refund", "replace"]},
+        ],
+        "usage": {
+            "input_tokens": _INPUT_TOKENS,
+            "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+            "output_tokens": _OUTPUT_TOKENS,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
+            "cost_details": {"total_usd": 0.0001},
+        },
+    }
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("openai_default_base")
+async def test_an_openai_deployment_behind_a_router_gets_the_caller_body_as_sent(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_OPENAI_DECISIONS_URL).respond(json=dict(_NATIVE_OPENAI_RESPONSE))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "decider",
+                "litellm_params": {
+                    "model": "openai/gpt-6-luna",
+                    "api_key": "deployment-key",
+                    "organization": "org-deployment",
+                    "drop_params": True,
+                    "timeout": 30,
+                    "max_retries": 0,
+                },
+                "model_info": {"id": "luna-deployment"},
+            }
+        ]
+    )
+
+    response: Final = await router.adecisions(
+        model="decider",
+        input=_NATIVE_OPENAI_INPUT,
+        questions=_NATIVE_OPENAI_QUESTIONS,
+        metadata={"trace": "caller"},
+        **_NATIVE_OPENAI_FIELDS,
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "gpt-6-luna",
+        "input": list(_NATIVE_OPENAI_INPUT),
+        "questions": list(_NATIVE_OPENAI_QUESTIONS),
+        **_NATIVE_OPENAI_FIELDS,
+    }
+    assert response.model_dump(mode="json") == _NATIVE_OPENAI_RESPONSE
+    assert response._hidden_params["custom_llm_provider"] == "openai"
+    assert response._hidden_params["provider_response_model"] == "openai/gpt-6-luna"
+
+
+@pytest.mark.parametrize(
+    "unsendable",
+    ({"prompt_cache_key": object()}, {"prompt_cache_options": {"tag": b"\xff\xfe"}}),
+    ids=("not_json", "not_utf8"),
+)
+@pytest.mark.usefixtures("openai_default_base")
+def test_a_caller_value_that_cannot_be_sent_as_json_is_a_client_error_before_http(
+    unsendable: Mapping[str, object], respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(_OPENAI_DECISIONS_URL).respond(json=dict(_NATIVE_OPENAI_RESPONSE))
+
+    with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request") as caught:
+        litellm.decisions(
+            model="openai/gpt-6-luna", api_key="caller-key", input="review", questions=_PREDICATE_QUESTIONS, **unsendable
+        )
+
+    assert caught.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.parametrize("is_async", (False, True), ids=("sync", "async"))
+@pytest.mark.parametrize(
+    "upstream_body",
+    (json.dumps({**_NATIVE_OPENAI_RESPONSE, "answers": "not a list"}).encode(), b"<html>busy</html>", b"[]"),
+    ids=("malformed_answers", "not_json", "not_an_object"),
+)
+@pytest.mark.usefixtures("openai_default_base")
+async def test_an_openai_response_litellm_cannot_parse_is_a_provider_error(
+    is_async: bool, upstream_body: bytes, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.post(_OPENAI_DECISIONS_URL).respond(content=upstream_body, headers={"content-type": "application/json"})
+    request: Final = {
+        "model": "openai/gpt-6-luna",
+        "api_key": "caller-key",
+        "input": "review",
+        "questions": _PREDICATE_QUESTIONS,
+    }
+
+    with pytest.raises(litellm.InternalServerError, match="returned an unexpected response"):
+        await litellm.adecisions(**request) if is_async else litellm.decisions(**request)
+
+
+_NATIVE_UNSUPPORTED_REQUESTS: Final[tuple[tuple[str, Mapping[str, object], Sequence[Mapping[str, object]]], ...]] = (
+    (
+        "box questions",
+        MappingProxyType({"questions": (dict(_CRACK_BOX_QUESTION), *_PREDICATE_QUESTIONS)}),
+        ({"type": "refusal", "name": "crack"}, *_OPENAI_RESPONSE_ANSWERS),
+    ),
+    (
+        "audio",
+        MappingProxyType({"questions": _PREDICATE_QUESTIONS, "audio": _AUDIO_CLIPS}),
+        _OPENAI_RESPONSE_ANSWERS,
+    ),
+)
+_NATIVE_UNSUPPORTED_IDS: Final = ("box", "audio")
+
+
+@pytest.mark.usefixtures("openai_default_base")
+@pytest.mark.parametrize(
+    ("param", "request_kwargs", "answers"), _NATIVE_UNSUPPORTED_REQUESTS, ids=_NATIVE_UNSUPPORTED_IDS
+)
+def test_an_openai_deployment_refuses_what_it_cannot_take_unless_it_drops_params(
+    param: str,
+    request_kwargs: Mapping[str, object],
+    answers: Sequence[Mapping[str, object]],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_OPENAI_DECISIONS_URL).respond(json=_OPENAI_RESPONSE)
+    send: Final = partial(
+        litellm.decisions,
+        model="openai/gpt-6-luna",
+        api_key="caller-key",
+        input="review",
+        model_info={"supports_box_questions": False},
+        **request_kwargs,
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=rf"\['{param}'\].*drop_params") as caught:
+        send()
+    assert caught.value.status_code == 400
+    assert not route.called
+
+    response: Final = send(drop_params=True)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "gpt-6-luna",
+        "input": "review",
+        "questions": list(_PREDICATE_QUESTIONS),
+    }
+    assert response.model_dump(mode="json")["answers"] == list(answers)
 
 
 @pytest.mark.asyncio

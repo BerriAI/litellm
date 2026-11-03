@@ -3,7 +3,18 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import AfterValidator, ConfigDict, Field, PrivateAttr, field_validator, model_validator, with_config
+from pydantic import (
+    AfterValidator,
+    ConfigDict,
+    Discriminator,
+    Field,
+    PrivateAttr,
+    Tag,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+    with_config,
+)
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -416,14 +427,14 @@ class OpenAIPredicateAnswer(LiteLLMPydanticObjectBase):
     name: str | None
     probability: float
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class OpenAIChoiceProbability(LiteLLMPydanticObjectBase):
     value: str | bool
     probability: float
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class OpenAIChoiceAnswer(LiteLLMPydanticObjectBase):
@@ -433,7 +444,7 @@ class OpenAIChoiceAnswer(LiteLLMPydanticObjectBase):
     probabilities: tuple[OpenAIChoiceProbability, ...]
     confidence: float | None = None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class OpenAIScoreProbability(LiteLLMPydanticObjectBase):
@@ -441,7 +452,7 @@ class OpenAIScoreProbability(LiteLLMPydanticObjectBase):
     label: str
     probability: float
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class OpenAIScoreAnswer(LiteLLMPydanticObjectBase):
@@ -451,14 +462,14 @@ class OpenAIScoreAnswer(LiteLLMPydanticObjectBase):
     probabilities: tuple[OpenAIScoreProbability, ...]
     confidence: float | None = None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class OpenAIRefusalAnswer(LiteLLMPydanticObjectBase):
     type: Literal["refusal"] = "refusal"
     name: str | None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class OpenAIBoxAnswer(LiteLLMPydanticObjectBase):
@@ -467,12 +478,43 @@ class OpenAIBoxAnswer(LiteLLMPydanticObjectBase):
     box: DecisionsBox
     confidence: float | None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIUnknownAnswer(LiteLLMPydanticObjectBase):
+    type: str
+    name: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+_KNOWN_OPENAI_ANSWER_TYPES: Final = frozenset({"predicate", "choice", "score", "box", "refusal"})
+
+
+class _TaggedAnswer(TypedDict, total=False):
+    type: ReadOnly[object]
+
+
+_TAGGED_ANSWER_ADAPTER: Final[TypeAdapter[_TaggedAnswer]] = TypeAdapter(_TaggedAnswer)
+
+
+def _openai_answer_tag(answer: object) -> str:
+    answer_type: Final = (
+        _TAGGED_ANSWER_ADAPTER.validate_python(answer).get("type")
+        if isinstance(answer, Mapping)
+        else getattr(answer, "type", None)
+    )
+    return answer_type if isinstance(answer_type, str) and answer_type in _KNOWN_OPENAI_ANSWER_TYPES else "unknown"
 
 
 OpenAIDecisionAnswer: TypeAlias = Annotated[
-    OpenAIPredicateAnswer | OpenAIChoiceAnswer | OpenAIScoreAnswer | OpenAIBoxAnswer | OpenAIRefusalAnswer,
-    Field(discriminator="type"),
+    Annotated[OpenAIPredicateAnswer, Tag("predicate")]
+    | Annotated[OpenAIChoiceAnswer, Tag("choice")]
+    | Annotated[OpenAIScoreAnswer, Tag("score")]
+    | Annotated[OpenAIBoxAnswer, Tag("box")]
+    | Annotated[OpenAIRefusalAnswer, Tag("refusal")]
+    | Annotated[OpenAIUnknownAnswer, Tag("unknown")],
+    Discriminator(_openai_answer_tag),
 ]
 
 
@@ -480,13 +522,13 @@ class OpenAIDecisionInputTokensDetails(LiteLLMPydanticObjectBase):
     cached_tokens: int = 0
     cache_write_tokens: int = 0
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class OpenAIDecisionOutputTokensDetails(LiteLLMPydanticObjectBase):
     reasoning_tokens: int = 0
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class OpenAIDecisionUsage(LiteLLMPydanticObjectBase):
@@ -496,7 +538,7 @@ class OpenAIDecisionUsage(LiteLLMPydanticObjectBase):
     output_tokens_details: OpenAIDecisionOutputTokensDetails = OpenAIDecisionOutputTokensDetails()
     total_tokens: int
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class OpenAIDecisionResponse(_HiddenParamsResponse):
