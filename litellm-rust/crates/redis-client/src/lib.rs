@@ -7,6 +7,7 @@ mod error;
 mod events;
 mod namespace;
 mod pipeline;
+mod pubsub;
 mod script;
 
 pub use batch::{Declared, RedisBatch};

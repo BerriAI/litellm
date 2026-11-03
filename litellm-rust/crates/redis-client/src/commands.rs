@@ -55,6 +55,10 @@ pub(crate) fn ping() -> Cmd {
     redis::cmd("PING")
 }
 
+pub(crate) fn publish(channel: &str, payload: &[u8]) -> Cmd {
+    redis::cmd("PUBLISH").arg(channel).arg(payload).to_owned()
+}
+
 pub(crate) fn get(key: String) -> Cmd {
     redis::cmd("GET").arg(key).to_owned()
 }

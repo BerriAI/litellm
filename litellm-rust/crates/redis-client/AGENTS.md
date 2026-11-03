@@ -38,6 +38,14 @@
 - Pipeline ops take one key each. A multi-key op would span slots inside one group
 - Command builders live in `commands.rs` and are shared by `RedisClient` and `Pipeline`, so a command is written once
 
+## Pub/sub
+- Classic `PUBLISH` / `SUBSCRIBE`, never sharded, since redis-py publishes and subscribes through one plain client and cluster broadcasts classic messages to every node. Payloads are raw bytes, and the codec belongs to the store that owns the channel
+- Channel names never get the namespace. Python builds `{namespace}:{channel}` itself, so the store does too
+- `publish` is a command like any other, guarded by the breaker and reported to events
+- `subscribe` returns a `Stream` that opens its own RESP3 connection when first polled, to the endpoint, the first reachable cluster node, or the master Sentinel names at that moment. It never touches the breaker or events, like Python's subscriber, which reads off its own connection
+- After a lost connection or a failed subscribe it waits and resubscribes, 5s doubling to 60s and reset by a successful subscribe, like `AuthCacheInvalidationSubscriber._run`. Messages published while it is down are lost. The connection has no idle ping, so a socket that dies silently is only noticed by TCP
+- RESP3 needs Redis 6 or newer, while redis-py 5.3.1 subscribes over RESP2. redis-rs's RESP2 `PubSub` takes no credentials provider, timeouts or TCP_NODELAY
+
 ## Batches
 - `RedisBatch` declares ops now and sends them later as one `Pipeline`, so it inherits every pipeline rule above. It knows nothing about requests. The host that owns a request (Axum handler, pyo3 adapter) builds one and passes it down as a value, never through a task-local
 - Each op returns a `Declared<T>` backed by a oneshot. `flush` sends everything declared so far, one flush at a time, and an empty flush makes no round trip. `resolve` flushes only when its op has not gone out yet, so an op declared after another caller resolved costs a second round trip. Stages that know their reads up front declare all of them and call `flush` once

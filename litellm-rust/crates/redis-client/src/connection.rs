@@ -234,20 +234,13 @@ impl SentinelConnection {
                 .set_client_to_sentinel_certificates(config::tls_certificates(tls)?),
             None => builder,
         };
-        let config = AsyncConnectionConfig::new()
-            .set_connection_timeout(Some(timeouts.connect))
-            .set_response_timeout(Some(timeouts.response));
-        let config = match credentials {
-            Credentials::Provider(provider) => config.set_credentials_provider(provider.clone()),
-            Credentials::Static { .. } => config,
-        };
         Ok(Self(Arc::new(SentinelState {
             discovery: tokio::sync::Mutex::new(builder.build()?),
             current: Mutex::new(None),
             generations: AtomicU64::new(0),
             endpoint: endpoint.clone(),
             credentials: credentials.clone(),
-            config,
+            config: async_config(credentials, timeouts),
             connect_timeout: timeouts.connect,
         })))
     }
@@ -268,11 +261,9 @@ impl SentinelConnection {
         if let Some(current) = self.cached() {
             return Ok(current);
         }
-        let master = tokio::time::timeout(self.0.connect_timeout, discovery.async_get_client())
-            .await
-            .map_err(|_| timed_out("asking the Sentinels for the master timed out"))??;
         let connection = self
-            .master_client(master.get_connection_info().addr())?
+            .discover(&mut discovery)
+            .await?
             .get_multiplexed_async_connection_with_config(&self.0.config)
             .await?;
         let mut current = self
@@ -283,6 +274,17 @@ impl SentinelConnection {
         let generation = self.0.generations.fetch_add(1, Ordering::Relaxed);
         *current = Some((generation, connection.clone()));
         Ok((generation, connection))
+    }
+
+    pub(crate) async fn master(&self) -> RedisResult<redis::Client> {
+        self.discover(&mut *self.0.discovery.lock().await).await
+    }
+
+    async fn discover(&self, discovery: &mut SentinelClient) -> RedisResult<redis::Client> {
+        let master = tokio::time::timeout(self.0.connect_timeout, discovery.async_get_client())
+            .await
+            .map_err(|_| timed_out("asking the Sentinels for the master timed out"))??;
+        self.master_client(master.get_connection_info().addr())
     }
 
     fn master_client(&self, master: &ConnectionAddr) -> Result<redis::Client, RedisError> {
@@ -330,6 +332,16 @@ impl SentinelConnection {
         {
             *current = None;
         }
+    }
+}
+
+pub(crate) fn async_config(credentials: &Credentials, timeouts: Timeouts) -> AsyncConnectionConfig {
+    let config = AsyncConnectionConfig::new()
+        .set_connection_timeout(Some(timeouts.connect))
+        .set_response_timeout(Some(timeouts.response));
+    match credentials {
+        Credentials::Provider(provider) => config.set_credentials_provider(provider.clone()),
+        Credentials::Static { .. } => config,
     }
 }
 
