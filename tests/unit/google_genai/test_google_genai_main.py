@@ -4,7 +4,7 @@ Test to verify the Google GenAI generate_content adapter functionality
 """
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Final
 
 import pytest
@@ -382,3 +382,374 @@ async def test_vertex_generate_content_spend_follows_the_deployment_location(
     recorded: Final = await _logged_vertex_generate_content_cost(location, stream=stream)
 
     assert recorded == pytest.approx(expected), (location, stream)
+
+
+class _WireCapture:
+    def __init__(self, url: str) -> None:
+        self.url: Final = url
+        self._items: Final[list[tuple[str, Mapping[str, str]]]] = []  # mutable-ok: test wire log
+
+    def record(self, path: str, headers: Mapping[str, str]) -> None:
+        self._items.append((path, headers))
+
+    @property
+    def requests(self) -> tuple[tuple[str, Mapping[str, str]], ...]:
+        return tuple(self._items)
+
+
+def _mock_wire_reply(path: str, stream_requested: bool) -> tuple[bytes, str]:
+    if "streamGenerateContent" in path:
+        return (
+            b'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"pong"}]},'
+            b'"finishReason":"STOP"}],'
+            b'"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":1,"totalTokenCount":5}}\n\n',
+            "text/event-stream",
+        )
+    if ":generateContent" in path:
+        return (
+            b'{"candidates":[{"content":{"role":"model","parts":[{"text":"pong"}]},'
+            b'"finishReason":"STOP"}],'
+            b'"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":1,"totalTokenCount":5}}',
+            "application/json",
+        )
+    if stream_requested:
+        return (
+            b'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,'
+            b'"model":"gpt-4o-mini","choices":[{"index":0,'
+            b'"delta":{"role":"assistant","content":"pong"},"finish_reason":"stop"}]}\n\n'
+            b"data: [DONE]\n\n",
+            "text/event-stream",
+        )
+    return (
+        b'{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"gpt-4o-mini",'
+        b'"choices":[{"index":0,"message":{"role":"assistant","content":"pong"},'
+        b'"finish_reason":"stop"}],'
+        b'"usage":{"prompt_tokens":4,"completion_tokens":1,"total_tokens":5}}',
+        "application/json",
+    )
+
+
+@pytest.fixture
+def header_capture_wire() -> Iterator[_WireCapture]:
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    holder: Final[list[_WireCapture]] = []  # mutable-ok: single-slot fixture bootstrap reference
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            length: Final = int(self.headers.get("Content-Length", "0"))
+            raw_body: Final = self.rfile.read(length)
+            lowered_headers: Final = {k.lower(): v for k, v in self.headers.items()}
+            holder[0].record(self.path, lowered_headers)
+
+            payload: Final = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+            reply: Final = _mock_wire_reply(self.path, bool(payload.get("stream")))
+            body: Final = reply[0]
+            content_type: Final = reply[1]
+
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    host: Final = server.server_address[0]
+    port: Final = server.server_address[1]
+    host_str: Final = host.decode("ascii") if isinstance(host, bytes) else host
+    capture: Final = _WireCapture(f"http://{host_str}:{port}")
+    holder.append(capture)
+    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield capture
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _extract_chunk_texts(payload: object) -> tuple[str, ...]:
+    from pydantic import TypeAdapter
+
+    obj_map: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
+    map_seq: Final = TypeAdapter[tuple[Mapping[str, object], ...]](tuple[Mapping[str, object], ...])
+    parsed: Final = obj_map.validate_python(payload.model_dump() if hasattr(payload, "model_dump") else payload)
+    candidates: Final = map_seq.validate_python(parsed.get("candidates", ()))
+    if not candidates:
+        return ()
+    content: Final = obj_map.validate_python(candidates[0].get("content", {}))
+    parts: Final = map_seq.validate_python(content.get("parts", ()))
+    return tuple(str(part["text"]) for part in parts if isinstance(part.get("text"), str) and part["text"])
+
+
+def _sse_payload_texts(line: str) -> tuple[str, ...]:
+    if not line.startswith("data: "):
+        return ()
+    payload: Final = line[6:].strip()
+    if not payload or payload == "[DONE]":
+        return ()
+    return _extract_chunk_texts(json.loads(payload))
+
+
+def _chunk_sse_texts(raw: bytes) -> tuple[str, ...]:
+    from itertools import chain
+
+    return tuple(chain.from_iterable(_sse_payload_texts(line) for line in raw.decode("utf-8").splitlines()))
+
+
+def _extract_sse_texts(chunks: tuple[bytes, ...]) -> tuple[str, ...]:
+    from itertools import chain
+
+    return tuple(chain.from_iterable(_chunk_sse_texts(raw) for raw in chunks))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entrypoint",
+    ["sync", "async", "sync_stream", "async_stream"],
+)
+async def test_native_generate_content_forwards_client_headers(
+    header_capture_wire: _WireCapture,
+    entrypoint: str,
+) -> None:
+    from collections.abc import AsyncIterator
+
+    from pydantic import TypeAdapter
+
+    from litellm.google_genai.main import (
+        agenerate_content,
+        agenerate_content_stream,
+        generate_content,
+        generate_content_stream,
+    )
+
+    contents: Final = [{"role": "user", "parts": [{"text": "ping"}]}]
+    forwarded: Final = {"x-team-id": "platform", "x-trace-tag": f"native-{entrypoint}"}
+
+    if entrypoint == "sync":
+        resp: Final = generate_content(
+            model="gemini/gemini-2.0-flash",
+            contents=contents,
+            api_base=header_capture_wire.url,
+            api_key="gemini-secret",
+            headers=forwarded,
+        )
+        assert _extract_chunk_texts(resp) == ("pong",)
+    elif entrypoint == "async":
+        async_resp: Final = await agenerate_content(
+            model="gemini/gemini-2.0-flash",
+            contents=contents,
+            api_base=header_capture_wire.url,
+            api_key="gemini-secret",
+            headers=forwarded,
+        )
+        assert _extract_chunk_texts(async_resp) == ("pong",)
+    elif entrypoint == "sync_stream":
+        sync_stream: Final = generate_content_stream(
+            model="gemini/gemini-2.0-flash",
+            contents=contents,
+            api_base=header_capture_wire.url,
+            api_key="gemini-secret",
+            headers=forwarded,
+        )
+        assert isinstance(sync_stream, Iterator)
+        sync_chunks: Final = tuple(TypeAdapter(bytes).validate_python(chunk) for chunk in sync_stream)
+        assert _extract_sse_texts(sync_chunks) == ("pong",)
+    else:
+        async_stream: Final = await agenerate_content_stream(
+            model="gemini/gemini-2.0-flash",
+            contents=contents,
+            api_base=header_capture_wire.url,
+            api_key="gemini-secret",
+            headers=forwarded,
+        )
+        assert isinstance(async_stream, AsyncIterator)
+        async_chunks: Final = tuple([TypeAdapter(bytes).validate_python(chunk) async for chunk in async_stream])
+        assert _extract_sse_texts(async_chunks) == ("pong",)
+
+    assert len(header_capture_wire.requests) == 1
+    wire_headers: Final = header_capture_wire.requests[0][1]
+    assert wire_headers["x-goog-api-key"] == "gemini-secret"
+    assert wire_headers["x-team-id"] == "platform"
+    assert wire_headers["x-trace-tag"] == f"native-{entrypoint}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entrypoint",
+    ["sync", "async", "sync_stream", "async_stream"],
+)
+async def test_adapter_generate_content_forwards_client_headers(
+    header_capture_wire: _WireCapture,
+    entrypoint: str,
+) -> None:
+    from collections.abc import AsyncIterator
+
+    from pydantic import TypeAdapter
+
+    from litellm.google_genai.main import (
+        agenerate_content,
+        agenerate_content_stream,
+        generate_content,
+        generate_content_stream,
+    )
+
+    contents: Final = [{"role": "user", "parts": [{"text": "ping"}]}]
+    forwarded: Final = {
+        "x-team-id": "platform",
+        "anthropic-beta": "context-1m-2025-08-07",
+        "x-trace-tag": f"adapter-{entrypoint}",
+    }
+
+    if entrypoint == "sync":
+        resp: Final = generate_content(
+            model="openai/gpt-4o-mini",
+            contents=contents,
+            api_base=f"{header_capture_wire.url}/v1",
+            api_key="openai-secret",
+            headers=forwarded,
+        )
+        assert _extract_chunk_texts(resp) == ("pong",)
+    elif entrypoint == "async":
+        async_resp: Final = await agenerate_content(
+            model="openai/gpt-4o-mini",
+            contents=contents,
+            api_base=f"{header_capture_wire.url}/v1",
+            api_key="openai-secret",
+            headers=forwarded,
+        )
+        assert _extract_chunk_texts(async_resp) == ("pong",)
+    elif entrypoint == "sync_stream":
+        sync_stream: Final = generate_content_stream(
+            model="openai/gpt-4o-mini",
+            contents=contents,
+            api_base=f"{header_capture_wire.url}/v1",
+            api_key="openai-secret",
+            headers=forwarded,
+        )
+        assert isinstance(sync_stream, AsyncIterator)
+        sync_chunks: Final = tuple([TypeAdapter(bytes).validate_python(chunk) async for chunk in sync_stream])
+        assert _extract_sse_texts(sync_chunks) == ("pong",)
+    else:
+        async_stream: Final = await agenerate_content_stream(
+            model="openai/gpt-4o-mini",
+            contents=contents,
+            api_base=f"{header_capture_wire.url}/v1",
+            api_key="openai-secret",
+            headers=forwarded,
+        )
+        assert isinstance(async_stream, AsyncIterator)
+        async_chunks: Final = tuple([TypeAdapter(bytes).validate_python(chunk) async for chunk in async_stream])
+        assert _extract_sse_texts(async_chunks) == ("pong",)
+
+    assert len(header_capture_wire.requests) == 1
+    req_path: Final = header_capture_wire.requests[0][0]
+    wire_headers: Final = header_capture_wire.requests[0][1]
+    assert req_path == "/v1/chat/completions"
+    assert wire_headers["authorization"] == "Bearer openai-secret"
+    assert wire_headers["x-team-id"] == "platform"
+    assert wire_headers["anthropic-beta"] == "context-1m-2025-08-07"
+    assert wire_headers["x-trace-tag"] == f"adapter-{entrypoint}"
+
+
+@pytest.mark.parametrize("target", ["native", "adapter"])
+def test_extra_headers_override_forwarded_client_headers_case_insensitively(
+    header_capture_wire: _WireCapture,
+    target: str,
+) -> None:
+    from litellm.google_genai.main import _merge_client_forwarded_headers, generate_content
+
+    forwarded: Final = {"x-custom": "from-proxy", "x-only-proxy": "proxy-val"}
+    explicit: Final = {"X-Custom": "from-caller", "X-Only-Caller": "caller-val"}
+
+    resp: Final = generate_content(
+        model="gemini/gemini-2.0-flash" if target == "native" else "openai/gpt-4o-mini",
+        contents=[{"role": "user", "parts": [{"text": "ping"}]}],
+        api_base=header_capture_wire.url if target == "native" else f"{header_capture_wire.url}/v1",
+        api_key="test-secret",
+        headers=forwarded,
+        extra_headers=explicit,
+    )
+
+    assert _extract_chunk_texts(resp) == ("pong",)
+    assert forwarded == {"x-custom": "from-proxy", "x-only-proxy": "proxy-val"}
+    assert explicit == {"X-Custom": "from-caller", "X-Only-Caller": "caller-val"}
+    assert len(header_capture_wire.requests) == 1
+    wire_headers: Final = header_capture_wire.requests[0][1]
+    assert wire_headers["x-custom"] == "from-caller"
+    assert wire_headers["x-only-proxy"] == "proxy-val"
+    assert wire_headers["x-only-caller"] == "caller-val"
+
+    assert _merge_client_forwarded_headers(None, None) is None
+    assert _merge_client_forwarded_headers(None, {}) is None
+    assert _merge_client_forwarded_headers({}, None) == {}
+    source_extra: Final = {"x-b": "2"}
+    merged_extra: Final = _merge_client_forwarded_headers(source_extra, None)
+    assert merged_extra == {"x-b": "2"} and merged_extra is not source_extra
+    source_headers: Final = {"x-a": "1"}
+    merged_only: Final = _merge_client_forwarded_headers(None, source_headers)
+    assert merged_only == {"x-a": "1"} and merged_only is not source_headers
+    assert _merge_client_forwarded_headers({}, {"x-a": "1"}) == {"x-a": "1"}
+    assert _merge_client_forwarded_headers({"X-Custom": "from-caller"}, {"x-custom": "from-proxy"}) == {
+        "X-Custom": "from-caller"
+    }
+    assert _merge_client_forwarded_headers({"x-b": "2"}, "not-a-mapping") == {"x-b": "2"}
+    assert _merge_client_forwarded_headers(None, "not-a-mapping") is None
+
+
+@pytest.mark.asyncio
+async def test_proxy_forwarded_headers_reach_generate_content_without_leaking_proxy_auth(
+    header_capture_wire: _WireCapture,
+) -> None:
+    from starlette.datastructures import Headers
+
+    from litellm.google_genai.main import agenerate_content
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, clean_headers
+
+    incoming_headers: Final = Headers(
+        {
+            "x-goog-api-key": "sk-litellm-virtual-key",
+            "authorization": "Bearer sk-litellm-virtual-key",
+            "x-cost-center": "core-platform",
+            "x-request-org": "acme",
+            "user-agent": "google-genai-sdk/1.0",
+        }
+    )
+    cleaned: Final = clean_headers(
+        incoming_headers,
+        litellm_key_header_name=None,
+        forward_llm_provider_auth_headers=False,
+        authenticated_with_header="x-goog-api-key",
+    )
+    request_data: Final[Mapping[str, object]] = {
+        "model": "gemini/gemini-2.0-flash",
+        "contents": [{"role": "user", "parts": [{"text": "ping"}]}],
+    }
+    backend_data: Final = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers=cleaned,
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
+        general_settings={"forward_client_headers_to_llm_api": True},
+    )
+
+    resp: Final = await agenerate_content(
+        model="gemini/gemini-2.0-flash",
+        contents=request_data["contents"],
+        api_base=header_capture_wire.url,
+        api_key="real-upstream-gemini-key",
+        headers=backend_data.get("headers"),
+    )
+
+    assert _extract_chunk_texts(resp) == ("pong",)
+    assert len(header_capture_wire.requests) == 1
+    wire_headers: Final = header_capture_wire.requests[0][1]
+    assert wire_headers["x-goog-api-key"] == "real-upstream-gemini-key"
+    assert wire_headers["x-cost-center"] == "core-platform"
+    assert wire_headers["x-request-org"] == "acme"
+    assert "authorization" not in wire_headers
