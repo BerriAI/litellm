@@ -563,7 +563,19 @@ def _namespace_members_or_tool(tool: JsonValue) -> tuple[JsonValue, ...]:
     if not isinstance(tool, dict) or tool.get("type") != "namespace":
         return (tool,)
     members: Final = tool.get("tools")
-    return tuple(map(_as_chat_tool, members)) if isinstance(members, list) else ()
+    return _members_named_once(tuple(map(_as_chat_tool, members))) if isinstance(members, list) else ()
+
+
+def _members_named_once(
+    members: tuple[JsonValue, ...], repeatable: frozenset[str] = frozenset()
+) -> tuple[JsonValue, ...]:
+    names: Final = tuple(map(declared_function_name, members))
+    first_index: Final = {name: index for index, name in reversed(tuple(enumerate(names)))}
+    return tuple(
+        member
+        for index, (member, name) in enumerate(zip(members, names, strict=True))
+        if name is None or name in repeatable or first_index[name] == index
+    )
 
 
 def _is_namespace(tool: JsonValue) -> bool:
@@ -598,20 +610,31 @@ def _qualified_member(namespace: str, member: JsonValue) -> JsonValue:
     return {**member, "function": {**function, "name": qualified_member_name(namespace, name)}}
 
 
-def _as_declared(tool: JsonValue, declarable: Counter[str | None]) -> tuple[JsonValue, ...]:
+def _as_declared(
+    tool: JsonValue, declarable: Counter[str | None], top_level_names: frozenset[str]
+) -> tuple[JsonValue, ...]:
     if _inlines_members(tool, declarable):
         return _namespace_members_or_tool(tool)
     namespace: Final = declared_function_name(tool)
     if not _is_namespace(tool) or namespace is None:
         return (tool,)
-    return tuple(_qualified_member(namespace, member) for member in _namespace_members_or_tool(tool))
+    qualified: Final = (_qualified_member(namespace, member) for member in _namespace_members_or_tool(tool))
+    return tuple(member for member in qualified if declared_function_name(member) not in top_level_names)
+
+
+def _top_level_names_in(tools: tuple[JsonValue, ...]) -> frozenset[str]:
+    top_level_tools: Final = (tool for tool in tools if not _is_namespace(tool))
+    return frozenset(name for name in map(declared_function_name, top_level_tools) if name is not None)
 
 
 def _with_namespace_members_inlined(tools: JsonValue, outside_declarations: JsonValue = None) -> JsonValue:
     if not isinstance(tools, list) or not any(map(_is_namespace, tools)):
         return tools
-    declarable: Final = Counter(_declarable_names_in((*tools, *_listed(outside_declarations))))
-    return list(chain.from_iterable(_as_declared(tool, declarable) for tool in tools))
+    candidates: Final = (*tools, *_listed(outside_declarations))
+    declarable: Final = Counter(_declarable_names_in(candidates))
+    top_level_names: Final = _top_level_names_in(candidates)
+    declared: Final = chain.from_iterable(_as_declared(tool, declarable, top_level_names) for tool in tools)
+    return list(_members_named_once(tuple(declared), top_level_names))
 
 
 def _qualified_names_of(member_name: str, tool: JsonValue, declarable: Counter[str | None]) -> tuple[str, ...]:
@@ -629,7 +652,7 @@ def _forced_function_names(name: str, tools: JsonValue) -> tuple[str, ...]:
     declarable: Final = Counter(_declarable_names_in(candidates))
     named: Final = next((tool for tool in candidates if _is_namespace(tool) and _member_name_of(tool) == name), None)
     if named is not None:
-        declared: Final = map(declared_function_name, _as_declared(named, declarable))
+        declared: Final = map(declared_function_name, _as_declared(named, declarable, frozenset()))
         return tuple(member for member in declared if member is not None) or (name,)
     qualified: Final = chain.from_iterable(_qualified_names_of(name, tool, declarable) for tool in candidates)
     return tuple(qualified) or (name,)

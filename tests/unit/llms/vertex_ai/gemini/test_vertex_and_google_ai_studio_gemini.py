@@ -1836,12 +1836,8 @@ _TOP_LEVEL_GET_WEATHER = {"type": "function", "function": {k: v for k, v in _GET
         ),
         ([_TOP_LEVEL_GET_WEATHER, _WEATHER_NAMESPACE], ["get_weather", "weather__get_weather"]),
         ([_WEATHER_NAMESPACE, _TOP_LEVEL_GET_WEATHER], ["weather__get_weather", "get_weather"]),
-        (
-            [{"type": "namespace", "name": "delete_db", "tools": [_GET_WEATHER, _GET_WEATHER]}],
-            ["delete_db__get_weather", "delete_db__get_weather"],
-        ),
     ],
-    ids=["namespaces_share_a_member", "top_level_first", "namespace_first", "namespace_repeats_a_member"],
+    ids=["namespaces_share_a_member", "top_level_first", "namespace_first"],
 )
 def test_vertex_ai_map_tools_declares_qualified_member_names_when_another_tool_declares_a_member_name(
     tools: list[dict], declared: list[str]
@@ -1849,6 +1845,55 @@ def test_vertex_ai_map_tools_declares_qualified_member_names_when_another_tool_d
     mapped = VertexGeminiConfig().map_function(value=tools, optional_params={})
 
     assert [declaration["name"] for declaration in mapped[0]["function_declarations"]] == declared
+
+
+def test_vertex_ai_map_tools_declares_a_member_a_namespace_lists_twice_once_from_its_first_entry() -> None:
+    first = {**_GET_WEATHER, "description": "Current weather"}
+    repeat = {**_GET_WEATHER, "description": "Forecast"}
+    namespace = {"type": "namespace", "name": "weather", "tools": [first, repeat]}
+
+    mapped = VertexGeminiConfig().map_function(value=[namespace], optional_params={})
+
+    declarations = mapped[0]["function_declarations"]
+    assert [(declaration["name"], declaration["description"]) for declaration in declarations] == [
+        ("get_weather", "Current weather")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tools", "declared"),
+    [
+        (
+            [
+                _WEATHER_NAMESPACE,
+                _TOP_LEVEL_GET_WEATHER,
+                {"type": "function", "function": {"name": "weather__get_weather", "description": "Top level"}},
+            ],
+            [("get_weather", None), ("weather__get_weather", "Top level")],
+        ),
+        (
+            [
+                {"type": "namespace", "name": "mcp__ops", "tools": [{"type": "function", "name": "exec"}]},
+                {"type": "namespace", "name": "mcp", "tools": [{"type": "function", "name": "ops__exec"}]},
+                {"type": "function", "function": {"name": "exec"}},
+                {"type": "function", "function": {"name": "ops__exec"}},
+            ],
+            [("mcp__ops__exec", None), ("exec", None), ("ops__exec", None)],
+        ),
+        (
+            [_TOP_LEVEL_GET_WEATHER, _TOP_LEVEL_GET_WEATHER, _WEATHER_NAMESPACE],
+            [("get_weather", None), ("get_weather", None), ("weather__get_weather", None)],
+        ),
+    ],
+    ids=["top_level_function_has_the_qualified_name", "namespaces_build_one_qualified_name", "client_repeats_a_function"],
+)
+def test_vertex_ai_map_tools_never_repeats_a_generated_name(
+    tools: list[dict], declared: list[tuple[str, str | None]]
+) -> None:
+    mapped = VertexGeminiConfig().map_function(value=tools, optional_params={})
+
+    declarations = mapped[0]["function_declarations"]
+    assert [(declaration["name"], declaration.get("description")) for declaration in declarations] == declared
 
 
 def test_vertex_ai_map_openai_params_declares_qualified_member_names_when_functions_repeat_a_member() -> None:

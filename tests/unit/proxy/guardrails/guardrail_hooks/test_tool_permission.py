@@ -707,6 +707,37 @@ class TestToolPermissionGuardrail:
         assert [call.function.name for call in response.choices[0].message.tool_calls or ()] == kept
 
     @pytest.mark.asyncio
+    async def test_post_call_judges_a_top_level_function_by_its_own_name_beside_a_member_qualified_the_same(
+        self,
+    ) -> None:
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="post-exec",
+            rules=[{"id": "deny_exec", "tool_name": r"^exec$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        namespace = {"type": "namespace", "name": "ops", "tools": [{"type": "function", "name": "exec"}]}
+        top_level = {"type": "function", "function": {"name": "ops__exec"}}
+        function = Function(name="ops__exec", arguments="{}")
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    message={"tool_calls": [{"id": "call_ops", "type": "function", "function": function}]},
+                )
+            ]
+        )
+
+        await guardrail.async_post_call_success_hook(
+            data={"guardrails": ["post-exec"], "tools": [namespace, top_level]},
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=response,
+        )
+
+        assert [call.function.name for call in response.choices[0].message.tool_calls or ()] == ["ops__exec"]
+
+    @pytest.mark.asyncio
     async def test_async_post_call_success_hook_missing_arguments_blocks_param_rule(
         self,
     ):

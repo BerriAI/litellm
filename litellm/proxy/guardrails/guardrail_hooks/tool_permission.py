@@ -1015,7 +1015,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         returned_members: Final = _grouped_values(
             chain(
                 ((bare, (name, bare)) for name, bare in member_names if bare not in top_level_names),
-                ((name, (name, bare)) for name, bare in member_names),
+                ((name, (name, bare)) for name, bare in member_names if name not in top_level_names),
             )
         )
         return MappingProxyType(
