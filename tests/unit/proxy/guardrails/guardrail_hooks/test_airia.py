@@ -229,6 +229,57 @@ async def test_an_mcp_evaluation_does_not_mark_the_next_model_evaluation_as_a_to
     assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "marker",
+    [
+        {"mcp_tool_name": "send_email"},
+        {"mcp_tool_call_metadata": {"name": "send_email", "arguments": {}}},
+        {"metadata": {"mcp_tool_name": "send_email"}},
+    ],
+)
+async def test_client_supplied_mcp_markers_do_not_mark_model_traffic_as_a_tool_call(
+    marker: dict[str, object],
+) -> None:
+    guardrail: Final = _make_guardrail_with_response({"action": "NONE"}, event_hook="pre_call", default_on=True)
+
+    await UnifiedLLMGuardrails().async_pre_call_hook(  # pyright: ignore[reportUnknownMemberType]  # annotates data as a bare dict
+        user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+        cache=DualCache(),
+        data={"guardrail_to_apply": guardrail, "messages": [{"role": "user", "content": "hello"}], **marker},
+        call_type="completion",
+    )
+
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_hook_that_does_not_run_leaves_no_marker_for_the_next_evaluation() -> None:
+    guardrail: Final = _make_guardrail_with_response({"action": "NONE"}, event_hook="pre_call", default_on=True)
+    tool_call: Final[dict[str, object]] = {"mcp_tool_name": "send_email"}
+
+    assert not guardrail.should_run_guardrail(data=tool_call, event_type=GuardrailEventHooks.pre_mcp_call)
+    await guardrail.apply_guardrail(inputs=_inputs(), request_data=tool_call, input_type="request")
+
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_an_mcp_evaluation_without_a_tool_name_still_names_one_so_tool_filters_apply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _make_guardrail_with_response({"action": "NONE"}, event_hook="post_mcp_call", default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    await ProxyLogging(user_api_key_cache=UserApiKeyCache()).post_mcp_call_hook(
+        response=CallToolResult(content=[TextContent(type="text", text="ok")]),
+        request_data={"mcp_tool_call_metadata": {"arguments": {}}},
+        user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+    )
+
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] == "unknown"
+
+
 def _during_call_request() -> dict[str, object]:
     return {"model": "gpt-4o", "messages": [{"role": "user", "content": "mail ada@example.com"}]}
 
@@ -254,6 +305,7 @@ async def test_during_call_enforces_every_intervention_as_a_block(
 
     assert excinfo.value.blocked_content is True
     assert _post_mock(guardrail).call_args.kwargs["json"]["input_type"] == "request"
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
 
 
 @pytest.mark.asyncio
@@ -268,6 +320,7 @@ async def test_during_call_allow_lets_the_request_through(monkeypatch: pytest.Mo
 
     assert request["messages"] == _during_call_request()["messages"]
     _post_mock(guardrail).assert_called_once()
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
 
 
 @pytest.mark.asyncio
@@ -571,6 +624,7 @@ async def test_streaming_redaction_actually_reaches_the_client() -> None:
         request_data={  # mutable-ok: one-shot request_data the framework requires as a plain dict
             "messages": [{"role": "user", "content": "share your contact"}],
             "stream": True,
+            "mcp_tool_name": "send_email",
         },
         guardrail_to_apply=guardrail,
     ):
@@ -581,6 +635,7 @@ async def test_streaming_redaction_actually_reaches_the_client() -> None:
     assert "[EmailAddress1]" in assembled
     assert "ada@example.com" not in assembled
     _post_mock(guardrail).assert_called_once()
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
 
 
 def _streamed_request(route: str | None) -> dict[str, object]:
