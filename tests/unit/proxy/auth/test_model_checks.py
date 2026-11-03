@@ -1151,6 +1151,38 @@ def test_expand_wildcard_alias_over_one_model_is_kept_only_for_keys_with_a_name_
 
     assert rows == ([deployment] if keeps_the_alias else [])
 
+def test_team_owned_wildcard_model_info_lists_the_names_the_team_sees_on_v1_models() -> None:
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "model_name_team-1_abc",
+                "litellm_params": {"model": "anthropic/claude-*", "api_key": "sk-test"},
+                "model_info": {"id": "team-row", "team_id": "team-1", "team_public_model_name": "team-claude-*"},
+            }
+        ]
+    )
+    team_listing: Final = get_complete_model_list(
+        key_models=[],
+        team_models=["team-claude-*"],
+        proxy_model_list=[],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+        team_id="team-1",
+    )
+
+    rows: Final = expand_wildcard_deployments_for_model_info(
+        router.get_model_list(), router, allowed_model_names=team_listing
+    )
+
+    assert team_listing
+    assert sorted(
+        (row["model_name"], row["model_info"]["team_public_model_name"], row["model_info"]["team_id"]) for row in rows
+    ) == sorted((name, name, "team-1") for name in team_listing)
+
+
 def test_get_complete_model_list_excludes_wildcard_routes_by_default():
     """Regression (LIT-4108): a wildcard with a matching router deployment leaked into /v1/models."""
     from litellm import Router

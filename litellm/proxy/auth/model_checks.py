@@ -429,6 +429,13 @@ def _deployment_team_id(deployment: Mapping[str, object]) -> str | None:
     return team_id if isinstance(team_id, str) else None
 
 
+def _public_model_name(deployment: Mapping[str, object]) -> str:
+    team_public_model_name: Final = _model_info_field(deployment, "team_public_model_name")
+    if isinstance(team_public_model_name, str) and team_public_model_name:
+        return team_public_model_name
+    return str(deployment.get("model_name") or "")
+
+
 def _cached_wildcard_routing(llm_router: Router | None) -> Callable[[str, str | None], frozenset[str]] | None:
     if llm_router is None:
         return None
@@ -587,7 +594,7 @@ def expand_wildcard_deployments_for_model_info(
     routed_models: Final = _cached_wildcard_routing(llm_router)
     deployed_by_name: Final = _deployed_by_name(llm_router)
     for deployment in deployments:
-        model_name = str(deployment.get("model_name") or "")
+        model_name = _public_model_name(deployment)
         raw_params = deployment.get("litellm_params")
         litellm_params_dict: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
         litellm_model = str(litellm_params_dict.get("model") or "")
@@ -614,6 +621,9 @@ def expand_wildcard_deployments_for_model_info(
         for name in _names_no_deployment_serves_by_name(deployment, expanded_names, deployed_by_name):
             row = copy.deepcopy(deployment)
             row["model_name"] = name
+            model_info = row.get("model_info")
+            if isinstance(model_info, dict) and "team_public_model_name" in model_info:
+                model_info["team_public_model_name"] = name
             params = row.get("litellm_params")
             if isinstance(params, dict):
                 params["model"] = _routed_deployment_model(model_name, name, litellm_model)
