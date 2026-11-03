@@ -583,6 +583,7 @@ _SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 _REDACTED_RESULT: Final = TypeAdapter(object)
 _FAILED_ATTEMPTS_USAGE: Final = TypeAdapter(tuple[ServedRound, ...])
+_ATTEMPT_IDS: Final = TypeAdapter(tuple[str, ...])
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
 
@@ -2735,8 +2736,11 @@ class Logging(LiteLLMLoggingBaseClass):
         response_cost: Final = self._model_call_details_view.get("response_cost")
         billed_by_continuation: Final = self.model_call_details.pop("stash_billed_by_continuation", False) is True
         owed_on_success: Final = self.model_call_details.pop("stash_owed_on_success", False) is True
-        if isinstance(usage, Usage) and type(self).usage_capture_callback is not None:
+        captured_attempt_ids: Final = (
             self.capture_failed_attempt_usage(usage)
+            if isinstance(usage, Usage) and type(self).usage_capture_callback is not None
+            else ()
+        )
         self.model_call_details.pop("_accounting_capture", None)
         self.model_call_details.pop("_accounting_pricing_snapshot", None)
         self.model_call_details.pop("_accounting_usage_observed", None)
@@ -2750,22 +2754,28 @@ class Logging(LiteLLMLoggingBaseClass):
             *self.model_call_details.get("failed_attempts_usage", ()),
             attempt,
         )
-        if owed_on_success and not billed_by_continuation:
-            self.model_call_details["failed_attempts_owed_on_success"] = (
-                *self.model_call_details.get("failed_attempts_owed_on_success", ()),
-                attempt,
+        if not owed_on_success or billed_by_continuation:
+            return
+        self.model_call_details["failed_attempts_owed_on_success"] = (
+            *self.model_call_details.get("failed_attempts_owed_on_success", ()),
+            attempt,
+        )
+        if captured_attempt_ids:
+            self.model_call_details["failed_attempt_ids_owed_on_success"] = (
+                *_ATTEMPT_IDS.validate_python(self.model_call_details.get("failed_attempt_ids_owed_on_success", ())),
+                *captured_attempt_ids,
             )
 
     def mark_stash_billed_by_continuation(self) -> None:
         self.model_call_details["stash_billed_by_continuation"] = True
 
-    def capture_failed_attempt_usage(self, usage: Usage) -> None:
+    def capture_failed_attempt_usage(self, usage: Usage) -> tuple[str, ...]:
         from litellm.constants import BILLED_RETRY_ATTEMPT_METADATA_KEY
         from litellm.proxy.spend_tracking.usage_capture import CapturedUsage
 
         capture: Final = type(self).usage_capture_callback
         if capture is None:
-            return
+            return ()
         attempt: Final = self.attempt_scoped_copy()
         attempt.prepared_cost = None
         attempt.finalized_cost = None
@@ -2800,11 +2810,13 @@ class Logging(LiteLLMLoggingBaseClass):
             datetime.datetime.now(datetime.timezone.utc),
             False,
         )
-        if isinstance(captured, CapturedUsage):
-            self.model_call_details["_accounting_prior_captures"] = (
-                *self.model_call_details.get("_accounting_prior_captures", ()),
-                captured,
-            )
+        if not isinstance(captured, CapturedUsage):
+            return ()
+        self.model_call_details["_accounting_prior_captures"] = (
+            *self.model_call_details.get("_accounting_prior_captures", ()),
+            captured,
+        )
+        return tuple(write.event.event_id for write in captured.writes)
 
     def record_continued_partial(self, usage: Usage, response_cost: float, response_id: str) -> None:
         """Bill what a cut stream already consumed on this continuation's success log, under the id the caller saw."""
@@ -2849,6 +2861,14 @@ class Logging(LiteLLMLoggingBaseClass):
         failed_attempts_cost: Final = sum(cost for _, cost in failed_attempts)
         self.model_call_details.pop("failed_attempts_usage", None)
         self.model_call_details["failed_attempts_billed_on_success"] = failed_attempts
+        included_attempt_ids: Final = _ATTEMPT_IDS.validate_python(
+            self.model_call_details.pop("failed_attempt_ids_owed_on_success", ())
+        )
+        if included_attempt_ids:
+            self.model_call_details["_accounting_included_attempt_ids"] = (
+                *_ATTEMPT_IDS.validate_python(self.model_call_details.get("_accounting_included_attempt_ids", ())),
+                *included_attempt_ids,
+            )
         self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
             usage_objects=[own_usage, *(usage for usage, _ in failed_attempts)]
         )
