@@ -712,7 +712,7 @@ class _MessageCountParams:
         self.bills_tool_choice = (
             self.tool_section.counts_tool_choice
             if self.tool_section is not None
-            else huggingface_tokenizer_kind(model) != "deepseek"
+            else huggingface_tokenizer_kind(model or "") != "deepseek"
         )
         self._model = model
 
