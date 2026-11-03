@@ -1972,6 +1972,8 @@ def _tls_view(connection: AbstractConnection) -> dict[str, object] | None:
     context: Final = connection.ssl_context
     return {
         "ca_certs": context.ca_certs,
+        "ca_data": context.ca_data,
+        "ca_path": None,
         "certfile": context.certfile,
         "keyfile": context.keyfile,
         "verify_certificate": context.cert_reqs != ssl.CERT_NONE,
@@ -2006,6 +2008,7 @@ def _connection_view(connection: AbstractConnection, kwargs: dict[str, object]) 
         "auth": _auth_view(kwargs),
         "socket_timeout": connection.socket_timeout,
         "socket_connect_timeout": connection.socket_connect_timeout,
+        "health_check_interval": float(connection.health_check_interval) or None,
     }
 
 
@@ -2047,6 +2050,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         "tls": None,
         "socket_timeout": 5.0,
         "socket_connect_timeout": 5.0,
+        "health_check_interval": None,
         **fields,
     }
 
@@ -2065,30 +2069,9 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
             id="host_defaults",
         ),
         pytest.param(
-            {"host": "redis", "port": "6380\n", "db": " 2 ", "socket_timeout": "1_0.5\n"},
-            {},
-            _expected_view(
-                {
-                    "db": 2,
-                    "host": "redis",
-                    "mode": "host",
-                    "port": 6380,
-                    "socket_timeout": 10.5,
-                    "socket_connect_timeout": 10.5,
-                }
-            ),
-            id="padded_and_underscored_numbers_parse_like_python_int_and_float",
-        ),
-        pytest.param(
-            {},
-            {"REDIS_HOST": "redis", "REDIS_PORT": "6_380", "REDIS_DB": "3\n"},
-            _expected_view({"db": 3, "host": "redis", "mode": "host", "port": 6380}),
-            id="padded_environment_numbers_parse_like_python_int",
-        ),
-        pytest.param(
             {"startup_nodes": []},
             {"REDIS_CLUSTER_NODES": '[{"host": "node-a", "port": 7000}]'},
-            _expected_view({"mode": "cluster", "nodes": ["node-a:7000"]}),
+            _expected_view({"health_check_interval": 25.0, "mode": "cluster", "nodes": ["node-a:7000"]}),
             id="empty_cluster_nodes_use_the_environment",
         ),
         pytest.param(
@@ -2175,6 +2158,8 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                     "socket_timeout": 1.5,
                     "tls": {
                         "ca_certs": None,
+                        "ca_data": None,
+                        "ca_path": None,
                         "certfile": None,
                         "check_hostname": False,
                         "keyfile": None,
@@ -2201,6 +2186,8 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                     "port": 6390,
                     "tls": {
                         "ca_certs": None,
+                        "ca_data": None,
+                        "ca_path": None,
                         "certfile": None,
                         "check_hostname": False,
                         "keyfile": None,
@@ -2224,6 +2211,27 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 }
             ),
             id="string_numbers_are_coerced",
+        ),
+        pytest.param(
+            {"host": "redis", "port": "6380\n", "db": " 2 ", "socket_timeout": "1_0.5\n"},
+            {},
+            _expected_view(
+                {
+                    "db": 2,
+                    "host": "redis",
+                    "mode": "host",
+                    "port": 6380,
+                    "socket_timeout": 10.5,
+                    "socket_connect_timeout": 10.5,
+                }
+            ),
+            id="padded_and_underscored_numbers_parse_like_python_int_and_float",
+        ),
+        pytest.param(
+            {},
+            {"REDIS_HOST": "redis", "REDIS_PORT": "6_380", "REDIS_DB": "3\n"},
+            _expected_view({"db": 3, "host": "redis", "mode": "host", "port": 6380}),
+            id="padded_environment_numbers_parse_like_python_int",
         ),
         pytest.param(
             {"host": "redis"},
@@ -2267,6 +2275,8 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                     "mode": "url",
                     "tls": {
                         "ca_certs": None,
+                        "ca_data": None,
+                        "ca_path": None,
                         "certfile": None,
                         "check_hostname": False,
                         "keyfile": None,
@@ -2290,6 +2300,8 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                     "mode": "url",
                     "tls": {
                         "ca_certs": None,
+                        "ca_data": None,
+                        "ca_path": None,
                         "certfile": None,
                         "check_hostname": False,
                         "keyfile": None,
@@ -2310,6 +2322,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
             _expected_view(
                 {
                     "auth": {"kind": "static", "password": "cluster-secret", "username": None},
+                    "health_check_interval": 25.0,
                     "mode": "cluster",
                     "nodes": ["node-a:7000"],
                 }
@@ -2319,7 +2332,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {},
             {"REDIS_CLUSTER_NODES": '[{"host": "node-a", "port": "7000"}, {"host": "node-b", "port": 7001}]'},
-            _expected_view({"mode": "cluster", "nodes": ["node-a:7000", "node-b:7001"]}),
+            _expected_view({"health_check_interval": 25.0, "mode": "cluster", "nodes": ["node-a:7000", "node-b:7001"]}),
             id="environment_cluster_nodes",
         ),
         pytest.param(
@@ -2332,10 +2345,13 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
             {},
             _expected_view(
                 {
+                    "health_check_interval": 25.0,
                     "mode": "cluster",
                     "nodes": ["node-a:7000"],
                     "tls": {
                         "ca_certs": "/ca.pem",
+                        "ca_data": None,
+                        "ca_path": None,
                         "certfile": None,
                         "check_hostname": True,
                         "keyfile": None,
@@ -2447,6 +2463,8 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                     "port": 6379,
                     "tls": {
                         "ca_certs": "/gcp-ca.pem",
+                        "ca_data": None,
+                        "ca_path": None,
                         "certfile": None,
                         "check_hostname": False,
                         "keyfile": None,
@@ -2529,6 +2547,8 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                     "port": 6379,
                     "tls": {
                         "ca_certs": None,
+                        "ca_data": None,
+                        "ca_path": None,
                         "certfile": None,
                         "check_hostname": False,
                         "keyfile": None,
@@ -2562,6 +2582,8 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                     "port": 6379,
                     "tls": {
                         "ca_certs": None,
+                        "ca_data": None,
+                        "ca_path": None,
                         "certfile": None,
                         "check_hostname": False,
                         "keyfile": None,
@@ -2593,6 +2615,8 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                     "mode": "url",
                     "tls": {
                         "ca_certs": None,
+                        "ca_data": None,
+                        "ca_path": None,
                         "certfile": None,
                         "check_hostname": False,
                         "keyfile": None,
@@ -2649,6 +2673,8 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                     "port": 6379,
                     "tls": {
                         "ca_certs": "/ca.pem",
+                        "ca_data": None,
+                        "ca_path": None,
                         "certfile": None,
                         "check_hostname": True,
                         "keyfile": None,
@@ -2669,6 +2695,8 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                     "port": 6379,
                     "tls": {
                         "ca_certs": "/env-ca.pem",
+                        "ca_data": None,
+                        "ca_path": None,
                         "certfile": None,
                         "check_hostname": False,
                         "keyfile": None,
@@ -2724,6 +2752,8 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                     "port": 6379,
                     "tls": {
                         "ca_certs": None,
+                        "ca_data": None,
+                        "ca_path": None,
                         "certfile": "/client.pem",
                         "check_hostname": False,
                         "keyfile": "/client.key",
@@ -2741,6 +2771,8 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                     "mode": "url",
                     "tls": {
                         "ca_certs": "/ca.pem",
+                        "ca_data": None,
+                        "ca_path": None,
                         "certfile": None,
                         "check_hostname": True,
                         "keyfile": None,
@@ -2772,6 +2804,8 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                     "mode": "url",
                     "tls": {
                         "ca_certs": None,
+                        "ca_data": None,
+                        "ca_path": None,
                         "certfile": None,
                         "check_hostname": False,
                         "keyfile": None,
@@ -2807,7 +2841,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"db": False, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {},
-            _expected_view({"mode": "cluster", "nodes": ["node-a:7000"]}),
+            _expected_view({"health_check_interval": 25.0, "mode": "cluster", "nodes": ["node-a:7000"]}),
             id="cluster_db_false",
         ),
         pytest.param(
@@ -2824,7 +2858,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"db": 0.0, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {},
-            _expected_view({"mode": "cluster", "nodes": ["node-a:7000"]}),
+            _expected_view({"health_check_interval": 25.0, "mode": "cluster", "nodes": ["node-a:7000"]}),
             id="cluster_db_float_zero",
         ),
         pytest.param(
@@ -2841,7 +2875,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"db": [], "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {},
-            _expected_view({"mode": "cluster", "nodes": ["node-a:7000"]}),
+            _expected_view({"health_check_interval": 25.0, "mode": "cluster", "nodes": ["node-a:7000"]}),
             id="cluster_db_empty_list",
         ),
         pytest.param(
@@ -2855,6 +2889,8 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                     "port": 6379,
                     "tls": {
                         "ca_certs": None,
+                        "ca_data": None,
+                        "ca_path": None,
                         "certfile": None,
                         "check_hostname": False,
                         "keyfile": None,
@@ -2911,6 +2947,84 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
             {},
             _expected_view({"mode": "unix", "path": "/tmp/redis.sock"}),
             id="unix_socket_path",
+        ),
+        pytest.param(
+            {"host": "redis", "ssl": True, "ssl_ca_certs": "/ca.pem", "unix_socket_path": "/tmp/redis.sock"},
+            {},
+            _expected_view({"mode": "unix", "path": "/tmp/redis.sock"}),
+            id="unix_socket_path_keeps_tls_settings_out_of_the_target",
+        ),
+        pytest.param(
+            {
+                "host": "redis",
+                "ssl": True,
+                "ssl_ca_data": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+            },
+            {},
+            _expected_view(
+                {
+                    "db": 0,
+                    "host": "redis",
+                    "mode": "host",
+                    "port": 6379,
+                    "tls": {
+                        "ca_certs": None,
+                        "ca_data": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+                        "ca_path": None,
+                        "certfile": None,
+                        "check_hostname": False,
+                        "keyfile": None,
+                        "verify_certificate": True,
+                    },
+                }
+            ),
+            id="ssl_ca_data",
+        ),
+        pytest.param(
+            {"host": "redis"},
+            {"REDIS_SSL": "true", "REDIS_SSL_CA_PATH": "/etc/ssl/private-cas"},
+            {
+                "rejected": {
+                    "message": "Redis.__init__() got an unexpected keyword argument 'ssl_ca_path'",
+                    "type": "TypeError",
+                }
+            },
+            id="ssl_ca_path_from_the_environment",
+        ),
+        pytest.param(
+            {"health_check_interval": "7", "host": "redis"},
+            {},
+            _expected_view({"db": 0, "health_check_interval": 7.0, "host": "redis", "mode": "host", "port": 6379}),
+            id="health_check_interval_is_whole_seconds",
+        ),
+        pytest.param(
+            {"health_check_interval": 0, "host": "redis"},
+            {},
+            _expected_view({"db": 0, "host": "redis", "mode": "host", "port": 6379}),
+            id="health_check_interval_zero_is_off",
+        ),
+        pytest.param(
+            {"health_check_interval": 0, "startup_nodes": [{"host": "node-a", "port": 7000}]},
+            {},
+            _expected_view({"mode": "cluster", "nodes": ["node-a:7000"]}),
+            id="health_check_interval_zero_keeps_a_cluster_off",
+        ),
+        pytest.param(
+            {"db": 3, "startup_nodes": [{"host": "node-a", "port": 7000}]},
+            {},
+            {
+                "rejected": {
+                    "message": "Argument 'db' must be 0 or None in cluster mode",
+                    "type": "RedisClusterException",
+                }
+            },
+            id="a_cluster_rejects_a_nonzero_db",
+        ),
+        pytest.param(
+            {"unix_socket_path": "/tmp/redis.sock"},
+            {},
+            {"rejected": {"message": "Either 'host' or 'url' must be specified for redis.", "type": "ValueError"}},
+            id="unix_socket_path_without_a_host_fails_like_python",
         ),
     ],
 )

@@ -4,7 +4,7 @@ use litellm_redis_client::{Credentials, RedisUrl, Sentinel, StaticAuth, Target, 
 use litellm_secret_value::SecretValue;
 
 #[rstest]
-#[case::url(format!("{:?}", Target::Url(RedisUrl { url: SecretValue::new("redis://user:credential-value@cache:6379/0"), tls: None })))]
+#[case::url(format!("{:?}", Target::Url(RedisUrl { url: SecretValue::new("redis://user:credential-value@cache:6379/0"), tls: None, db: None, username: None, password: None })))]
 #[case::static_password(format!("{:?}", Credentials { username: None, password: Some(SecretValue::new("credential-value")) }))]
 #[case::sentinel_password(format!("{:?}", Target::Sentinel(Sentinel {
     monitors: Vec::new(),
@@ -21,7 +21,16 @@ fn debug_output_never_shows_the_secret(#[case] debug: String) {
 #[derive(Clone, Copy, Debug)]
 enum Ca {
     Trusted,
+    TrustedData,
+    TrustedDirectory,
     SystemRoots,
+}
+
+fn directory_holding(ca: &std::path::Path) -> std::path::PathBuf {
+    let directory = std::env::temp_dir().join(format!("litellm-ca-dir-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::copy(ca, directory.join("ca.pem")).unwrap();
+    directory
 }
 
 async fn ping_over_tls(
@@ -41,6 +50,8 @@ async fn ping_over_tls(
     let files = server.files();
     let tls = TlsOptions {
         ca_certs: matches!(ca, Ca::Trusted).then(|| files.ca.clone()),
+        ca_data: matches!(ca, Ca::TrustedData).then(|| std::fs::read_to_string(&files.ca).unwrap()),
+        ca_path: matches!(ca, Ca::TrustedDirectory).then(|| directory_holding(&files.ca)),
         certfile: client_certificate.then(|| files.client_cert.clone()),
         keyfile: client_certificate.then(|| files.client_key.clone()),
         verify_certificate,
@@ -58,6 +69,7 @@ async fn ping_over_tls(
         timeouts: litellm_redis_client::Timeouts::default(),
         breaker: None,
         events: None,
+        health_check: None,
     })
     .unwrap();
     client.ping().await
@@ -67,6 +79,14 @@ async fn ping_over_tls(
 #[case::trusted_ca_without_hostname_check_like_redis_py(
     "127.0.0.1",
     Ca::Trusted,
+    true,
+    false,
+    true
+)]
+#[case::trusted_ca_as_pem_text_like_ssl_ca_data("127.0.0.1", Ca::TrustedData, true, false, true)]
+#[case::trusted_ca_in_a_directory_like_ssl_ca_path(
+    "127.0.0.1",
+    Ca::TrustedDirectory,
     true,
     false,
     true
@@ -134,6 +154,7 @@ fn a_missing_tls_file_names_the_path() {
         timeouts: litellm_redis_client::Timeouts::default(),
         breaker: None,
         events: None,
+        health_check: None,
     })
     .err()
     .unwrap();

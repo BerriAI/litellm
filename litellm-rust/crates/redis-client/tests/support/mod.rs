@@ -17,6 +17,9 @@ pub fn endpoint(deployment: &RedisDeployment) -> Target {
         RedisDeployment::Standalone(server) => Target::Url(RedisUrl {
             url: SecretValue::new(server.url()),
             tls: None,
+            db: None,
+            username: None,
+            password: None,
         }),
         RedisDeployment::Cluster(cluster) => Target::Cluster(Cluster {
             nodes: cluster
@@ -48,6 +51,7 @@ pub fn connect_guarded(
         timeouts: Timeouts::new(timeout, None),
         breaker,
         events: None,
+        health_check: None,
     })
     .unwrap()
 }
@@ -60,6 +64,7 @@ pub fn connect_as(deployment: &RedisDeployment, credentials: Credentials) -> Red
         timeouts: Timeouts::new(Duration::from_secs(2), None),
         breaker: None,
         events: None,
+        health_check: None,
     })
     .unwrap()
 }

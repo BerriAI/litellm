@@ -1,17 +1,23 @@
-use litellm_redis_types::TlsOptions;
+use litellm_python_compat::number;
+use litellm_redis_types::{Ignored, TlsOptions};
+use litellm_secret_value::SecretValue;
 
 use super::{
-    Expected, RedisError,
+    Expected, RedisError, keys,
     layers::Entry,
-    options::{TlsInput, flag, parsed, text},
+    options::{TlsInput, flag, parsed, secret, text},
 };
 use crate::Value;
 
-// redis-py's parse_url turns every query parameter into a client kwarg. Only the TLS ones have a redis-rs
-// equivalent, so any other parameter, and any parameter on a plain redis:// url, is rejected
+// redis-py's parse_url turns every query parameter into a client kwarg. Only these and, on a rediss:// url, the
+// TLS ones have a redis-rs equivalent, so any other parameter is ignored
+const URL_CONNECTION_SETTINGS: &[&str] = &["db", "username", "password"];
+
 const URL_TLS_SETTINGS: &[&str] = &[
     "ssl_cert_reqs",
     "ssl_ca_certs",
+    "ssl_ca_data",
+    "ssl_ca_path",
     "ssl_certfile",
     "ssl_keyfile",
     "ssl_check_hostname",
@@ -24,6 +30,8 @@ pub(super) fn tls_options(
 ) -> Result<TlsOptions, RedisError> {
     Ok(TlsOptions {
         ca_certs: text(gcp_ca_certs.or(input.ca_certs.as_ref())).map(Into::into),
+        ca_data: text(input.ca_data.as_ref()),
+        ca_path: text(input.ca_path.as_ref()).map(Into::into),
         certfile: text(input.certfile.as_ref()).map(Into::into),
         keyfile: text(input.keyfile.as_ref()).map(Into::into),
         verify_certificate: verify_certificate(input.cert_reqs.as_ref())?,
@@ -40,13 +48,29 @@ fn verify_certificate(cert_reqs: Option<&Entry>) -> Result<bool, RedisError> {
     .map(|verify| verify.unwrap_or(true))
 }
 
-pub(super) fn url_tls(url: &str) -> Result<Option<TlsOptions>, RedisError> {
-    let Ok(parsed) = url::Url::parse(url) else {
-        return Ok(None);
+/// What redis-py's `parse_url` reads from a url's query on top of the url itself.
+pub(super) struct UrlQuery {
+    pub(super) tls: Option<TlsOptions>,
+    pub(super) db: Option<i64>,
+    pub(super) username: Option<SecretValue>,
+    pub(super) password: Option<SecretValue>,
+    pub(super) ignored: Vec<Ignored>,
+}
+
+pub(super) fn url_query(url: &str) -> Result<UrlQuery, RedisError> {
+    let Ok(url) = url::Url::parse(url) else {
+        return Ok(UrlQuery {
+            tls: None,
+            db: None,
+            username: None,
+            password: None,
+            ignored: Vec::new(),
+        });
     };
-    let tls_scheme = parsed.scheme().eq_ignore_ascii_case("rediss");
-    let query: Vec<(String, Entry)> = parsed
+    let tls_scheme = url.scheme().eq_ignore_ascii_case("rediss");
+    let query: Vec<(String, Entry)> = url
         .query_pairs()
+        .filter(|(_, value)| !value.is_empty())
         .map(|(name, value)| {
             (
                 name.to_string(),
@@ -57,17 +81,10 @@ pub(super) fn url_tls(url: &str) -> Result<Option<TlsOptions>, RedisError> {
             )
         })
         .collect();
-    if let Some((_, entry)) = query
-        .iter()
-        .find(|(name, _)| !tls_scheme || !URL_TLS_SETTINGS.contains(&name.as_str()))
-    {
-        return Err(RedisError::Unsupported {
-            setting: entry.source.clone(),
-        });
-    }
-    if !tls_scheme {
-        return Ok(None);
-    }
+    let (query, ignored): (Vec<_>, Vec<_>) = query.into_iter().partition(|(name, _)| {
+        URL_CONNECTION_SETTINGS.contains(&name.as_str())
+            || (tls_scheme && URL_TLS_SETTINGS.contains(&name.as_str()))
+    });
     let get = |key: &str| {
         query
             .iter()
@@ -75,14 +92,32 @@ pub(super) fn url_tls(url: &str) -> Result<Option<TlsOptions>, RedisError> {
             .find(|(name, _)| name == key)
             .map(|(_, entry)| entry.clone())
     };
-    Ok(Some(TlsOptions {
-        ca_certs: text(get("ssl_ca_certs").as_ref()).map(Into::into),
-        certfile: text(get("ssl_certfile").as_ref()).map(Into::into),
-        keyfile: text(get("ssl_keyfile").as_ref()).map(Into::into),
-        verify_certificate: verify_certificate(get("ssl_cert_reqs").as_ref())?,
-        check_hostname: text(get("ssl_check_hostname").as_ref())
-            .is_some_and(|text| url_bool(&text)),
-    }))
+    let tls = match tls_scheme {
+        true => Some(TlsOptions {
+            ca_certs: text(get("ssl_ca_certs").as_ref()).map(Into::into),
+            ca_data: text(get("ssl_ca_data").as_ref()),
+            ca_path: text(get("ssl_ca_path").as_ref()).map(Into::into),
+            certfile: text(get("ssl_certfile").as_ref()).map(Into::into),
+            keyfile: text(get("ssl_keyfile").as_ref()).map(Into::into),
+            verify_certificate: verify_certificate(get("ssl_cert_reqs").as_ref())?,
+            check_hostname: text(get("ssl_check_hostname").as_ref())
+                .is_some_and(|text| url_bool(&text)),
+        }),
+        false => None,
+    };
+    Ok(UrlQuery {
+        tls,
+        // parse_url reads ?db= with int() and raises on anything else
+        db: parsed(get("db").as_ref(), Expected::Integer, |text| {
+            number::int(text).and_then(|db| i64::try_from(db).ok())
+        })?,
+        username: secret(get("username").as_ref()),
+        password: secret(get("password").as_ref()),
+        ignored: ignored
+            .into_iter()
+            .map(|(name, entry)| keys::ignored(entry.source, &name))
+            .collect(),
+    })
 }
 
 // redis-py's to_bool: only 0, F, FALSE, N and NO (any case) are false

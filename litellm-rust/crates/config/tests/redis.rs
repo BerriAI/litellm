@@ -4,7 +4,8 @@ use litellm_config::{
     CacheSettings, Config, ConfiguredRedis, Expected, RedisError, SecretSnapshot, Value,
 };
 use litellm_redis_types::{
-    Auth, AwsIamAuth, AzureAdAuth, Node, ProviderHandle, Resolution, StaticAuth, Target, TlsOptions,
+    Auth, AwsIamAuth, AzureAdAuth, HealthCheck, Node, ProviderHandle, Resolution, StaticAuth,
+    Target, TlsOptions,
 };
 use rstest::rstest;
 use serde_json::json;
@@ -117,6 +118,7 @@ fn resolves_redis_through_the_parsed_config(
 ) {
     let resolved = resolve(yaml, environment).unwrap();
     let description = match resolved.target {
+        Target::Unix(socket) => format!("unix:{}", socket.path.display()),
         Target::Url(url) => format!("url:{}", url.url.expose()),
         Target::Sentinel(sentinel) => format!("sentinel:{}", sentinel.service_name),
         Target::Standalone(host) => format!(
@@ -161,14 +163,27 @@ fn resolves_redis_through_the_parsed_config(
     &[],
     "connection_pool"
 )]
-fn rejected_settings_name_their_source(
+fn unsupported_settings_resolve_and_are_named_by_their_source(
     #[case] yaml: &str,
     #[case] environment: &[(&str, &str)],
     #[case] expected: &str,
 ) {
-    let error = resolve(yaml, environment).unwrap_err();
+    let resolution = coordination_resolution(yaml, environment).unwrap();
 
-    assert!(matches!(error, RedisError::Unsupported { setting } if setting == expected));
+    assert_eq!(
+        resolution.target,
+        Target::Standalone(litellm_redis_types::Standalone {
+            host: "redis".into(),
+            port: 6379,
+            db: 0,
+            tls: None,
+        })
+    );
+    let [ignored] = resolution.ignored.as_slice() else {
+        panic!("expected one ignored setting, got {:?}", resolution.ignored);
+    };
+    assert_eq!(ignored.setting, expected);
+    assert!(!ignored.consequence.is_empty());
 }
 
 fn static_auth(username: Option<&str>, password: Option<&str>) -> Auth {
@@ -312,22 +327,22 @@ fn incomplete_aws_iam_auth_fails(#[case] yaml: &str, #[case] message: &str) {
 #[case::defaults_verify_the_certificate_but_not_the_hostname(
     "    ssl: true",
     &[],
-    Some(TlsOptions { ca_certs: None, certfile: None, keyfile: None, verify_certificate: true, check_hostname: false })
+    Some(TlsOptions { ca_certs: None, ca_data: None, ca_path: None, certfile: None, keyfile: None, verify_certificate: true, check_hostname: false })
 )]
 #[case::every_option(
     "    ssl: true\n    ssl_ca_certs: /ca.pem\n    ssl_certfile: /client.pem\n    ssl_keyfile: /client.key\n    ssl_cert_reqs: none\n    ssl_check_hostname: true",
     &[],
-    Some(TlsOptions { ca_certs: Some("/ca.pem".into()), certfile: Some("/client.pem".into()), keyfile: Some("/client.key".into()), verify_certificate: false, check_hostname: true })
+    Some(TlsOptions { ca_certs: Some("/ca.pem".into()), ca_data: None, ca_path: None, certfile: Some("/client.pem".into()), keyfile: Some("/client.key".into()), verify_certificate: false, check_hostname: true })
 )]
 #[case::options_from_the_environment(
     "    ssl: true",
     &[("REDIS_SSL_CA_CERTS", "/env-ca.pem"), ("REDIS_SSL_CERT_REQS", "optional")],
-    Some(TlsOptions { ca_certs: Some("/env-ca.pem".into()), certfile: None, keyfile: None, verify_certificate: true, check_hostname: false })
+    Some(TlsOptions { ca_certs: Some("/env-ca.pem".into()), ca_data: None, ca_path: None, certfile: None, keyfile: None, verify_certificate: true, check_hostname: false })
 )]
 #[case::gcp_ca_certs_replace_the_configured_ones(
     "    ssl: true\n    ssl_ca_certs: /ca.pem\n    gcp_service_account: account\n    gcp_ssl_ca_certs: /gcp-ca.pem",
     &[],
-    Some(TlsOptions { ca_certs: Some("/gcp-ca.pem".into()), certfile: None, keyfile: None, verify_certificate: true, check_hostname: false })
+    Some(TlsOptions { ca_certs: Some("/gcp-ca.pem".into()), ca_data: None, ca_path: None, certfile: None, keyfile: None, verify_certificate: true, check_hostname: false })
 )]
 #[case::options_without_ssl_stay_plaintext("    ssl_ca_certs: /ca.pem", &[], None)]
 fn tls_options_resolve_like_redis_py(
@@ -575,19 +590,19 @@ fn a_missing_canonical_startup_nodes_reference_shadows_the_cache_alias() {
 }
 
 #[rstest]
-fn rejected_environment_settings_never_print_the_value() {
-    let error = resolve(
+fn unsupported_environment_settings_never_carry_the_value() {
+    let resolution = coordination_resolution(
         "model_list: []",
         &[
             ("REDIS_HOST", "redis"),
             ("REDIS_SSL_CIPHERS", "private-option-value"),
         ],
     )
-    .unwrap_err();
-    let message = error.to_string();
+    .unwrap();
+    let ignored = format!("{:?}", resolution.ignored);
 
-    assert!(message.contains("REDIS_SSL_CIPHERS"));
-    assert!(!message.contains("private-option-value"));
+    assert!(ignored.contains("REDIS_SSL_CIPHERS"), "{ignored}");
+    assert!(!ignored.contains("private-option-value"), "{ignored}");
 }
 
 #[rstest]
@@ -678,7 +693,12 @@ fn ignored_settings_are_named_by_their_source(
 ) {
     let resolution = coordination_resolution(yaml, environment).unwrap();
 
-    assert_eq!(resolution.ignored, vec![source.to_owned()]);
+    let settings: Vec<&str> = resolution
+        .ignored
+        .iter()
+        .map(|ignored| ignored.setting.as_str())
+        .collect();
+    assert_eq!(settings, vec![source]);
 }
 
 #[rstest]
@@ -723,10 +743,73 @@ fn settings_rust_does_not_model_reach_the_host_instead_of_being_dropped(
     );
 }
 
+#[rstest]
+#[case::read_on_a_plain_url(
+    "redis://cache:6379/1?db=3&username=query-user&password=query-secret",
+    Some(3),
+    Some("query-user"),
+    Some("query-secret")
+)]
+#[case::absent("rediss://cache:6380/1", None, None, None)]
+fn a_url_query_carries_db_and_credentials_like_parse_url(
+    #[case] url: &str,
+    #[case] db: Option<i64>,
+    #[case] username: Option<&str>,
+    #[case] password: Option<&str>,
+) {
+    let resolved = resolve_kwargs(json!({"url": url}), &HashMap::new()).unwrap();
+
+    let Target::Url(parsed) = resolved.target else {
+        panic!("expected a url target, got {:?}", resolved.target);
+    };
+    assert_eq!(parsed.db, db);
+    assert_eq!(expose(parsed.username.as_ref()), username);
+    assert_eq!(expose(parsed.password.as_ref()), password);
+    assert!(resolved.ignored.is_empty(), "{:?}", resolved.ignored);
+}
+
+#[rstest]
+fn a_url_query_db_that_is_not_an_integer_fails_like_parse_url() {
+    let error = resolve_kwargs(
+        json!({"url": "redis://cache:6379?db=first"}),
+        &HashMap::new(),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(error, RedisError::Invalid { setting, expected: Expected::Integer } if setting == "url ?db")
+    );
+}
+
+#[rstest]
+#[case::tls_1_2_is_already_met(json!("TLSv1_2"), false)]
+#[case::the_enum_name(json!("TLSVersion.TLSv1_2"), false)]
+#[case::the_enum_value(json!(771), false)]
+#[case::tls_1_3_is_not_enforced(json!("TLSv1_3"), true)]
+fn ssl_min_version_warns_only_when_rustls_cannot_meet_it(
+    #[case] version: serde_json::Value,
+    #[case] warns: bool,
+) {
+    let resolved = resolve_kwargs(
+        json!({"host": "redis", "ssl": true, "ssl_min_version": version}),
+        &HashMap::new(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        !resolved.ignored.is_empty(),
+        warns,
+        "{:?}",
+        resolved.ignored
+    );
+}
+
 fn tls_view(tls: Option<&TlsOptions>) -> serde_json::Value {
     tls.map_or(serde_json::Value::Null, |tls| {
         serde_json::json!({
             "ca_certs": tls.ca_certs,
+            "ca_data": tls.ca_data,
+            "ca_path": tls.ca_path,
             "certfile": tls.certfile,
             "keyfile": tls.keyfile,
             "verify_certificate": tls.verify_certificate,
@@ -746,24 +829,11 @@ fn expose(value: Option<&litellm_secret_value::SecretValue>) -> Option<&str> {
     value.map(litellm_secret_value::SecretValue::expose)
 }
 
-fn expected_view(fields: serde_json::Value) -> serde_json::Value {
-    let serde_json::Value::Object(fields) = fields else {
-        unreachable!("expected views are objects")
-    };
-    let defaults = json!({
-        "auth": {"kind": "static", "username": null, "password": null},
-        "tls": null,
-        "socket_timeout": 5.0,
-        "socket_connect_timeout": 5.0,
-    });
-    let serde_json::Value::Object(defaults) = defaults else {
-        unreachable!("the defaults are an object")
-    };
-    serde_json::Value::Object(defaults.into_iter().chain(fields).collect())
-}
-
 fn view(resolved: &Resolution) -> serde_json::Value {
     let target = match &resolved.target {
+        Target::Unix(socket) => serde_json::json!({
+            "mode": "unix", "path": socket.path, "tls": null,
+        }),
         Target::Standalone(host) => serde_json::json!({
             "mode": "host",
             "host": host.host,
@@ -818,6 +888,11 @@ fn view(resolved: &Resolution) -> serde_json::Value {
         "auth": auth,
         "socket_timeout": resolved.timeout.map_or(5.0, |timeout| timeout.as_secs_f64()),
         "socket_connect_timeout": resolved.connect_timeout.or(resolved.timeout).map_or(5.0, |timeout| timeout.as_secs_f64()),
+        "health_check_interval": match (&resolved.target, resolved.health_check) {
+            (_, HealthCheck::Every(interval)) => Some(interval.as_secs_f64()),
+            (Target::Cluster(_), HealthCheck::Unset) => Some(25.0),
+            (_, HealthCheck::Unset | HealthCheck::Disabled) => None,
+        },
     });
     let serde_json::Value::Object(rest) = rest else {
         unreachable!("the view is an object")
@@ -825,31 +900,48 @@ fn view(resolved: &Resolution) -> serde_json::Value {
     serde_json::Value::Object(target.into_iter().chain(rest).collect())
 }
 
+fn expected_view(fields: serde_json::Value) -> serde_json::Value {
+    let serde_json::Value::Object(fields) = fields else {
+        unreachable!("expected views are objects")
+    };
+    let defaults = json!({
+        "auth": {"kind": "static", "username": null, "password": null},
+        "tls": null,
+        "socket_timeout": 5.0,
+        "socket_connect_timeout": 5.0,
+        "health_check_interval": null,
+    });
+    let serde_json::Value::Object(defaults) = defaults else {
+        unreachable!("the defaults are an object")
+    };
+    serde_json::Value::Object(defaults.into_iter().chain(fields).collect())
+}
+
 #[rstest]
 #[case::host_defaults(
     json!({"host": "redis"}),
     &[],
-    Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0}))),
 )]
 #[case::empty_cluster_nodes_use_the_environment(
     json!({"startup_nodes": []}),
     &[("REDIS_CLUSTER_NODES", r#"[{"host": "node-a", "port": 7000}]"#)],
-    Ok(expected_view(json!({"mode": "cluster", "nodes": ["node-a:7000"]}))),
+    Ok(expected_view(json!({"mode": "cluster", "nodes": ["node-a:7000"], "health_check_interval": 25.0}))),
 )]
 #[case::empty_sentinel_nodes_use_the_environment(
     json!({"sentinel_nodes": [], "service_name": "primary"}),
     &[("REDIS_SENTINEL_NODES", r#"[["sentinel-a", 26379]]"#)],
-    Ok(expected_view(json!({"db": 0, "mode": "sentinel", "nodes": ["sentinel-a:26379"], "sentinel_password": null, "service_name": "primary"}))),
+    Ok(expected_view(json!({"mode": "sentinel", "nodes": ["sentinel-a:26379"], "service_name": "primary", "sentinel_password": null, "db": 0}))),
 )]
 #[case::empty_service_name_uses_the_environment(
     json!({"sentinel_nodes": [["sentinel-a", 26379]], "service_name": ""}),
     &[("REDIS_SERVICE_NAME", "primary")],
-    Ok(expected_view(json!({"db": 0, "mode": "sentinel", "nodes": ["sentinel-a:26379"], "sentinel_password": null, "service_name": "primary"}))),
+    Ok(expected_view(json!({"mode": "sentinel", "nodes": ["sentinel-a:26379"], "service_name": "primary", "sentinel_password": null, "db": 0}))),
 )]
 #[case::plaintext_ignores_tls_requirements(
     json!({"host": "redis", "ssl_cert_reqs": "strict"}),
     &[],
-    Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0}))),
 )]
 #[case::an_ambiguous_flag_is_refused(
     json!({"host": "redis", "ssl": "on"}),
@@ -864,22 +956,22 @@ fn view(resolved: &Resolution) -> serde_json::Value {
 #[case::ssl_ca_path_is_unsupported(
     json!({"host": "redis", "ssl": true, "ssl_ca_path": "/ca"}),
     &[],
-    Err("Redis host does not yet support configured setting ssl_ca_path"),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "tls": {"ca_certs": null, "ca_data": null, "ca_path": "/ca", "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}}))),
 )]
 #[case::host_with_every_basic_setting(
     json!({"db": 2, "host": "redis", "password": "pass", "port": 6380, "socket_timeout": 1.5, "ssl": true, "username": "user"}),
     &[],
-    Ok(expected_view(json!({"auth": {"kind": "static", "password": "pass", "username": "user"}, "db": 2, "host": "redis", "mode": "host", "port": 6380, "socket_connect_timeout": 1.5, "socket_timeout": 1.5, "tls": {"ca_certs": null, "certfile": null, "check_hostname": false, "keyfile": null, "verify_certificate": true}}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6380, "db": 2, "tls": {"ca_certs": null, "ca_data": null, "ca_path": null, "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}, "auth": {"kind": "static", "username": "user", "password": "pass"}, "socket_timeout": 1.5, "socket_connect_timeout": 1.5}))),
 )]
 #[case::environment_host_port_and_password(
     json!({}),
     &[("REDIS_HOST", "environment"), ("REDIS_PASSWORD", "environment-secret"), ("REDIS_PORT", "6390"), ("REDIS_SSL", "True")],
-    Ok(expected_view(json!({"auth": {"kind": "static", "password": "environment-secret", "username": null}, "db": 0, "host": "environment", "mode": "host", "port": 6390, "tls": {"ca_certs": null, "certfile": null, "check_hostname": false, "keyfile": null, "verify_certificate": true}}))),
+    Ok(expected_view(json!({"mode": "host", "host": "environment", "port": 6390, "db": 0, "tls": {"ca_certs": null, "ca_data": null, "ca_path": null, "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}, "auth": {"kind": "static", "username": null, "password": "environment-secret"}}))),
 )]
 #[case::string_numbers_are_coerced(
     json!({"db": "3", "host": "redis", "port": "6380", "socket_timeout": "2.5"}),
     &[],
-    Ok(expected_view(json!({"db": 3, "host": "redis", "mode": "host", "port": 6380, "socket_connect_timeout": 2.5, "socket_timeout": 2.5}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6380, "db": 3, "socket_timeout": 2.5, "socket_connect_timeout": 2.5}))),
 )]
 #[case::padded_and_underscored_numbers_parse_like_python_int_and_float(
     json!({"host": "redis", "port": "6380\n", "db": " 2 ", "socket_timeout": "1_0.5\n"}),
@@ -894,7 +986,7 @@ fn view(resolved: &Resolution) -> serde_json::Value {
 #[case::socket_timeout_from_the_environment(
     json!({"host": "redis"}),
     &[("REDIS_SOCKET_TIMEOUT", "0.75")],
-    Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379, "socket_connect_timeout": 0.75, "socket_timeout": 0.75}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "socket_timeout": 0.75, "socket_connect_timeout": 0.75}))),
 )]
 #[case::environment_url(
     json!({}),
@@ -909,42 +1001,42 @@ fn view(resolved: &Resolution) -> serde_json::Value {
 #[case::an_explicit_host_drops_the_environment_url(
     json!({"host": "configured"}),
     &[("REDIS_URL", "redis://environment:6379")],
-    Ok(expected_view(json!({"db": 0, "host": "configured", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "configured", "port": 6379, "db": 0}))),
 )]
 #[case::a_url_drops_host_db_and_password_and_keeps_the_username(
     json!({"db": 4, "host": "dropped", "password": "dropped", "url": "rediss://cache:6380", "username": "user"}),
     &[],
-    Ok(expected_view(json!({"auth": {"kind": "static", "password": null, "username": "user"}, "mode": "url", "tls": {"ca_certs": null, "certfile": null, "check_hostname": false, "keyfile": null, "verify_certificate": true}, "url": "rediss://cache:6380"}))),
+    Ok(expected_view(json!({"mode": "url", "url": "rediss://cache:6380", "tls": {"ca_certs": null, "ca_data": null, "ca_path": null, "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}, "auth": {"kind": "static", "username": "user", "password": null}}))),
 )]
 #[case::a_url_ignores_tls_settings_outside_the_url(
     json!({"ssl_ca_certs": "/ca.pem", "ssl_cert_reqs": "none", "ssl_check_hostname": true, "url": "rediss://cache:6380"}),
     &[],
-    Ok(expected_view(json!({"mode": "url", "tls": {"ca_certs": null, "certfile": null, "check_hostname": false, "keyfile": null, "verify_certificate": true}, "url": "rediss://cache:6380"}))),
+    Ok(expected_view(json!({"mode": "url", "url": "rediss://cache:6380", "tls": {"ca_certs": null, "ca_data": null, "ca_path": null, "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}}))),
 )]
 #[case::startup_nodes_beat_a_url(
     json!({"password": "cluster-secret", "startup_nodes": [{"host": "node-a", "port": 7000}], "url": "redis://single:6379"}),
     &[],
-    Ok(expected_view(json!({"auth": {"kind": "static", "password": "cluster-secret", "username": null}, "mode": "cluster", "nodes": ["node-a:7000"]}))),
+    Ok(expected_view(json!({"mode": "cluster", "nodes": ["node-a:7000"], "auth": {"kind": "static", "username": null, "password": "cluster-secret"}, "health_check_interval": 25.0}))),
 )]
 #[case::environment_cluster_nodes(
     json!({}),
     &[("REDIS_CLUSTER_NODES", r#"[{"host": "node-a", "port": "7000"}, {"host": "node-b", "port": 7001}]"#)],
-    Ok(expected_view(json!({"mode": "cluster", "nodes": ["node-a:7000", "node-b:7001"]}))),
+    Ok(expected_view(json!({"mode": "cluster", "nodes": ["node-a:7000", "node-b:7001"], "health_check_interval": 25.0}))),
 )]
 #[case::cluster_tls_options(
     json!({"ssl": "true", "ssl_ca_certs": "/ca.pem", "ssl_check_hostname": true, "startup_nodes": [{"host": "node-a", "port": 7000}]}),
     &[],
-    Ok(expected_view(json!({"mode": "cluster", "nodes": ["node-a:7000"], "tls": {"ca_certs": "/ca.pem", "certfile": null, "check_hostname": true, "keyfile": null, "verify_certificate": true}}))),
+    Ok(expected_view(json!({"mode": "cluster", "nodes": ["node-a:7000"], "tls": {"ca_certs": "/ca.pem", "ca_data": null, "ca_path": null, "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": true}, "health_check_interval": 25.0}))),
 )]
 #[case::sentinel_from_settings(
     json!({"password": "data-secret", "sentinel_nodes": [["sentinel-a", 26379], ["sentinel-b", 26380]], "sentinel_password": "sentinel-secret", "service_name": "primary"}),
     &[],
-    Ok(expected_view(json!({"auth": {"kind": "static", "password": "data-secret", "username": null}, "db": 0, "mode": "sentinel", "nodes": ["sentinel-a:26379", "sentinel-b:26380"], "sentinel_password": "sentinel-secret", "service_name": "primary"}))),
+    Ok(expected_view(json!({"mode": "sentinel", "nodes": ["sentinel-a:26379", "sentinel-b:26380"], "service_name": "primary", "sentinel_password": "sentinel-secret", "db": 0, "auth": {"kind": "static", "username": null, "password": "data-secret"}}))),
 )]
 #[case::sentinel_from_the_environment(
     json!({}),
     &[("REDIS_SENTINEL_NODES", r#"[["sentinel-a", 26379]]"#), ("REDIS_SENTINEL_PASSWORD", "sentinel-secret"), ("REDIS_SERVICE_NAME", "primary")],
-    Ok(expected_view(json!({"db": 0, "mode": "sentinel", "nodes": ["sentinel-a:26379"], "sentinel_password": "sentinel-secret", "service_name": "primary"}))),
+    Ok(expected_view(json!({"mode": "sentinel", "nodes": ["sentinel-a:26379"], "service_name": "primary", "sentinel_password": "sentinel-secret", "db": 0}))),
 )]
 #[case::a_host_breaks_sentinel(
     json!({"host": "ignored", "sentinel_nodes": [["sentinel-a", 26379]], "service_name": "primary"}),
@@ -959,47 +1051,47 @@ fn view(resolved: &Resolution) -> serde_json::Value {
 #[case::an_explicit_credential_provider_beats_cloud_auth(
     json!({"aws_iam_auth": true, "credential_provider": true, "gcp_service_account": "account", "host": "redis", "password": "dropped"}),
     &[("REDIS_AZURE_AD_TOKEN", "true")],
-    Ok(expected_view(json!({"auth": {"kind": "host"}, "db": 0, "host": "redis", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "auth": {"kind": "host"}}))),
 )]
 #[case::gcp_beats_azure_and_aws(
     json!({"aws_iam_auth": true, "azure_redis_ad_token": "True", "host": "redis", "password": "dropped"}),
     &[("REDIS_GCP_SERVICE_ACCOUNT", "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com")],
-    Ok(expected_view(json!({"auth": {"kind": "gcp_iam", "service_account": "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com"}, "db": 0, "host": "redis", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "auth": {"kind": "gcp_iam", "service_account": "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com"}}))),
 )]
 #[case::gcp_ca_certs_replace_the_configured_ones_under_ssl(
     json!({"gcp_service_account": "account", "gcp_ssl_ca_certs": "/gcp-ca.pem", "host": "redis", "ssl": true, "ssl_ca_certs": "/configured-ca.pem"}),
     &[],
-    Ok(expected_view(json!({"auth": {"kind": "gcp_iam", "service_account": "account"}, "db": 0, "host": "redis", "mode": "host", "port": 6379, "tls": {"ca_certs": "/gcp-ca.pem", "certfile": null, "check_hostname": false, "keyfile": null, "verify_certificate": true}}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "tls": {"ca_certs": "/gcp-ca.pem", "ca_data": null, "ca_path": null, "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}, "auth": {"kind": "gcp_iam", "service_account": "account"}}))),
 )]
 #[case::azure_beats_aws_and_takes_the_environment_username(
     json!({"aws_iam_auth": true, "azure_client_id": "client", "azure_client_secret": "secret", "azure_redis_ad_token": true, "azure_tenant_id": "tenant", "host": "redis", "username": "dropped"}),
     &[("REDIS_USERNAME", "environment-user")],
-    Ok(expected_view(json!({"auth": {"kind": "azure_ad", "username": "environment-user"}, "db": 0, "host": "redis", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "auth": {"kind": "azure_ad", "username": "environment-user"}}))),
 )]
 #[case::azure_without_a_username_sends_only_the_token(
     json!({"azure_client_id": "client", "azure_client_secret": "secret", "azure_redis_ad_token": true, "azure_tenant_id": "tenant", "host": "redis"}),
     &[],
-    Ok(expected_view(json!({"auth": {"kind": "azure_ad", "username": null}, "db": 0, "host": "redis", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "auth": {"kind": "azure_ad", "username": null}}))),
 )]
 #[case::azure_needs_the_literal_true(
     json!({"azure_client_id": "client", "azure_client_secret": "secret", "azure_redis_ad_token": "1", "azure_tenant_id": "tenant", "host": "redis"}),
     &[],
-    Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0}))),
 )]
 #[case::aws_iam_over_tls_with_the_default_region(
     json!({"aws_iam_auth": "yes", "aws_iam_cache_name": "cache-1", "aws_iam_user_name": "iam-user", "host": "cache-1", "password": "dropped", "ssl": true}),
     &[("AWS_DEFAULT_REGION", "us-east-1")],
-    Ok(expected_view(json!({"auth": {"cache_name": "cache-1", "kind": "aws_iam", "region": "us-east-1", "serverless": false, "user_name": "iam-user"}, "db": 0, "host": "cache-1", "mode": "host", "port": 6379, "tls": {"ca_certs": null, "certfile": null, "check_hostname": false, "keyfile": null, "verify_certificate": true}}))),
+    Ok(expected_view(json!({"mode": "host", "host": "cache-1", "port": 6379, "db": 0, "tls": {"ca_certs": null, "ca_data": null, "ca_path": null, "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}, "auth": {"kind": "aws_iam", "user_name": "iam-user", "cache_name": "cache-1", "region": "us-east-1", "serverless": false}}))),
 )]
 #[case::aws_region_beats_the_default_region(
     json!({"aws_iam_auth": true, "aws_iam_cache_name": "cache-1", "aws_iam_user_name": "iam-user", "host": "cache-1", "ssl": true}),
     &[("AWS_DEFAULT_REGION", "us-east-1"), ("AWS_REGION", "eu-central-1")],
-    Ok(expected_view(json!({"auth": {"cache_name": "cache-1", "kind": "aws_iam", "region": "eu-central-1", "serverless": false, "user_name": "iam-user"}, "db": 0, "host": "cache-1", "mode": "host", "port": 6379, "tls": {"ca_certs": null, "certfile": null, "check_hostname": false, "keyfile": null, "verify_certificate": true}}))),
+    Ok(expected_view(json!({"mode": "host", "host": "cache-1", "port": 6379, "db": 0, "tls": {"ca_certs": null, "ca_data": null, "ca_path": null, "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}, "auth": {"kind": "aws_iam", "user_name": "iam-user", "cache_name": "cache-1", "region": "eu-central-1", "serverless": false}}))),
 )]
 #[case::aws_iam_serverless_over_a_rediss_url_drops_its_userinfo(
     json!({"aws_iam_auth": true, "aws_iam_cache_name": "cache-1", "aws_iam_region": "eu-west-1", "aws_iam_serverless": true, "aws_iam_user_name": "iam-user", "url": "rediss://user:pass@cache-1:6379"}),
     &[],
-    Ok(expected_view(json!({"auth": {"cache_name": "cache-1", "kind": "aws_iam", "region": "eu-west-1", "serverless": true, "user_name": "iam-user"}, "mode": "url", "tls": {"ca_certs": null, "certfile": null, "check_hostname": false, "keyfile": null, "verify_certificate": true}, "url": "rediss://cache-1:6379"}))),
+    Ok(expected_view(json!({"mode": "url", "url": "rediss://cache-1:6379", "tls": {"ca_certs": null, "ca_data": null, "ca_path": null, "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}, "auth": {"kind": "aws_iam", "user_name": "iam-user", "cache_name": "cache-1", "region": "eu-west-1", "serverless": true}}))),
 )]
 #[case::aws_iam_without_tls_fails(
     json!({"aws_iam_auth": true, "aws_iam_cache_name": "cache-1", "aws_iam_region": "us-east-1", "aws_iam_user_name": "iam-user", "host": "cache-1"}),
@@ -1014,22 +1106,22 @@ fn view(resolved: &Resolution) -> serde_json::Value {
 #[case::tls_options_from_settings(
     json!({"host": "redis", "ssl": true, "ssl_ca_certs": "/ca.pem", "ssl_cert_reqs": "none", "ssl_check_hostname": true}),
     &[],
-    Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379, "tls": {"ca_certs": "/ca.pem", "certfile": null, "check_hostname": true, "keyfile": null, "verify_certificate": false}}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "tls": {"ca_certs": "/ca.pem", "ca_data": null, "ca_path": null, "certfile": null, "keyfile": null, "verify_certificate": false, "check_hostname": true}}))),
 )]
 #[case::tls_options_from_the_environment(
     json!({"host": "redis"}),
     &[("REDIS_SSL", "true"), ("REDIS_SSL_CA_CERTS", "/env-ca.pem"), ("REDIS_SSL_CERT_REQS", "optional")],
-    Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379, "tls": {"ca_certs": "/env-ca.pem", "certfile": null, "check_hostname": false, "keyfile": null, "verify_certificate": true}}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "tls": {"ca_certs": "/env-ca.pem", "ca_data": null, "ca_path": null, "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}}))),
 )]
 #[case::connect_timeout_is_separate_from_the_socket_timeout(
     json!({"host": "redis", "socket_connect_timeout": 0.25, "socket_timeout": 2.5}),
     &[],
-    Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379, "socket_connect_timeout": 0.25, "socket_timeout": 2.5}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "socket_timeout": 2.5, "socket_connect_timeout": 0.25}))),
 )]
 #[case::environment_references_resolve(
     json!({"host": "os.environ/COORD_HOST", "password": "os.environ/COORD_PASSWORD"}),
     &[("COORD_HOST", "referenced"), ("COORD_PASSWORD", "referenced-secret")],
-    Ok(expected_view(json!({"auth": {"kind": "static", "password": "referenced-secret", "username": null}, "db": 0, "host": "referenced", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "referenced", "port": 6379, "db": 0, "auth": {"kind": "static", "username": null, "password": "referenced-secret"}}))),
 )]
 #[case::no_target_fails(
     json!({"port": 6379}),
@@ -1039,22 +1131,22 @@ fn view(resolved: &Resolution) -> serde_json::Value {
 #[case::client_certificates(
     json!({"host": "redis", "ssl": true, "ssl_certfile": "/client.pem", "ssl_keyfile": "/client.key"}),
     &[],
-    Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379, "tls": {"ca_certs": null, "certfile": "/client.pem", "check_hostname": false, "keyfile": "/client.key", "verify_certificate": true}}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "tls": {"ca_certs": null, "ca_data": null, "ca_path": null, "certfile": "/client.pem", "keyfile": "/client.key", "verify_certificate": true, "check_hostname": false}}))),
 )]
 #[case::a_rediss_url_takes_tls_options_from_its_query(
     json!({"url": "rediss://cache:6380/0?ssl_cert_reqs=none&ssl_ca_certs=/ca.pem&ssl_check_hostname=yes"}),
     &[],
-    Ok(expected_view(json!({"mode": "url", "tls": {"ca_certs": "/ca.pem", "certfile": null, "check_hostname": true, "keyfile": null, "verify_certificate": false}, "url": "rediss://cache:6380/0?ssl_cert_reqs=none&ssl_ca_certs=/ca.pem&ssl_check_hostname=yes"}))),
+    Ok(expected_view(json!({"mode": "url", "url": "rediss://cache:6380/0?ssl_cert_reqs=none&ssl_ca_certs=/ca.pem&ssl_check_hostname=yes", "tls": {"ca_certs": "/ca.pem", "ca_data": null, "ca_path": null, "certfile": null, "keyfile": null, "verify_certificate": false, "check_hostname": true}}))),
 )]
 #[case::a_url_query_setting_without_a_redis_rs_equivalent(
     json!({"url": "redis://cache:6379/0?socket_timeout=2"}),
     &[],
-    Err("Redis host does not yet support configured setting url ?socket_timeout"),
+    Ok(expected_view(json!({"mode": "url", "url": "redis://cache:6379/0?socket_timeout=2"}))),
 )]
 #[case::tls_settings_outside_a_url_never_fail_it(
     json!({"db": "99999999999999999999", "ssl_cert_reqs": "strict", "url": "rediss://cache:6380"}),
     &[],
-    Ok(expected_view(json!({"mode": "url", "tls": {"ca_certs": null, "certfile": null, "check_hostname": false, "keyfile": null, "verify_certificate": true}, "url": "rediss://cache:6380"}))),
+    Ok(expected_view(json!({"mode": "url", "url": "rediss://cache:6380", "tls": {"ca_certs": null, "ca_data": null, "ca_path": null, "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}}))),
 )]
 #[case::db_is_not_read_for_a_cluster(
     json!({"db": 99_999_999_999_i64, "startup_nodes": [{"host": "node-a", "port": 7000}]}),
@@ -1069,7 +1161,7 @@ fn view(resolved: &Resolution) -> serde_json::Value {
 #[case::cluster_db_false(
     json!({"db": false, "startup_nodes": [{"host": "node-a", "port": 7000}]}),
     &[],
-    Ok(expected_view(json!({"mode": "cluster", "nodes": ["node-a:7000"]}))),
+    Ok(expected_view(json!({"mode": "cluster", "nodes": ["node-a:7000"], "health_check_interval": 25.0}))),
 )]
 #[case::cluster_db_fraction(
     json!({"db": 0.5, "startup_nodes": [{"host": "node-a", "port": 7000}]}),
@@ -1079,7 +1171,7 @@ fn view(resolved: &Resolution) -> serde_json::Value {
 #[case::cluster_db_float_zero(
     json!({"db": 0.0, "startup_nodes": [{"host": "node-a", "port": 7000}]}),
     &[],
-    Ok(expected_view(json!({"mode": "cluster", "nodes": ["node-a:7000"]}))),
+    Ok(expected_view(json!({"mode": "cluster", "nodes": ["node-a:7000"], "health_check_interval": 25.0}))),
 )]
 #[case::cluster_db_nonempty_list(
     json!({"db": [1], "startup_nodes": [{"host": "node-a", "port": 7000}]}),
@@ -1089,52 +1181,92 @@ fn view(resolved: &Resolution) -> serde_json::Value {
 #[case::cluster_db_empty_list(
     json!({"db": [], "startup_nodes": [{"host": "node-a", "port": 7000}]}),
     &[],
-    Ok(expected_view(json!({"mode": "cluster", "nodes": ["node-a:7000"]}))),
+    Ok(expected_view(json!({"mode": "cluster", "nodes": ["node-a:7000"], "health_check_interval": 25.0}))),
 )]
 #[case::ssl_ciphers(
     json!({"host": "redis", "ssl": true, "ssl_ciphers": "HIGH"}),
     &[],
-    Err("Redis host does not yet support configured setting ssl_ciphers"),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "tls": {"ca_certs": null, "ca_data": null, "ca_path": null, "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}}))),
 )]
 #[case::retry_on_timeout(
     json!({"host": "redis", "retry_on_timeout": true}),
     &[],
-    Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0}))),
 )]
 #[case::malformed_port(
     json!({"host": "redis", "port": "abc"}),
     &[],
-    Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0}))),
 )]
 #[case::malformed_db(
     json!({"db": "first", "host": "redis"}),
     &[],
-    Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0}))),
 )]
 #[case::socket_timeout_not_a_number(
     json!({"host": "redis", "socket_timeout": "slow"}),
     &[],
-    Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0}))),
 )]
 #[case::malformed_port_from_the_environment(
     json!({}),
     &[("REDIS_HOST", "redis"), ("REDIS_PORT", "abc")],
-    Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0}))),
 )]
 #[case::protocol_3(
     json!({"host": "redis", "protocol": 3}),
     &[],
-    Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0}))),
 )]
 #[case::retry_on_error_from_the_environment(
     json!({"host": "redis"}),
     &[("REDIS_RETRY_ON_ERROR", "true")],
-    Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379}))),
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0}))),
 )]
 #[case::unix_socket_path(
     json!({"host": "redis", "unix_socket_path": "/tmp/redis.sock"}),
     &[],
-    Err("Redis host does not yet support configured setting unix_socket_path"),
+    Ok(expected_view(json!({"mode": "unix", "path": "/tmp/redis.sock"}))),
+)]
+#[case::unix_socket_path_keeps_tls_settings_out_of_the_target(
+    json!({"host": "redis", "ssl": true, "ssl_ca_certs": "/ca.pem", "unix_socket_path": "/tmp/redis.sock"}),
+    &[],
+    Ok(expected_view(json!({"mode": "unix", "path": "/tmp/redis.sock"}))),
+)]
+#[case::ssl_ca_data(
+    json!({"host": "redis", "ssl": true, "ssl_ca_data": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"}),
+    &[],
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "tls": {"ca_certs": null, "ca_data": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----", "ca_path": null, "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}}))),
+)]
+#[case::ssl_ca_path_from_the_environment(
+    json!({"host": "redis"}),
+    &[("REDIS_SSL", "true"), ("REDIS_SSL_CA_PATH", "/etc/ssl/private-cas")],
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "tls": {"ca_certs": null, "ca_data": null, "ca_path": "/etc/ssl/private-cas", "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}}))),
+)]
+#[case::health_check_interval_is_whole_seconds(
+    json!({"health_check_interval": "7", "host": "redis"}),
+    &[],
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "health_check_interval": 7.0}))),
+)]
+#[case::health_check_interval_zero_is_off(
+    json!({"health_check_interval": 0, "host": "redis"}),
+    &[],
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0}))),
+)]
+#[case::health_check_interval_zero_keeps_a_cluster_off(
+    json!({"health_check_interval": 0, "startup_nodes": [{"host": "node-a", "port": 7000}]}),
+    &[],
+    Ok(expected_view(json!({"mode": "cluster", "nodes": ["node-a:7000"]}))),
+)]
+#[case::a_cluster_rejects_a_nonzero_db(
+    json!({"db": 3, "startup_nodes": [{"host": "node-a", "port": 7000}]}),
+    &[],
+    Err("db must be 0 in cluster mode"),
+)]
+#[case::unix_socket_path_without_a_host_fails_like_python(
+    json!({"unix_socket_path": "/tmp/redis.sock"}),
+    &[],
+    Err("either host or url must be specified for redis"),
 )]
 fn resolves_like_python_redis(
     #[case] kwargs: serde_json::Value,

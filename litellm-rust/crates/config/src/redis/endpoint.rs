@@ -1,5 +1,6 @@
 use litellm_redis_types::{
-    Auth, Cluster, Node, RedisUrl, Sentinel, Standalone, StaticAuth, Target, TlsOptions,
+    Auth, Cluster, Ignored, Node, RedisUrl, Sentinel, Standalone, StaticAuth, Target, TlsOptions,
+    UnixSocket,
 };
 use litellm_secret_value::SecretValue;
 
@@ -11,33 +12,49 @@ use super::{
 };
 use crate::Value;
 
-/// The target, first match wins like `get_redis_client`: cluster, url, Sentinel, then host.
-pub(super) fn target(options: &Options, auth: &Auth) -> Result<Target, RedisError> {
+/// The target, first match wins like `get_redis_client`: cluster, url, Sentinel, then host. A
+/// url also returns the query parameters it ignores.
+pub(super) fn target(options: &Options, auth: &Auth) -> Result<(Target, Vec<Ignored>), RedisError> {
     if let Some(nodes) = cluster_nodes(options.startup_nodes.as_ref())? {
         reject_cluster_db(options.db.as_ref())?;
-        return Ok(Target::Cluster(Cluster {
+        let cluster = Cluster {
             nodes,
             tls: tls_for(options, auth)?,
-        }));
+        };
+        return Ok((Target::Cluster(cluster), Vec::new()));
     }
     if let Some(url) = text(options.url.as_ref()) {
-        return Ok(Target::Url(RedisUrl {
-            tls: tls::url_tls(&url)?,
+        let query = tls::url_query(&url)?;
+        let url = RedisUrl {
             url: SecretValue::new(match auth {
                 Auth::Static(_) => url,
                 _ => without_userinfo(&url),
             }),
-        }));
+            tls: query.tls,
+            db: query.db,
+            username: query.username,
+            password: query.password,
+        };
+        return Ok((Target::Url(url), query.ignored));
     }
     if let Some(sentinels) = options.sentinel.nodes.as_ref() {
-        return sentinel(options, auth, sentinels).map(Target::Sentinel);
+        let sentinel = sentinel(options, auth, sentinels)?;
+        return Ok((Target::Sentinel(sentinel), Vec::new()));
     }
-    Ok(Target::Standalone(Standalone {
-        host: text(options.host.as_ref()).ok_or(RedisError::NoTarget)?,
-        port: integer(options.port.as_ref())?.unwrap_or(6379),
-        tls: tls_for(options, auth)?,
-        db: db(options)?,
-    }))
+    let host = text(options.host.as_ref()).ok_or(RedisError::NoTarget)?;
+    let target = match text(options.unix_socket_path.as_ref()) {
+        Some(path) => Target::Unix(UnixSocket {
+            path: path.into(),
+            db: db(options)?,
+        }),
+        None => Target::Standalone(Standalone {
+            host,
+            port: integer(options.port.as_ref())?.unwrap_or(6379),
+            tls: tls_for(options, auth)?,
+            db: db(options)?,
+        }),
+    };
+    Ok((target, Vec::new()))
 }
 
 fn tls_for(options: &Options, auth: &Auth) -> Result<Option<TlsOptions>, RedisError> {

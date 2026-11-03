@@ -5,7 +5,7 @@ use std::{
 
 use litellm_core_utils::settings::Lookup;
 use litellm_python_compat::{BigInt, number};
-use litellm_redis_types::Passthrough;
+use litellm_redis_types::{Ignored, Passthrough};
 use litellm_secret_value::SecretValue;
 
 use super::{
@@ -24,6 +24,7 @@ pub(super) struct Options {
     pub(super) host: Option<Entry>,
     pub(super) port: Option<Entry>,
     pub(super) db: Option<Entry>,
+    pub(super) unix_socket_path: Option<Entry>,
     pub(super) startup_nodes: Option<Entry>,
     pub(super) sentinel: SentinelOptions,
     pub(super) username: Option<Entry>,
@@ -37,6 +38,7 @@ pub(super) struct Options {
     pub(super) namespace: Option<Entry>,
     pub(super) socket_timeout: Option<Entry>,
     pub(super) socket_connect_timeout: Option<Entry>,
+    pub(super) health_check_interval: Option<Entry>,
 }
 
 pub(super) struct SentinelOptions {
@@ -69,6 +71,8 @@ pub(super) struct AwsOptions {
 pub(super) struct TlsInput {
     pub(super) cert_reqs: Option<Entry>,
     pub(super) ca_certs: Option<Entry>,
+    pub(super) ca_data: Option<Entry>,
+    pub(super) ca_path: Option<Entry>,
     pub(super) certfile: Option<Entry>,
     pub(super) keyfile: Option<Entry>,
     pub(super) check_hostname: Option<Entry>,
@@ -78,7 +82,7 @@ pub(super) struct TlsInput {
 pub(super) struct Unmodeled {
     pub(super) passthrough: Passthrough,
     pub(super) host_objects: BTreeSet<String>,
-    pub(super) ignored: Vec<String>,
+    pub(super) ignored: Vec<Ignored>,
 }
 
 impl Unmodeled {
@@ -104,8 +108,11 @@ impl Unmodeled {
             passthrough: Passthrough::new(passthrough),
             host_objects: objects.into_iter().map(|(key, _)| key.clone()).collect(),
             ignored: unmodeled()
-                .filter(|(key, _)| handling(key) == Some(Handling::Warn))
-                .map(|(_, entry)| entry.source.clone())
+                .filter(|(key, entry)| {
+                    handling(key) == Some(Handling::Warn)
+                        && !keys::is_met_by_rustls(key, &entry.value)
+                })
+                .map(|(key, entry)| keys::ignored(entry.source.clone(), key))
                 .collect(),
         })
     }
@@ -117,14 +124,6 @@ impl Options {
         kwargs: Kwargs,
         lookup: &dyn Lookup,
     ) -> Result<(Self, Unmodeled), RedisError> {
-        if let Some((_, entry)) = kwargs
-            .iter()
-            .find(|(key, _)| handling(key) == Some(Handling::Reject))
-        {
-            return Err(RedisError::Unsupported {
-                setting: entry.source.clone(),
-            });
-        }
         let unmodeled = Unmodeled::read(&kwargs)?;
         let get = |key: &str| {
             kwargs
@@ -138,6 +137,7 @@ impl Options {
             host: get("host"),
             port: get("port"),
             db: get("db"),
+            unix_socket_path: get("unix_socket_path"),
             startup_nodes: get("startup_nodes"),
             sentinel: SentinelOptions {
                 nodes: get("sentinel_nodes"),
@@ -168,6 +168,8 @@ impl Options {
             tls: TlsInput {
                 cert_reqs: get("ssl_cert_reqs"),
                 ca_certs: get("ssl_ca_certs"),
+                ca_data: get("ssl_ca_data"),
+                ca_path: get("ssl_ca_path"),
                 certfile: get("ssl_certfile"),
                 keyfile: get("ssl_keyfile"),
                 check_hostname: get("ssl_check_hostname"),
@@ -175,6 +177,7 @@ impl Options {
             namespace: get("namespace"),
             socket_timeout: get("socket_timeout"),
             socket_connect_timeout: get("socket_connect_timeout"),
+            health_check_interval: get("health_check_interval"),
         };
         Ok((options, unmodeled))
     }
