@@ -1982,9 +1982,17 @@ def messages_within_cache_control_cap(
 
     Tool hints and a top-level ``cache_control`` stay on the wire, so they are reserved first.
     """
-    reserved_marks: Final = AnthropicCacheControlHook.count_external_cache_breakpoints(
-        _validated_object_list(tools), cache_control, request_kwargs
+    return messages_within_reserved_cache_control_cap(
+        messages,
+        AnthropicCacheControlHook.count_external_cache_breakpoints(
+            _validated_object_list(tools), cache_control, request_kwargs
+        ),
     )
+
+
+def messages_within_reserved_cache_control_cap(
+    messages: Sequence[_MessageT], reserved_marks: int
+) -> Sequence[_MessageT]:
     kept: Final = newest_marks_within_cache_control_limit(messages, reserved_marks)
     dropped: Final = sum(map(cache_control_count, messages)) - sum(map(cache_control_count, kept))
     if dropped > 0:

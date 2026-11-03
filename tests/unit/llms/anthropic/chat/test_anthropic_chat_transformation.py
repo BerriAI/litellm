@@ -4434,7 +4434,7 @@ def _anthropic_body(messages: list, litellm_params: dict | None = None, tools: l
 
 
 def test_transform_request_carries_prompt_cache_breakpoint_to_cache_control():
-    body = _anthropic_body(
+    body: Final = _anthropic_body(
         [
             {
                 "role": "system",
@@ -4477,28 +4477,28 @@ def test_transform_request_carries_prompt_cache_breakpoint_to_cache_control():
     ],
 )
 def test_transform_request_prompt_cache_breakpoint_without_claude_equivalent(marker, expected_block):
-    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": marker}]}]
+    messages: Final = [{"role": "user", "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": marker}]}]
 
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
         _anthropic_body(copy.deepcopy(messages))
 
-    body = _anthropic_body(messages, litellm_params={"drop_params": True})
+    body: Final = _anthropic_body(messages, litellm_params={"drop_params": True})
     assert body["messages"] == [{"role": "user", "content": [expected_block]}]
 
 
 def test_transform_request_keeps_the_first_and_last_prompt_cache_breakpoints_within_the_cap():
-    client_marked_part = {"type": "text", "text": "part 0", "cache_control": {"type": "ephemeral"}}
-    marked_parts = [
+    client_marked_part: Final = {"type": "text", "text": "part 0", "cache_control": {"type": "ephemeral"}}
+    marked_parts: Final = [
         {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
         for index in range(1, 5)
     ]
-    messages = [{"role": "user", "content": [client_marked_part, *marked_parts]}]
-    tools = [{"name": "lookup", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}}]
+    messages: Final = [{"role": "user", "content": [client_marked_part, *marked_parts]}]
+    tools: Final = [{"name": "lookup", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}}]
 
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="at most 4 cache breakpoints"):
         _anthropic_body(copy.deepcopy(messages), tools=copy.deepcopy(tools))
 
-    body = _anthropic_body(messages, litellm_params={"drop_params": True}, tools=tools)
+    body: Final = _anthropic_body(messages, litellm_params={"drop_params": True}, tools=tools)
     assert [part.get("cache_control") for part in body["messages"][0]["content"]] == [
         {"type": "ephemeral"},
         {"type": "ephemeral"},
@@ -4510,8 +4510,8 @@ def test_transform_request_keeps_the_first_and_last_prompt_cache_breakpoints_wit
 
 
 def test_transform_request_counts_a_cache_marked_tool_search_tool_toward_the_cap():
-    config = AnthropicConfig()
-    optional_params = config.map_openai_params(
+    config: Final = AnthropicConfig()
+    optional_params: Final = config.map_openai_params(
         non_default_params={
             "max_tokens": 100,
             "tools": [
@@ -4526,7 +4526,7 @@ def test_transform_request_counts_a_cache_marked_tool_search_tool_toward_the_cap
         model="claude-sonnet-5-5",
         drop_params=False,
     )
-    marked_turns = [
+    marked_turns: Final = [
         {
             "role": "user",
             "content": [{"type": "text", "text": f"turn {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}],
@@ -4546,9 +4546,9 @@ def test_transform_request_counts_a_cache_marked_tool_search_tool_toward_the_cap
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="this request has 5"):
         body({})
 
-    capped = body({"drop_params": True})
+    capped: Final = body({"drop_params": True})
     assert capped["tools"][0]["cache_control"] == {"type": "ephemeral"}
-    sent_parts = itertools.chain.from_iterable(message["content"] for message in capped["messages"])
+    sent_parts: Final = itertools.chain.from_iterable(message["content"] for message in capped["messages"])
     assert [part.get("cache_control") for part in sent_parts] == [
         {"type": "ephemeral"},
         {"type": "ephemeral"},
@@ -4576,15 +4576,15 @@ def test_transform_request_counts_a_cache_marked_tool_search_tool_toward_the_cap
     ],
 )
 def test_transform_request_caps_only_the_marks_claude_receives(unsent_marks: list[dict]):
-    marked_parts = [
+    marked_parts: Final = [
         {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}} for index in range(4)
     ]
 
-    body = _anthropic_body(
+    body: Final = _anthropic_body(
         [{"role": "user", "content": marked_parts}, *unsent_marks, {"role": "user", "content": "Go on."}]
     )
 
-    sent_marks = [
+    sent_marks: Final = [
         part.get("cache_control")
         for part in itertools.chain.from_iterable(message["content"] for message in body["messages"])
         if isinstance(part, dict)

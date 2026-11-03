@@ -2241,22 +2241,27 @@ class AmazonConverseConfig(BaseConfig):
 
         return data
 
-    @staticmethod
     def _claude_messages_within_cache_control_cap(
+        self,
         messages: Sequence[AllMessageValues],
         capability_model: str,
+        deployment_model: str,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
+        model_info: Mapping[str, object] | None,
     ) -> Sequence[AllMessageValues]:
         if not drops_unsupported_params(litellm_params.get("drop_params")) or "claude" not in capability_model.lower():
             return messages
         from litellm.integrations.anthropic_cache_control_hook import (
-            messages_within_cache_control_cap,
+            messages_within_reserved_cache_control_cap,
             tool_message_with_single_cache_mark,
         )
 
-        return messages_within_cache_control_cap(
-            tuple(map(tool_message_with_single_cache_mark, messages)), optional_params.get("tools")
+        return messages_within_reserved_cache_control_cap(
+            tuple(map(tool_message_with_single_cache_mark, messages)),
+            self._tool_cache_points_on_the_wire(
+                capability_model, deployment_model, optional_params, litellm_params, model_info
+            ),
         )
 
     async def _async_transform_request(
@@ -2285,7 +2290,7 @@ class AmazonConverseConfig(BaseConfig):
         messages, system_content_blocks = self._transform_system_message(
             list(
                 self._claude_messages_within_cache_control_cap(
-                    marked_messages, capability_model, json_optional_params, litellm_params
+                    marked_messages, capability_model, model, json_optional_params, litellm_params, model_info
                 )
             ),
             model=capability_model,
@@ -2399,7 +2404,7 @@ class AmazonConverseConfig(BaseConfig):
         messages, system_content_blocks = self._transform_system_message(
             list(
                 self._claude_messages_within_cache_control_cap(
-                    marked_messages, capability_model, json_optional_params, litellm_params
+                    marked_messages, capability_model, model, json_optional_params, litellm_params, model_info
                 )
             ),
             model=capability_model,

@@ -10074,7 +10074,7 @@ def test_bedrock_prompt_caching_message(messages, expected_cache_control):
 
 
 def test_converse_carries_prompt_cache_breakpoint_to_cache_point():
-    request = litellm.AmazonConverseConfig()._transform_request(
+    request: Final = litellm.AmazonConverseConfig()._transform_request(
         model="anthropic.claude-sonnet-5-5",
         messages=[
             {
@@ -10099,7 +10099,7 @@ def test_converse_carries_prompt_cache_breakpoint_to_cache_point():
 
 
 def test_converse_keeps_the_first_and_last_prompt_cache_breakpoints_within_the_cap():
-    messages = [
+    messages: Final = [
         {
             "role": "user",
             "content": [
@@ -10120,7 +10120,7 @@ def test_converse_keeps_the_first_and_last_prompt_cache_breakpoints_within_the_c
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="at most 4 cache breakpoints"):
         transform({})
 
-    cache_point = {"cachePoint": {"type": "default"}}
+    cache_point: Final = {"cachePoint": {"type": "default"}}
     assert transform({"drop_params": True})["messages"] == [
         {
             "role": "user",
@@ -10157,7 +10157,7 @@ _CONVERSE_CAP_TOOL: Final[dict[str, object]] = {
     ids=["client_tool_cache_control", "tool_config_injection_point"],
 )
 def test_converse_reserves_the_tool_cache_point_within_the_cap(tool_cache_params: dict[str, object]):
-    messages = [
+    messages: Final = [
         {
             "role": "user",
             "content": [
@@ -10178,8 +10178,8 @@ def test_converse_reserves_the_tool_cache_point_within_the_cap(tool_cache_params
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="this request has 5"):
         transform({})
 
-    request = transform({"drop_params": True})
-    cache_point = {"cachePoint": {"type": "default"}}
+    request: Final = transform({"drop_params": True})
+    cache_point: Final = {"cachePoint": {"type": "default"}}
     assert request["messages"][0]["content"] == [
         {"text": "part 0"},
         cache_point,
@@ -10210,8 +10210,11 @@ def test_converse_reserves_the_tool_cache_point_within_the_cap(tool_cache_params
     ],
     ids=["tool_search_tool", "built_in_tool", "tool_config_point_with_no_tool_sent"],
 )
-def test_converse_leaves_the_cap_to_markers_when_a_marked_tool_is_not_sent(unsent_tool_params: dict[str, object]):
-    request = litellm.AmazonConverseConfig()._transform_request(
+@pytest.mark.parametrize("litellm_params", [{}, {"drop_params": True}], ids=["strict", "drop_params"])
+def test_converse_leaves_the_cap_to_markers_when_a_marked_tool_is_not_sent(
+    unsent_tool_params: dict[str, object], litellm_params: dict[str, object]
+):
+    request: Final = litellm.AmazonConverseConfig()._transform_request(
         model="anthropic.claude-sonnet-5-5",
         messages=[
             {
@@ -10223,10 +10226,10 @@ def test_converse_leaves_the_cap_to_markers_when_a_marked_tool_is_not_sent(unsen
             }
         ],
         optional_params=copy.deepcopy(unsent_tool_params),
-        litellm_params={},
+        litellm_params=dict(litellm_params),
     )
 
-    cache_point = {"cachePoint": {"type": "default"}}
+    cache_point: Final = {"cachePoint": {"type": "default"}}
     assert request["messages"][0]["content"] == [
         {"text": "part 0"},
         cache_point,
@@ -10265,7 +10268,7 @@ def _marked_tool_result_parts() -> list[dict[str, object]]:
 
 
 def test_converse_counts_one_cache_point_for_a_tool_result_with_several_marks():
-    request = litellm.AmazonConverseConfig()._transform_request(
+    request: Final = litellm.AmazonConverseConfig()._transform_request(
         model="anthropic.claude-sonnet-5-5",
         messages=[
             {"role": "user", "content": _marked_text_parts(3)},
@@ -10279,7 +10282,7 @@ def test_converse_counts_one_cache_point_for_a_tool_result_with_several_marks():
 
 
 def test_converse_drops_marks_until_a_merged_tool_result_fits_the_cap():
-    messages = [
+    messages: Final = [
         {"role": "user", "content": _marked_text_parts(4)},
         *_converse_tool_turn(*_marked_tool_result_parts()),
     ]
@@ -10295,8 +10298,8 @@ def test_converse_drops_marks_until_a_merged_tool_result_fits_the_cap():
     with pytest.raises(litellm.UnsupportedParamsError, match="this request has 5"):
         transform({})
 
-    request = transform({"drop_params": True})
-    cache_point = {"cachePoint": {"type": "default"}}
+    request: Final = transform({"drop_params": True})
+    cache_point: Final = {"cachePoint": {"type": "default"}}
     assert request["messages"][0]["content"] == [
         {"text": "part 0"},
         cache_point,
@@ -10310,7 +10313,7 @@ def test_converse_drops_marks_until_a_merged_tool_result_fits_the_cap():
 
 
 def test_converse_drops_prompt_cache_breakpoint_from_a_nova_tool_result():
-    messages = [
+    messages: Final = [
         {
             "role": "system",
             "content": [{"type": "text", "text": "You are terse.", "prompt_cache_breakpoint": {"mode": "explicit"}}],
@@ -10330,7 +10333,7 @@ def test_converse_drops_prompt_cache_breakpoint_from_a_nova_tool_result():
     with pytest.raises(litellm.UnsupportedParamsError, match="tool result"):
         transform({})
 
-    request = transform({"drop_params": True})
+    request: Final = transform({"drop_params": True})
     assert request["system"] == [{"text": "You are terse."}, {"cachePoint": {"type": "default"}}]
     assert _collect_cache_points(request["messages"]) == []
 
