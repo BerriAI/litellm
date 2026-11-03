@@ -27,6 +27,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import i18n from "@/i18n/i18n";
 import type { KeyValueFormValue, KillSwitchConfig, KillSwitchFormValue } from "./kill_switch_config";
 
 export interface AgentSkillFormValue {
@@ -282,7 +283,7 @@ export const AgentTagsInput = ({
   value,
   onValueChange,
   placeholder,
-  emptyText = "No matching options",
+  emptyText = i18n.t("agents.formKit.noMatchingOptions"),
   ...props
 }: AgentTagsInputProps) => {
   const anchor = useComboboxAnchor();
@@ -396,7 +397,7 @@ export const AgentMultiSelect = ({
   value,
   onValueChange,
   placeholder,
-  emptyText = "No matching options",
+  emptyText = i18n.t("agents.formKit.noMatchingOptions"),
   ...props
 }: AgentMultiSelectProps) => {
   const anchor = useComboboxAnchor();

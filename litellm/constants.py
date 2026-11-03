@@ -432,6 +432,7 @@ WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
 DEEPGRAM_DEFAULT_API_BASE: Final = "https://api.deepgram.com/v1"
 NADIR_DEFAULT_API_BASE: Final = "https://api.getnadir.com/v1"
 DEEPGRAM_LISTEN_DEFAULT_MODEL: Final = "nova-3"
+DEEPGRAM_SPEAK_DEFAULT_MODEL: Final = "aura-asteria-en"
 
 BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_opening_message"
 BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY: Final = "litellm.bedrock_realtime.session_committed"
@@ -450,6 +451,7 @@ OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES: Final = frozenset(
     {"response.completed", "response.incomplete", "response.failed"}
 )
 REALTIME_SESSION_FAILURE_LOGGED_KEY: Final = "realtime_session_failure_logged"
+REALTIME_SESSION_ENDED_ABNORMALLY_KEY: Final = "realtime_session_ended_abnormally"
 
 # SSL/TLS cipher configuration for faster handshakes
 # Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
@@ -675,7 +677,7 @@ request_timeout: float = (
     DEFAULT_REQUEST_TIMEOUT_SECONDS if _request_timeout_from_env is None else _request_timeout_from_env
 )
 request_timeout_explicitly_set: bool = _request_timeout_from_env is not None
-DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = get_env_float("DEFAULT_A2A_AGENT_TIMEOUT", 6000.0)  # 10 minutes
+DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = get_env_float("DEFAULT_A2A_AGENT_TIMEOUT", 6000.0)
 AGENT_KILL_SWITCH_TIMEOUT_SECONDS: Final = 10.0
 AGENT_KILL_SWITCH_RESPONSE_BODY_MAX_CHARS: Final = 2000
 # Patterns that indicate a localhost/internal URL in A2A agent cards that should be
@@ -698,6 +700,9 @@ STREAM_SSE_DONE_STRING: Final[str] = "[DONE]"
 STREAM_SSE_DATA_PREFIX: Final[str] = "data: "
 STREAM_SSE_KEEPALIVE_PING_CHUNK: Final[str] = 'event: ping\ndata: {"type": "ping"}\n\n'
 STREAM_SSE_KEEPALIVE_PING_BYTES: Final[bytes] = STREAM_SSE_KEEPALIVE_PING_CHUNK.encode("utf-8")
+STREAM_FINISH_CHOICE_FIELDS: Final = ("stop_reason",)
+STREAM_CHUNK_CHOICE_FIELDS: Final = ("token_ids",)
+VLLM_CHOICE_FIELDS: Final = STREAM_FINISH_CHOICE_FIELDS + STREAM_CHUNK_CHOICE_FIELDS
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = get_env_float(
     "DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400
@@ -967,7 +972,10 @@ OPENAI_CHAT_COMPLETION_PARAMS: Final = [
 
 OPENAI_TRANSCRIPTION_PARAMS: Final = [
     "language",
+    "languages",
+    "keywords",
     "response_format",
+    "stream",
     "timestamp_granularities",
 ]
 

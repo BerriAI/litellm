@@ -2946,6 +2946,44 @@ async def test_async_success_handler_runs_async_callbacks_in_the_post_response_p
     assert in_post_response_phase() is False, "the phase must not leak into the request task"
 
 
+@pytest.mark.parametrize("stream", [True, False], ids=["streaming", "non_streaming"])
+def test_reused_logging_obj_does_not_report_the_previous_attempts_first_token(logging_obj, stream: bool):
+    """A fallback reuses the request's logging object but runs in its own window.
+
+    When the first attempt already recorded a first-token time, the fallback must not
+    report it. Otherwise ``completion_start_time`` lands before the attempt's
+    ``start_time``, the callbacks see a negative TTFT, and latency-based routing caches
+    a negative sample that empties its buffer window.
+    """
+    logging_obj.stream = stream
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    first_attempt_start: Final = datetime.datetime(2026, 1, 1, 12, 0, 0)
+    logging_obj.update_completion_start_time(first_attempt_start + datetime.timedelta(seconds=1))
+    fallback_start: Final = first_attempt_start + datetime.timedelta(seconds=600)
+    fallback_end: Final = fallback_start + datetime.timedelta(seconds=5)
+
+    observed: dict[str, object] = {}
+
+    class Recorder(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            observed["completion_start_time"] = kwargs.get("completion_start_time")
+
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=[Recorder()]):
+        logging_obj.success_handler(
+            result=_success_response(),
+            start_time=fallback_start,
+            end_time=fallback_end,
+        )
+
+    completion_start_time: Final = observed["completion_start_time"]
+    assert isinstance(completion_start_time, datetime.datetime)
+    assert completion_start_time >= fallback_start, (
+        "the fallback attempt reported a first-token time that predates its own start"
+    )
+
+
 def test_is_sync_litellm_request():
     assert LitellmLogging.is_sync_litellm_request({}) is True
     assert LitellmLogging.is_sync_litellm_request({"acompletion": True}) is False
@@ -11050,6 +11088,40 @@ def test_get_assembled_streaming_response_bills_a_provider_reported_usage_cost()
 
     assert assembled._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.0042
     assert logging_obj.response_cost_calculator(result=assembled) == 0.0042
+
+
+@pytest.mark.parametrize("continued_response_id", ["resp_continuedafteracutstream", None])
+@pytest.mark.parametrize("client_facing_response_id", ["resp_encryptedidtheclientsaw", None])
+def test_sync_success_handler_logs_a_stream_under_the_id_the_client_saw(
+    client_facing_response_id, continued_response_id
+):
+    class Recorder(CustomLogger):
+        def __init__(self):
+            super().__init__()
+            self.logged = []
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            self.logged.append((response_obj.id, kwargs["standard_logging_object"]["id"]))
+
+    recorder: Final = Recorder()
+    logging_obj: Final = _responses_stream_logging_obj()
+    logging_obj.dynamic_success_callbacks = [recorder]
+    logging_obj.client_facing_response_id = client_facing_response_id
+    if continued_response_id is not None:
+        logging_obj.record_continued_partial(
+            Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2), 0.0, continued_response_id
+        )
+    now: Final = datetime.datetime.now()
+
+    logging_obj.success_handler(
+        result=_completed_responses_event(ResponseAPIUsage(input_tokens=3, output_tokens=2, total_tokens=5)),
+        start_time=now,
+        end_time=now,
+        cache_hit=False,
+    )
+
+    expected_id: Final = client_facing_response_id or continued_response_id or "resp-1"
+    assert recorder.logged == [(expected_id, expected_id)]
 
 
 def test_response_cost_calculator_prices_terminal_responses_event_from_its_response():
