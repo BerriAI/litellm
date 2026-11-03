@@ -1169,18 +1169,21 @@ premium_user_data: Optional["EnterpriseLicenseData"] = _license_check.airgapped_
 
 def _set_premium_user(is_premium: bool) -> None:
     global premium_user, premium_user_data
-    premium_user = is_premium
-    premium_user_data = _license_check.airgapped_license_data
+    premium_user = is_premium  # rebind-ok: config load can switch the license in use
+    premium_user_data = _license_check.airgapped_license_data  # rebind-ok: tracks the license in use
 
 
-def _premium_with_config_license(config_license: str, env_license_is_premium: bool) -> bool:
+def _use_config_license(config_license: str, env_license_is_premium: bool) -> bool:
+    env_license: Final = _license_check.license_str
+    env_license_data: Final = _license_check.airgapped_license_data
     _license_check.license_str = config_license
     if _license_check.is_premium():
         return True
     if not env_license_is_premium:
         return False
-    _license_check.license_str = os.getenv("LITELLM_LICENSE")
-    return _license_check.is_premium()
+    _license_check.license_str = env_license
+    _license_check.airgapped_license_data = env_license_data
+    return True
 
 
 global_max_parallel_request_retries_env: Final[str | None] = os.getenv("LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES")
@@ -6783,7 +6786,7 @@ class ProxyConfig:
             _GENERAL_SETTINGS_VIEW.validate_python(config).get("general_settings") or {}
         ).get("litellm_license")
         if isinstance(config_license, str):
-            _set_premium_user(_premium_with_config_license(config_license, env_license_is_premium=premium_user))
+            _set_premium_user(_use_config_license(config_license, env_license_is_premium=premium_user))
 
         ## Coordination Redis (before cache init, so the explicit block wins)
         coordination_redis_cache: Final = self._init_coordination_redis(config=config)

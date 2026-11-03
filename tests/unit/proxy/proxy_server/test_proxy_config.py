@@ -2710,13 +2710,19 @@ def _write_config(path: Path, general_settings: dict[str, object], litellm_setti
 
 
 def _boot_proxy(
-    monkeypatch: pytest.MonkeyPatch, public_key: RSAPublicKey, env_license: str | None, license_server_urls: list[str]
+    monkeypatch: pytest.MonkeyPatch,
+    public_key: RSAPublicKey,
+    env_license: str | None,
+    license_server_urls: list[str],
+    server_accepted_license: str | None = None,
 ) -> None:
     from litellm.proxy import proxy_server
 
     def _license_server(request: httpx.Request) -> httpx.Response:
         license_server_urls.append(str(request.url))
-        return httpx.Response(200, json={"verify": False})
+        return httpx.Response(
+            200, json={"verify": server_accepted_license is not None and server_accepted_license in str(request.url)}
+        )
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
@@ -2848,6 +2854,33 @@ async def test_load_config_does_not_recheck_an_env_license_that_failed_at_boot(
     assert proxy_server.premium_user is False
     assert [url for url in license_server_urls[asked_at_boot:] if "also-not-a-valid-license" in url] == []
     assert any("not-a-valid-license" in url for url in license_server_urls[asked_at_boot:])
+
+
+@pytest.mark.asyncio
+async def test_load_config_keeps_the_boot_verdict_of_a_server_checked_env_license(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy import proxy_server
+
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    config_file: Final = _write_config(
+        tmp_path / "stale_license.yaml", {"litellm_license": "not-a-valid-license", "allowed_ips": ["127.0.0.1"]}, {}
+    )
+    license_server_urls: Final[list[str]] = []
+    _boot_proxy(
+        monkeypatch,
+        private_key.public_key(),
+        "server-checked-license",
+        license_server_urls,
+        server_accepted_license="server-checked-license",
+    )
+    asked_at_boot: Final = len(license_server_urls)
+
+    await ProxyConfig().load_config(router=None, config_file_path=config_file)
+
+    assert proxy_server.premium_user is True
+    assert proxy_server._license_check.license_str == "server-checked-license"
+    assert [url for url in license_server_urls[asked_at_boot:] if "server-checked-license" in url] == []
 
 
 @pytest.mark.asyncio
