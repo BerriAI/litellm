@@ -2700,6 +2700,38 @@ def test_an_unmapped_models_shared_row_lasts_exactly_as_long_as_a_deployment_ser
         litellm.get_model_info(backend_model)
 
 
+def test_deleting_a_deployment_keeps_a_limit_an_sdk_user_added_to_an_unmapped_models_row() -> None:
+    backend_model: Final = "hosted_vllm/withdraw-test-unmapped-in-place-model"
+    sdk_limit: Final = 987_656
+    router: Final = Router(
+        model_list=[
+            _cache_point_deployment("kept", model=backend_model),
+            _cache_point_deployment("doomed", model=backend_model),
+        ]
+    )
+    litellm.model_cost[backend_model]["max_input_tokens"] = sdk_limit
+
+    assert router.delete_deployment(id="doomed") is not None
+
+    assert litellm.get_model_info(backend_model).get("max_input_tokens") == sdk_limit
+
+
+def test_deleting_a_deployment_keeps_the_limit_the_newest_router_wrote_to_the_shared_row() -> None:
+    row: Final = _shared_cache_point_row()
+    oldest_limit: Final = _unseen_max_output_tokens(row)
+    routers: Final = tuple(
+        Router(model_list=[_cache_point_deployment(f"router-{index}", max_output_tokens=oldest_limit + index)])
+        for index in range(16)
+    )
+    newest_limit: Final = oldest_limit + len(routers) - 1
+    assert routers[0].upsert_deployment(Deployment(**_cache_point_deployment("plain"))) is not None
+    assert litellm.model_cost[row].get("max_output_tokens") == newest_limit
+
+    assert routers[0].delete_deployment(id="plain") is not None
+
+    assert litellm.model_cost[row].get("max_output_tokens") == newest_limit
+
+
 def test_deleting_a_flagged_deployment_keeps_the_flag_another_router_sets() -> None:
     row: Final = _shared_cache_point_row()
     flag: Final = not bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)

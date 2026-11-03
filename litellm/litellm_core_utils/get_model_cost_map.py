@@ -562,7 +562,6 @@ def get_model_cost_map_loaded_at() -> "datetime | None":
 
 class AliasedCostEntry(dict[str, object]):
     __slots__ = (
-        "created_by_registration",
         "displaced_values",
         "latest_unsaved_write_fields",
         "names",
@@ -578,7 +577,6 @@ class AliasedCostEntry(dict[str, object]):
         entry: Mapping[str, object],
         names: tuple[str, ...],
         registered_fields: frozenset[str] = frozenset(),
-        created_by_registration: bool = False,
         registered_by: frozenset[str] = frozenset(),
         written_fields: frozenset[str] = frozenset(),
         displaced_values: tuple[tuple[str, object], ...] = (),
@@ -589,7 +587,6 @@ class AliasedCostEntry(dict[str, object]):
         super().__init__(entry)
         self.names: tuple[str, ...] = names
         self.registered_fields: frozenset[str] = registered_fields
-        self.created_by_registration: bool = created_by_registration
         self.registered_by: frozenset[str] = registered_by
         self.written_fields: frozenset[str] = written_fields
         self.displaced_values: tuple[tuple[str, object], ...] = displaced_values

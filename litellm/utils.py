@@ -3889,7 +3889,6 @@ def _replace_cost_map_entry(
             **dict(previous.displaced_values),
         }.items()
     )
-    created_by_registration: Final = previous.created_by_registration if current is previous else current is None
     written_now: Final = {name: value for name, value in entry.items() if name in changed_fields or name in set_fields}
     cost_map.update(
         dict.fromkeys(
@@ -3898,7 +3897,6 @@ def _replace_cost_map_entry(
                 merged,
                 previous.names,
                 registered_fields,
-                created_by_registration,
                 registered_by=previous.registered_by | {registered_key},
                 written_fields=previous.written_fields | registered_fields | changed_fields,
                 displaced_values=displaced_values,
@@ -4218,7 +4216,7 @@ def restore_model_cost_rows_to_catalog(rows: Iterable[str]) -> None:
     """Put each of ``rows`` back to its loaded catalog entry, keeping every alias on the one shared entry and every
     field written into it outside ``register_model``, such as an SDK user's own price, at the value it had before a
     registration first overwrote it, so registrations replayed onto them start where a fresh boot does. A row the
-    catalog lacks goes once no such field is left or a registration created it."""
+    catalog lacks goes once no such field is left."""
     cost_map: Final = _builtin_cost_map()
     catalog: Final = GetModelCostMap.loaded_model_cost_map()
     entries: Final = ((row, cost_map.get(row)) for row in rows)
@@ -4236,8 +4234,6 @@ def restore_model_cost_rows_to_catalog(rows: Iterable[str]) -> None:
 
 
 def _fields_outside_registrations(entry: AliasedCostEntry) -> Mapping[str, object]:
-    if entry.created_by_registration:
-        return {}
     unwritten: Final = {
         name: value for name, value in entry.items() if name not in entry.written_fields and value is not None
     }
@@ -4274,7 +4270,6 @@ def _without_fields_left_by_earlier_writes(
         },
         current.names,
         registered_fields=current.registered_fields - dropped,
-        created_by_registration=current.created_by_registration,
         registered_by=current.registered_by,
         written_fields=current.written_fields - dropped,
         displaced_values=tuple((name, value) for name, value in current.displaced_values if name not in dropped),
@@ -4319,7 +4314,6 @@ def _with_fields_set_in_place(entry: AliasedCostEntry, values: Mapping[str, obje
         {**entry, **values},
         entry.names,
         registered_fields=entry.registered_fields,
-        created_by_registration=entry.created_by_registration,
         registered_by=entry.registered_by,
         written_fields=entry.written_fields,
         displaced_values=entry.displaced_values,

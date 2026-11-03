@@ -47,7 +47,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache, partial
-from itertools import chain, groupby
+from itertools import chain, count, groupby
 from operator import itemgetter
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, TypeAlias, TypeVar, Union, cast
@@ -1301,13 +1301,19 @@ class RoutingArgs(enum.Enum):
 # as the per-request one built from a caller-supplied user_config, drops out on its
 # own rather than leaving entries behind that nothing can withdraw.
 _live_routers: Final["weakref.WeakSet[PythonCore]"] = weakref.WeakSet()
+_live_router_creation_ticks: Final["weakref.WeakKeyDictionary[PythonCore, int]"] = weakref.WeakKeyDictionary()
+_next_router_creation_tick: Final = count()
 _routers_holding_global_callbacks: Final["weakref.WeakSet[PythonCore]"] = weakref.WeakSet()
 _routers_holding_global_callbacks_lock: Final = threading.Lock()
 
 
+def _live_routers_oldest_first() -> tuple["PythonCore", ...]:
+    return tuple(sorted(_live_routers, key=_live_router_creation_ticks.__getitem__))
+
+
 def _replay_live_router_model_cost() -> None:
-    """Re-assert every live router's deployments after the cost map is refreshed."""
-    for router in tuple(_live_routers):
+    """Re-assert every live router's deployments, oldest router first, after the cost map is refreshed."""
+    for router in _live_routers_oldest_first():
         router.replay_model_cost_registrations()
 
 
@@ -1939,6 +1945,7 @@ class PythonCore(DeprecatedRouterMembers):
         # Track this router so a price data reload can rebuild its deployments'
         # cost-map entries from the list it is serving at that moment, whether
         # those deployments came from model_list or were added later from the DB.
+        _live_router_creation_ticks[self] = next(_next_router_creation_tick)
         _live_routers.add(self)
 
         if allowed_fails is not None:
@@ -12511,8 +12518,8 @@ class PythonCore(DeprecatedRouterMembers):
 
     def _rebuild_cost_rows_written_by(self, written_keys: frozenset[str]) -> None:
         """Rebuild the rows ``register_model`` writes of ``written_keys`` landed on: the loaded catalog row, then the
-        ``register_model`` registrations replayed on every reload, then every live deployment that wrote it in
-        ``model_list`` order, then again the fields of those registrations no deployment wrote over since, then the
+        ``register_model`` registrations replayed on every reload, then every live deployment that wrote it, oldest router
+        first and each router's in ``model_list`` order, then again the fields of those registrations no deployment wrote over since, then the
         fields set in place after their last write, so each field keeps the order its writes came in, whether the
         registration came before the router or after it. The replay writes only those rows, so a row it leaves alone
         keeps what later deployments and registrations put there, and deployments with the same write replay it once,
@@ -12522,7 +12529,7 @@ class PythonCore(DeprecatedRouterMembers):
             return
         writers: Final = model_cost_row_writers(stale)
         targets: Final = stale | writers
-        routers: Final = tuple(_live_routers)
+        routers: Final = _live_routers_oldest_first()
         entries: Final = tuple(chain.from_iterable(router._model_list_entries() for router in routers))
         writes: Final = (PythonCore._entry_shared_cost_write(entry) for entry in entries)
         landing: Final = tuple(
