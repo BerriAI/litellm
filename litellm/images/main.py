@@ -28,8 +28,7 @@ from litellm.litellm_core_utils.mock_functions import mock_image_generation
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.llms.custom_llm import CustomLLM
-from litellm.utils import exception_type, filter_out_litellm_params, get_litellm_params
+from litellm.utils import exception_type, filter_out_litellm_params, get_litellm_params, header_auth_params
 
 #################### Initialize provider clients ####################
 llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
@@ -53,7 +52,7 @@ from litellm.main import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.openai import ImageGenerationRequestQuality
-from litellm.types.router import GenericLiteLLMParams
+from litellm.types.router import CustomPricingLiteLLMParams, GenericLiteLLMParams
 from litellm.types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
     LlmProviders,
@@ -68,6 +67,11 @@ from litellm.utils import (
 )
 
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
+_PROVIDERS_RESOLVING_THEIR_OWN_IMAGE_BASE: Final = (
+    LlmProviders.DASHSCOPE,
+    LlmProviders.QWENCLOUD,
+    LlmProviders.QWEN_AI_PLATFORM,
+)
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: type["ImageEditRequestUtils"] | None = None
@@ -271,6 +275,7 @@ def image_generation(
     """
     try:
         args: Final = locals()
+        requested_api_base: Final = api_base
         aimg_generation: Final = kwargs.get("aimg_generation", False)
         litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         logger_fn: Final = kwargs.get("logger_fn", None)
@@ -468,7 +473,11 @@ def image_generation(
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
 
             # Resolve api_base from litellm.api_base if not explicitly provided
-            _api_base: Final = api_base or litellm.api_base
+            _api_base: Final = (
+                requested_api_base
+                if custom_llm_provider in _PROVIDERS_RESOLVING_THEIR_OWN_IMAGE_BASE
+                else api_base or litellm.api_base
+            )
             litellm_params_dict["api_base"] = _api_base
 
             return llm_http_handler.image_generation_handler(
@@ -598,10 +607,7 @@ def image_generation(
             )
         elif custom_llm_provider in litellm._custom_providers:  # Assume custom LLM provider
             # Get the Custom Handler
-            custom_handler: CustomLLM | None = None
-            for item in litellm.custom_provider_map:
-                if item["provider"] == custom_llm_provider:
-                    custom_handler = item["custom_handler"]
+            custom_handler: Final = ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
 
             if custom_handler is None:
                 raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
@@ -905,10 +911,7 @@ def image_edit(
 
         # Check for custom provider
         if custom_llm_provider in litellm._custom_providers:
-            custom_handler: CustomLLM | None = None
-            for item in litellm.custom_provider_map:
-                if item["provider"] == custom_llm_provider:
-                    custom_handler = item["custom_handler"]
+            custom_handler: Final = ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
 
             if custom_handler is None:
                 raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
@@ -985,10 +988,15 @@ def image_edit(
             or custom_llm_provider == "azure"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
+            dropped_form_params: Final = header_auth_params(custom_llm_provider)
             image_edit_request_params.update(
                 flatten_form_field_values(
-                    non_default_params,
-                    extra_body if isinstance(extra_body, dict) else None,
+                    {key: value for key, value in non_default_params.items() if key not in dropped_form_params},
+                    (
+                        {key: value for key, value in extra_body.items() if key not in dropped_form_params}
+                        if isinstance(extra_body, dict)
+                        else None
+                    ),
                 )
             )
 
@@ -1000,6 +1008,7 @@ def image_edit(
             optional_params=dict(image_edit_request_params),
             litellm_params={
                 **image_edit_request_params,
+                **litellm_params.model_dump(include=set(CustomPricingLiteLLMParams.model_fields), exclude_none=True),
                 "litellm_call_id": litellm_call_id,
                 "model_info": model_info,
                 "vertex_location": litellm_params.vertex_location,

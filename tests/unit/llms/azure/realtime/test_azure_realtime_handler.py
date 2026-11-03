@@ -1,4 +1,7 @@
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -257,6 +260,21 @@ async def test_construct_url_v1_protocol():
 
     assert "/openai/v1/realtime?" in url
     assert url.count("/realtime") == 1
+
+
+def test_construct_url_translation_protocol():
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    url = AzureOpenAIRealtime()._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="translate-deployment",
+        api_version=None,
+        realtime_protocol="GA",
+        query_params={"model": "translate-deployment"},
+        realtime_mode="translation",
+    )
+
+    assert url == "wss://my-endpoint.openai.azure.com/openai/v1/realtime/translations?model=translate-deployment"
 
 
 @pytest.mark.asyncio
@@ -752,3 +770,32 @@ def test_construct_url_with_a_trailing_slash_api_base_matches_the_url_without_it
         )
 
     assert url_for("https://gw.example.com/azure/") == url_for("https://gw.example.com/azure")
+
+
+@dataclass(frozen=True, slots=True)
+class _ClientWebSocketWithHeaders:
+    scope: Mapping[str, object]
+
+
+@pytest.mark.parametrize("pinned_protocol", ("GA", "ga", "v1"))
+@pytest.mark.parametrize(
+    ("client_headers", "bridges_beta_client_to_ga"),
+    (
+        pytest.param(((b"openai-beta", b"realtime=v1"),), True, id="beta-client"),
+        pytest.param((), False, id="ga-client"),
+    ),
+)
+def test_a_deployment_pinned_to_ga_bridges_only_a_beta_client(
+    pinned_protocol: str, client_headers: tuple[tuple[bytes, bytes], ...], bridges_beta_client_to_ga: bool
+) -> None:
+    from litellm.llms.azure.realtime.handler import AzureRealtimeProtocol, azure_realtime_protocol_for_client
+
+    protocol: Final = azure_realtime_protocol_for_client(
+        pinned_protocol,
+        model="my-realtime-deployment",
+        realtime_mode="realtime",
+        query_params=None,
+        websocket=_ClientWebSocketWithHeaders(scope={"headers": client_headers}),
+    )
+
+    assert protocol == AzureRealtimeProtocol(name=pinned_protocol, bridges_beta_client_to_ga=bridges_beta_client_to_ga)
