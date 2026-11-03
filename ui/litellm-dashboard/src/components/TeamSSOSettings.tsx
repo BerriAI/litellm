@@ -1,6 +1,7 @@
 import { Edit, Save } from "lucide-react";
 import React, { useEffect, useState } from "react";
 
+import { useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_compone
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { toast } from "@/lib/toast";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
+import AccessGroupSelector from "./common_components/AccessGroupSelector";
 import OrganizationDropdown from "./common_components/OrganizationDropdown";
 
 interface TeamSSOSettingsProps {
@@ -98,6 +100,7 @@ interface SettingsValues {
   models: string[];
   team_member_permissions: string[];
   organization_id: string | null;
+  access_group_ids: string[];
 }
 
 const DEFAULT_VALUES: SettingsValues = {
@@ -108,6 +111,7 @@ const DEFAULT_VALUES: SettingsValues = {
   models: [],
   team_member_permissions: [],
   organization_id: null,
+  access_group_ids: [],
 };
 
 const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
@@ -119,6 +123,9 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
   const [saving, setSaving] = useState<boolean>(false);
   const [fetchError, setFetchError] = useState<boolean>(false);
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
+  const { data: accessGroups } = useAccessGroups();
+  const getAccessGroupLabel = (accessGroupId: string): string =>
+    accessGroups?.find((group) => group.access_group_id === accessGroupId)?.access_group_name ?? accessGroupId;
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -346,8 +353,24 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
             />
 
             <SettingRow
+              label="Access Groups"
+              description="Access groups attached to teams created without explicit access groups. Use this to manage model access for all new teams in one place."
+              isEditing={isEditing}
+              viewContent={renderTags(values.access_group_ids, getAccessGroupLabel)}
+              editContent={
+                <div className="*:w-full">
+                  <AccessGroupSelector
+                    value={editedValues.access_group_ids || []}
+                    onChange={(v) => update("access_group_ids", v)}
+                    placeholder="Select access groups"
+                  />
+                </div>
+              }
+            />
+
+            <SettingRow
               label="Models"
-              description="Default list of models that new teams can access."
+              description="Default list of models for teams auto-created from SSO groups. Teams created from the UI or /team/new are not affected."
               isEditing={isEditing}
               viewContent={renderTags(values.models, getModelDisplayName)}
               editContent={

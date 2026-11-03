@@ -727,10 +727,15 @@ def test_get_group_ids_from_graph_api_response():
     [
         # Test case 1: Using DefaultTeamSSOParams
         DefaultTeamSSOParams(
-            max_budget=10, budget_duration="1d", models=["special-gpt-5"]
+            max_budget=10, budget_duration="1d", models=["special-gpt-5"], access_group_ids=["central-models"]
         ),
         # Test case 2: Using Dict
-        {"max_budget": 10, "budget_duration": "1d", "models": ["special-gpt-5"]},
+        {
+            "max_budget": 10,
+            "budget_duration": "1d",
+            "models": ["special-gpt-5"],
+            "access_group_ids": ["central-models"],
+        },
     ],
 )
 async def test_default_team_params(team_params):
@@ -775,6 +780,7 @@ async def test_default_team_params(team_params):
         assert create_call_args["max_budget"] == 10
         assert create_call_args["budget_duration"] == "1d"
         assert create_call_args["models"] == ["special-gpt-5"]
+        assert create_call_args["access_group_ids"] == ["central-models"]
 
 
 @pytest.mark.asyncio

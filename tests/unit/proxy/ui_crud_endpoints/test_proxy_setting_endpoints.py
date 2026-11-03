@@ -3458,6 +3458,86 @@ def test_update_default_team_settings_without_organization_skips_lookup(
     assert mock_proxy_config["save_call_count"]() == 1
 
 
+@pytest.fixture
+def mock_access_group_lookup(monkeypatch):
+    """Fake the access group table so the default team settings endpoint can check ids."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    existing_access_group_ids: set = set()
+
+    async def _find_many(where):
+        return [
+            MagicMock(access_group_id=access_group_id)
+            for access_group_id in where["access_group_id"]["in"]
+            if access_group_id in existing_access_group_ids
+        ]
+
+    find_many = AsyncMock(side_effect=_find_many)
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_accessgrouptable.find_many = find_many
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "default_team_params", {})
+
+    return {"existing_access_group_ids": existing_access_group_ids, "find_many": find_many}
+
+
+def test_update_default_team_settings_rejects_unknown_access_group(mock_proxy_config, mock_auth, mock_access_group_lookup):
+    """/team/new never checks that an access group exists, so an unknown default id
+    would silently attach nothing to every future team. Catch it where the admin typed it."""
+    mock_access_group_lookup["existing_access_group_ids"].add("real-group")
+
+    resp = client.patch(
+        "/update/default_team_settings",
+        json={"access_group_ids": ["real-group", "ghost-group"]},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "ghost-group" in resp.json()["detail"]["error"]
+    assert "real-group" not in resp.json()["detail"]["error"]
+    assert mock_proxy_config["save_call_count"]() == 0
+
+    import litellm
+
+    assert litellm.default_team_params == {}
+
+
+def test_update_default_team_settings_saves_existing_access_groups(mock_proxy_config, mock_auth, mock_access_group_lookup):
+    """Real access group ids save and reach the in-memory settings /team/new reads."""
+    mock_access_group_lookup["existing_access_group_ids"].update({"real-group", "other-group"})
+
+    resp = client.patch(
+        "/update/default_team_settings",
+        json={"access_group_ids": ["real-group", "other-group"]},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["settings"]["access_group_ids"] == ["real-group", "other-group"]
+    assert mock_proxy_config["save_call_count"]() == 1
+
+    import litellm
+
+    assert litellm.default_team_params["access_group_ids"] == ["real-group", "other-group"]
+
+
+def test_update_default_team_settings_with_empty_access_groups_skips_lookup(
+    mock_proxy_config, mock_auth, mock_access_group_lookup
+):
+    """Clearing the default access groups must not pay for a DB round trip."""
+    resp = client.patch(
+        "/update/default_team_settings",
+        json={"access_group_ids": []},
+    )
+
+    assert resp.status_code == 200, resp.text
+    mock_access_group_lookup["find_many"].assert_not_awaited()
+    assert mock_proxy_config["save_call_count"]() == 1
+
+
 def test_update_mcp_semantic_filter_settings_requires_proxy_admin(monkeypatch):
     """Non-admin callers must not mutate global MCP semantic filter settings."""
     from litellm.proxy._types import UserAPIKeyAuth

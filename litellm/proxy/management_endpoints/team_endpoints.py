@@ -1822,6 +1822,7 @@ async def new_team(
             "tpm_limit",
             "rpm_limit",
             "team_member_permissions",
+            "access_group_ids",
         ):
             if getattr(data, field, None) is None and (
                 field != "budget_duration" or field not in data.model_fields_set

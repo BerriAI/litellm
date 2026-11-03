@@ -215,6 +215,40 @@ class TestNewTeamDefaultParamsApplied:
         assert data.team_member_permissions == ["/key/generate", "/key/update"]
 
     @pytest.mark.asyncio
+    async def test_default_access_group_ids_attach_to_a_team_created_without_any(self, monkeypatch):
+        """A central access group configured in default_team_params lands on every
+        /team/new call that omits access_group_ids, not only on SSO-created teams."""
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+        monkeypatch.setattr(litellm, "default_team_params", {"access_group_ids": ["central-models"]})
+
+        data = NewTeamRequest(team_alias="my-team")
+
+        try:
+            await new_team(data=data, user_api_key_dict=self._make_admin_auth(), http_request=MagicMock())
+        except Exception:
+            pass
+
+        assert data.access_group_ids == ["central-models"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("explicit_access_group_ids", [["research"], []])
+    async def test_explicit_access_group_ids_win_over_the_default(self, monkeypatch, explicit_access_group_ids):
+        """An explicit list, including an empty one, is the caller's choice and is kept."""
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+        monkeypatch.setattr(litellm, "default_team_params", {"access_group_ids": ["central-models"]})
+
+        data = NewTeamRequest(team_alias="my-team", access_group_ids=explicit_access_group_ids)
+
+        try:
+            await new_team(data=data, user_api_key_dict=self._make_admin_auth(), http_request=MagicMock())
+        except Exception:
+            pass
+
+        assert data.access_group_ids == explicit_access_group_ids
+
+    @pytest.mark.asyncio
     async def test_explicit_values_not_overridden(self, monkeypatch):
         """When request provides explicit values, defaults do not override them."""
         from litellm.proxy.management_endpoints.team_endpoints import new_team

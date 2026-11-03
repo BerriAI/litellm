@@ -32120,6 +32120,11 @@ export interface components {
          */
         DefaultTeamSSOParams: {
             /**
+             * Access Group Ids
+             * @description Default access groups attached to new teams created without explicit access_group_ids
+             */
+            access_group_ids?: string[] | null;
+            /**
              * Budget Duration
              * @description Default budget duration for new teams, when not explicitly provided (e.g. '24h', '7d', '30d')
              */

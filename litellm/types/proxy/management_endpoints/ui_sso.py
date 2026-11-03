@@ -234,3 +234,7 @@ class DefaultTeamSSOParams(LiteLLMPydanticObjectBase):
         default=None,
         description="Default organization for new teams created without an explicit organization",
     )
+    access_group_ids: list[str] | None = Field(
+        default=None,
+        description="Default access groups attached to new teams created without explicit access_group_ids",
+    )
