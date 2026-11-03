@@ -5328,6 +5328,33 @@ async def test_embedding_header_forwarding_without_model_group_config():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model", [0, False, [], {}, 7, True])
+async def test_policy_engine_leaves_a_model_that_is_not_a_string_alone(
+    model: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyAttachment, PolicyGuardrails
+
+    policy_registry = get_policy_registry()
+    monkeypatch.setattr(
+        policy_registry, "_policies", {"baseline": Policy(guardrails=PolicyGuardrails(add=["pii_blocker"]))}
+    )
+    monkeypatch.setattr(policy_registry, "_initialized", True)
+    attachment_registry = get_attachment_registry()
+    monkeypatch.setattr(attachment_registry, "_attachments", [PolicyAttachment(policy="baseline", scope="*")])
+    monkeypatch.setattr(attachment_registry, "_initialized", True)
+    data = {"model": model, "metadata": {}}
+
+    await add_guardrails_from_policy_engine(
+        data=data, metadata_variable_name="metadata", user_api_key_dict=UserAPIKeyAuth(api_key="test-key")
+    )
+
+    assert data["model"] == model
+    assert data["metadata"]["guardrails"] == ["pii_blocker"]
+
+
+@pytest.mark.asyncio
 async def test_add_guardrails_from_policy_engine():
     """
     Test that add_guardrails_from_policy_engine adds guardrails from matching policies

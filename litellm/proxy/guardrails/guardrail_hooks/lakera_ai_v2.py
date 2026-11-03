@@ -915,6 +915,9 @@ class LakeraAIGuardrail(CustomGuardrail):
 
         # Use a copy of original_messages so _mask_pii_in_messages does not mutate data["messages"]
         post_call_messages: Final = list(copy.deepcopy(original_messages)) + response_messages
+        if not post_call_messages:
+            verbose_proxy_logger.debug("Lakera AI: not running guardrail. No inspectable text in data")
+            return response
 
         # Call Lakera guardrail
         lakera_guardrail_response, _ = await self.call_v2_guard(

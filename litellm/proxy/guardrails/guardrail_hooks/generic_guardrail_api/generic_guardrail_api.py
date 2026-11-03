@@ -365,7 +365,10 @@ class GenericGuardrailAPI(CustomGuardrail):
         top_level_metadata: Final = request_data.get("metadata", {})
 
         # Merge both sources, preferring litellm_metadata if both exist
-        metadata_dict: Final = {**top_level_metadata, **litellm_metadata}
+        metadata_dict: Final = {
+            **(top_level_metadata if isinstance(top_level_metadata, dict) else {}),
+            **(litellm_metadata if isinstance(litellm_metadata, dict) else {}),
+        }
 
         if not metadata_dict:
             return result_metadata
