@@ -108,7 +108,7 @@ pub(super) async fn execute(
             if !status.is_success() {
                 return Err(litellm_http::Error::upstream(status.as_u16(), text).into());
             }
-            let raw = RawResponse { body: text.clone() };
+            let raw = RawResponse::new(text.clone());
             if let Some(observers) = observers {
                 observers.emit(litellm_host::lifecycle::CallEvent::Execution(
                     ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },

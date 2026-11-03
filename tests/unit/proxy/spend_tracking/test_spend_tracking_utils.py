@@ -5150,6 +5150,23 @@ def test_a_background_response_billing_event_writes_a_row_apart_from_the_read_th
     assert request_ids == ("resp_shared", "resp_shared_background_cost")
 
 
+@pytest.mark.parametrize("call_type", ["aget_responses", "acancel_responses"])
+def test_a_read_or_cancel_row_carries_the_id_its_callbacks_logged(call_type: str):
+    row: Final = get_logging_payload(
+        kwargs={
+            "call_type": call_type,
+            "model": "gpt-5.6",
+            "litellm_call_id": "call-read",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj={"id": "resp_logged_by_callbacks", "object": "response", "status": "completed"},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert row["request_id"] == "resp_logged_by_callbacks"
+
+
 @pytest.mark.parametrize("forged_marker", [True, BackgroundResponseSettlement.SETTLES.value])
 def test_a_request_body_cannot_move_its_spend_row_onto_a_background_settlement_id(forged_marker):
     """A failed call logs its raw request body as kwargs, so a body field named like the settlement
@@ -7467,6 +7484,46 @@ def test_failure_error_information_masks_ip_addresses_in_long_text_and_at_its_tr
         assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_text
         assert any(char.isdigit() for char in kept_head_and_tail) is not disabled
     assert sanitized["error_code"] == "500"
+
+
+def test_spend_row_sanitizes_the_session_failure_a_realtime_success_row_carries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", False)
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "200")
+    provider_error: Final = 'stream ended {"messages": [{"role": "user", "content": "private-prompt"}]} ' + "x" * 2000
+    now: Final = datetime.datetime.now(timezone.utc)
+
+    row: Final = get_logging_payload(
+        kwargs={
+            "model": "bedrock/amazon.nova-sonic-v1:0",
+            "call_type": "_arealtime",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "hashed-key",
+                    "status": "failure",
+                    "error_information": {
+                        "error_code": "503",
+                        "error_class": "BedrockError",
+                        "error_message": provider_error,
+                        "llm_provider": "bedrock",
+                    },
+                }
+            },
+        },
+        response_obj=None,
+        start_time=now,
+        end_time=now,
+    )
+
+    stored: Final = json.loads(row["metadata"])["error_information"]
+    assert row["status"] == "failure"
+    assert "private-prompt" not in stored["error_message"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored["error_message"]
+    assert len(stored["error_message"]) < len(provider_error)
+    assert stored["error_class"] == "BedrockError"
 
 
 @pytest.mark.parametrize(

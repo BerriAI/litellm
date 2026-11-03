@@ -388,6 +388,34 @@ def test_vertex_gemini_flash_rows_carry_the_documented_retirement_date(prices: d
     assert prices[f"{prefix}{model}"]["deprecation_date"] == VERTEX_GEMINI_FLASH_RETIREMENT_DATES[model]
 
 
+# https://developers.openai.com/api/docs/deprecations, the 2026-10-14 GPT-4 series notice
+OPENAI_GPT_4_SERIES_SNAPSHOTS: Final = MappingProxyType(
+    {
+        "gpt-4o": ("gpt-4o-2024-08-06", "gpt-4o-2024-11-20"),
+        "gpt-4o-mini": ("gpt-4o-mini-2024-07-18",),
+        "gpt-4.1": ("gpt-4.1-2025-04-14",),
+        "gpt-4.1-mini": ("gpt-4.1-mini-2025-04-14",),
+    }
+)
+
+
+class _ShutdownRow(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    deprecation_date: str | None = None
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+@pytest.mark.parametrize("alias", sorted(OPENAI_GPT_4_SERIES_SNAPSHOTS))
+def test_openai_gpt_4_series_aliases_retire_with_their_snapshots(path: Path, alias: str) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    snapshot_dates: Final = frozenset(
+        _ShutdownRow.model_validate(prices[snapshot]).deprecation_date
+        for snapshot in OPENAI_GPT_4_SERIES_SNAPSHOTS[alias]
+    )
+    assert snapshot_dates == {_ShutdownRow.model_validate(prices[alias]).deprecation_date}
+
+
 def _sampling_flags_across_provider_twins(prices: Mapping[str, Mapping[str, object]], key: str) -> frozenset[object]:
     bare: Final = key.split("/")[-1]
     twins: Final = tuple(twin for twin in (bare, f"vertex_ai/{bare}", f"gemini/{bare}") if twin in prices)
@@ -838,11 +866,92 @@ def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
     ]
 
 
+@pytest.mark.parametrize("model", ("gpt-realtime-2.1", "gpt-realtime-2.1-mini"))
+def test_realtime_family_cache_image_rate_tracks_azure(prices: dict, model: str):
+    openai: Final = prices[model]
+    azure: Final = prices[f"azure/{model}"]
+
+    assert openai["cache_read_input_image_token_cost"] > 0
+    assert azure["cache_read_input_image_token_cost"] == openai["cache_read_input_image_token_cost"]
+    assert azure["input_cost_per_image_token"] >= azure["cache_read_input_image_token_cost"]
+
+
+@pytest.mark.parametrize(
+    "model,mode",
+    (
+        ("gpt-realtime-translate", "realtime"),
+        ("gpt-live-transcribe", "audio_transcription"),
+        ("gpt-transcribe", "audio_transcription"),
+    ),
+)
+def test_azure_realtime_specialized_models_follow_openai_modes(prices: dict, model: str, mode: str):
+    openai: Final = prices[model]
+    azure: Final = prices[f"azure/{model}"]
+
+    assert openai["mode"] == azure["mode"] == mode
+    assert azure["supports_audio_input"] is True
+    assert set(openai.get("supported_endpoints", ())) <= set(azure.get("supported_endpoints", ()))
+
+
+_DATED_SNAPSHOT: Final = re.compile(r"(?P<alias>.+)-\d{4}-\d{2}-\d{2}")
+
+
+def _azure_realtime_snapshots_with_an_alias(prices: Mapping[str, dict]) -> tuple[tuple[str, str], ...]:
+    dated: Final = (
+        (name, _DATED_SNAPSHOT.fullmatch(name))
+        for name, entry in prices.items()
+        if name.startswith("azure/") and "/v1/realtime" in entry.get("supported_endpoints", ())
+    )
+    return tuple((name, match["alias"]) for name, match in dated if match is not None and match["alias"] in prices)
+
+
+def _realtime_ga_only(entry: dict) -> object:
+    return (entry.get("provider_specific_entry") or {}).get("realtime_ga_only")
+
+
+def test_dated_azure_realtime_models_select_the_same_protocol_as_their_alias(prices: dict):
+    snapshots: Final = _azure_realtime_snapshots_with_an_alias(prices)
+    disagreeing: Final = tuple(
+        (snapshot, alias)
+        for snapshot, alias in snapshots
+        if _realtime_ga_only(prices[snapshot]) != _realtime_ga_only(prices[alias])
+    )
+
+    assert snapshots
+    assert disagreeing == ()
+
+
+def test_model_prices_backup_is_synchronized(prices: dict):
+    backup: Final = json.loads(BACKUP_PRICES_PATH.read_text())
+
+    assert backup == prices
+
+
 def _search_free_requests_rows(path: Path) -> Mapping[str, dict[str, JsonValue]]:
     prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
     return MappingProxyType(
         {key: row for key, row in prices.items() if isinstance(row, dict) and "search_free_requests" in row}
     )
+
+
+def _supports_continuation_rows(path: Path) -> frozenset[str]:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    return frozenset(
+        key for key, row in prices.items() if isinstance(row, dict) and row.get("supports_continuation") is True
+    )
+
+
+def test_gemini_4_argon_google_rows_carry_supports_continuation_in_both_cost_map_copies() -> None:
+    main_rows: Final = _supports_continuation_rows(PRICES_PATH)
+    # long decode models: https://ai.google.dev/gemini-api/docs/generate-content/long-decode and
+    # https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon (2026-11-02)
+    long_decode_rows: Final = {
+        "gemini/gemini-4-argon",
+        "vertex_ai/gemini-4-argon",
+        "vertex_ai/gemini-4-argon-cyber-permissive",
+    }
+    assert long_decode_rows <= main_rows, sorted(main_rows)
+    assert _supports_continuation_rows(BACKUP_PRICES_PATH) == main_rows
 
 
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
