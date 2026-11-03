@@ -5055,6 +5055,18 @@ def test_get_spend_logs_id_prefers_the_response_id_for_batch_and_file_calls(call
     assert get_spend_logs_id(call_type, {"id": "batch_abc123"}, {"litellm_call_id": "call-id-1"}) == expected
 
 
+@pytest.mark.parametrize("status_call_type", ["avideo_status", "video_status"])
+def test_get_spend_logs_id_keeps_a_video_status_row_apart_from_the_create_row(status_call_type):
+    """A video's create and its status polls answer with the same video id, and a custom
+    provider charges the video on the poll that sees it completed, so that charge needs a
+    row of its own: sharing the create row's id drops it on the skip_duplicates insert."""
+    create_id = get_spend_logs_id("avideo_generation", {"id": "video_abc"}, {"litellm_call_id": "call-1"})
+    status_id = get_spend_logs_id(status_call_type, {"id": "video_abc"}, {"litellm_call_id": "call-2"})
+
+    assert create_id == "video_abc"
+    assert status_id == "video_abc_video_cost"
+
+
 def test_get_logging_payload_gives_redacted_batch_and_file_rows_distinct_request_ids():
     """End to end at the payload level: a batch retrieve and a file create whose bodies
     were both flattened to the same redaction placeholder must still produce two

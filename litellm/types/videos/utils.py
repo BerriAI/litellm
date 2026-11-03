@@ -17,10 +17,9 @@ VIDEO_ID_PREFIX: Final = "video_"
 VIDEO_ID_SERVED_MODEL_PREFIX: Final = "served_model:"
 VIDEO_ID_DEPLOYMENT_PREFIX: Final = "deployment_id:"
 VIDEO_ID_REQUESTED_MODEL_PREFIX: Final = "requested_model:"
-VIDEO_ID_CALL_TYPES: Final = frozenset(
+VIDEO_STATUS_CALL_TYPES: Final = frozenset({"avideo_status", "video_status"})
+VIDEO_ID_CALL_TYPES: Final = VIDEO_STATUS_CALL_TYPES | frozenset(
     {
-        "avideo_status",
-        "video_status",
         "avideo_content",
         "video_content",
         "avideo_remix",
