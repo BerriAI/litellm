@@ -28,6 +28,7 @@ from litellm.router import Router
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import LiteLLMBatch, Usage
 from litellm.types.videos.main import VideoObject
+from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 
 KEY_HASH: Final = "key-hash-batch"
 USER_ID: Final = "user-batch"
@@ -335,7 +336,7 @@ async def _poll_video(
 ) -> None:
     await _log_success(
         limiter,
-        _event("avideo_status", response_cost),
+        {**_event("avideo_status", response_cost), POLLED_VIDEO_STATUS_KWARG: status},
         response_obj=VideoObject(id=video_id, object="video", status=status),
     )
 
@@ -362,18 +363,19 @@ async def test_polls_of_a_finished_video_charge_each_per_model_budget_once():
         ("aretrieve_batch", lambda status: _batch("job_first", status)),
     ),
 )
-async def test_a_guardrail_priced_poll_of_a_running_job_leaves_its_charge_to_the_finished_poll(call_type, polled):
+async def test_every_poll_pays_its_guardrail_and_only_the_finished_poll_pays_the_job(call_type, polled):
     limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     guardrail_cost: Final = 0.01
     priced: Final = ({"guardrail_name": "priced", "guardrail_cost": guardrail_cost},)
 
-    await _log_success(limiter, _event(call_type, guardrail_cost, guardrail_information=priced), polled("in_progress"))
-    for _ in range(3):
-        await _log_success(
-            limiter, _event(call_type, BATCH_COST + guardrail_cost, guardrail_information=priced), polled("completed")
-        )
+    def poll(status: str, response_cost: float) -> dict[str, object]:
+        return {**_event(call_type, response_cost, guardrail_information=priced), POLLED_VIDEO_STATUS_KWARG: status}
 
-    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(guardrail_cost + BATCH_COST + guardrail_cost)
+    await _log_success(limiter, poll("in_progress", guardrail_cost), polled("in_progress"))
+    for _ in range(3):
+        await _log_success(limiter, poll("completed", BATCH_COST + guardrail_cost), polled("completed"))
+
+    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST + 4 * guardrail_cost)
 
 OPUS_GROUP: Final = "claude-opus"
 OPUS_GROUP_MEMBERS: Final = MappingProxyType(

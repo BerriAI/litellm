@@ -18,6 +18,7 @@ from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.utils import BudgetConfig
+from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 import sys, os, asyncio, time, random
 
 
@@ -519,7 +520,10 @@ async def test_video_polls_charge_each_router_budget_once(call_type):
             }
         ],
     )
-    kwargs: Final = _success_kwargs(provider_in_litellm_params=None, provider_in_payload="openai", call_type=call_type)
+    kwargs: Final = {
+        **_success_kwargs(provider_in_litellm_params=None, provider_in_payload="openai", call_type=call_type),
+        POLLED_VIDEO_STATUS_KWARG: "completed",
+    }
     video: Final = VideoObject(id="video-first", object="video", status="completed")
     keys: Final = ("provider_spend:openai:1d", "deployment_spend:deployment-1:1d")
 
@@ -533,7 +537,7 @@ async def test_video_polls_charge_each_router_budget_once(call_type):
 
 
 @pytest.mark.asyncio
-async def test_a_guardrail_priced_poll_of_a_running_video_leaves_the_router_charge_to_the_finished_poll():
+async def test_every_video_poll_pays_its_guardrail_and_only_the_finished_poll_pays_the_router_for_the_video():
     from litellm.types.videos.main import VideoObject
 
     cache: Final = DualCache()
@@ -558,15 +562,21 @@ async def test_a_guardrail_priced_poll_of_a_running_video_leaves_the_router_char
     )
 
     await limiter.async_log_success_event(
-        poll(response_cost=0.01), VideoObject(id="video-first", object="video", status="in_progress"), None, None
+        {**poll(response_cost=0.01), POLLED_VIDEO_STATUS_KWARG: "in_progress"},
+        VideoObject(id="video-first", object="video", status="in_progress"),
+        None,
+        None,
     )
     for _ in range(3):
         await limiter.async_log_success_event(
-            poll(response_cost=0.26), VideoObject(id="video-first", object="video", status="completed"), None, None
+            {**poll(response_cost=0.26), POLLED_VIDEO_STATUS_KWARG: "completed"},
+            VideoObject(id="video-first", object="video", status="completed"),
+            None,
+            None,
         )
 
     keys: Final = ("provider_spend:openai:1d", "deployment_spend:deployment-1:1d")
-    assert tuple([await cache.async_get_cache(key) for key in keys]) == pytest.approx((0.27, 0.27))
+    assert tuple([await cache.async_get_cache(key) for key in keys]) == pytest.approx((0.29, 0.29))
 
 @pytest.mark.asyncio
 async def test_batch_charge_is_shared_across_workers_and_requires_redis_confirmation():

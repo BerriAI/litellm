@@ -1248,6 +1248,14 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             job=job,
             ttl_seconds=duration_in_seconds(budget_duration),
         ):
+            if job.repeat_poll_cost > 0:
+                await self._charge_entity(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    resolved=resolved,
+                    response_cost=job.repeat_poll_cost,
+                    job=None,
+                )
             return
         start_time_key: Final = model_budget_start_time_cache_key(
             entity_type=entity_type,

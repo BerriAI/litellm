@@ -24,6 +24,7 @@ from litellm.proxy.hooks.max_budget_per_session_limiter import (
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentResponse
+from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 
 
 def _make_mock_agent(max_budget_per_session: float) -> AgentResponse:
@@ -170,6 +171,7 @@ async def test_repeated_polls_of_a_finished_job_charge_the_session_once():
                 {
                     "call_type": call_type,
                     "response_cost": cost,
+                    POLLED_VIDEO_STATUS_KWARG: "completed",
                     "litellm_params": {"metadata": {"session_id": "session-jobs", "agent_id": "agent-budget-123"}},
                 },
                 response_obj,
@@ -181,10 +183,13 @@ async def test_repeated_polls_of_a_finished_job_charge_the_session_once():
     assert spend == pytest.approx(0.4 + 0.1 + 3 * 0.01)
 
 
-def _video_poll(cost: float, guardrail_cost: float = 0.0, session_id: str = "session-jobs") -> dict[str, object]:
+def _video_poll(
+    cost: float, guardrail_cost: float = 0.0, session_id: str = "session-jobs", status: str = "completed"
+) -> dict[str, object]:
     return {
         "call_type": "avideo_status",
         "response_cost": cost,
+        POLLED_VIDEO_STATUS_KWARG: status,
         "standard_logging_object": {
             "response_cost": cost,
             "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": guardrail_cost}],
@@ -194,7 +199,7 @@ def _video_poll(cost: float, guardrail_cost: float = 0.0, session_id: str = "ses
 
 
 @pytest.mark.asyncio
-async def test_a_guardrail_priced_poll_of_a_running_video_leaves_the_session_charge_to_the_finished_poll():
+async def test_every_video_poll_pays_its_guardrail_and_only_the_finished_poll_pays_the_session_for_the_video():
     from litellm.types.videos.main import VideoObject
 
     handler = PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(DualCache()))
@@ -204,7 +209,10 @@ async def test_a_guardrail_priced_poll_of_a_running_video_leaves_the_session_cha
     ) as mock_registry:
         mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_budget_per_session=5.0)
         await handler.async_log_success_event(
-            _video_poll(0.01, guardrail_cost=0.01), VideoObject(id="job-1", object="video", status="in_progress"), None, None
+            _video_poll(0.01, guardrail_cost=0.01, status="in_progress"),
+            VideoObject(id="job-1", object="video", status="in_progress"),
+            None,
+            None,
         )
         for _ in range(3):
             await handler.async_log_success_event(
@@ -212,7 +220,7 @@ async def test_a_guardrail_priced_poll_of_a_running_video_leaves_the_session_cha
             )
 
     spend = await handler._get_current_spend(handler._make_cache_key("session-jobs"))
-    assert spend == pytest.approx(0.01 + 0.41)
+    assert spend == pytest.approx(0.01 + 0.41 + 2 * 0.01)
 
 
 class _ClockedRedis:

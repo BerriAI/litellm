@@ -211,6 +211,7 @@ from litellm.types.utils import (
     batch_chat_usage,
 )
 from litellm.types.videos.main import VideoObject
+from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 from litellm.utils import get_base_model_from_metadata, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
@@ -3311,6 +3312,8 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
             result = self.normalize_endpoint_logging_result(result)
+            if isinstance(result, VideoObject):
+                self.model_call_details[POLLED_VIDEO_STATUS_KWARG] = result.status
 
             logging_result: Final = self.normalize_logging_result(result=result)
             if cache_hit is None and _served_from_cache_at_no_charge(logging_result):

@@ -38,7 +38,7 @@ from litellm.constants import (
 )
 from litellm.integrations.otel.model.metadata import caller_session_id
 from litellm.integrations.otel.model.trace_controls import TraceControls
-from litellm.litellm_core_utils.batch_utils import charged_video_id
+from litellm.litellm_core_utils.batch_utils import charged_video_id, pays_only_its_guardrail
 from litellm.litellm_core_utils.classifier_logging import (
     CLASSIFIER_AUDIT_FIELDS,
     classifier_audit_fields,
@@ -373,11 +373,13 @@ def get_spend_logs_id(
     )
     if resolved_id is None:
         return None
-    charged_video: Final = charged_video_id(
-        call_type, response_obj.get("status"), resolved_id, kwargs, kwargs.get("response_cost")
-    )
+    response_cost: Final = kwargs.get("response_cost")
+    charged_video: Final = charged_video_id(call_type, kwargs, resolved_id, response_cost)
     if charged_video is not None:
         return f"{charged_video}{VIDEO_COST_REQUEST_ID_SUFFIX}"
+    call_id: Final = kwargs.get("litellm_call_id")
+    if pays_only_its_guardrail(call_type, kwargs, response_cost) and isinstance(call_id, str) and call_id:
+        return call_id
     return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, kwargs)}"
 
 

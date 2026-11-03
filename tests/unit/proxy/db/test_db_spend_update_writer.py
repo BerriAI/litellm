@@ -4815,6 +4815,7 @@ async def _update_database_for_video_poll(
                 "call_type": "avideo_status",
                 "litellm_call_id": litellm_call_id,
                 "response_cost": response_cost,
+                "polled_video_status": status,
                 "litellm_params": {"metadata": {"user_api_key": "test-key"}, "video_id": polled_video_id},
             },
             completion_response=VideoObject(id="video_abc", object="video", status=status),

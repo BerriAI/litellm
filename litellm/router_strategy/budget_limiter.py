@@ -613,6 +613,13 @@ class RouterBudgetLimiting(CustomLogger):
         current_time: Final = self._clock()
         new_window_seconds: Final = budget_window_seconds(current_time, budget_config.budget_duration)
         if job is not None and not await self._claim_job_charge(spend_key, job, new_window_seconds):
+            if job.repeat_poll_cost > 0:
+                await self._increment_spend_for_key(
+                    budget_config=budget_config,
+                    spend_key=spend_key,
+                    start_time_key=start_time_key,
+                    response_cost=job.repeat_poll_cost,
+                )
             return
 
         budget_start: Final = await self._get_or_set_budget_start_time(

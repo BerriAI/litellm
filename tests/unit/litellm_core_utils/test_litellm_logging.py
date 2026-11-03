@@ -14451,3 +14451,45 @@ def test_record_native_bedrock_guardrail_bills_each_call_its_own_trace_when_call
     (first_cost, second_cost) = costs
     assert second_cost == pytest.approx(2 * first_cost)
     assert shared_metadata == {"tag": "x"}
+
+
+@pytest.mark.asyncio
+async def test_a_redacted_video_poll_still_tells_the_spend_callbacks_the_video_finished(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_to_charge_once
+    from litellm.types.videos.main import VideoObject
+
+    class Recorder(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: tuple[tuple[dict[str, object], object], ...] = ()
+
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            self.events = (*self.events, (dict(kwargs), response_obj))
+
+    recorder: Final = Recorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logging_obj: Final = LitellmLogging(
+        model="custom-video",
+        messages=[],
+        stream=False,
+        call_type="avideo_status",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="poll-1",
+        function_id="poll-1",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {}, "video_id": "video_abc"}, optional_params={}
+    )
+
+    await logging_obj.async_success_handler(result=VideoObject(id="video_abc", object="video", status="completed"))
+
+    ((kwargs, response_obj),) = recorder.events
+    assert not isinstance(response_obj, VideoObject)
+    assert job_to_charge_once(kwargs, response_obj, 0.42) == ChargeOnceJob(kind="video", job_id="video_abc")

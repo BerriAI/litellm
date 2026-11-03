@@ -178,9 +178,12 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
             cache_key: Final = self._make_cache_key(str(session_id))
             job: Final = job_to_charge_once(callback_fields, response_obj, response_cost)
-            if job is not None and not await self._claim_job_charge(cache_key, job):
+            charge: Final = (
+                response_cost if job is None or await self._claim_job_charge(cache_key, job) else job.repeat_poll_cost
+            )
+            if charge <= 0:
                 return
-            await self._increment_spend(cache_key, response_cost)
+            await self._increment_spend(cache_key, charge)
 
             verbose_proxy_logger.debug(
                 "MaxBudgetPerSessionHandler: incremented session %s spend by %.6f",

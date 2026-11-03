@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.batch_utils import (
     parse_jsonl_with_embedded_newlines,
     replace_model_in_jsonl,
 )
+from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG, encode_video_id_with_provider
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -417,7 +418,11 @@ def test_job_charge_identity_requires_a_cost_bearing_poll(call_type: str, polled
     from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_to_charge_once
 
     expected: Final = None if kind is None else ChargeOnceJob(kind=kind, job_id="job-budget")
-    kwargs: Final = {"call_type": call_type, "standard_logging_object": {"response_cost": cost}}
+    kwargs: Final = {
+        "call_type": call_type,
+        POLLED_VIDEO_STATUS_KWARG: "completed",
+        "standard_logging_object": {"response_cost": cost},
+    }
     assert job_to_charge_once(kwargs, polled(), cost) == expected
     assert job_to_charge_once(kwargs, {"id": "job-budget"}, cost) is None
 
@@ -426,17 +431,20 @@ def test_job_charge_identity_requires_a_cost_bearing_poll(call_type: str, polled
     ("call_type", "polled", "kind"),
     (("aretrieve_batch", _completed_batch, "batch"), ("avideo_status", _completed_video, "video")),
 )
-def test_only_the_jobs_own_cost_claims_its_charge_since_a_guardrail_charges_every_poll(
+def test_only_the_jobs_own_cost_is_charged_once_since_a_guardrail_charges_every_poll(
     call_type: str, polled, kind
 ) -> None:
     from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_to_charge_once
 
     kwargs: Final = {
         "call_type": call_type,
+        POLLED_VIDEO_STATUS_KWARG: "completed",
         "standard_logging_object": {"guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}]},
     }
     assert job_to_charge_once(kwargs, polled(), 0.01) is None
-    assert job_to_charge_once(kwargs, polled(), 0.43) == ChargeOnceJob(kind=kind, job_id="job-budget")
+    assert job_to_charge_once(kwargs, polled(), 0.43) == ChargeOnceJob(
+        kind=kind, job_id="job-budget", repeat_poll_cost=0.01
+    )
 
 
 def test_a_video_is_charged_once_it_completes_under_the_id_the_client_polled() -> None:
@@ -446,7 +454,7 @@ def test_a_video_is_charged_once_it_completes_under_the_id_the_client_polled() -
 
     def poll(status: str, polled_id: str) -> ChargeOnceJob | None:
         return job_to_charge_once(
-            {"call_type": "avideo_status", "litellm_params": {"video_id": polled_id}},
+            {"call_type": "avideo_status", POLLED_VIDEO_STATUS_KWARG: status, "litellm_params": {"video_id": polled_id}},
             VideoObject(id="job-1", object="video", status=status),
             0.42,
         )
@@ -454,6 +462,37 @@ def test_a_video_is_charged_once_it_completes_under_the_id_the_client_polled() -
     assert poll("in_progress", "video_deployment_a") is None
     assert poll("completed", "video_deployment_a") == ChargeOnceJob(kind="video", job_id="video_deployment_a")
     assert poll("completed", "video_deployment_b") == ChargeOnceJob(kind="video", job_id="video_deployment_b")
+
+
+@pytest.mark.parametrize("status", ["in_progress", "completed"])
+def test_a_video_poll_is_judged_by_its_logged_status_when_redaction_replaced_the_video(status: str) -> None:
+    from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_to_charge_once
+
+    kwargs: Final = {
+        "call_type": "avideo_status",
+        POLLED_VIDEO_STATUS_KWARG: status,
+        "litellm_params": {"video_id": "video_deployment_a"},
+    }
+    expected: Final = ChargeOnceJob(kind="video", job_id="video_deployment_a") if status == "completed" else None
+
+    assert job_to_charge_once(kwargs, {"text": "redacted-by-litellm"}, 0.42) == expected
+
+
+def test_a_video_polled_with_or_without_its_base64_padding_is_charged_as_one_job() -> None:
+    from litellm.litellm_core_utils.batch_utils import job_to_charge_once
+
+    padded: Final = encode_video_id_with_provider("job-1", "custom_video", "deployment-a")
+    assert padded.endswith("=")
+
+    def charged_job(polled_id: str):
+        return job_to_charge_once(
+            {"call_type": "avideo_status", POLLED_VIDEO_STATUS_KWARG: "completed", "litellm_params": {"video_id": polled_id}},
+            None,
+            0.42,
+        )
+
+    assert charged_job(padded.rstrip("=")) == charged_job(padded)
+    assert charged_job(padded) is not None
 
 
 def test_job_charge_markers_keep_counters_jobs_and_kinds_independent() -> None:

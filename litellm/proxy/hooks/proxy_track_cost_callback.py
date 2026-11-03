@@ -4,6 +4,7 @@ from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast
 
@@ -15,6 +16,7 @@ from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.caching.redis_batch import flush_post_call_redis_batches
 from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED, BILLED_RETRY_ATTEMPT_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.batch_utils import repeat_poll_cost
 from litellm.litellm_core_utils.core_helpers import (
     budget_reservation_from_metadata,
     finite_cost,
@@ -983,25 +985,28 @@ class _ProxyDBLogger(CustomLogger):
                     agent_id=metadata.get("billing_agent_id") or metadata.get("agent_id"),
                 ):
                     ## UPDATE DATABASE
-                    charged: Final = await _update_database_and_spend_counters(
-                        proxy_logging_obj=proxy_logging_obj,
-                        increment_spend_counters=increment_spend_counters,
-                        user_api_key=user_api_key,
-                        user_id=user_id,
-                        end_user_id=end_user_id,
-                        team_id=team_id,
-                        org_id=org_id,
+                    charged_cost: Final = await _charge_request_cost(
+                        partial(
+                            _update_database_and_spend_counters,
+                            proxy_logging_obj=proxy_logging_obj,
+                            increment_spend_counters=increment_spend_counters,
+                            user_api_key=user_api_key,
+                            user_id=user_id,
+                            end_user_id=end_user_id,
+                            team_id=team_id,
+                            org_id=org_id,
+                            completion_response=completion_response,
+                            start_time=start_time,
+                            end_time=end_time,
+                            request_tags=tags,
+                            model_access_groups=model_access_groups,
+                            project_id=project_id,
+                        ),
                         kwargs=kwargs,
-                        completion_response=completion_response,
-                        start_time=start_time,
-                        end_time=end_time,
                         response_cost=response_cost,
                         budget_reservation=budget_reservation,
-                        request_tags=tags,
-                        model_access_groups=model_access_groups,
-                        project_id=project_id,
                     )
-                    if not charged:
+                    if charged_cost is None:
                         return
 
                     # update cache (fire-and-forget for backward compat:
@@ -1011,7 +1016,7 @@ class _ProxyDBLogger(CustomLogger):
                             token=user_api_key,
                             user_id=user_id,
                             end_user_id=end_user_id,
-                            response_cost=response_cost,
+                            response_cost=charged_cost,
                             team_id=team_id,
                             parent_otel_span=parent_otel_span,
                             tags=tags,
@@ -1022,7 +1027,7 @@ class _ProxyDBLogger(CustomLogger):
                         token=user_api_key,
                         key_alias=key_alias,
                         end_user_id=end_user_id,
-                        response_cost=response_cost,
+                        response_cost=charged_cost,
                         max_budget=end_user_max_budget,
                     )
                 elif budget_reservation is not None:
@@ -1314,6 +1319,34 @@ def _get_request_tags_for_cost_tracking(
         return metadata_tags
 
     return None
+
+
+class _ChargeSpend(Protocol):
+    async def __call__(
+        self,
+        *,
+        kwargs: dict[str, object],  # mutable-ok: update_database takes the logging kwargs dict itself
+        response_cost: float,
+        budget_reservation: dict[str, object] | None,  # mutable-ok: reconcile stamps the shared reservation dict
+    ) -> bool: ...
+
+
+async def _charge_request_cost(
+    charge_spend: _ChargeSpend,
+    kwargs: dict[str, object],  # mutable-ok: the first charge passes the caller's logging kwargs dict on unchanged
+    response_cost: float,
+    budget_reservation: dict[str, object] | None,  # mutable-ok: reconcile stamps the shared reservation dict
+) -> float | None:
+    """What the request charged, since a poll of a job an earlier poll charged still pays for its own guardrails."""
+    if await charge_spend(kwargs=kwargs, response_cost=response_cost, budget_reservation=budget_reservation):
+        return response_cost
+    cost_after_job: Final = repeat_poll_cost(response_cost, kwargs.get("standard_logging_object"))
+    if cost_after_job <= 0:
+        return None
+    charged: Final = await charge_spend(
+        kwargs={**kwargs, "response_cost": cost_after_job}, response_cost=cost_after_job, budget_reservation=None
+    )
+    return cost_after_job if charged else None
 
 
 class _IncrementSpendCounters(Protocol):

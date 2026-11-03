@@ -5080,6 +5080,7 @@ def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(st
                 "call_type": call_type,
                 "litellm_call_id": call_id,
                 "response_cost": cost,
+                "polled_video_status": "completed",
                 "litellm_params": {"metadata": {"user_api_key": "test-key"}},
             },
             response_obj=video,
@@ -5094,21 +5095,41 @@ def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(st
 
 
 @pytest.mark.parametrize(
-    ("response_cost", "status_id"),
-    [(0.01, "video_abc"), (0.43, "video_abc_video_cost")],
-    ids=["guardrail_only", "charged_with_guardrail"],
+    ("call_type", "job_id", "charged_id"),
+    [("avideo_status", "video_abc", "video_abc_video_cost"), ("aretrieve_batch", "batch_abc", "batch_abc_batch_cost")],
 )
-def test_a_video_poll_that_pays_only_its_guardrail_keeps_the_bare_id(response_cost, status_id):
-    """A guardrail charges every poll, so a running video's poll must not take the row the finished poll charges."""
+@pytest.mark.parametrize(("response_cost", "pays_the_job"), [(0.01, False), (0.43, True)])
+def test_a_job_poll_that_pays_only_its_guardrail_gets_a_row_of_its_own(
+    call_type, job_id, charged_id, response_cost, pays_the_job
+):
+    """A guardrail charges every poll, so a poll paying only that must neither land on the create row
+    nor take the row the job's own charge goes on, either of which the skip_duplicates insert drops."""
     kwargs = {
+        "litellm_call_id": "poll-call-id",
         "response_cost": response_cost,
+        "polled_video_status": "completed",
         "standard_logging_object": {
             "response_cost": response_cost,
             "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}],
         },
     }
 
-    assert get_spend_logs_id("avideo_status", {"id": "video_abc", "status": "completed"}, kwargs) == status_id
+    assert get_spend_logs_id(call_type, {"id": job_id, "status": "completed"}, kwargs) == (
+        charged_id if pays_the_job else "poll-call-id"
+    )
+
+
+def test_a_video_polled_with_or_without_its_base64_padding_charges_one_row():
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    padded = encode_video_id_with_provider("job-1", "custom_video", "deployment-a")
+    assert padded.endswith("=")
+
+    def row_id(polled_id: str) -> str | None:
+        kwargs = {"response_cost": 0.42, "polled_video_status": "completed", "litellm_params": {"video_id": polled_id}}
+        return get_spend_logs_id("avideo_status", {"id": "job-1", "status": "completed"}, kwargs)
+
+    assert row_id(padded.rstrip("=")) == row_id(padded) == f"{padded}_video_cost"
 
 
 def test_get_logging_payload_gives_redacted_batch_and_file_rows_distinct_request_ids():

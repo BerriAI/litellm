@@ -16,7 +16,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_in
 from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
 from litellm.types.utils import CallTypes, LlmProviders
 from litellm.types.videos.main import VideoObject
-from litellm.types.videos.utils import is_video_status_call_type
+from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG, canonical_video_id, is_video_status_call_type
 
 _DECODED_JSONL_ROW: Final = TypeAdapter(object)
 _DEPLOYMENT_FIELD: Final = TypeAdapter(Mapping[str, object])
@@ -299,20 +299,41 @@ def is_batch_retrieve_call_type(call_type: object) -> bool:
 class ChargeOnceJob:
     kind: Literal["batch", "video"]
     job_id: str
+    repeat_poll_cost: float = 0.0
 
 
 def job_charged_once_marker_key(spend_key: str, job: ChargeOnceJob) -> str:
     return f"{spend_key}:{job.kind}:{job.job_id}"
 
 
-def job_cost_of_poll(response_cost: object, standard_logging_payload: object) -> float:
-    """What the polled job itself cost, since a guardrail on the poll charges every poll, running or finished."""
+def _guardrail_cost_of_poll(standard_logging_payload: object) -> float:
     guardrail_information: Final = (
         _PAYLOAD_FIELDS.validate_python(standard_logging_payload).get("guardrail_information")
         if isinstance(standard_logging_payload, Mapping)
         else None
     )
-    return (finite_cost(response_cost) or 0.0) - guardrail_information_cost(guardrail_information)
+    return guardrail_information_cost(guardrail_information)
+
+
+def job_cost_of_poll(response_cost: object, standard_logging_payload: object) -> float:
+    """What the polled job itself cost, since a guardrail on the poll charges every poll, running or finished."""
+    return (finite_cost(response_cost) or 0.0) - _guardrail_cost_of_poll(standard_logging_payload)
+
+
+def repeat_poll_cost(response_cost: object, standard_logging_payload: object) -> float:
+    """What a poll still costs once an earlier poll charged its job: the guardrails that ran on it."""
+    return max(0.0, min(finite_cost(response_cost) or 0.0, _guardrail_cost_of_poll(standard_logging_payload)))
+
+
+def pays_only_its_guardrail(call_type: object, kwargs: Mapping[str, object], response_cost: object) -> bool:
+    """A batch or video poll whose whole cost is its guardrails', charged like any other request."""
+    if not is_batch_retrieve_call_type(call_type) and not is_video_status_call_type(call_type):
+        return False
+    return (
+        job_cost_of_poll(response_cost, kwargs.get("standard_logging_object"))
+        <= 0
+        < (finite_cost(response_cost) or 0.0)
+    )
 
 
 def _requested_video_id(kwargs: Mapping[str, object]) -> str | None:
@@ -324,35 +345,47 @@ def _requested_video_id(kwargs: Mapping[str, object]) -> str | None:
 
 
 def charged_video_id(
-    call_type: object, status: object, video_id: str, kwargs: Mapping[str, object], response_cost: object
+    call_type: object, kwargs: Mapping[str, object], fallback_video_id: str | None, response_cost: object
 ) -> str | None:
     """The id a finished video's own cost is charged once under.
 
     That is the id the client polled, which names the deployment that made the video, since a
-    custom provider's own id can repeat across deployments.
+    custom provider's own id can repeat across deployments. The status comes from the logging
+    kwargs because message redaction replaces the logged video object.
     """
-    if not is_video_status_call_type(call_type) or status != "completed":
+    if not is_video_status_call_type(call_type) or kwargs.get(POLLED_VIDEO_STATUS_KWARG) != "completed":
         return None
     if job_cost_of_poll(response_cost, kwargs.get("standard_logging_object")) <= 0:
         return None
-    return _requested_video_id(kwargs) or video_id
+    video_id: Final = _requested_video_id(kwargs) or fallback_video_id
+    return None if video_id is None else canonical_video_id(video_id)
 
 
 def _charged_batch(kwargs: Mapping[str, object], response_obj: object, response_cost: float) -> ChargeOnceJob | None:
     if not is_batch_retrieve_call_type(kwargs.get("call_type")) or not isinstance(response_obj, Batch):
         return None
-    if job_cost_of_poll(response_cost, kwargs.get("standard_logging_object")) <= 0:
+    standard_logging_payload: Final = kwargs.get("standard_logging_object")
+    if job_cost_of_poll(response_cost, standard_logging_payload) <= 0:
         return None
-    return ChargeOnceJob(kind="batch", job_id=response_obj.id)
+    return ChargeOnceJob(
+        kind="batch", job_id=response_obj.id, repeat_poll_cost=repeat_poll_cost(response_cost, standard_logging_payload)
+    )
 
 
 def job_to_charge_once(
     kwargs: Mapping[str, object], response_obj: object, response_cost: float
 ) -> ChargeOnceJob | None:
     """A finished batch or video reports its whole cost on every poll, so it is charged once per counter."""
-    if not isinstance(response_obj, VideoObject):
+    call_type: Final = kwargs.get("call_type")
+    if not is_video_status_call_type(call_type):
         return _charged_batch(kwargs, response_obj, response_cost)
     video_id: Final = charged_video_id(
-        kwargs.get("call_type"), response_obj.status, response_obj.id, kwargs, response_cost
+        call_type, kwargs, response_obj.id if isinstance(response_obj, VideoObject) else None, response_cost
     )
-    return None if video_id is None else ChargeOnceJob(kind="video", job_id=video_id)
+    if video_id is None:
+        return None
+    return ChargeOnceJob(
+        kind="video",
+        job_id=video_id,
+        repeat_poll_cost=repeat_poll_cost(response_cost, kwargs.get("standard_logging_object")),
+    )

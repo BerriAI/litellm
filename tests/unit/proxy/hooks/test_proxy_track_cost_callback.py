@@ -4,7 +4,7 @@ import logging
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
@@ -24,6 +24,7 @@ from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     ProxyDBLogger,
+    _charge_request_cost,
     _get_budget_reservation_from_metadata,
     _should_track_cost_callback,
     _update_database_and_spend_counters,
@@ -4086,3 +4087,42 @@ async def test_capture_and_legacy_share_resolved_key_attribution(
     legacy: Final = TypeAdapter(dict[str, object]).validate_python(writer.rows[0]["kwargs"])
     payload: Final = get_logging_payload(legacy, {"id": "tool"}, _CALL_START, _CALL_START)
     assert (payload["user"], payload["team_id"], payload["organization_id"]) == (owner, "team", "org")
+
+
+class _RecordedCharges:
+    def __init__(self, outcomes: tuple[bool, ...]) -> None:
+        self.outcomes = outcomes
+        self.calls: tuple[tuple[object, float, dict[str, object] | None], ...] = ()
+
+    async def __call__(
+        self, *, kwargs: dict, response_cost: float, budget_reservation: dict[str, object] | None
+    ) -> bool:
+        self.calls = (*self.calls, (kwargs.get("response_cost"), response_cost, budget_reservation))
+        return self.outcomes[len(self.calls) - 1]
+
+
+_GUARDED_POLL: Final = MappingProxyType(
+    {
+        "response_cost": 0.43,
+        "standard_logging_object": {"guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}]},
+    }
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcomes", "poll", "charged", "second_call"),
+    [
+        ((True,), _GUARDED_POLL, 0.43, None),
+        ((False, True), _GUARDED_POLL, 0.01, (0.01, 0.01, None)),
+        ((False, False), _GUARDED_POLL, None, (0.01, 0.01, None)),
+        ((False,), {"response_cost": 0.43}, None, None),
+    ],
+    ids=["first_poll_pays_the_job", "repeat_poll_pays_its_guardrail", "guardrail_charge_not_written", "repeat_poll_free"],
+)
+async def test_a_poll_of_an_already_charged_job_still_charges_its_own_guardrails(outcomes, poll, charged, second_call):
+    charge_spend: Final = _RecordedCharges(outcomes)
+    reservation: Final = {"reserved": 0.43}
+
+    assert await _charge_request_cost(charge_spend, dict(poll), 0.43, reservation) == charged
+    assert charge_spend.calls == ((0.43, 0.43, reservation), *(() if second_call is None else (second_call,)))
