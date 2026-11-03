@@ -5,6 +5,7 @@ from typing import Final, NoReturn
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.models.mcp_server import LiteLLM_MCPServerTable
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
 from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
@@ -134,13 +135,22 @@ async def authorize_provider_mcp(
     registrations: Final = {server.url: server for server in manager.catalog.provider_registrations().values()}
     allowed_servers: Final = frozenset(await manager.get_allowed_mcp_servers(current_auth))
     for attachment in attachments:
-        if isinstance(attachment, MCPAdmissionError):
-            _raise_denied(attachment)
-        registration = registrations.get(attachment.url)
-        if registration is None or registration.server_id not in allowed_servers:
-            _raise_denied(MCPAdmissionError("Provider MCP server is not registered or not permitted for this key/team"))
-        permitted = await MCPRequestHandler.get_allowed_tools_for_server(registration.server_id, current_auth)
-        ceiling = frozenset(registration.allowed_tools or ())
-        allowed = ceiling if permitted is None else ceiling.intersection(permitted)
-        if not attachment.tools <= allowed:
-            _raise_denied(MCPAdmissionError("Provider MCP tools exceed the registered server or key/team permissions"))
+        await _authorize_attachment(attachment, registrations, allowed_servers, current_auth)
+
+
+async def _authorize_attachment(
+    attachment: ProviderMCPAttachment | MCPAdmissionError,
+    registrations: Mapping[str | None, LiteLLM_MCPServerTable],
+    allowed_servers: frozenset[str],
+    auth: UserAPIKeyAuth,
+) -> None:
+    if isinstance(attachment, MCPAdmissionError):
+        _raise_denied(attachment)
+    registration: Final = registrations.get(attachment.url)
+    if registration is None or registration.server_id not in allowed_servers:
+        _raise_denied(MCPAdmissionError("Provider MCP server is not registered or not permitted for this key/team"))
+    permitted: Final = await MCPRequestHandler.get_allowed_tools_for_server(registration.server_id, auth)
+    ceiling: Final = frozenset(registration.allowed_tools or ())
+    allowed: Final = ceiling if permitted is None else ceiling.intersection(permitted)
+    if not attachment.tools <= allowed:
+        _raise_denied(MCPAdmissionError("Provider MCP tools exceed the registered server or key/team permissions"))
