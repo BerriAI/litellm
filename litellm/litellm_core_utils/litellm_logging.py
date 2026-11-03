@@ -415,6 +415,13 @@ in_memory_dynamic_logger_cache: Final = DynamicLoggingCache()
 _PrometheusLogger = None
 
 
+def _get_custom_logger() -> CustomLogger:
+    global customLogger
+    if customLogger is None:
+        customLogger = CustomLogger()  # rebind-ok: process-wide callable callback adapter shared by logging handlers
+    return customLogger
+
+
 def _get_cached_prometheus_logger():
     """
     Get cached PrometheusLogger class.
@@ -4117,12 +4124,10 @@ class Logging(LiteLLMLoggingBaseClass):
                                 start_time=start_time,
                                 end_time=end_time,
                             )
-                    if (
-                        callable(callback) is True and is_sync_request and customLogger is not None
-                    ):  # custom logger functions
+                    if callable(callback) and is_sync_request:
                         print_verbose(f"success callbacks: Running Custom Callback Function - {callback}")
 
-                        customLogger.log_event(
+                        _get_custom_logger().log_event(
                             kwargs=call_details,
                             response_obj=result,
                             start_time=start_time,
@@ -4496,12 +4501,9 @@ class Logging(LiteLLMLoggingBaseClass):
                             end_time=end_time,
                         )
                 if callable(callback):  # custom logger functions
-                    global customLogger
-                    if customLogger is None:
-                        customLogger = CustomLogger()
                     if self.stream:
                         if "async_complete_streaming_response" in self.model_call_details:
-                            await customLogger.async_log_event(
+                            await _get_custom_logger().async_log_event(
                                 kwargs=self.model_call_details,
                                 response_obj=self.model_call_details["async_complete_streaming_response"],
                                 start_time=start_time,
@@ -4510,7 +4512,7 @@ class Logging(LiteLLMLoggingBaseClass):
                                 callback_func=callback,
                             )
                     else:
-                        await customLogger.async_log_event(
+                        await _get_custom_logger().async_log_event(
                             kwargs=self.model_call_details,
                             response_obj=result,
                             start_time=start_time,

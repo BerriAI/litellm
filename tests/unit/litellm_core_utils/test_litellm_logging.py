@@ -8933,6 +8933,53 @@ async def test_logger_in_the_global_failure_callback_lists_gets_one_failure_hook
 
 
 @pytest.mark.usefixtures("no_global_callbacks")
+@pytest.mark.parametrize("event", ["success", "failure"])
+def test_sync_callable_after_string_callback_setup_receives_the_call(
+    monkeypatch: pytest.MonkeyPatch, event: str
+) -> None:
+    monkeypatch.setattr(litellm.utils, "callback_list", [])
+    monkeypatch.setattr(litellm_logging, "customLogger", None)
+    monkeypatch.setattr(litellm_logging, "promptLayerLogger", None)
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "_async_input_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", ["promptlayer"])
+    start: Final = datetime.datetime(2026, 1, 1)
+    end: Final = start + datetime.timedelta(seconds=1)
+    litellm.utils.function_setup(
+        original_function="completion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=start,
+        is_async_call=False,
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id="string-callback",
+    )
+    calls: Final[list[tuple[object, object, object, object]]] = []
+
+    def callback(kwargs: dict[str, object], response: object, started: object, ended: object) -> None:
+        calls.append((kwargs["litellm_call_id"], response, started, ended))
+
+    monkeypatch.setattr(litellm, "success_callback", [callback] if event == "success" else [])
+    monkeypatch.setattr(litellm, "failure_callback", [callback] if event == "failure" else [])
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="completion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=start,
+        is_async_call=False,
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id="callable-callback",
+    )
+    response: Final = ModelResponse(model="gpt-4o")
+    if event == "success":
+        logging_obj.success_handler(response, start, end)
+    else:
+        logging_obj.failure_handler(ValueError("upstream rejected"), "traceback", start, end)
+
+    assert calls == [("callable-callback", response if event == "success" else None, start, end)]
+
+
+@pytest.mark.usefixtures("no_global_callbacks")
 def test_failure_handler_run_without_an_async_failure_run_keeps_the_sync_hook() -> None:
     recorder: Final = _BothFailureHooksRecorder()
 
