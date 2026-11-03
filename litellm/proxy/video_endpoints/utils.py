@@ -3,6 +3,10 @@ from typing import TYPE_CHECKING, Any, Final
 import orjson
 from pydantic import BaseModel, ConfigDict
 
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    authorize_model_for_key,
+    get_team_provider_deployment_id,
+)
 from litellm.types.videos.main import DecodedVideoId, VideoObject
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -12,6 +16,7 @@ from litellm.types.videos.utils import (
 )
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
 
 
@@ -90,6 +95,24 @@ def routable_model_name(model: object, llm_router: "Router | None", custom_llm_p
         return name
     provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
     return name if llm_router.registry().resolve(name, kind="from_id", custom_llm_provider=provider) else None
+
+
+async def video_list_model(
+    requested_model: str | None,
+    custom_llm_provider: str | None,
+    llm_router: "Router | None",
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> str | None:
+    if requested_model:
+        await authorize_model_for_key(
+            model_id=requested_model, llm_router=llm_router, user_api_key_dict=user_api_key_dict
+        )
+        return requested_model
+    if not custom_llm_provider:
+        return None
+    return get_team_provider_deployment_id(
+        llm_router=llm_router, user_api_key_dict=user_api_key_dict, custom_llm_provider=custom_llm_provider
+    )
 
 
 def video_model_group(decoded: DecodedVideoId, llm_router: "Router | None") -> str | None:

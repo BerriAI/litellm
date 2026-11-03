@@ -3,7 +3,7 @@ import itertools
 import logging
 import mimetypes
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -559,7 +559,39 @@ def get_team_provider_credentials(
     """
     if llm_router is None:
         return None
+    match: Final = next(
+        _authorized_provider_credentials(
+            llm_router, user_api_key_dict, custom_llm_provider, include_accessible_deployments
+        ),
+        None,
+    )
+    return None if match is None else dict(match[1])
 
+
+def get_team_provider_deployment_id(
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+    custom_llm_provider: str,
+) -> str | None:
+    if llm_router is None:
+        return None
+    match: Final = next(
+        _authorized_provider_credentials(llm_router, user_api_key_dict, custom_llm_provider, True), None
+    )
+    deployment: Final = (
+        None
+        if match is None
+        else llm_router.registry().credentials(match[0], form="deployment", team_id=user_api_key_dict.team_id)
+    )
+    return None if deployment is None else deployment.model_info.id
+
+
+def _authorized_provider_credentials(
+    llm_router: "Router",
+    user_api_key_dict: "UserAPIKeyAuth",
+    custom_llm_provider: str,
+    include_accessible_deployments: bool,
+) -> Iterator[tuple[str, Mapping[str, object]]]:
     from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.auth.auth_checks import is_model_allowed_by_pattern
     from litellm.proxy.auth.model_checks import get_complete_model_list, get_key_models
@@ -596,10 +628,10 @@ def get_team_provider_credentials(
             return True
         return isinstance(public_model_name, str) and _key_allowlist_covers(public_model_name, key_model_allowlist)
 
-    def _provider_credentials(model_id: str) -> dict[str, object] | None:
+    def _provider_credentials(model_id: str) -> tuple[str, Mapping[str, object]] | None:
         credentials: Final = registry.credentials(model_id, form="with_provider", team_id=team_id)
         if credentials is not None and credentials.get("custom_llm_provider") == custom_llm_provider:
-            return {key: value for key, value in credentials.items() if key != "model"}
+            return model_id, {key: value for key, value in credentials.items() if key != "model"}
         return None
 
     def _usable_team_deployment_order(deployment: _RouterDeployment) -> tuple[tuple[datetime, str], str] | None:
@@ -627,15 +659,10 @@ def get_team_provider_credentials(
             key=_by_team_deployment_rank,
         )
         team_deployment_ids: Final = tuple(deployment_id for _, deployment_id in team_deployment_orders)
-        team_credentials: Final = next(
-            (credentials for credentials in map(_provider_credentials, team_deployment_ids) if credentials is not None),
-            None,
-        )
-        if team_credentials is not None:
-            return team_credentials
+        yield from (found for found in map(_provider_credentials, team_deployment_ids) if found is not None)
 
     if not include_accessible_deployments:
-        return None
+        return
 
     # 2. Fall back to deployments the caller is allowed to access. The key's
     #    effective allowlist (sentinels and access groups already expanded by
@@ -668,15 +695,12 @@ def get_team_provider_credentials(
             is_model_allowed_by_pattern(model=model_name, allowed_model_pattern=granted) for granted in granted_models
         )
     )
-    return next(
-        (
-            credentials
-            for credentials in map(
-                _provider_credentials, dict.fromkeys(itertools.chain(granted_models, deployments_granted_by_wildcard))
-            )
-            if credentials is not None
-        ),
-        None,
+    yield from (
+        found
+        for found in map(
+            _provider_credentials, dict.fromkeys(itertools.chain(granted_models, deployments_granted_by_wildcard))
+        )
+        if found is not None
     )
 
 

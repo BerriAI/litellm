@@ -28,17 +28,22 @@ mock's call args), and a brand-new kwarg added to this layer surfaces as a failu
 
 from contextlib import ExitStack
 from dataclasses import dataclass
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import orjson
 import pytest
+import respx
+from fastapi.testclient import TestClient
 
 
+import litellm
 import litellm.proxy.proxy_server as proxy_server
 import litellm.proxy.video_endpoints.endpoints as endpoints
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
@@ -660,6 +665,129 @@ async def test_list__provider_from_header(harness):
         "query_params": {},
         "custom_llm_provider": "bedrock",
     }
+
+
+_DEPLOYMENT_ARK_HOST: Final = "ark.deployment.example"
+_DEPLOYMENT_ARK_KEY: Final = "deployment-ark-key"
+_ARK_TASKS_PATH: Final = "/api/v3/contents/generations/tasks"
+_EMPTY_ARK_TASK_LIST: Final = {"items": [], "total": 0}
+
+
+def _router_with_a_volcengine_and_an_openai_deployment() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "seedance",
+                "litellm_params": {
+                    "model": "volcengine/doubao-seedance-2-5-260628",
+                    "api_key": _DEPLOYMENT_ARK_KEY,
+                    "api_base": f"https://{_DEPLOYMENT_ARK_HOST}/api/v3",
+                },
+            },
+            {
+                "model_name": "sora",
+                "litellm_params": {"model": "openai/sora-2", "api_key": "deployment-openai-key"},
+            },
+        ]
+    )
+
+
+@pytest.fixture
+def proxy_client_for_key_models(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[list[str]], TestClient]]:
+    for env_name in ("ARK_API_KEY", "VOLCENGINE_API_KEY", "ARK_API_BASE", "VOLCENGINE_API_BASE"):
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(proxy_server, "llm_router", _router_with_a_volcengine_and_an_openai_deployment())
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    def proxy_client(key_models: list[str]) -> TestClient:
+        key: Final = UserAPIKeyAuth(api_key="sk-video-list", models=key_models)
+        monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth, lambda: key)
+        return TestClient(proxy_server.app)
+
+    yield proxy_client
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.mark.parametrize(
+    "query, headers",
+    [
+        pytest.param({"model": "seedance"}, {}, id="model-query"),
+        pytest.param({}, {"x-litellm-model": "seedance"}, id="model-header"),
+        pytest.param({"custom_llm_provider": "volcengine"}, {}, id="provider-only"),
+    ],
+)
+def test_list__reaches_the_deployments_provider_account_with_its_credentials(
+    proxy_client_for_key_models: Callable[[list[str]], TestClient],
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    client: Final = proxy_client_for_key_models(["seedance"])
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.get(f"https://{_DEPLOYMENT_ARK_HOST}{_ARK_TASKS_PATH}").mock(
+            return_value=httpx.Response(200, json=_EMPTY_ARK_TASK_LIST)
+        )
+        response: Final = client.get("/v1/videos", params=query, headers=headers)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"] == []
+    assert upstream.call_count == 1
+    assert upstream.calls.last.request.headers["authorization"] == f"Bearer {_DEPLOYMENT_ARK_KEY}"
+
+
+def test_list__provider_only_never_borrows_a_deployment_the_key_cannot_use(
+    proxy_client_for_key_models: Callable[[list[str]], TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ARK_API_KEY", "env-ark-key")
+    client: Final = proxy_client_for_key_models(["sora"])
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.get(url__regex=f".*{_ARK_TASKS_PATH}$").mock(
+            return_value=httpx.Response(200, json=_EMPTY_ARK_TASK_LIST)
+        )
+        response: Final = client.get("/v1/videos", params={"custom_llm_provider": "volcengine"})
+
+    assert response.status_code == 200, response.text
+    assert upstream.calls.last.request.headers["authorization"] == "Bearer env-ark-key"
+    assert upstream.calls.last.request.url.host != _DEPLOYMENT_ARK_HOST
+
+
+def test_list__provider_only_on_a_proxy_without_a_router_is_a_clean_client_error(
+    proxy_client_for_key_models: Callable[[list[str]], TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    client: Final = proxy_client_for_key_models([])
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=_EMPTY_ARK_TASK_LIST))
+        response: Final = client.get("/v1/videos", params={"custom_llm_provider": "volcengine"})
+
+    assert response.status_code == 400, response.text
+    assert "Invalid model name passed in model=None" in response.json()["error"]["message"]
+    assert upstream.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "key_models, requested_model",
+    [
+        pytest.param(["sora"], "seedance", id="model-the-key-cannot-use"),
+        pytest.param([], "no-such-model", id="unknown-model"),
+    ],
+)
+def test_list__a_model_that_cannot_be_listed_is_a_client_error_naming_it(
+    proxy_client_for_key_models: Callable[[list[str]], TestClient], key_models: list[str], requested_model: str
+) -> None:
+    client: Final = proxy_client_for_key_models(key_models)
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=_EMPTY_ARK_TASK_LIST))
+        response: Final = client.get("/v1/videos", params={"model": requested_model})
+
+    assert 400 <= response.status_code < 500, response.text
+    assert requested_model in response.json()["error"]["message"]
+    assert "Traceback" not in response.text
+    assert upstream.call_count == 0
 
 
 # =========================================================================== #

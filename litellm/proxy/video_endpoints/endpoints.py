@@ -8,6 +8,7 @@ from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_utils import MODEL_ROUTING_HEADER_NAME
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -28,6 +29,7 @@ from litellm.proxy.video_endpoints.utils import (
     fallback_requested_model,
     get_custom_provider_from_data,
     routable_model_name,
+    video_list_model,
     video_model_group,
     video_reference_to_id,
 )
@@ -193,6 +195,14 @@ async def video_list(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
+        listing_model: Final = await video_list_model(
+            requested_model=request.query_params.get("model") or request.headers.get(MODEL_ROUTING_HEADER_NAME),
+            custom_llm_provider=custom_llm_provider,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+        )
+        if listing_model:
+            data["model"] = listing_model
         listed: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
