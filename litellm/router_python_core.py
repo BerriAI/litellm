@@ -7614,9 +7614,30 @@ class PythonCore(DeprecatedRouterMembers):
         )
         return creating or healthy_deployments
 
+    @staticmethod
+    def _run_coroutine_in_background(coro: Awaitable[object]) -> None:
+        """
+        Schedule a coroutine from sync code. Called from a thread with no running loop (the usual
+        sync Router call), so run it to completion there; inside a loop (sync code called from an
+        async handler) just queue it and let the loop do the work.
+        """
+        try:
+            loop: Final = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                asyncio.run(coro)
+            except Exception:
+                verbose_router_logger.debug("background coroutine failed", exc_info=True)
+            return
+        loop.create_task(coro)
+
     def _generic_api_call_with_fallbacks(self, model: str, original_function: Callable, **kwargs):
         """
         Make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
+
+        This is the sync twin of _ageneric_api_call_with_fallbacks: async_function_with_fallbacks is
+        driven through run_async_function, and the deployment is picked inside
+        _generic_api_call_with_fallbacks_helper so every retry / fallback hop re-routes.
         Args:
             model: The model to use
             original_function: The handler function to call (e.g., litellm.completion)
@@ -7624,15 +7645,35 @@ class PythonCore(DeprecatedRouterMembers):
         Returns:
             The response from the handler function
         """
-        handler_name: Final = original_function.__name__
-        metadata_variable_name: Final = get_router_metadata_variable_name(function_name="generic_api_call")
+        try:
+            kwargs["model"] = model
+            kwargs["original_generic_function"] = original_function
+            kwargs["original_function"] = self._generic_api_call_with_fallbacks_helper
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs, metadata_variable_name="litellm_metadata")
+            verbose_router_logger.debug("Inside generic_api_call_with_fallbacks() - model: %s", model)
+            response: Final = self.function_with_fallbacks(**kwargs)
+            return response
+        except Exception as e:
+            # async_function_with_fallbacks can't be awaited from here, so fire the slack/teams
+            # alert the async twin sends. It no-ops unless router.slack_alerting_logger is set.
+            self._run_coroutine_in_background(
+                send_llm_exception_alert(
+                    ctx=self._core_ctx,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
+            raise e
+
+    def _generic_api_call_with_fallbacks_helper(self, model: str, original_generic_function: Callable, **kwargs):
+        """
+        One attempt of the sync generic fallback chain (see _generic_api_call_with_fallbacks), routed
+        against the group the hop is for.
+        """
+        handler_name: Final = getattr(original_generic_function, "__name__", "")
         try:
             verbose_router_logger.debug("Inside _generic_api_call() - handler: %s, model: %s", handler_name, model)
-            self._update_kwargs_before_fallbacks(
-                model=model,
-                kwargs=kwargs,
-                metadata_variable_name=metadata_variable_name,
-            )
             with self._video_call_pin(handler_name, kwargs), self._route_capability_pin(handler_name):
                 deployment: Final = self.get_available_deployment(
                     model=model,
@@ -7664,7 +7705,7 @@ class PythonCore(DeprecatedRouterMembers):
 
             custom_llm_provider: Final = provider_for_generic_call(data)
 
-            response: Final = original_function(
+            response: Final = original_generic_function(
                 **{
                     **data,
                     "custom_llm_provider": custom_llm_provider,
@@ -8599,10 +8640,19 @@ class PythonCore(DeprecatedRouterMembers):
         ):
 
             def sync_wrapper(
+                model: str | None = None,
                 custom_llm_provider: str | None = None,
                 client: object | None = None,
                 **kwargs,
             ):
+                # model sits in the signature, so without this it never reaches kwargs and the
+                # retry/fallback loop has no group to route against. Don't forward
+                # custom_llm_provider when it's unset: the deployment already carries the provider
+                # and a None would shadow it.
+                if model is not None:
+                    kwargs["model"] = model
+                if custom_llm_provider and "custom_llm_provider" not in kwargs:
+                    kwargs["custom_llm_provider"] = custom_llm_provider
                 return self._generic_api_call_with_fallbacks(original_function=original_function, **kwargs)
 
             return sync_wrapper
