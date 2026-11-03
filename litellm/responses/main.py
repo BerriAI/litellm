@@ -529,6 +529,7 @@ def _will_bridge_to_chat_completions(
     use_chat_completions_api: bool,
     model_info: object,
     api_base: str | None,
+    litellm_params: GenericLiteLLMParams | None = None,
 ) -> bool:
     """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
 
@@ -554,12 +555,15 @@ def provider_stores_the_conversation(model: str, custom_llm_provider: str | None
     first MCP round runs as an internal call that writes no spend log at all.
     """
     api_base: Final = _api_base_kwarg(kwargs)
+    litellm_params: Final = GenericLiteLLMParams(**kwargs)
     return not _will_bridge_to_chat_completions(
         model,
-        custom_llm_provider or litellm.get_llm_provider(model=model, api_base=api_base)[1],
+        custom_llm_provider
+        or litellm.get_llm_provider(model=model, api_base=api_base, litellm_params=litellm_params)[1],
         bool(kwargs.get("use_chat_completions_api")),
         kwargs.get("model_info"),
         api_base,
+        litellm_params,
     )
 
 
@@ -640,7 +644,12 @@ async def aresponses(
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=local_vars.get("base_url", None)
+                model=model,
+                api_base=local_vars.get("base_url", None),
+                litellm_params=GenericLiteLLMParams(
+                    extra_headers=extra_headers,
+                    **cast("dict[str, object]", kwargs),  # cast-ok: kwargs is the untyped request dict
+                ),
             )
             # Update local_vars with detected provider (fixes #19782)
             local_vars["custom_llm_provider"] = custom_llm_provider
@@ -670,6 +679,7 @@ async def aresponses(
                     bool(kwargs.get("use_chat_completions_api")),
                     kwargs.get("model_info"),
                     _api_base_kwarg(kwargs),
+                    GenericLiteLLMParams(**kwargs),
                 ),
             ):
                 (
@@ -700,7 +710,7 @@ async def aresponses(
                     original_model=original_model,
                     swapped_model=model,
                     custom_llm_provider=custom_llm_provider,
-                    kwargs=kwargs,
+                    kwargs={**kwargs, "extra_headers": extra_headers},
                     prompt_id=prompt_id,
                 )
             kwargs.pop("prompt_id", None)
@@ -784,11 +794,14 @@ def _resolve_prompt_swapped_provider(
     kwargs: Mapping[str, object],
     prompt_id: str | None,
 ) -> str:
-    swapped_provider: Final = litellm.get_llm_provider(model=swapped_model)[1]
+    litellm_params: Final = GenericLiteLLMParams(**kwargs)
+    swapped_provider: Final = litellm.get_llm_provider(model=swapped_model, litellm_params=litellm_params)[1]
     if kwargs.get("api_key") is None and kwargs.get("api_base") is None:
         return swapped_provider
     try:
-        original_provider: Final = custom_llm_provider or litellm.get_llm_provider(model=original_model)[1]
+        original_provider: Final = (
+            custom_llm_provider or litellm.get_llm_provider(model=original_model, litellm_params=litellm_params)[1]
+        )
     except litellm.BadRequestError:
         return swapped_provider
     if swapped_provider == original_provider:
@@ -840,6 +853,7 @@ def _apply_prompt_management_to_responses_call(
                 use_chat_completions_api,
                 kwargs.get("model_info"),
                 _api_base_kwarg(kwargs),
+                GenericLiteLLMParams(**kwargs),
             ),
         ):
             (
@@ -873,7 +887,7 @@ def _apply_prompt_management_to_responses_call(
                 original_model=original_model,
                 swapped_model=model,
                 custom_llm_provider=custom_llm_provider,
-                kwargs=kwargs,
+                kwargs={**kwargs, "extra_headers": local_vars.get("extra_headers")},
                 prompt_id=prompt_id,
             )
         )
@@ -1216,7 +1230,12 @@ def responses(
 
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=local_vars.get("base_url", None)
+                model=model,
+                api_base=local_vars.get("base_url", None),
+                litellm_params=GenericLiteLLMParams(
+                    extra_headers=extra_headers,
+                    **cast("dict[str, object]", kwargs),  # cast-ok: kwargs is the untyped request dict
+                ),
             )
             local_vars["custom_llm_provider"] = custom_llm_provider
 
@@ -1230,12 +1249,17 @@ def responses(
             use_chat_completions_api=use_chat_completions_api,
         )
 
-        # get llm provider logic
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(extra_headers=extra_headers, **kwargs)
+        provider_headers: Final = ResponsesAPIRequestUtils.merge_provider_specific_headers(
+            extra_headers=extra_headers,
+            provider_specific_header=getattr(litellm_params, "provider_specific_header", None),
+            custom_llm_provider=custom_llm_provider,
+        )
+        local_vars["extra_headers"] = provider_headers
         try:
             effective_extra_headers: Final = (
                 add_provider_affinity_header(
-                    headers=extra_headers or MappingProxyType({}),
+                    headers=provider_headers or MappingProxyType({}),
                     litellm_params=MappingProxyType(
                         {
                             "provider_affinity_header": litellm_params.provider_affinity_header,
@@ -1247,7 +1271,7 @@ def responses(
                     ),
                 )
                 if litellm_params.provider_affinity_header is not None
-                else extra_headers
+                else provider_headers
             )
         except ValueError as affinity_error:
             raise litellm.BadRequestError(
