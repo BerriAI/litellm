@@ -2063,7 +2063,12 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     perform_redaction(model_call_details=_request_body, result=None)
 
             stored_request_body: Final = _sanitize_proxy_server_request_body(
-                _stored_request_body(_request_body, standard_payload if isinstance(standard_payload, Mapping) else None)
+                _stored_request_body(
+                    _REQUEST_BODY_ADAPTER.validate_python(_request_body),
+                    _REQUEST_BODY_ADAPTER.validate_python(standard_payload)
+                    if isinstance(standard_payload, Mapping)
+                    else None,
+                )
             )
             _request_body_json_str: Final = safe_dumps(
                 _stored_request_without_requester_ip_address(stored_request_body)
