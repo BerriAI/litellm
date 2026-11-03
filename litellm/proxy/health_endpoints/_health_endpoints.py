@@ -8,6 +8,7 @@ import time
 import traceback
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final, Literal, TypedDict
 
 import fastapi
@@ -2227,7 +2228,15 @@ async def test_model_connection(
                     "Could not find model %s in router: %s. Proceeding with request params only.", model_name, e
                 )
 
-        reject_server_owned_wif_params(request_litellm_params)
+        reject_server_owned_wif_params(
+            MappingProxyType(
+                {
+                    key: value
+                    for key, value in _OBJECT_MAPPING.validate_python(request_litellm_params).items()
+                    if key != "chatgpt_auth_file"
+                }
+            )
+        )
         # Merge: config params (from proxy config) as base, request params override
         litellm_params = {
             **_config_base_for_health_check(
