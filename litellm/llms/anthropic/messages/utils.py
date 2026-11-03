@@ -217,9 +217,9 @@ def model_reasoning_efforts(model: str, custom_llm_provider: str | None) -> tupl
     return resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True)
 
 
-def reasoning_defaults_off(model: str, custom_llm_provider: str | None) -> bool:
+def maps_bare_output_effort(model: str, custom_llm_provider: str | None) -> bool:
     model_info: Final = _mapped_model_info(model, custom_llm_provider)
-    return model_info is not None and model_info.get("default_reasoning_effort") == REASONING_EFFORT_OFF
+    return model_info is not None and model_info.get("default_reasoning_effort") != REASONING_EFFORT_OFF
 
 
 def normalize_reasoning_effort_value(

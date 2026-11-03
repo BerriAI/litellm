@@ -24,6 +24,7 @@ from litellm.llms.anthropic.messages.responses_adapters.handler import (
 from litellm.router import Router
 from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS, converted_stream_requested
+from litellm.types.llms.anthropic import AnthropicOutputConfig
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 CLAUDE_CODE_USER_ID = json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": "session-abc"})
@@ -179,10 +180,44 @@ def test_build_responses_kwargs_never_turns_on_reasoning_the_client_left_off(
     )
 
     map_row: Final = litellm.model_cost.get(model)
-    reasons_only_when_asked: Final = map_row is not None and map_row.get("default_reasoning_effort") == "none"
+    reasons_unasked: Final = map_row is not None and map_row.get("default_reasoning_effort") != "none"
     reasoning: Final = responses_kwargs.get("reasoning")
-    assert (reasoning is None) == (thinking is None and reasons_only_when_asked)
+    assert (reasoning is None) == (thinking is None and not reasons_unasked)
     assert reasoning is None or cast(Mapping[str, object], reasoning)["effort"] != "none"
+
+
+@pytest.mark.parametrize("thinking", [None, {"type": "adaptive"}], ids=["thinking-left-out", "adaptive"])
+def test_build_responses_kwargs_leaves_a_bare_output_effort_to_an_explicit_reasoning_effort(
+    thinking: dict[str, object] | None,
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5-mini",
+        output_config={"effort": "high"},
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai", "reasoning_effort": "minimal"},
+    )
+
+    assert responses_kwargs["reasoning_effort"] == "minimal"
+    assert ("reasoning" in responses_kwargs) == (thinking is not None)
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+@pytest.mark.parametrize("thinking", [None, {"type": "adaptive"}], ids=["thinking-left-out", "adaptive"])
+def test_build_responses_kwargs_drops_an_effort_no_reasoning_api_defines_only_under_drop_params(
+    drop_params: bool, thinking: dict[str, object] | None
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6-luna",
+        output_config=cast(AnthropicOutputConfig, {"effort": "turbo"}),
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": drop_params},
+    )
+
+    assert responses_kwargs.get("reasoning") == (None if drop_params else {"effort": "turbo"})
 
 
 @pytest.mark.parametrize("effort", ["max", "xhigh"])

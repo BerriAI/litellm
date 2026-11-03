@@ -5,7 +5,7 @@ Used when the target model is an OpenAI or Azure model.
 """
 
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
-from typing import Final, TypeAlias
+from typing import Final, TypeAlias, get_args
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -37,7 +37,7 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import REASONING_EFFORT, ResponsesAPIResponse
 from litellm.types.utils import CountContextManagement
 from litellm.utils import ProviderConfigManager, supports_none_reasoning_effort, supports_reasoning
 
@@ -51,9 +51,9 @@ from ..utils import (
     REASONING_EFFORT_OFF,
     litellm_logging_obj_from_kwargs,
     local_model_name,
+    maps_bare_output_effort,
     model_reasoning_efforts,
     normalize_reasoning_effort_value,
-    reasoning_defaults_off,
 )
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
@@ -67,6 +67,7 @@ _SplitEdits: TypeAlias = tuple[dict[str, object] | None, Sequence[Mapping[str, o
 AnthropicContextManagementSpec: TypeAlias = dict[str, object] | list[dict[str, object]] | None
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
+_KNOWN_REASONING_EFFORTS: Final = frozenset(get_args(REASONING_EFFORT))
 
 
 def _split_context_management(
@@ -293,6 +294,13 @@ def _reasoning_for_target(
         return _reasoning_off_for_target(
             reasoning_params, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
         )
+    if drop_params and effort not in _KNOWN_REASONING_EFFORTS:
+        verbose_logger.warning(
+            "Dropping reasoning.effort=%r for %s, no reasoning API defines it, because drop_params is set",
+            effort,
+            model,
+        )
+        return None
     normalized: Final = normalize_reasoning_effort_value(
         effort,
         model=model,
@@ -300,6 +308,14 @@ def _reasoning_for_target(
         deployment_model_info=deployment_model_info,
     )
     return reasoning if normalized == effort else {**reasoning_params, "effort": normalized}
+
+
+def _maps_reasoning(
+    thinking: Mapping[str, object] | None, model: str, provider: str | None, forwarded_kwargs: Mapping[str, object]
+) -> bool:
+    return bool(thinking) or (
+        forwarded_kwargs.get("reasoning_effort") is None and maps_bare_output_effort(model, provider)
+    )
 
 
 def _build_responses_kwargs(
@@ -383,15 +399,15 @@ def _build_responses_kwargs(
     provider: Final = provider_hint if isinstance(provider_hint, str) else None
     bridged_reasoning: Final = responses_kwargs.pop("reasoning", None)
     target_reasoning: Final = (
-        None
-        if not thinking and reasoning_defaults_off(model, provider)
-        else _reasoning_for_target(
+        _reasoning_for_target(
             bridged_reasoning,
             model=model,
             custom_llm_provider=provider,
             deployment_model_info=forwarded_kwargs.get("model_info"),
             drop_params=drop_params,
         )
+        if _maps_reasoning(thinking, model, provider, forwarded_kwargs)
+        else None
     )
     if target_reasoning is not None:
         responses_kwargs["reasoning"] = target_reasoning
