@@ -254,11 +254,15 @@ def _gemini_items(value: object) -> Sequence[object]:
     return _OBJECT_LIST.validate_python(value) if isinstance(value, list) else ()
 
 
+def _gemini_part_text(part: object) -> object:
+    """A part's ``text`` field, or the part itself when it's a plain string, which the generateContent adapter sends as text"""
+    return part if isinstance(part, str) else (as_str_mapping(part) or {}).get("text")
+
+
 def _gemini_text(content: object) -> str:
     """Join the text parts of one Gemini ``Content`` object, skipping inline data, files and function calls."""
     parts: Final = _gemini_items((as_str_mapping(content) or {}).get("parts"))
-    texts: Final = ((as_str_mapping(part) or {}).get("text") for part in parts)
-    return "\n".join(text for text in texts if isinstance(text, str) and text)
+    return "\n".join(text for text in map(_gemini_part_text, parts) if isinstance(text, str) and text)
 
 
 def _gemini_tool_part_values(part: object) -> Iterator[object]:

@@ -1829,6 +1829,13 @@ class TestGeminiContents:
             {"role": "tool", "content": expected},
         ]
 
+    def test_reads_a_plain_string_part_as_text(self):
+        data: Final = {"contents": [{"role": "user", "parts": ["hello", {"text": "world"}]}]}
+
+        assert _build_lakera_inspection_messages(data, call_type="pass_through_endpoint") == [
+            {"role": "user", "content": "hello\nworld"}
+        ]
+
     def test_reads_a_single_contents_object_with_a_single_parts_object(self):
         data: Final = {"contents": {"role": "user", "parts": {"text": "hello world"}}}
         assert _build_lakera_inspection_messages(data, call_type="pass_through_endpoint") == [
