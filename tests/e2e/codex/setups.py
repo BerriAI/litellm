@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from typing import Final, Literal
 
 import pytest
@@ -93,4 +94,24 @@ def with_expected_failure(setup_id: SetupId, *, reason: str) -> tuple[ParameterS
         if setup.id == setup_id
         else setup
         for setup in SETUPS
+    )
+
+
+def also_driving(setups: tuple[ParameterSet, ...], extra: Mapping[str, Subject]) -> tuple[ParameterSet, ...]:
+    return tuple(_also_driving(setup, extra) for setup in setups)
+
+
+def _also_driving(setup: ParameterSet, extra: Mapping[str, Subject]) -> ParameterSet:
+    deployment: Final = setup.values[0]
+    assert isinstance(deployment, Deployment)
+    added: Final = extra[deployment.litellm_params.model]
+    return pytest.param(*setup.values, id=setup.id, marks=tuple(_widened(mark, added) for mark in setup.marks))
+
+
+def _widened(mark: pytest.MarkDecorator | pytest.Mark, added: Subject) -> pytest.MarkDecorator | pytest.Mark:
+    subject: Final = mark.args[0] if mark.name == "meta" and mark.args else None
+    if not isinstance(subject, Subject):
+        return mark
+    return meta(
+        replace(subject, providers=(*subject.providers, *added.providers), models=(*subject.models, *added.models))
     )
