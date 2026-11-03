@@ -71,7 +71,7 @@ def stage_core_distribution(source: Path, destination: Path, *, package: str = "
         else:
             shutil.copy2(path, destination / name)
     template: Final = (source / "packaging" / package / "pyproject.toml").read_text()
-    if package == "litellm-gateway" and IN_TREE_RUST_PATH not in template:
+    if package == "litellm-proxy" and IN_TREE_RUST_PATH not in template:
         raise SystemExit(f"packaging/{package}/pyproject.toml no longer points at {IN_TREE_RUST_PATH}")
     metadata: Final = template.replace(IN_TREE_RUST_PATH, "litellm-rust/")
     (destination / "pyproject.toml").write_text(metadata)
@@ -93,7 +93,7 @@ def build_core_distribution(output: Path, *, sdist_only: bool = False, package: 
 
 def main() -> None:
     parser: Final = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--package", choices=("litellm-core", "litellm-gateway"), default="litellm-core")
+    parser.add_argument("--package", choices=("litellm-core", "litellm-proxy"), default="litellm-core")
     parser.add_argument("--out-dir", type=Path, default=ROOT / "dist/core")
     parser.add_argument(
         "--sdist-only", action="store_true", help="Build only the source archive, without compiling a wheel"
