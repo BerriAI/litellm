@@ -1354,21 +1354,25 @@ def _replayed_by_responses_bridge(standard_payload: Mapping[str, object] | None)
     return isinstance(response, Mapping) and "choices" in response
 
 
-def _latest_turn_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
+def _trimmed_turn(request_body: Mapping[str, object]) -> Mapping[str, object]:
     if _continues_stored_conversation(request_body):
         return request_body
     kept: Final = {key: value for key, value in request_body.items() if key in _LATEST_TURN_KEPT_KEYS}
-    originating: Final = request_body.get("originating_request_masked")
-    audit: Final = (
-        {**kept, "originating_request_masked": _latest_turn_body(_REQUEST_BODY_ADAPTER.validate_python(originating))}
-        if isinstance(originating, Mapping)
-        else kept
-    )
     turns_key: Final = next((key for key in _TURNS_KEYS if key in request_body), None)
     text: Final = None if turns_key is None else _latest_user_message_text(request_body[turns_key])
     if turns_key is None or text is None:
-        return MappingProxyType(audit)
-    return MappingProxyType({**audit, turns_key: [{"role": "user", "content": text}]})
+        return MappingProxyType(kept)
+    return MappingProxyType({**kept, turns_key: [{"role": "user", "content": text}]})
+
+
+def _latest_turn_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
+    trimmed: Final = _trimmed_turn(request_body)
+    originating: Final = request_body.get("originating_request_masked")
+    if not isinstance(originating, Mapping) or trimmed is request_body:
+        return trimmed
+    return MappingProxyType(
+        {**trimmed, "originating_request_masked": _trimmed_turn(_REQUEST_BODY_ADAPTER.validate_python(originating))}
+    )
 
 
 def _stored_request_body(

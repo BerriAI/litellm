@@ -7158,9 +7158,7 @@ def _stored_request(body: Mapping[str, object]) -> object:
     return _STORED_JSON.validate_json(_stored_request_json(body))
 
 
-@pytest.mark.parametrize(
-    ("body", "expected"),
-    [
+_STATELESS_CASES: Final[tuple[tuple[dict[str, object], dict[str, object]], ...]] = (
         (
             {"model": "gpt-4o-mini", "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "latest"}]},
             {"model": "gpt-4o-mini", "messages": _user_turn("latest")},
@@ -7253,8 +7251,10 @@ def _stored_request(body: Mapping[str, object]) -> object:
         ({"messages": [{"role": "user", "content": ""}]}, {}),
         ({"messages": []}, {}),
         ({"model": "gpt-4o-mini"}, {"model": "gpt-4o-mini"}),
-    ],
 )
+
+
+@pytest.mark.parametrize(("body", "expected"), _STATELESS_CASES)
 def test_latest_turn_mode_stores_only_the_model_and_the_latest_user_text_of_a_stateless_request(
     monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], expected: dict[str, object]
 ) -> None:
