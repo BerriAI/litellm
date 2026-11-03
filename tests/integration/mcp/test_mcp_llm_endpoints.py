@@ -744,7 +744,7 @@ CALLER_FUNCTION_TOOLS: Final[Mapping[Surface, Mapping[str, object]]] = {
 
 
 @pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
-def test_tools_that_do_not_name_the_gateway_reach_the_provider_unchanged_and_never_the_peer(
+def test_non_gateway_tools_follow_provider_native_admission_policy(
     gateway: Gateway, surface: Surface
 ) -> None:
     with _rig(gateway, surface) as rig:
@@ -763,16 +763,42 @@ def test_tools_that_do_not_name_the_gateway_reach_the_provider_unchanged_and_nev
             },
         ]
         response: Final = rig.send(_granted_key(rig), [CALLER_FUNCTION_TOOLS[surface], *remote_mcp_tools])
-        assert response.status_code == 200, response.text
+        assert response.status_code == (200 if surface == "chat" else 403), response.text
         bodies: Final = tuple(
             JSON_OBJECT.validate_json(request.body) for request in rig.wire.drain() if request.method == "POST"
         )
+        assert tool_calls(rig.peer.drain()) == (), "a tool that does not name the gateway reached the peer"
+        if surface != "chat":
+            assert "explicit allowed_tools list" in response.text, response.text
+            assert bodies == (), bodies
+            return
         assert len(bodies) == 1, bodies
         forwarded: Final = bodies[0].get("tools")
         assert isinstance(forwarded, list) and len(forwarded) == 3, forwarded
         assert [tool for tool in forwarded if isinstance(tool, dict) and tool.get("type") == "mcp"] == remote_mcp_tools
         assert "lookup" in json.dumps([tool for tool in forwarded if tool not in remote_mcp_tools]), forwarded
-        assert tool_calls(rig.peer.drain()) == (), "a tool that does not name the gateway reached the peer"
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_chat_to_anthropic_denies_native_mcp_before_provider_dispatch(gateway: Gateway, stream: bool) -> None:
+    with _rig(gateway, "chat", upstream="messages") as rig:
+        response: Final = rig.send(
+            _granted_key(rig),
+            [CALLER_FUNCTION_TOOLS["chat"]],
+            stream=stream,
+            mcp_servers=[
+                {
+                    "type": "url",
+                    "name": "unregistered",
+                    "url": "https://native.example/mcp",
+                    "tool_configuration": {"allowed_tools": ["search"]},
+                }
+            ],
+        )
+        assert response.status_code == 403, response.text
+        assert "not registered or not permitted" in response.text, response.text
+        assert tuple(request for request in rig.wire.drain() if request.method == "POST") == ()
+        assert tool_calls(rig.peer.drain()) == ()
 
 
 def test_streaming_chat_executes_the_tool_once_and_streams_the_follow_up(gateway: Gateway) -> None:

@@ -141,6 +141,26 @@ async def test_allowed_native_attachment_is_unchanged(body: Mapping[str, object]
             **_anthropic(),
             "tools": [{"type": "mcp_toolset", "mcp_server_name": "missing", "default_config": {"enabled": False}}],
         },
+        {
+            **_anthropic(),
+            "tools": [{"type": "mcp_toolset", "mcp_server_name": "docs", "default_config": {"enabled": False}}] * 2,
+        },
+        {
+            **_anthropic(),
+            "mcp_servers": [{"type": "url", "name": "docs", "url": "https://native.example/mcp"}] * 2,
+        },
+        {**_anthropic(True), "tools": _anthropic()["tools"]},
+        {
+            **_anthropic(),
+            "tools": [
+                {
+                    "type": "mcp_toolset",
+                    "mcp_server_name": "docs",
+                    "default_config": {"enabled": False},
+                    "configs": {"search": {"enabled": "true"}},
+                }
+            ],
+        },
         {"tools": [{"type": "mcp", "connector_id": "connector_example", "allowed_tools": ["search"]}]},
     ],
 )
@@ -173,14 +193,46 @@ async def test_canonical_host_and_default_port_match(native_auth: UserAPIKeyAuth
     assert body == _openai(["search"], "https://NATIVE.example:443/mcp")
 
 
-async def test_extra_body_cannot_replace_authorized_attachment(native_auth: UserAPIKeyAuth) -> None:
+async def test_toolsets_match_only_their_named_server_in_a_mixed_configuration(native_auth: UserAPIKeyAuth) -> None:
+    body: Final = {
+        "mcp_servers": [
+            {
+                "type": "url",
+                "name": "legacy",
+                "url": "https://native.example/mcp",
+                "tool_configuration": {"allowed_tools": ["search"]},
+            },
+            {"type": "url", "name": "modern", "url": "https://native.example/mcp"},
+        ],
+        "tools": [
+            {
+                "type": "mcp_toolset",
+                "mcp_server_name": "modern",
+                "default_config": {"enabled": False},
+                "configs": {"search": {"enabled": True}},
+            }
+        ],
+    }
+    original: Final = deepcopy(body)
+    await authorize_provider_mcp(body, native_auth)
+    assert body == original
+
+
+@pytest.mark.parametrize(
+    "call_type,model",
+    [("aresponses", "openai/gpt-5.6-luna"), ("acompletion", "anthropic/claude-haiku-5-5")],
+)
+async def test_extra_body_cannot_replace_authorized_attachment(
+    native_auth: UserAPIKeyAuth, call_type: str, model: str
+) -> None:
     kwargs: Final = {
+        "model": model,
         **_openai(),
         "extra_body": _openai(["delete"]),
         "litellm_metadata": {"user_api_key_auth": native_auth},
     }
     with pytest.raises(ProxyException) as denied:
-        await async_pre_call_deployment_hook(kwargs, "aresponses")
+        await async_pre_call_deployment_hook(kwargs, call_type)
     assert denied.value.code == "403"
 
 
@@ -237,7 +289,7 @@ async def test_explicit_gateway_references_retain_existing_path(native_auth: Use
     assert await LiteLLM_Proxy_MCP_Handler.split_mcp_tools(tools) == (tools, [])
 
 
-@pytest.mark.parametrize("api", ["aresponses", "anthropic_messages"])
+@pytest.mark.parametrize("api", ["aresponses", "anthropic_messages", "acompletion"])
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("configured", [False, True])
 async def test_denied_native_request_never_reaches_provider(
@@ -283,13 +335,15 @@ async def test_denied_native_request_never_reaches_provider(
     request: Final = {
         "model": "native-model",
         "stream": stream,
-        "litellm_metadata": {"user_api_key_auth": native_auth},
+        "metadata" if api == "acompletion" else "litellm_metadata": {"user_api_key_auth": native_auth},
         **({} if configured else attachment),
     }
     call: Final = (
         router.aresponses(input="Use the tool", **request)
         if api == "aresponses"
         else router.anthropic_messages(messages=[{"role": "user", "content": "Use the tool"}], max_tokens=32, **request)
+        if api == "anthropic_messages"
+        else router.acompletion(messages=[{"role": "user", "content": "Use the tool"}], max_tokens=32, **request)
     )
     with pytest.raises(ProxyException) as denied:
         await call
@@ -297,7 +351,7 @@ async def test_denied_native_request_never_reaches_provider(
     assert upstream.call_count == 0
 
 
-@pytest.mark.parametrize("api", ["aresponses", "anthropic_messages"])
+@pytest.mark.parametrize("api", ["aresponses", "anthropic_messages", "acompletion"])
 async def test_allowed_native_request_reaches_provider_unchanged(
     native_auth: UserAPIKeyAuth,
     monkeypatch: pytest.MonkeyPatch,
@@ -309,7 +363,7 @@ async def test_allowed_native_request_reaches_provider_unchanged(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     litellm.in_memory_llm_clients_cache.flush_cache()
-    attachment: Final = _openai(["search"]) if api == "aresponses" else _anthropic()
+    attachment: Final = _openai(["search"]) if api == "aresponses" else _anthropic(legacy=api == "acompletion")
     response: Final = (
         {
             "id": "resp_native",
@@ -340,8 +394,15 @@ async def test_allowed_native_request_reaches_provider_unchanged(
     }
     if api == "aresponses":
         await litellm.aresponses(model="openai/gpt-5.6-luna", input="Use the tool", **request)
-    else:
+    elif api == "anthropic_messages":
         await litellm.anthropic_messages(
+            model="anthropic/claude-haiku-5-5",
+            messages=[{"role": "user", "content": "Use the tool"}],
+            max_tokens=32,
+            **request,
+        )
+    else:
+        await litellm.acompletion(
             model="anthropic/claude-haiku-5-5",
             messages=[{"role": "user", "content": "Use the tool"}],
             max_tokens=32,
@@ -352,10 +413,12 @@ async def test_allowed_native_request_reaches_provider_unchanged(
     assert upstream.call_count == 1
 
 
+@pytest.mark.parametrize("api", ["aresponses", "acompletion"])
 async def test_cached_response_does_not_bypass_revoked_mcp_permission(
     native_auth: UserAPIKeyAuth,
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
+    api: str,
 ) -> None:
     monkeypatch.setattr(litellm, "cache", Cache(type="local"))
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -378,19 +441,43 @@ async def test_cached_response_does_not_bypass_revoked_mcp_permission(
                 }
             ],
             "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        }
+        if api == "aresponses"
+        else {
+            "id": "msg_cached",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "tool result"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
         },
     )
     request: Final = {
-        "model": "openai/gpt-5.6-luna",
-        "input": "Use the tool",
         "caching": True,
         "api_key": "test-provider-key",
         "api_base": "https://native-provider.example/v1",
-        **_openai(["search"]),
+        **(
+            {"model": "openai/gpt-5.6-luna", "input": "Use the tool", **_openai(["search"])}
+            if api == "aresponses"
+            else {
+                "model": "anthropic/claude-haiku-5-5",
+                "messages": [{"role": "user", "content": "Use the tool"}],
+                "tools": [
+                    {
+                        "type": "url",
+                        "name": "docs",
+                        "url": "https://native.example/mcp",
+                        "tool_configuration": {"allowed_tools": ["search"]},
+                    }
+                ],
+            }
+        ),
     }
-    await litellm.aresponses(**request, litellm_metadata={"user_api_key_auth": native_auth})
+    call: Final = litellm.aresponses if api == "aresponses" else litellm.acompletion
+    await call(**request, litellm_metadata={"user_api_key_auth": native_auth})
     await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
-    await litellm.aresponses(**request, litellm_metadata={"user_api_key_auth": native_auth})
+    await call(**request, litellm_metadata={"user_api_key_auth": native_auth})
     assert upstream.call_count == 1
     denied_auth: Final = native_auth.model_copy(
         update={
@@ -401,7 +488,7 @@ async def test_cached_response_does_not_bypass_revoked_mcp_permission(
         }
     )
     with pytest.raises(ProxyException) as denied:
-        await litellm.aresponses(**request, litellm_metadata={"user_api_key_auth": denied_auth})
+        await call(**request, litellm_metadata={"user_api_key_auth": denied_auth})
     assert denied.value.code == "403"
     assert upstream.call_count == 1
 
@@ -422,20 +509,44 @@ class _LateMCPAttachment(CustomLogger):
         }
 
 
+class _LateChatMCPAttachment(CustomLogger):
+    def log_pre_api_call(self, model: str, messages: list, kwargs: dict) -> None:
+        body: Final = kwargs["additional_args"]["complete_input_dict"]  # mutable-ok: exercise payload mutation by a callback
+        body.update(
+            {
+                "mcp_servers": [
+                    {
+                        "type": "url",
+                        "name": "docs",
+                        "url": "https://unregistered.example/mcp",
+                        "tool_configuration": {"allowed_tools": ["search"]},
+                    }
+                ]
+            }
+        )
+
+
+@pytest.mark.parametrize("api", ["anthropic_messages", "acompletion"])
+@pytest.mark.parametrize("stream", [False, True])
 async def test_final_body_check_blocks_attachment_added_after_deployment_hook(
     native_auth: UserAPIKeyAuth,
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
+    api: str,
+    stream: bool,
 ) -> None:
-    monkeypatch.setattr(litellm, "callbacks", [_LateMCPAttachment()])
+    callback: Final = _LateChatMCPAttachment() if api == "acompletion" else _LateMCPAttachment()
+    monkeypatch.setattr(litellm, "callbacks", [callback])
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     upstream: Final = respx_mock.post(url__regex=r"https://native-provider.example/.*").respond(500)
-    with pytest.raises(ProxyException) as denied:
-        await litellm.anthropic_messages(
+    call: Final = litellm.acompletion if api == "acompletion" else litellm.anthropic_messages
+    with pytest.raises((ProxyException, litellm.PermissionDeniedError)) as denied:
+        await call(
             model="anthropic/claude-haiku-5-5",
             messages=[{"role": "user", "content": "hello"}],
             max_tokens=32,
+            stream=stream,
             api_key="test-provider-key",
             api_base="https://native-provider.example/v1",
             litellm_metadata={"user_api_key_auth": native_auth},

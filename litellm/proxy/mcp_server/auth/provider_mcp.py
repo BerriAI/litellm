@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, NoReturn
 
 from pydantic import TypeAdapter, ValidationError
@@ -55,15 +56,15 @@ def _openai_attachment(tool: Mapping[str, object]) -> ProviderMCPAttachment | MC
 
 
 def _anthropic_attachment(
-    server: Mapping[str, object], toolsets: tuple[Mapping[str, object], ...]
+    server: Mapping[str, object], toolsets: Mapping[str, Mapping[str, object]]
 ) -> ProviderMCPAttachment | MCPAdmissionError:
-    matching: Final = tuple(tool for tool in toolsets if tool.get("mcp_server_name") == server.get("name"))
-    if server.get("type") != "url" or not isinstance(server.get("name"), str):
+    name: Final = server.get("name")
+    if server.get("type") != "url" or not isinstance(name, str):
         return MCPAdmissionError("Provider MCP servers must have type=url and a name")
-    if len(matching) > 1 or (matching and server.get("tool_configuration") is not None):
+    toolset: Final = toolsets.get(name)
+    if toolset is not None and server.get("tool_configuration") is not None:
         return MCPAdmissionError("Provider MCP servers require one unambiguous tool configuration")
-    if matching:
-        toolset: Final = matching[0]
+    if toolset is not None:
         default: Final = _OBJECT.validate_python(toolset.get("default_config") or {})
         if default.get("enabled") is not False:
             return MCPAdmissionError("Provider MCP toolsets require default_config.enabled=false")
@@ -92,14 +93,19 @@ async def _attachments(
         else await LiteLLM_Proxy_MCP_Handler.routes_through_gateway(mcp_tools)
     )
     openai: Final = tuple(_openai_attachment(tool) for tool, routed in zip(mcp_tools, gateway) if not routed)
-    servers: Final = _OBJECTS.validate_python(body.get("mcp_servers") or ())
+    servers: Final = (
+        *_OBJECTS.validate_python(body.get("mcp_servers") or ()),
+        *(tool for tool in tools if tool.get("type") == "url"),
+    )
     toolsets: Final = tuple(tool for tool in tools if tool.get("type") == "mcp_toolset")
-    server_names: Final = tuple(server.get("name") for server in servers)
-    if len(set(server_names)) != len(server_names) or any(
-        tool.get("mcp_server_name") not in server_names for tool in toolsets
-    ):
+    server_names: Final = frozenset(_NAMES.validate_python(tuple(server.get("name") for server in servers)))
+    toolset_names: Final = _NAMES.validate_python(tuple(tool.get("mcp_server_name") for tool in toolsets))
+    if len(server_names) != len(servers) or any(name not in server_names for name in toolset_names):
         return (MCPAdmissionError("Provider MCP server names must be unique and toolsets must reference them"),)
-    return (*openai, *(_anthropic_attachment(server, toolsets) for server in servers))
+    indexed_toolsets: Final = MappingProxyType({name: tool for name, tool in zip(toolset_names, toolsets)})
+    if len(indexed_toolsets) != len(toolsets):
+        return (MCPAdmissionError("Provider MCP servers require one unambiguous tool configuration"),)
+    return (*openai, *(_anthropic_attachment(server, indexed_toolsets) for server in servers))
 
 
 def _raise_denied(error: MCPAdmissionError) -> NoReturn:

@@ -45,7 +45,7 @@ async def authorize_provider_mcp_request(
     tools: Final = effective.get("tools")
     has_native_tools: Final = isinstance(tools, (list, tuple)) and any(
         isinstance(tool, Mapping)
-        and TypeAdapter(dict[str, object]).validate_python(tool).get("type") in ("mcp", "mcp_toolset")
+        and TypeAdapter(dict[str, object]).validate_python(tool).get("type") in ("mcp", "mcp_toolset", "url")
         for tool in TypeAdapter(tuple[object, ...]).validate_python(tools)
     )
     if not has_native_tools and not effective.get("mcp_servers"):
