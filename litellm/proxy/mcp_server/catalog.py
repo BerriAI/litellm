@@ -206,7 +206,7 @@ class CatalogSnapshots:
                 for server_id, server in snapshot.management_servers.items()
                 if server.execution_mode == MCPExecutionMode.provider
             }
-        return {**self.config_registrations, **self._registration_only_servers}
+        return {**self.config_registrations, **self._provider_native_servers}
 
     def routing(self) -> MutableMapping[str, str]:
         staged: Final = self._staged_routing.get()
