@@ -142,11 +142,7 @@ class AzureAnthropicConfig(AnthropicConfig):
             headers=headers,
         )
 
-        # Remove unsupported parameters for Azure AI Anthropic
-        data.pop("extra_body", None)
-        data.pop("max_retries", None)
-        data.pop("stream_options", None)
-        for key in AZURE_AI_AUTH_PARAM_KEYS:
+        for key in AZURE_AI_AUTH_PARAM_KEYS | {"extra_body", "max_retries", "stream_options"}:
             data.pop(key, None)
 
         return data

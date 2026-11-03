@@ -432,8 +432,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         extra_body: Final = optional_params.pop("extra_body", {})
         if extra_body and isinstance(extra_body, dict):
             optional_params.update(extra_body)
-        optional_params.pop("max_retries", None)
-        for key in AZURE_AI_AUTH_PARAM_KEYS:
+        for key in AZURE_AI_AUTH_PARAM_KEYS | {"max_retries"}:
             optional_params.pop(key, None)
         return {
             "model": model,
