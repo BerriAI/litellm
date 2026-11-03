@@ -5057,6 +5057,7 @@ _JSON_TOOL_CHOICE: Final = {"tool": {"name": "json_tool_call"}}
         ("us.anthropic.claude-fable-5", None, None, {"reasoning_effort": "none"}, False),
         ("us.anthropic.claude-opus-4-8", None, None, {}, True),
         ("us.anthropic.claude-opus-5", None, None, {"thinking": {"type": "disabled"}}, True),
+        ("us.anthropic.claude-opus-5", None, None, {"thinking": False}, True),
         ("us.anthropic.claude-haiku-5-5", None, None, {"reasoning_effort": "none"}, True),
     ],
     ids=[
@@ -5068,6 +5069,7 @@ _JSON_TOOL_CHOICE: Final = {"tool": {"name": "json_tool_call"}}
         "fable-5-always-on-reasoning-effort-none",
         "opus-4-8-default-off",
         "opus-5-thinking-disabled",
+        "opus-5-thinking-false",
         "haiku-5-5-reasoning-effort-none",
     ],
 )

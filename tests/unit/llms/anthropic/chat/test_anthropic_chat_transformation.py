@@ -6767,6 +6767,7 @@ def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(loc
         ("claude-fable-5", {"reasoning_effort": "none"}, False),
         ("claude-opus-4-8", {}, True),
         ("claude-opus-5", {"thinking": {"type": "disabled"}}, True),
+        ("claude-opus-5", {"thinking": False}, True),
         ("claude-haiku-5-5", {"reasoning_effort": "none"}, True),
     ],
     ids=[
@@ -6777,6 +6778,7 @@ def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(loc
         "fable-5-always-on-reasoning-effort-none",
         "opus-4-8-default-off",
         "opus-5-thinking-disabled",
+        "opus-5-thinking-false",
         "haiku-5-5-reasoning-effort-none",
     ],
 )
