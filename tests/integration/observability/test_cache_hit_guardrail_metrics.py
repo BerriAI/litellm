@@ -409,6 +409,7 @@ def test_cache_hit_post_call_reject_keeps_deployment_labels_anthropic(gateway: G
         sdk: Final = anthropic.Anthropic(
             base_url=str(rig.candidate.client.base_url),
             api_key=rig.candidate.key,
+            auth_token=rig.candidate.key,
             http_client=httpx.Client(trust_env=False, timeout=15),
         )
         sdk.messages.create(model=rig.model_name, max_tokens=16, messages=[{"role": "user", "content": text}])
@@ -424,7 +425,7 @@ def test_cache_hit_post_call_reject_keeps_deployment_labels_anthropic(gateway: G
             raised = True
         assert raised, "cache-hit post_call guardrail did not reject /v1/messages"
         assert rig.provider.received.qsize() == 1, rig.provider.drain()
-        _expect_metrics(rig, 1, 0, api_provider="anthropic", pf_id="None")
+        _expect_metrics(rig, 1, 0, api_provider="anthropic")
 
 
 def test_cache_hit_post_call_reject_keeps_deployment_labels_responses(gateway: Gateway, tmp_path: Path) -> None:
@@ -441,7 +442,7 @@ def test_cache_hit_post_call_reject_keeps_deployment_labels_responses(gateway: G
         )
         assert reject.status_code == 400, reject.text
         assert rig.provider.received.qsize() == 1, rig.provider.drain()
-        _expect_metrics(rig, 1, 0, pf_id="None")
+        _expect_metrics(rig, 1, 0)
         _assert_spend(_call_id(reject), rig)
 
 
