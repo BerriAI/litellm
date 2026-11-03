@@ -323,18 +323,20 @@ def _guardrail_headers_with_room(
     )
 
 
-def _with_callback_headers(
-    response_headers: Mapping[str, str], callback_headers: Mapping[str, str]
-) -> dict[str, str]:  # mutable-ok: the starlette response takes a plain dict
-    """``response_headers`` with a callback's headers added, less a guardrail header they then leave no room for"""
-    merged: Final = {**response_headers, **callback_headers}
+def _add_callback_headers(
+    response_headers: dict[str, str],  # mutable-ok: adds to the response's headers in place, like the dict's update
+    callback_headers: Mapping[str, str],
+) -> None:
+    """Add a callback's headers to ``response_headers``, less a guardrail header they then leave no room for"""
     guardrail_headers: Final = {
         name: value
         for name, value in response_headers.items()
         if name in _GUARDRAIL_HEADER_NAMES and name not in callback_headers
     }
-    kept: Final = _guardrail_headers_with_room(guardrail_headers, merged)
-    return {name: value for name, value in merged.items() if name not in guardrail_headers or name in kept}
+    response_headers.update(callback_headers)
+    kept: Final = _guardrail_headers_with_room(guardrail_headers, response_headers)
+    for name in guardrail_headers.keys() - kept.keys():
+        response_headers.pop(name)
 
 
 def _recorded_guardrail_headers(
@@ -2152,12 +2154,7 @@ async def pass_through_request(
                 request_headers=dict(redact_credential_headers(request.headers)),
             )
             if callback_headers:
-                _response_headers = (
-                    _with_callback_headers(  # rebind-ok: replaces this branch's headers with the room kept
-                        _response_headers,  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
-                        callback_headers,
-                    )
-                )
+                _add_callback_headers(_response_headers, callback_headers)  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
 
             return StreamingResponse(
                 wrap_passthrough_sse_bytes_with_keepalive_pings(
@@ -2262,12 +2259,7 @@ async def pass_through_request(
                 request_headers=dict(redact_credential_headers(request.headers)),
             )
             if callback_headers:
-                _response_headers = (
-                    _with_callback_headers(  # rebind-ok: replaces this branch's headers with the room kept
-                        _response_headers,  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
-                        callback_headers,
-                    )
-                )
+                _add_callback_headers(_response_headers, callback_headers)  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
 
             return StreamingResponse(
                 wrap_passthrough_sse_bytes_with_keepalive_pings(
