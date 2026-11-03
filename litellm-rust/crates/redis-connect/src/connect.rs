@@ -1,13 +1,25 @@
+use std::time::Duration;
+
 use litellm_circuit_breaker::Breaker;
 use litellm_config::{RedisAuth, ResolvedRedis};
 use litellm_redis_client::{
-    Credentials, DEFAULT_TIMEOUT, Namespace, RedisClient, RedisConfig, Timeouts,
+    Credentials, DEFAULT_TIMEOUT, Endpoint, Namespace, RedisClient, RedisConfig, Timeouts,
 };
 
 use crate::Error;
 
+// litellm/constants.py REDIS_CLUSTER_HEALTH_CHECK_INTERVAL, the default _redis.py sets for cluster clients only
+const CLUSTER_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(25);
+
 pub fn connect(resolved: ResolvedRedis, breaker: Option<Breaker>) -> Result<RedisClient, Error> {
     tracing::info!(endpoint = ?resolved.endpoint, namespace = ?resolved.namespace, "redis client configured");
+    let health_check = match &resolved.endpoint {
+        Endpoint::Cluster(_) => resolved
+            .health_check_interval
+            .or(Some(CLUSTER_HEALTH_CHECK_INTERVAL)),
+        _ => resolved.health_check_interval,
+    }
+    .filter(|interval| !interval.is_zero());
     Ok(RedisClient::new(RedisConfig {
         endpoint: resolved.endpoint,
         credentials: credentials(resolved.auth)?,
@@ -18,6 +30,7 @@ pub fn connect(resolved: ResolvedRedis, breaker: Option<Breaker>) -> Result<Redi
         ),
         breaker,
         events: None,
+        health_check,
     })?)
 }
 

@@ -71,6 +71,15 @@ impl RedisCluster {
         self.ports.iter().map(|&port| (HOST, port))
     }
 
+    /// One redis-cli reply per node, in `nodes()` order.
+    pub async fn cli_outputs(&self, args: &[&str]) -> Result<Vec<String>, Error> {
+        let mut replies = Vec::with_capacity(self.ports.len());
+        for port in self.ports {
+            replies.push(crate::exec::run(&self.container, crate::exec::cli(port, args)).await?);
+        }
+        Ok(replies)
+    }
+
     pub async fn cli_on_every_node(&self, args: &[&str]) -> Result<(), Error> {
         for port in self.ports {
             crate::exec::run(&self.container, crate::exec::cli(port, args)).await?;

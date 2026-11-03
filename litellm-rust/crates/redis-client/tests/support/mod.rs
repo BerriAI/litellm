@@ -48,6 +48,7 @@ pub fn connect_guarded(
         timeouts: Timeouts::new(timeout, None),
         breaker,
         events: None,
+        health_check: None,
     })
     .unwrap()
 }
@@ -60,6 +61,7 @@ pub fn connect_as(deployment: &RedisDeployment, credentials: Credentials) -> Red
         timeouts: Timeouts::new(Duration::from_secs(2), None),
         breaker: None,
         events: None,
+        health_check: None,
     })
     .unwrap()
 }

@@ -16,6 +16,9 @@ pub struct HostEndpoint {
     pub port: u16,
     pub tls: Option<TlsOptions>,
     pub db: i64,
+    /// Connect over this unix socket instead of host, port and TLS, like redis-py's
+    /// `UnixDomainSocketConnection`
+    pub unix_socket_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -42,6 +45,10 @@ pub struct SentinelEndpoint {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TlsOptions {
     pub ca_certs: Option<PathBuf>,
+    /// PEM text trusted alongside `ca_certs`, redis-py's `ssl_ca_data`
+    pub ca_data: Option<String>,
+    /// A directory whose files are PEM certificates to trust, redis-py's `ssl_ca_path`
+    pub ca_path: Option<PathBuf>,
     pub certfile: Option<PathBuf>,
     pub keyfile: Option<PathBuf>,
     pub verify_certificate: bool,

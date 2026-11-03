@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+tracing.workspace = true
 litellm-circuit-breaker.workspace = true
 litellm-secret-value.workspace = true
 litellm-redis-types.workspace = true

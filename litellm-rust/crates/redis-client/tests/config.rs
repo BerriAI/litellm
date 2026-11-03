@@ -21,7 +21,16 @@ fn debug_output_never_shows_the_secret(#[case] debug: String) {
 #[derive(Clone, Copy, Debug)]
 enum Ca {
     Trusted,
+    TrustedData,
+    TrustedDirectory,
     SystemRoots,
+}
+
+fn directory_holding(ca: &std::path::Path) -> std::path::PathBuf {
+    let directory = std::env::temp_dir().join(format!("litellm-ca-dir-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::copy(ca, directory.join("ca.pem")).unwrap();
+    directory
 }
 
 async fn ping_over_tls(
@@ -41,6 +50,8 @@ async fn ping_over_tls(
     let files = server.files();
     let tls = TlsOptions {
         ca_certs: matches!(ca, Ca::Trusted).then(|| files.ca.clone()),
+        ca_data: matches!(ca, Ca::TrustedData).then(|| std::fs::read_to_string(&files.ca).unwrap()),
+        ca_path: matches!(ca, Ca::TrustedDirectory).then(|| directory_holding(&files.ca)),
         certfile: client_certificate.then(|| files.client_cert.clone()),
         keyfile: client_certificate.then(|| files.client_key.clone()),
         verify_certificate,
@@ -52,12 +63,14 @@ async fn ping_over_tls(
             port: server.port(),
             tls: Some(tls),
             db: 0,
+            unix_socket_path: None,
         }),
         credentials: Credentials::NONE,
         namespace: litellm_redis_client::Namespace::default(),
         timeouts: litellm_redis_client::Timeouts::default(),
         breaker: None,
         events: None,
+        health_check: None,
     })
     .unwrap();
     client.ping().await
@@ -67,6 +80,14 @@ async fn ping_over_tls(
 #[case::trusted_ca_without_hostname_check_like_redis_py(
     "127.0.0.1",
     Ca::Trusted,
+    true,
+    false,
+    true
+)]
+#[case::trusted_ca_as_pem_text_like_ssl_ca_data("127.0.0.1", Ca::TrustedData, true, false, true)]
+#[case::trusted_ca_in_a_directory_like_ssl_ca_path(
+    "127.0.0.1",
+    Ca::TrustedDirectory,
     true,
     false,
     true
@@ -128,12 +149,14 @@ fn a_missing_tls_file_names_the_path() {
             port: 6379,
             tls: Some(tls),
             db: 0,
+            unix_socket_path: None,
         }),
         credentials: Credentials::NONE,
         namespace: litellm_redis_client::Namespace::default(),
         timeouts: litellm_redis_client::Timeouts::default(),
         breaker: None,
         events: None,
+        health_check: None,
     })
     .err()
     .unwrap();
