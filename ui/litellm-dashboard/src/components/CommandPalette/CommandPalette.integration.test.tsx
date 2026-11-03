@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import type { KeyResponse } from "@/components/key_team_helpers/key_list";
+import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import { writeStorage } from "@/lib/storage";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
@@ -44,7 +45,8 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
 const HIGH_VOLUME_KEY = keyFixture("key-prod-0", "high-volume-prod", "sk-...4zoA", "team-1");
 const PROD_KEY = keyFixture("key-prod-1", "prod-backend", "sk-...AHeA", "team-1");
 const STAGING_KEY = keyFixture("key-staging-1", "staging-agent", "sk-...stgB", "unknown-team");
-const KEY_FIXTURES = [HIGH_VOLUME_KEY, PROD_KEY, STAGING_KEY];
+const LOGS_KEY = keyFixture("key-logs-1", "logs-writer", "sk-...logW");
+const KEY_FIXTURES = [HIGH_VOLUME_KEY, PROD_KEY, STAGING_KEY, LOGS_KEY];
 const UI_SETTINGS_RESPONSE = {
   server_root_path: "",
   proxy_base_url: null,
@@ -227,7 +229,7 @@ describe("CommandPalette integration", () => {
 
     fireEvent.keyDown(document, { key: "k", ctrlKey: true });
     const input = await screen.findByRole("combobox", { name: "Search" });
-    expect(input).toHaveFocus();
+    await waitFor(() => expect(input).toHaveFocus());
     fireEvent.change(input, { target: { value: "stale" } });
 
     fireEvent.keyDown(document, { key: "k", ctrlKey: true });
@@ -245,7 +247,7 @@ describe("CommandPalette integration", () => {
     fireEvent.keyDown(document, { key: "k", ctrlKey: true });
     const input = await screen.findByRole("combobox", { name: "Search" });
     expect(input).toHaveAttribute("placeholder", "Search keys by alias or ID…");
-    expect(screen.getAllByText("Virtual Keys")).toHaveLength(2);
+    expect(screen.getByText("Virtual Keys")).toBeVisible();
 
     await user.type(input, "prod");
     await waitFor(() => {
@@ -288,7 +290,7 @@ describe("CommandPalette integration", () => {
     fireEvent.keyDown(document, { key: "k", ctrlKey: true });
     const input = screen.getByRole("combobox", { name: "Search" });
     fireEvent.change(input, { target: { value: "prod" } });
-    vi.advanceTimersByTime(DEBOUNCE_WAIT_MS / 2);
+    act(() => vi.advanceTimersByTime(DEBOUNCE_WAIT_MS / 2));
 
     expect(screen.getByText("Searching…")).toBeVisible();
     expect(screen.queryByRole("option", { name: /high-volume-prod/ })).not.toBeInTheDocument();
@@ -359,10 +361,11 @@ describe("CommandPalette integration", () => {
     const input = await screen.findByRole("combobox", { name: "Search" });
     await user.type(input, "no-match");
 
-    expect(await screen.findByText("No keys match “no-match”")).toBeVisible();
-    expect(screen.getByRole("group", { name: "Keys" })).toHaveTextContent("No keys match “no-match”");
-    expect(screen.getByRole("option", { name: /Filter the keys table/ })).toBeVisible();
+    expect(await screen.findByRole("option", { name: /Filter the keys table for “no-match”/ })).toBeVisible();
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.queryByRole("group", { name: "Keys" })).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Pages" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/No results for/)).not.toBeInTheDocument();
   });
 
   it("shows one global no-results message when the query has no matches", async () => {
@@ -375,8 +378,7 @@ describe("CommandPalette integration", () => {
     await user.type(input, "no-match");
 
     expect(await screen.findByText("No results for “no-match”")).toBeVisible();
-    expect(screen.queryByRole("group")).not.toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /Search virtual keys/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
   });
 
   it("opens the virtual-key table with the current search applied", async () => {
@@ -458,6 +460,21 @@ describe("CommandPalette integration", () => {
     expect(await screen.findByText("Recent keys")).toBeVisible();
   });
 
+  it("keeps typing in the search box after clicking an action with the mouse", async () => {
+    const user = userEvent.setup();
+    mocks.pathname = "/teams";
+    renderPalette();
+
+    await user.keyboard("{Control>}k{/Control}");
+    await user.click(await screen.findByRole("option", { name: /Search virtual keys/ }));
+    await user.keyboard("staging");
+
+    const input = screen.getByRole("combobox", { name: "Search" });
+    expect(input).toHaveAttribute("placeholder", "Search keys by alias or ID…");
+    expect(input).toHaveValue("staging");
+    expect(await screen.findByRole("option", { name: /staging-agent/ })).toBeVisible();
+  });
+
   it("switches from an empty keys scope to global search on Backspace", async () => {
     renderPalette();
     fireEvent.keyDown(document, { key: "k", ctrlKey: true });
@@ -466,5 +483,129 @@ describe("CommandPalette integration", () => {
 
     fireEvent.keyDown(input, { key: "Backspace" });
     expect(input).toHaveAttribute("placeholder", "Search pages and actions…");
+  });
+
+  it("ignores Cmd+K while another dialog has focus and still toggles the open palette closed", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <CommandPaletteProvider>
+        <CommandPaletteTrigger />
+        <Dialog>
+          <DialogTrigger>Create key</DialogTrigger>
+          <DialogContent>
+            <DialogTitle>Create key</DialogTitle>
+            <input aria-label="Key alias" />
+          </DialogContent>
+        </Dialog>
+      </CommandPaletteProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Create key" }));
+    const aliasInput = await screen.findByRole("textbox", { name: "Key alias" });
+    await user.click(aliasInput);
+    await user.keyboard("{Control>}k{/Control}");
+
+    expect(screen.queryByRole("combobox", { name: "Search" })).not.toBeInTheDocument();
+    expect(aliasInput).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Create key" })).not.toBeInTheDocument();
+
+    await user.keyboard("{Control>}k{/Control}");
+    const paletteInput = await screen.findByRole("combobox", { name: "Search" });
+    await waitFor(() => expect(paletteInput).toHaveFocus());
+
+    await user.keyboard("{Control>}k{/Control}");
+    expect(screen.queryByRole("combobox", { name: "Search" })).not.toBeInTheDocument();
+  });
+
+  it("orders Keys, then Actions, then Pages for a query that matches all three", async () => {
+    const user = userEvent.setup();
+    renderPalette();
+
+    await user.keyboard("{Control>}k{/Control}");
+    await user.type(await screen.findByRole("combobox", { name: "Search" }), "logs");
+    await screen.findByRole("option", { name: /logs-writer/ });
+
+    const rows = screen.getAllByRole("option");
+    expect(rows.length).toBeGreaterThanOrEqual(3);
+    expect(rows[0]).toHaveTextContent("logs-writer");
+    expect(rows[0]).toHaveTextContent("Key");
+    expect(rows[1]).toHaveTextContent("Filter the keys table for “logs”");
+    expect(rows.slice(2).every((row) => row.textContent?.endsWith("Page"))).toBe(true);
+    expect(screen.getByRole("option", { name: /^Logs/ })).toBeVisible();
+  });
+
+  it("points assistive tech at the highlighted row as the palette opens, filters and moves", async () => {
+    const user = userEvent.setup();
+    renderPalette();
+
+    await user.keyboard("{Control>}k{/Control}");
+    const input = await screen.findByRole("combobox", { name: "Search" });
+    const expectHighlighted = (name: RegExp) => {
+      const row = screen.getByRole("option", { name });
+      expect(row).toHaveAttribute("aria-selected", "true");
+      expect(input).toHaveAttribute("aria-activedescendant", row.id);
+    };
+
+    await waitFor(() => expectHighlighted(/high-volume-prod/));
+    await user.type(input, "prod");
+    await waitFor(() => expectHighlighted(/high-volume-prod/));
+    await user.keyboard("{ArrowDown}");
+    expectHighlighted(/prod-backend/);
+  });
+
+  it("moves the highlight back to the top row when the query changes after arrowing down", async () => {
+    const user = userEvent.setup();
+    renderPalette();
+
+    await user.keyboard("{Control>}k{/Control}");
+    const input = await screen.findByRole("combobox", { name: "Search" });
+    await user.type(input, "pro");
+    const prodBackend = await screen.findByRole("option", { name: /prod-backend/ });
+    await user.keyboard("{ArrowDown}");
+    expect(prodBackend).toHaveAttribute("aria-selected", "true");
+
+    await user.type(input, "d");
+    await screen.findByRole("option", { name: /prod-backend/ });
+    expect(screen.getByRole("option", { name: /high-volume-prod/ })).toHaveAttribute("aria-selected", "true");
+    await user.keyboard("{Enter}");
+    expect(mocks.push).toHaveBeenCalledWith(keyDetailHref(HIGH_VOLUME_KEY.token));
+  });
+
+  it("stays in key search when Backspace deletes typed text", async () => {
+    const user = userEvent.setup();
+    renderPalette();
+
+    await user.keyboard("{Control>}k{/Control}");
+    const input = await screen.findByRole("combobox", { name: "Search" });
+    await user.type(input, "pro{Backspace}");
+
+    expect(input).toHaveValue("pr");
+    expect(input).toHaveAttribute("placeholder", "Search keys by alias or ID…");
+  });
+
+  it("shows the key search error instead of results when keys fail to load", async () => {
+    vi.mocked(useKeys).mockImplementation(
+      () =>
+        ({ data: undefined, isFetching: false, isError: true, isPlaceholderData: false }) as ReturnType<typeof useKeys>,
+    );
+    renderPalette();
+
+    await userEvent.setup().keyboard("{Control>}k{/Control}");
+
+    expect(await screen.findByText("Unable to search keys")).toBeVisible();
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+  });
+
+  it("opens with Cmd+K on macOS and leaves Ctrl+K to the browser there", async () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)");
+    renderPalette();
+
+    expect(fireEvent.keyDown(document, { key: "k", ctrlKey: true })).toBe(true);
+    expect(screen.queryByRole("combobox", { name: "Search" })).not.toBeInTheDocument();
+
+    expect(fireEvent.keyDown(document, { key: "k", metaKey: true })).toBe(false);
+    expect(await screen.findByRole("combobox", { name: "Search" })).toBeVisible();
   });
 });
