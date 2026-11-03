@@ -15259,12 +15259,7 @@ def _provider_error_after_failed_estimate(
     return provider_failure.to_proxy_exception()
 
 
-_EstimateT = TypeVar("_EstimateT", int, int | None)
-
-
-async def _estimate_or_provider_error(
-    estimate: Awaitable[_EstimateT], provider_failure: ProviderCountFailure
-) -> _EstimateT:
+async def _estimate_or_provider_error(estimate: Awaitable[int], provider_failure: ProviderCountFailure) -> int:
     try:
         return await estimate
     except BaseException as e:
@@ -15422,14 +15417,14 @@ def _tokenizer_count(
     template_model: str,
     prompt: str | None,
     messages: Sequence[AllMessageValues] | None,
-    tools: list[ChatCompletionToolParam] | None,
+    tools: Sequence[ChatCompletionToolParam] | None,
     tokenizer: SelectTokenizerResponse,
 ) -> Awaitable[int]:
     return offload_token_count(litellm.token_counter)(
         model=template_model,
         text=prompt,
         messages=messages,
-        tools=tools,
+        tools=None if tools is None else list(tools),
         custom_tokenizer=tokenizer,
     )
 
@@ -15490,6 +15485,17 @@ async def _kimi_k3_encoded_count(
             return await offload_token_count(kimi_k3_tokens)(encoding, model, messages, tools)
 
 
+def _known_local_tokenizer(settings: TokenCountSettings, request_model: str) -> LocalTokenizer | None:
+    named: Final = settings.local_tokenizer
+    if isinstance(named, UnknownLocalTokenizer):
+        raise _rejected_view(
+            400,
+            f"{request_model} sets token_count_tokenizer to {named.value!r}, "
+            f"which is not one of {', '.join(get_args(LocalTokenizer))}",
+        )
+    return named
+
+
 def _local_tokenizer_failure(tokenizer: str, model: str, reason: str) -> ProviderCountFailure:
     return ProviderCountFailure(
         status_code=400,
@@ -15507,11 +15513,18 @@ async def _kimi_k3_local_tokens(
     encoding: Final = await _KIMI_K3_ENCODINGS.encoding(TOKENIZER_LOAD_WAIT_SECONDS)
     if encoding is None:
         raise unavailable.to_proxy_exception()
-    if prompt is not None:
-        return await _estimate_or_provider_error(offload_token_count(kimi_k3_text_tokens)(encoding, prompt), unreadable)
-    counted: Final = await _estimate_or_provider_error(count_messages(encoding), unreadable)
+    return await _estimate_or_provider_error(
+        offload_token_count(kimi_k3_text_tokens)(encoding, prompt)
+        if prompt is not None
+        else _counted_or_rejected(count_messages(encoding), unreadable),
+        unreadable,
+    )
+
+
+async def _counted_or_rejected(count: Awaitable[int | None], rejection: ProviderCountFailure) -> int:
+    counted: Final = await count
     if counted is None:
-        raise unreadable.to_proxy_exception()
+        raise rejection.to_proxy_exception()
     return counted
 
 
@@ -15521,7 +15534,7 @@ async def _local_tokenizer_tokens(
     template_model: str,
     prompt: str | None,
     messages: Sequence[AllMessageValues] | None,
-    tools: list[ChatCompletionToolParam] | None,
+    tools: Sequence[ChatCompletionToolParam] | None,
     kimi_k3_count: Callable[[tiktoken.Encoding], Awaitable[int | None]],
 ) -> _LocalTokenEstimate:
     unreadable: Final = _local_tokenizer_failure(tokenizer, request_model, "could not count this request")
@@ -15548,7 +15561,7 @@ async def _count_with_local_tokenizer(
     template_model: str,
     prompt: str | None,
     messages: Sequence[AllMessageValues] | None,
-    tools: list[ChatCompletionToolParam] | None,
+    tools: Sequence[ChatCompletionToolParam] | None,
     bridged: ChatCountRequest | None,
     settings: TokenCountSettings,
     responses_api: bool,
@@ -15576,7 +15589,7 @@ async def _count_with_local_tokenizer(
         tools
         if bridged is None
         else cast(  # cast-ok: the chat tools Responses inference sends
-            list[ChatCompletionToolParam] | None, [dict(tool) for tool in bridged.tools or ()] or None
+            Sequence[ChatCompletionToolParam] | None, [dict(tool) for tool in bridged.tools or ()] or None
         )
     )
     estimate: Final = await _local_tokenizer_tokens(
@@ -16016,13 +16029,7 @@ async def _count_request_tokens(
         default=await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model)),
         deployment_region=partial(_deployment_aws_region, deployment_view),
     )
-    local_tokenizer: Final = settings.local_tokenizer
-    if isinstance(local_tokenizer, UnknownLocalTokenizer):
-        raise _rejected_view(
-            400,
-            f"{request.model} sets token_count_tokenizer to {local_tokenizer.value!r}, "
-            f"which is not one of {', '.join(get_args(LocalTokenizer))}",
-        )
+    local_tokenizer: Final = _known_local_tokenizer(settings, request.model)
 
     # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)
     provider_counter: BaseTokenCounter | None = None
@@ -16179,12 +16186,11 @@ async def _count_request_tokens(
     local_system: Final = system if counted_view is None else counted_view.system
 
     # Default LiteLLM token counting
-    custom_tokenizer: CustomHuggingfaceTokenizer | None = None
-    if model_info is not None:
-        custom_tokenizer = cast(
-            CustomHuggingfaceTokenizer | None,
-            model_info.get("custom_tokenizer", None),
-        )
+    custom_tokenizer: Final = (
+        None
+        if model_info is None
+        else cast(CustomHuggingfaceTokenizer | None, model_info.get("custom_tokenizer", None))
+    )
     system_message: Final = _system_message(local_system)
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
