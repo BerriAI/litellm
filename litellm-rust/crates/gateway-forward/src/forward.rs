@@ -16,6 +16,7 @@ use hyper_util::{
     rt::{TokioExecutor, TokioTimer},
 };
 use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 
 use crate::{Error, hop, websocket::Upgrades};
 
@@ -66,21 +67,26 @@ impl Forward {
             .with_state(self)
     }
 
-    /// Serves until `shutdown` resolves, then gives open WebSockets a bounded drain before closing them.
+    /// Serves until `shutdown` resolves, then lets open requests and WebSockets finish for up to
+    /// `drain` before closing whatever is left. Python shuts down alongside and ends long streams
+    /// itself, so `drain` only backstops a Python that never does.
     pub async fn serve(
         self,
         listener: TcpListener,
         shutdown: impl Future<Output = ()> + Send + 'static,
+        drain: Duration,
     ) -> std::io::Result<()> {
         let upgrades = self.upgrades.clone();
         let _close_on_drop = upgrades.close_on_drop();
+        let stopping = CancellationToken::new();
+        let stop = stopping.clone();
         let draining = upgrades.clone();
         let listener = listener.tap_io(|stream| {
             if let Err(error) = stream.set_nodelay(true) {
                 tracing::warn!(%error, "could not disable Nagle on a client connection");
             }
         });
-        let result = axum::serve(
+        let server = axum::serve(
             listener,
             self.router()
                 .into_make_service_with_connect_info::<SocketAddr>(),
@@ -88,11 +94,29 @@ impl Forward {
         .with_graceful_shutdown(async move {
             shutdown.await;
             draining.begin_shutdown();
-        })
-        .await;
-        if result.is_err() {
-            upgrades.close();
-        }
+            stop.cancel();
+        });
+        let drained = async {
+            let result = server.await;
+            if result.is_err() {
+                upgrades.close();
+            }
+            upgrades.wait().await;
+            result
+        };
+        let deadline = async {
+            stopping.cancelled().await;
+            tokio::time::sleep(drain).await;
+            tracing::warn!(
+                ?drain,
+                "closing connections still open after the shutdown drain"
+            );
+        };
+        let result = tokio::select! {
+            result = drained => result,
+            () = deadline => Ok(()),
+        };
+        upgrades.close();
         upgrades.wait().await;
         result
     }

@@ -11,6 +11,7 @@ pub(super) struct ForwardSettings {
     pub port: u16,
     rust_log: Option<String>,
     keepalive_timeout: u64,
+    graceful_shutdown_timeout: Option<String>,
 }
 
 impl Default for ForwardSettings {
@@ -20,11 +21,27 @@ impl Default for ForwardSettings {
             port: 4000,
             rust_log: None,
             keepalive_timeout: 5,
+            graceful_shutdown_timeout: None,
         }
     }
 }
 
+const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+const GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM: Duration = Duration::from_secs(10);
+
 impl ForwardSettings {
+    /// Python ends its own streams at `GRACEFUL_SHUTDOWN_TIMEOUT` and then tears down, so Rust
+    /// waits past both to relay the closes Python sends instead of cutting connections first.
+    pub fn shutdown_drain(&self) -> Duration {
+        let python = self
+            .graceful_shutdown_timeout
+            .as_deref()
+            .and_then(|value| value.trim().parse::<f64>().ok())
+            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+            .unwrap_or(DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT);
+        python + GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM
+    }
+
     pub fn upstream_keepalive(&self) -> Duration {
         Duration::from_secs(self.keepalive_timeout)
     }
@@ -117,6 +134,20 @@ mod tests {
         let settings: ForwardSettings = parse(variables).unwrap();
 
         assert_eq!(settings.upstream_keepalive(), expected);
+    }
+
+    #[rstest]
+    #[case::python_default(&[], Duration::from_secs(40))]
+    #[case::fractional(&[("GRACEFUL_SHUTDOWN_TIMEOUT", " 2.5 ")], Duration::from_millis(12_500))]
+    #[case::malformed_falls_back_like_python(&[("GRACEFUL_SHUTDOWN_TIMEOUT", "soon")], Duration::from_secs(40))]
+    #[case::negative(&[("GRACEFUL_SHUTDOWN_TIMEOUT", "-1")], Duration::from_secs(40))]
+    fn forwarding_outlasts_python_graceful_shutdown(
+        #[case] variables: &[(&str, &str)],
+        #[case] expected: Duration,
+    ) {
+        let settings: ForwardSettings = parse(variables).unwrap();
+
+        assert_eq!(settings.shutdown_drain(), expected);
     }
 
     #[rstest]

@@ -8,7 +8,7 @@ use std::{
 use axum::{body::Body, extract::Request, http::StatusCode};
 use http_body_util::BodyExt;
 use rstest::rstest;
-use support::{Gateway, Raw, client, raw_upstream, unreachable_upstream, within};
+use support::{DRAIN, Gateway, Raw, client, raw_upstream, unreachable_upstream, within};
 use tokio::sync::{Notify, mpsc};
 
 /// Python stops a provider stream when it sees the client go away, so a client disconnect must
@@ -142,4 +142,28 @@ async fn shutdown_lets_an_in_flight_stream_finish() {
         .to_bytes();
     assert_eq!(body, "firstlast");
     within(server).await.unwrap().unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn shutdown_stops_waiting_for_a_stream_still_open_after_the_drain() {
+    let upstream = raw_upstream(|mut python: Raw| async move {
+        python.request_head().await.unwrap();
+        python
+            .send("HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n5\r\nfirst\r\n")
+            .await;
+        std::future::pending::<()>().await;
+    })
+    .await;
+    let gateway = Gateway::start(upstream).await;
+    let response =
+        within(client().request(Request::get(gateway.url("/")).body(Body::empty()).unwrap()))
+            .await
+            .unwrap();
+    let started = std::time::Instant::now();
+
+    within(gateway.shutdown()).await.unwrap().unwrap();
+
+    assert!(started.elapsed() >= DRAIN);
+    drop(response);
 }

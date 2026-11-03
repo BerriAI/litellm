@@ -56,7 +56,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let listener =
             tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
         tracing::info!(address = %listener.local_addr()?, "forwarding gateway listening");
-        forward.serve(listener, shutdown_signal()).await?;
+        forward
+            .serve(listener, shutdown_signal(), settings.shutdown_drain())
+            .await?;
         return Ok(());
     }
     let settings: Settings = settings::from_iter(std::env::vars_os())?;

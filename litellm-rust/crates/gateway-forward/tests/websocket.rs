@@ -13,7 +13,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use litellm_gateway_forward::PEER_HEADER;
 use rstest::rstest;
-use support::{Gateway, raw_upstream, serve, within};
+use support::{DRAIN, Gateway, raw_upstream, serve, within};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
     WebSocketStream, accept_hdr_async, client_async,
@@ -151,13 +151,29 @@ async fn shutdown_closes_open_sockets_after_drain() {
     let mut socket = within(connect(gateway.address, "Upgrade")).await.unwrap();
     socket.next().await.unwrap().unwrap();
     let started = Instant::now();
-    tokio::time::timeout(Duration::from_secs(10), gateway.shutdown())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(started.elapsed() >= Duration::from_secs(4));
+    within(gateway.shutdown()).await.unwrap().unwrap();
+    assert!(started.elapsed() >= DRAIN);
     assert!(!matches!(socket.next().await, Some(Ok(Message::Text(_)))));
+}
+
+#[rstest]
+#[tokio::test]
+async fn shutdown_relays_the_close_python_sends_while_draining() {
+    let gateway = Gateway::start(echo().await).await;
+    let mut socket = within(connect(gateway.address, "Upgrade")).await.unwrap();
+    socket.next().await.unwrap().unwrap();
+    let server = gateway.shutdown();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    socket.send(Message::text("bye")).await.unwrap();
+    let Message::Close(Some(frame)) = within(socket.next()).await.unwrap().unwrap() else {
+        panic!("expected python's close frame");
+    };
+    assert_eq!(frame.code, CloseCode::Library(4000));
+    while socket.next().await.is_some() {}
+    drop(socket);
+    let started = Instant::now();
+    within(server).await.unwrap().unwrap();
+    assert!(started.elapsed() < DRAIN / 2);
 }
 
 #[rstest]
@@ -178,9 +194,5 @@ async fn refuses_new_sockets_while_draining() {
         Message::text("still open")
     );
     drop(open);
-    tokio::time::timeout(Duration::from_secs(10), server)
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+    within(server).await.unwrap().unwrap();
 }

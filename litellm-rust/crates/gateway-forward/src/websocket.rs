@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use axum::{
     body::Body,
     extract::Request,
@@ -16,8 +14,6 @@ use tokio_util::{
     task::TaskTracker,
 };
 
-const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
-
 #[derive(Clone, Default)]
 pub(crate) struct Upgrades {
     tasks: TaskTracker,
@@ -28,11 +24,6 @@ pub(crate) struct Upgrades {
 impl Upgrades {
     pub fn begin_shutdown(&self) {
         self.draining.cancel();
-        let closed = self.closed.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(DRAIN_TIMEOUT).await;
-            closed.cancel();
-        });
     }
 
     pub fn take_handshake(&self, request: &mut Request) -> Result<Option<OnUpgrade>, StatusCode> {

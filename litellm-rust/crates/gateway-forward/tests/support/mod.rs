@@ -26,6 +26,7 @@ use tokio::{
 
 pub const WAIT: Duration = Duration::from_secs(5);
 pub const UVICORN_KEEPALIVE: Duration = Duration::from_secs(5);
+pub const DRAIN: Duration = Duration::from_secs(1);
 
 pub async fn within<T>(future: impl Future<Output = T>) -> T {
     tokio::time::timeout(WAIT, future).await.expect("timed out")
@@ -48,9 +49,13 @@ impl Gateway {
         let public = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = public.local_addr().unwrap();
         let (stop, stopped) = oneshot::channel::<()>();
-        let server = tokio::spawn(forward.serve(public, async {
-            stopped.await.ok();
-        }));
+        let server = tokio::spawn(forward.serve(
+            public,
+            async {
+                stopped.await.ok();
+            },
+            DRAIN,
+        ));
         Self {
             address,
             stop,
@@ -68,7 +73,8 @@ impl Gateway {
         Raw::new(TcpStream::connect(self.address).await.unwrap())
     }
 
-    /// Starts graceful shutdown and returns the server task, which ends once in-flight work drains.
+    /// Starts graceful shutdown and returns the server task, which ends once in-flight work drains
+    /// or `DRAIN` passes.
     pub fn shutdown(self) -> JoinHandle<std::io::Result<()>> {
         self.stop.send(()).unwrap();
         self.server
