@@ -3,7 +3,7 @@ import copy
 import json
 import uuid
 from types import SimpleNamespace
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -20,6 +20,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transform
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.unit.conftest import NativeStructuredOutputKey
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 ONE_PIXEL_PNG = base64.b64decode(
@@ -644,7 +645,6 @@ def test_shared_defs_reach_native_output_once_instead_of_inlined_per_use(set_nat
     assert "tools" not in result
 
 
-
 class Relabel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -680,6 +680,7 @@ def test_nested_pydantic_response_format_reaches_native_output_with_refs_that_re
     item_ref: Final = sent["properties"]["relabels"]["items"]["$ref"]
     assert item_ref.removeprefix("#/$defs/") in sent["$defs"]
     assert "tools" not in result
+
 
 def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(local_model_cost_map):
     """Bedrock Invoke chat path forwards ``output_config.format`` alongside effort
@@ -1392,6 +1393,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -1400,6 +1402,7 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -1433,6 +1436,7 @@ def setup_and_teardown(event_loop):
         task.cancel()
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
 
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
@@ -1504,6 +1508,7 @@ IN WITNESS WHEREOF, the parties have executed this Agreement.
 """
     * 8
 )  # Repeat to ensure we have enough tokens (need 1024+ for Claude models)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropicPromptCachingRegression:
@@ -1666,6 +1671,7 @@ class TestBedrockAnthropicPromptCachingRegression:
             additional_fields = result["additionalModelRequestFields"]
             if "anthropic_beta" in additional_fields:
                 assert "prompt-caching-2024-07-31" not in additional_fields["anthropic_beta"]
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropic1MContextRegression:
@@ -1852,6 +1858,7 @@ class TestBedrockAnthropic1MContextRegression:
         assert "context-1m-2025-08-07" in beta_headers
         assert "computer-use-2024-10-22" in beta_headers
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropicCombinedRegressions:
     """
@@ -2018,6 +2025,104 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
     )
 
 
+@pytest.mark.parametrize(
+    ("forced_tool_use", "map_flag", "model_info", "thinking_params", "native"),
+    [
+        (False, None, None, {}, True),
+        (False, None, None, {"thinking": {"type": "adaptive"}}, False),
+        (False, True, None, {"thinking": {"type": "adaptive"}}, True),
+        (False, False, None, {}, False),
+        (False, None, {"supports_bedrock_native_structured_output": False}, {}, False),
+        (True, True, None, {"thinking": {"type": "disabled"}}, False),
+    ],
+    ids=[
+        "cannot-force-tool",
+        "cannot-force-tool-thinking",
+        "cannot-force-tool-thinking-key-true",
+        "cannot-force-tool-key-false",
+        "cannot-force-tool-deployment-opt-out",
+        "can-force-tool",
+    ],
+)
+def test_invoke_model_that_cannot_force_the_json_tool_gets_native_output_without_thinking_unless_opted_out(
+    set_native_structured_output: Callable[[str, NativeStructuredOutputKey], None],
+    monkeypatch: pytest.MonkeyPatch,
+    forced_tool_use: bool,
+    map_flag: bool | None,
+    model_info: Mapping[str, object] | None,
+    thinking_params: Mapping[str, object],
+    native: bool,
+) -> None:
+    model: Final = "us.anthropic.claude-haiku-5-5"
+    monkeypatch.setitem(litellm.model_cost[model], "supports_forced_tool_use", forced_tool_use)
+    set_native_structured_output(model, "bedrock" if map_flag else None)
+    if map_flag is None:
+        monkeypatch.delitem(litellm.model_cost[model], "supports_bedrock_native_structured_output")
+
+    config: Final = AmazonAnthropicClaudeConfig(model_info=model_info)
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"response_format": _CITY_RESPONSE_FORMAT, "max_tokens": 2048, **thinking_params},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    body: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Capital of France?"}],
+        optional_params=optional_params,
+        litellm_params={} if model_info is None else {"model_info": model_info},
+        headers={},
+    )
+
+    assert (body.get("output_config", {}).get("format", {}).get("schema") == _CITY_SCHEMA) is native
+    assert ("tools" in body) is not native
+
+
+@pytest.mark.parametrize(
+    "caller_schema_param",
+    [
+        lambda schema: {"output_format": {"type": "json_schema", "schema": schema}},
+        lambda schema: {"output_config": {"format": {"type": "json_schema", "schema": schema}}},
+    ],
+    ids=["output_format", "output_config.format"],
+)
+@pytest.mark.parametrize(
+    ("model", "forced_tool_use", "native_key"),
+    [("us.anthropic.claude-opus-4-8", True, "legacy"), ("us.anthropic.claude-haiku-5-5", False, None)],
+    ids=["native-key", "cannot-force-tool"],
+)
+def test_invoke_caller_schema_drops_unsupported_constraints_before_going_native(
+    set_native_structured_output: Callable[[str, NativeStructuredOutputKey], None],
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    forced_tool_use: bool,
+    native_key: NativeStructuredOutputKey,
+    caller_schema_param: Callable[[Mapping[str, object]], dict[str, object]],
+) -> None:
+    monkeypatch.setitem(litellm.model_cost[model], "supports_forced_tool_use", forced_tool_use)
+    set_native_structured_output(model, native_key)
+    if native_key is None:
+        monkeypatch.delitem(litellm.model_cost[model], "supports_bedrock_native_structured_output")
+    schema: Final = {
+        "type": "object",
+        "properties": {"age": {"type": "integer", "minimum": 0}},
+        "required": ["age"],
+        "additionalProperties": False,
+    }
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "How old is the oldest tree?"}],
+        optional_params={**caller_schema_param(schema), "max_tokens": 2048},
+        litellm_params={},
+        headers={},
+    )
+
+    sent_age: Final = body["output_config"]["format"]["schema"]["properties"]["age"]
+    assert sent_age["type"] == "integer"
+    assert "minimum" not in sent_age
+
+
 BEDROCK_HAIKU_45_BASE_ID: Final = "anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
@@ -2040,7 +2145,9 @@ def test_bedrock_invoke_claude_default_max_tokens_comes_from_base_model(local_mo
         headers={},
     )
 
-    assert body["max_tokens"] == mapped_cap, f"default max_tokens should be the base model's cap, got {body['max_tokens']}"
+    assert body["max_tokens"] == mapped_cap, (
+        f"default max_tokens should be the base model's cap, got {body['max_tokens']}"
+    )
 
 
 def test_bedrock_invoke_claude_explicit_max_tokens_is_kept(local_model_cost_map):
@@ -2100,7 +2207,9 @@ def test_bedrock_invoke_claude_default_max_tokens_yields_to_anthropic_config(loc
         headers={},
     )
 
-    assert body["max_tokens"] == configured_max_tokens, f"AnthropicConfig(max_tokens) was ignored, got {body['max_tokens']}"
+    assert body["max_tokens"] == configured_max_tokens, (
+        f"AnthropicConfig(max_tokens) was ignored, got {body['max_tokens']}"
+    )
 
 
 @pytest.mark.parametrize(("configured_max_tokens", "deployment_cap"), [(100000, 50), (1000, 8192)])

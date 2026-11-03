@@ -603,6 +603,26 @@ def test_anthropic_context_window_error_mapping(error_message):
     assert excinfo.value.llm_provider == "anthropic"
 
 
+@pytest.mark.parametrize("upstream_status_code", [400, 500])
+def test_vertex_ai_anthropic_prompt_too_long_maps_to_context_window_exceeded(upstream_status_code: int) -> None:
+    original_exception: Final = VertexAIError(
+        status_code=upstream_status_code,
+        message='{"type":"error","error":{"type":"invalid_request_error",'
+        '"message":"prompt is too long: 210123 tokens > 200000 maximum"}}',
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.llm_provider == "vertex_ai"
+    assert excinfo.value.model == "claude-opus-5-5"
+
+
 # Test cases for Vertex AI RateLimitError mapping
 # As per https://github.com/BerriAI/litellm/issues/16189
 vertex_rate_limit_test_cases = [

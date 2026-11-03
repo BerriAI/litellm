@@ -129,9 +129,19 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         json_schema: Mapping[str, object] | None,
         request_params: Mapping[str, object],
     ) -> bool:
+        return self.chat_uses_native_structured_output(model, request_params, self._deployment_model_info) and (
+            json_schema is None or bedrock_cleaned_output_schema(model, json_schema) is not None
+        )
+
+    def chat_uses_native_structured_output(
+        self, model: str, request_params: Mapping[str, object], model_info: Mapping[str, object] | None
+    ) -> bool:
         return bedrock_chat_uses_native_structured_output(
-            model, self.will_think(model, "bedrock", request_params), model_info=self._deployment_model_info
-        ) and (json_schema is None or bedrock_cleaned_output_schema(model, json_schema) is not None)
+            model,
+            will_think=self.will_think(model, "bedrock", request_params),
+            thinking_requested=self.is_thinking_requested(request_params),
+            model_info=model_info,
+        )
 
     def uses_opt_in_native_output(
         self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
@@ -335,10 +345,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
+        model_info: Final = deployment_model_info(_LITELLM_PARAMS.validate_python(litellm_params))
         apply_bedrock_invoke_structured_output(
             model=model,
             request_body=anthropic_request,
-            model_info=deployment_model_info(_LITELLM_PARAMS.validate_python(litellm_params)),
+            model_info=model_info,
+            chat_uses_native_output=lambda: self.chat_uses_native_structured_output(
+                model, _NON_DEFAULT_PARAMS.validate_python(filtered_params), model_info
+            ),
         )
         strip_unsupported_bedrock_invoke_output_config_keys(
             model=model,

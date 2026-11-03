@@ -1754,6 +1754,9 @@ if TYPE_CHECKING:
     from .llms.typesafe.decisions.transformation import (
         TypeSafeDecisionsConfig as TypeSafeDecisionsConfig,
     )
+    from .llms.parallel_ai.decisions.transformation import (
+        ParallelAIDecisionsConfig as ParallelAIDecisionsConfig,
+    )
     from .llms.openrouter.decisions.transformation import (
         OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,
     )
@@ -2374,6 +2377,7 @@ if TYPE_CHECKING:
     supports_web_search: Callable[..., bool]
     supports_tool_search: Callable[..., bool]
     supports_url_context: Callable[..., bool]
+    supports_continuation: Callable[..., bool]
     supports_response_schema: Callable[..., bool]
     supports_parallel_function_calling: Callable[..., bool]
     supports_vision: Callable[..., bool]

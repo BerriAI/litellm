@@ -29404,7 +29404,7 @@ export interface components {
             /** Choice */
             choice: string;
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Probabilities */
             probabilities: {
                 [key: string]: number;
@@ -38949,6 +38949,11 @@ export interface components {
              */
             supports_background_chat: boolean;
             /**
+             * Supports Continuation
+             * @default false
+             */
+            supports_continuation: boolean;
+            /**
              * Supports Fast Mode
              * @default false
              */
@@ -40221,7 +40226,7 @@ export interface components {
             /** Choice */
             choice: string | boolean;
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Name */
             name: string | null;
             /** Probabilities */
@@ -40317,7 +40322,7 @@ export interface components {
         /** OpenAIScoreAnswer */
         OpenAIScoreAnswer: {
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Name */
             name: string | null;
             /** Probabilities */
@@ -42053,6 +42058,8 @@ export interface components {
         };
         /** PromptCacheOptions */
         PromptCacheOptions: {
+            /** Comparison Response Id */
+            comparison_response_id?: string;
             /**
              * Mode
              * @enum {string}
@@ -45557,7 +45564,7 @@ export interface components {
         /** ScoreAnswer */
         ScoreAnswer: {
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Legend */
             legend: {
                 [key: string]: string | {
