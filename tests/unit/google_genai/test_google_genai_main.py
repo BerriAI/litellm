@@ -686,20 +686,25 @@ async def test_proxy_forwarded_headers_reach_generate_content_without_leaking_pr
 
     from litellm.google_genai.main import agenerate_content
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, clean_headers
+    from litellm.proxy.litellm_pre_call_utils import (
+        LiteLLMProxyRequestSetup,
+        clean_headers,
+        litellm_auth_header_name,
+    )
 
+    incoming_headers: Final = Headers(
+        {
+            "x-goog-api-key": "sk-litellm-virtual-key",
+            "authorization": "Bearer sk-litellm-virtual-key",
+            "x-cost-center": "core-platform",
+            "user-agent": "google-genai-sdk/1.0",
+        }
+    )
     cleaned: Final = clean_headers(
-        Headers(
-            {
-                "x-goog-api-key": "sk-litellm-virtual-key",
-                "authorization": "Bearer sk-litellm-virtual-key",
-                "x-cost-center": "core-platform",
-                "user-agent": "google-genai-sdk/1.0",
-            }
-        ),
+        incoming_headers,
         litellm_key_header_name=None,
         forward_llm_provider_auth_headers=False,
-        authenticated_with_header="x-goog-api-key",
+        authenticated_with_header=litellm_auth_header_name(incoming_headers),
     )
     backend_data: Final = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
         headers=cleaned,
