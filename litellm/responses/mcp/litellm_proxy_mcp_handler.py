@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, over
 
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, Unpack
 from typing_extensions import TypedDict as ExtraItemsTypedDict
 
@@ -118,6 +119,67 @@ async def _served_mcp_path_names(
 ) -> frozenset[str]:
     names: Final = frozenset(name for name in map(proxy_path_mcp_name, tools) if name is not None)
     return await served_names(names) if names else frozenset[str]()
+
+
+_ITEM_FIELDS: Final = TypeAdapter(dict[str, object])
+_CONTENT_PARTS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _output_item_fields(output_item: object) -> Mapping[str, object] | None:
+    if isinstance(output_item, BaseModel):
+        return output_item.model_dump(exclude_none=True)
+    if isinstance(output_item, dict):
+        return _ITEM_FIELDS.validate_python(output_item)
+    return None
+
+
+def _is_blank_text_part(part: object) -> bool:
+    if not isinstance(part, dict):
+        return part == ""
+    fields: Final = _ITEM_FIELDS.validate_python(part)
+    return fields.get("type") == "output_text" and not fields.get("text")
+
+
+def _replayed_function_call(fields: Mapping[str, object]) -> Mapping[str, object] | None:
+    call_id: Final = fields.get("call_id") or fields.get("id")
+    name: Final = fields.get("name")
+    if not call_id or not name:
+        return None
+    return {"type": "function_call", "call_id": call_id, "name": name, "arguments": fields.get("arguments")}
+
+
+def _replayed_message(fields: Mapping[str, object]) -> Mapping[str, object] | None:
+    content: Final = fields.get("content", ())
+    parts: Final = _CONTENT_PARTS.validate_python(content) if isinstance(content, list) else (content,)
+    visible: Final = tuple(part for part in parts if not _is_blank_text_part(part))
+    if not visible:
+        return None
+    return {"type": "message", "role": "assistant", "content": list(visible)}
+
+
+def _replayed_output_item(output_item: object, preserve_reasoning: bool) -> Mapping[str, object] | None:
+    fields: Final = _output_item_fields(output_item)
+    if fields is None:
+        return None
+    match fields.get("type"):
+        case "function_call":
+            return _replayed_function_call(fields)
+        case "reasoning":
+            return fields if preserve_reasoning else None
+        case "message":
+            return _replayed_message(fields)
+        case _:
+            return None
+
+
+def _history_items(original_input: str | ResponseInputParam | None) -> tuple[object, ...]:
+    if not original_input:
+        return ()
+    if isinstance(original_input, str):
+        return ({"type": "message", "role": "user", "content": original_input},)
+    if isinstance(original_input, list):
+        return tuple(original_input)
+    return (original_input,)
 
 
 class LiteLLM_Proxy_MCP_Handler:
@@ -1114,77 +1176,14 @@ class LiteLLM_Proxy_MCP_Handler:
         original_input: str | ResponseInputParam | None = None,
         preserve_reasoning: bool = False,
     ) -> list[object]:
-        """Create follow-up input with tool results in proper format."""
-        follow_up_input: Final[list[object]] = []
-
-        # Add original user input if available to maintain conversation context
-        if original_input:
-            if isinstance(original_input, str):
-                follow_up_input.append({"type": "message", "role": "user", "content": original_input})
-            elif isinstance(original_input, list):
-                follow_up_input.extend(original_input)
-            else:
-                follow_up_input.append(original_input)
-
-        # Add the assistant message with function calls
-        assistant_message_content: Final[list[object]] = []
-        turn_items: Final[list[Mapping[str, object]]] = []
-
-        for output_item in response.output:
-            if not isinstance(output_item, dict) and hasattr(output_item, "model_dump"):
-                output_item = output_item.model_dump(exclude_none=True)
-
-            if isinstance(output_item, dict):
-                if output_item.get("type") == "function_call":
-                    call_id = output_item.get("call_id") or output_item.get("id")
-                    name = output_item.get("name")
-                    arguments = output_item.get("arguments")
-
-                    # Only add if we have required fields
-                    if call_id and name:
-                        turn_items.append(
-                            {
-                                "type": "function_call",
-                                "call_id": call_id,
-                                "name": name,
-                                "arguments": arguments,
-                            }
-                        )
-                elif output_item.get("type") == "reasoning" and preserve_reasoning:
-                    turn_items.append(output_item)
-                elif output_item.get("type") == "message":
-                    # Extract content from message
-                    content = output_item.get("content", [])
-                    if isinstance(content, list):
-                        assistant_message_content.extend(content)
-                    else:
-                        assistant_message_content.append(content)
-
-        # Add assistant message only if there's actual content (not empty)
-        # For example, gemini requires that function call turns come immediately after user turns,
-        # so we should not add empty assistant messages
-        if assistant_message_content:
-            follow_up_input.append(
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": assistant_message_content,
-                }
-            )
-
-        follow_up_input.extend(turn_items)
-
-        # Add tool results (function call outputs)
-        for tool_result in tool_results:
-            follow_up_input.append(
-                {
-                    "type": "function_call_output",
-                    "call_id": tool_result["tool_call_id"],
-                    "output": tool_result["result"],
-                }
-            )
-
-        return follow_up_input
+        """Replay the round's output items in their order, so one turn's reasoning, text, and tool calls go back as
+        one assistant message, then append the tool results."""
+        replayed: Final = (_replayed_output_item(item, preserve_reasoning) for item in response.output)
+        tool_outputs: Final = (
+            {"type": "function_call_output", "call_id": tool_result["tool_call_id"], "output": tool_result["result"]}
+            for tool_result in tool_results
+        )
+        return [*_history_items(original_input), *(item for item in replayed if item is not None), *tool_outputs]
 
     _create_follow_up_input = create_follow_up_input
 
