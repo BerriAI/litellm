@@ -294,7 +294,7 @@ GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
         "role": "assistant",
         "model": "vertex_ai/gemini-3.5-flash",
         "stop_sequence": None,
-        "usage": {"input_tokens": 9, "output_tokens": 86},
+        "usage": {"input_tokens": 9, "output_tokens": 86, "output_tokens_details": {"thinking_tokens": 84}},
         "content": [{"type": "text", "text": "Hello."}],
         "stop_reason": "end_turn",
         "stop_details": None,
@@ -744,7 +744,7 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
         **MESSAGES_BRIDGE_RESPONSE,
         "id": "ySjQarHoLb2apucPwee_YQ",
         "model": "vertex_ai/gemini-3.8-flash",
-        "usage": {"input_tokens": 242, "output_tokens": 314},
+        "usage": {"input_tokens": 242, "output_tokens": 314, "output_tokens_details": {"thinking_tokens": 243}},
         "content": [
             {
                 "type": "thinking",
@@ -872,7 +872,7 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
         **MESSAGES_BRIDGE_RESPONSE,
         "id": "xCjQasWfKcyL9LsPx7HAqQ8",
         "model": "vertex_ai/gemini-3.1-pro-preview",
-        "usage": {"input_tokens": 242, "output_tokens": 257},
+        "usage": {"input_tokens": 242, "output_tokens": 257, "output_tokens_details": {"thinking_tokens": 198}},
         "content": [
             {
                 "type": "thinking",
@@ -996,7 +996,7 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
         **MESSAGES_BRIDGE_RESPONSE,
         "id": "0CjQauKQPNyFpucPldSPiAY",
         "model": "vertex_ai/gemini-4-argon",
-        "usage": {"input_tokens": 412, "output_tokens": 192},
+        "usage": {"input_tokens": 412, "output_tokens": 192, "output_tokens_details": {"thinking_tokens": 123}},
         "content": [
             {
                 "type": "thinking",
