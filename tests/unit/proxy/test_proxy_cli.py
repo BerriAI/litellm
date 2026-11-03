@@ -101,23 +101,32 @@ def _request_header_test_config(server: str, limit: int | None) -> uvicorn.Confi
 
 @pytest.mark.parametrize("server", ["uvicorn", "gunicorn"])
 @pytest.mark.parametrize("limit", [None, DEFAULT_MAX_REQUEST_HEADER_SIZE, 128 * 1024])
-def test_request_header_size_only_selects_h11_when_configured(server: str, limit: int | None) -> None:
+def test_request_header_size_preserves_parser_selection(server: str, limit: int | None) -> None:
     config: Final = _request_header_test_config(server, limit)
-    assert config.http == ("auto" if limit is None else "h11")
+    assert config.http == "auto"
     assert config.h11_max_incomplete_event_size == (limit if limit is not None else DEFAULT_MAX_REQUEST_HEADER_SIZE)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("server", ["uvicorn", "gunicorn"])
+@pytest.mark.parametrize("parser", ["h11", "httptools"])
 @pytest.mark.parametrize(
     ("limit", "header_bytes", "expected_status"),
     [(16384, 16384, 200), (16384, 16896, 400), (16384, 39936, 400), (131072, 39936, 200), (131072, 131073, 400)],
 )
-async def test_segmented_request_headers(server: str, limit: int, header_bytes: int, expected_status: int) -> None:
+async def test_segmented_request_headers(
+    monkeypatch: pytest.MonkeyPatch, server: str, parser: str, limit: int, header_bytes: int, expected_status: int
+) -> None:
     from uvicorn.server import ServerState
 
+    from uvicorn.protocols.http.h11_impl import H11Protocol
+    from uvicorn.protocols.http.httptools_impl import HttpToolsProtocol
+
+    selected_protocol: Final = H11Protocol if parser == "h11" else HttpToolsProtocol
+    monkeypatch.setattr("uvicorn.protocols.http.auto.AutoHTTPProtocol", selected_protocol)
     config: Final = _request_header_test_config(server, limit)
     config.load()
+    assert config.http_protocol_class is selected_protocol
     protocol: Final = config.http_protocol_class(config, ServerState(), {}, _loop=asyncio.get_running_loop())
     transport: Final = MagicMock(spec=asyncio.Transport)
     transport.get_extra_info.return_value = None
@@ -134,7 +143,7 @@ async def test_segmented_request_headers(server: str, limit: int, header_bytes: 
             protocol.data_received(b"\r\n\r\n")
         await asyncio.gather(*protocol.tasks)
         response: Final = b"".join(call.args[0] for call in transport.write.call_args_list)
-        assert response.startswith(f"HTTP/1.1 {expected_status} ".encode())
+        assert response.startswith(f"HTTP/1.1 {expected_status if parser == 'h11' else 200} ".encode())
     finally:
         protocol.connection_lost(None)
 
@@ -2231,7 +2240,7 @@ class TestProxyInitializationHelpers:
         assert isinstance(worker, UvicornWorker)
         assert worker.config.timeout_graceful_shutdown == 7.5
         assert worker.config.loop == UvicornWorker.CONFIG_KWARGS["loop"]
-        assert worker.config.http == "h11"
+        assert worker.config.http == UvicornWorker.CONFIG_KWARGS["http"]
         assert worker.config.h11_max_incomplete_event_size == max_request_header_size
         assert captured["options"]["graceful_timeout"] == 8 + GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
 

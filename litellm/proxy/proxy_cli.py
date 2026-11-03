@@ -431,7 +431,6 @@ class ProxyInitializationHelpers:
             "h11_max_incomplete_event_size": (
                 max_request_header_size if max_request_header_size is not None else DEFAULT_MAX_REQUEST_HEADER_SIZE
             ),
-            **({"http": "h11"} if max_request_header_size is not None else {}),
         }
         if log_config is not None:
             print_startup_message(f"Using log_config: {log_config}")
@@ -1121,7 +1120,7 @@ class ProxyInitializationHelpers:
     type=click.IntRange(min=1),
     help=(
         "Maximum bytes buffered for an incomplete HTTP request header block. "
-        "When set, uses the h11 parser for uvicorn and --run_gunicorn, even when httptools is installed. "
+        "Applies when uvicorn or --run_gunicorn uses h11. Parser selection is unchanged; httptools ignores this setting. "
         "Ignored under --run_hypercorn / --run_granian."
     ),
     envvar="MAX_REQUEST_HEADER_SIZE",

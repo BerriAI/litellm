@@ -15,7 +15,6 @@ def build_graceful_shutdown_uvicorn_worker(
                 "h11_max_incomplete_event_size": (
                     max_request_header_size if max_request_header_size is not None else DEFAULT_MAX_REQUEST_HEADER_SIZE
                 ),
-                **({"http": "h11"} if max_request_header_size is not None else {}),
             }
             super().__init__(*args)
 
