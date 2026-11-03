@@ -675,6 +675,36 @@ class ProxyExtrasDBManager:
             )
 
     @staticmethod
+    def raise_if_accounting_event_removal_pending() -> None:
+        database_url: Final = os.environ.get("DATABASE_URL")
+        if not database_url:
+            return
+        try:
+            import psycopg
+        except ImportError as exc:
+            raise RuntimeError("Install psycopg to verify accounting events before prisma db push.") from exc
+        try:
+            with psycopg.connect(
+                ProxyExtrasDBManager._strip_prisma_query_params(database_url), connect_timeout=10, autocommit=True
+            ) as connection:
+                events: Final = connection.execute(
+                    "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+                    "WHERE n.nspname=%s AND c.relname='LiteLLM_AccountingEvent' LIMIT 1",
+                    (ProxyExtrasDBManager._prisma_schema_param(database_url) or "public",),
+                ).fetchone()
+        except psycopg.Error as exc:
+            raise RuntimeError(
+                "Cannot verify accounting events; refusing prisma db push. "
+                f"The database check failed: {_redact_credentials(str(exc)).strip()}"
+            ) from exc
+        if events is not None:
+            raise RuntimeError(
+                "Legacy accounting events require the guarded removal migration. "
+                "Drain pending and parked deliveries, then upgrade without --use_prisma_db_push. "
+                "prisma db push bypasses the migration and can discard unfinished work."
+            )
+
+    @staticmethod
     def spend_logs_is_partitioned() -> bool:
         """True when the connected database's LiteLLM_SpendLogs is a
         partitioned table in Prisma's target schema (the `schema` URL param,
@@ -1037,6 +1067,7 @@ class ProxyExtrasDBManager:
 
         if not use_migrate:
             ProxyExtrasDBManager.raise_if_lens_rename_pending()
+            ProxyExtrasDBManager.raise_if_accounting_event_removal_pending()
             if ProxyExtrasDBManager.spend_logs_is_partitioned():
                 raise RuntimeError(PARTITIONED_SPEND_LOGS_PUSH_ERROR)
             original_dir = os.getcwd()
@@ -1715,6 +1746,7 @@ class ProxyExtrasDBManager:
                         raise RuntimeError(PARTITIONED_SPEND_LOGS_PUSH_ERROR)
                     # Use prisma db push with increased timeout
                     ProxyExtrasDBManager.raise_if_lens_rename_pending()
+                    ProxyExtrasDBManager.raise_if_accounting_event_removal_pending()
                     prisma_toolchain.run_prisma(
                         [_get_prisma_command(), "db", "push", "--accept-data-loss"],
                         timeout=prisma_command_timeout(),

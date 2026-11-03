@@ -339,7 +339,6 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_TelemetryReport",
         "LiteLLM_AccessGroupTable",
         "LiteLLM_AccountingDelivery",
-        "LiteLLM_AccountingEvent",
         "LiteLLM_ClaudeCodePluginTable",
         "LiteLLM_MemoryTable",
         "LiteLLM_AdaptiveRouterState",

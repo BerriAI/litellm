@@ -753,13 +753,17 @@ class TestPartitionedSpendLogsPushGuard:
 
 
 class _FakeCursor:
+    def __init__(self, present=True):
+        self._present = present
+
     def fetchone(self):
-        return (1,)
+        return (1,) if self._present else None
 
 
 class _FakePsycopgConn:
-    def __init__(self, executed):
+    def __init__(self, executed, present=True):
         self._executed = executed
+        self._present = present
 
     def __enter__(self):
         return self
@@ -769,7 +773,7 @@ class _FakePsycopgConn:
 
     def execute(self, query, params):
         self._executed.append((query, params))
-        return _FakeCursor()
+        return _FakeCursor(self._present)
 
 
 class TestLensRenamePendingCheck:
@@ -2373,3 +2377,42 @@ class TestMigrateDeployRunsUnderTheCoordinatorLock:
 
         assert ProxyExtrasDBManager._run_database_v2(True, deploy_lock=self._recording_lock(events)) is True
         assert events == ["lock", "deploy", "unlock", "lock", "rollback", "unlock", "lock", "deploy", "unlock"]
+
+
+class TestAccountingEventRemovalPushGuard:
+    def test_missing_database_url_needs_no_schema_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        assert ProxyExtrasDBManager.raise_if_accounting_event_removal_pending() is None
+
+    def test_missing_database_driver_refuses_schema_push(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import sys
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/database")
+        monkeypatch.setitem(sys.modules, "psycopg", None)
+        with pytest.raises(RuntimeError, match="Install psycopg"):
+            ProxyExtrasDBManager.raise_if_accounting_event_removal_pending()
+
+    def test_failed_schema_check_redacts_database_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        password: Final = "p%zzword"
+        monkeypatch.setenv("DATABASE_URL", f"postgresql://litellm:{password}@localhost:9/database")
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        with pytest.raises(RuntimeError, match="Cannot verify accounting events") as error:
+            ProxyExtrasDBManager.raise_if_accounting_event_removal_pending()
+        assert password not in str(error.value)
+
+
+    @pytest.mark.parametrize("present", [True, False])
+    def test_existing_events_require_migration_instead_of_schema_push(
+        self, monkeypatch: pytest.MonkeyPatch, present: bool,
+    ) -> None:
+        import psycopg
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/database?schema=accounting")
+        executed = []
+        monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _FakePsycopgConn(executed, present))
+        if present:
+            with pytest.raises(RuntimeError, match="guarded removal migration"):
+                ProxyExtrasDBManager.raise_if_accounting_event_removal_pending()
+        else:
+            assert ProxyExtrasDBManager.raise_if_accounting_event_removal_pending() is None
+        assert len(executed) == 1 and executed[0][1] == ("accounting",)
