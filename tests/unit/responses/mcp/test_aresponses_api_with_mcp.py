@@ -2462,12 +2462,13 @@ async def test_streaming_mcp_iterator_uses_max_agentic_loops_from_request(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("provider", "one_id"), [("openai", False), ("anthropic", True)], ids=["native", "bridged"])
 @respx.mock
 async def test_streaming_mcp_event_order_and_response_id_consistency(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, provider: str, one_id: bool
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    model, upstream_url, tool_round, answer_round = SCRIPTED_PROVIDERS["openai"]
+    model, upstream_url, tool_round, answer_round = SCRIPTED_PROVIDERS[provider]
 
     with caplog.at_level(logging.ERROR):
         events, _, _, _, _ = await _scripted_mcp_stream(model, upstream_url, (tool_round(), answer_round()))
@@ -2485,7 +2486,7 @@ async def test_streaming_mcp_event_order_and_response_id_consistency(
     ]
     assert len(lifecycle_ids) == 3
     assert lifecycle_ids[0] == lifecycle_ids[1]
-    assert lifecycle_ids[2] != lifecycle_ids[0]
+    assert (lifecycle_ids[2] == lifecycle_ids[0]) is one_id
     assert not [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
 
 
@@ -3941,7 +3942,6 @@ async def test_a_gateway_reference_that_needs_approval_beside_a_claimed_url_hand
 
     assert isinstance(response, ResponsesAPIResponse)
     assert _output_summary(response.output) == (
-        ("mcp_list_tools", "deepwiki", None),
         ("mcp_list_tools", "gitmcp", None),
         ("mcp_call", "gitmcp", "ask_question"),
         ("message", None, None),
@@ -4023,7 +4023,6 @@ async def test_a_claimed_url_that_needs_approval_is_dropped_beside_a_gateway_ref
 
     assert isinstance(response, ResponsesAPIResponse)
     assert _output_summary(response.output) == (
-        ("mcp_list_tools", "deepwiki", None),
         ("mcp_list_tools", "gitmcp", None),
         ("mcp_call", "gitmcp", "ask_question"),
         ("message", None, None),
@@ -4061,7 +4060,6 @@ async def test_a_streamed_gateway_reference_that_needs_approval_beside_a_claimed
 
     assert _event_type(events[-1]) == "response.completed"
     assert _output_summary(events[-1].response.output) == (
-        ("mcp_list_tools", "deepwiki", None),
         ("mcp_list_tools", "gitmcp", None),
         ("mcp_call", "gitmcp", "ask_question"),
         ("function_call", None, "deepwiki-ask_question"),
@@ -4307,15 +4305,9 @@ async def test_a_round_calling_a_claimed_and_a_held_tool_runs_the_claimed_one_an
     if stream:
         _assert_streamed_like_an_openai_accumulator_reads_it(events, response.output)
     items: Final = tuple(_item(item) for item in response.output)
-    assert tuple(item["type"] for item in items) == (
-        "mcp_list_tools",
-        "mcp_list_tools",
-        "reasoning",
-        "function_call",
-        "mcp_call",
-    )
-    assert (items[3]["call_id"], items[3]["name"]) == ("call_wiki", "deepwiki-ask_question")
-    assert (items[4]["server_label"], items[4]["name"], items[4]["output"]) == ("gitmcp", "ask_question", _ASK_OUTPUT)
+    assert tuple(item["type"] for item in items) == ("mcp_list_tools", "reasoning", "function_call", "mcp_call")
+    assert (items[2]["call_id"], items[2]["name"]) == ("call_wiki", "deepwiki-ask_question")
+    assert (items[3]["server_label"], items[3]["name"], items[3]["output"]) == ("gitmcp", "ask_question", _ASK_OUTPUT)
     assert [call.name for call in server.calls] == ["ask_question"]
     assert mcp_client.call_tool.await_count == 0
     await _settle(lambda: len(recorder.logged) > 0)
@@ -4346,9 +4338,9 @@ async def test_a_round_calling_a_claimed_and_a_held_tool_runs_the_claimed_one_an
     assert [message["role"] for message in replayed] == ["user", "assistant", "tool", "tool"]
     assistant: Final = replayed[1]
     assert assistant["reasoning_content"] == "Ask both servers."
-    assert [call["id"] for call in assistant["tool_calls"]] == ["call_wiki", items[4]["id"]]
+    assert [call["id"] for call in assistant["tool_calls"]] == ["call_wiki", items[3]["id"]]
     assert [(message["tool_call_id"], message["content"]) for message in replayed[2:]] == [
-        (items[4]["id"], _ASK_OUTPUT),
+        (items[3]["id"], _ASK_OUTPUT),
         ("call_wiki", _HANDED_BACK_OUTPUT),
     ]
 
@@ -4618,3 +4610,119 @@ async def test_a_follow_up_reads_its_stored_turn_once_for_both_its_listings_and_
         "Which servers can you use?",
         "Ask again",
     ]
+
+
+def _streamed_answer_round_from(chat_id: str) -> httpx.Response:
+    return _chat_stream(
+        *(
+            {**chunk, "id": chat_id}
+            for chunk in (
+                _chat_chunk({"role": "assistant", "content": _ASK_ANSWER}, None),
+                _chat_chunk({}, "stop"),
+            )
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_turn_that_runs_a_tool_keeps_one_response_id_that_a_follow_up_continues_from(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
+    _deepwiki_registered(monkeypatch)
+    provider: Final = _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (
+            _streamed_tool_call_round("gitmcp-ask_question"),
+            _streamed_answer_round_from("chatcmpl-gateway-mcp-answer"),
+            _answer_round(_DEEPSEEK_MODEL),
+        ),
+        _DEEPSEEK_URL,
+    )
+    server: Final = _ScriptedMCPServer()
+    recorder: Final = _RoundRecorder()
+
+    stream: Final = await litellm.aresponses(
+        model=_DEEPSEEK_MODEL,
+        input="Ask DeepWiki what LiteLLM is",
+        tools=[dict(_GITMCP_TOOL)],
+        direct_client_factory=server.client_for,
+        stream=True,
+        litellm_logging_obj=_rounds_logging_obj(recorder, "one-id-stream"),
+        **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+    )
+    events: Final = tuple([event async for event in stream])
+    response_id: Final = events[0].response.id
+
+    assert _event_type(events[-1]) == "response.completed"
+    assert {event.response.id for event in events if getattr(event, "response", None) is not None} == {response_id}
+    assert [call.name for call in server.calls] == ["ask_question"]
+    await _settle(lambda: len(recorder.logged) > 0)
+    assert [row["id"] for row in recorder.logged] == [response_id]
+
+    _proxy_database(
+        monkeypatch,
+        SimpleNamespace(
+            db=_SpendLogs(
+                (
+                    {
+                        "request_id": recorder.logged[0]["id"],
+                        "session_id": "one-id-session",
+                        "proxy_server_request": {"input": "Ask DeepWiki what LiteLLM is"},
+                        "response": recorder.logged[0]["response"],
+                    },
+                )
+            )
+        ),
+    )
+    follow_up: Final = await litellm.aresponses(
+        model=_DEEPSEEK_MODEL,
+        input="Who maintains it?",
+        previous_response_id=response_id,
+        tools=[dict(_GITMCP_TOOL)],
+        direct_client_factory=server.client_for,
+        **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+    )
+
+    assert isinstance(follow_up, ResponsesAPIResponse)
+    replayed: Final = _sent_body(provider, 2)["messages"]
+    assert [(message["role"], message.get("content")) for message in replayed] == [
+        ("user", "Ask DeepWiki what LiteLLM is"),
+        ("assistant", _ASK_ANSWER),
+        ("user", "Who maintains it?"),
+    ]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_held_gateway_reference_is_still_listed_as_the_access_check_but_gets_no_mcp_list_tools_item(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fastapi import HTTPException
+
+    _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
+    mcp_client: Final = _deepwiki_registered(monkeypatch)
+    provider: Final = _serve_responses(
+        respx.mock, monkeypatch, (_tool_call_round(_BEDROCK_MODEL, "deepwiki-ask_question"),), _BEDROCK_URL
+    )
+    server: Final = _ScriptedMCPServer()
+
+    with pytest.raises(HTTPException) as denied:
+        await _gateway_hosted_mcp_request(
+            _BEDROCK_MODEL, server, _GITMCP_TOOL, beside=(_deepwiki_reference(),), caller=_key_holding("srv-other")
+        )
+    response: Final = await _gateway_hosted_mcp_request(
+        _BEDROCK_MODEL, server, _GITMCP_TOOL, beside=(_deepwiki_reference(),), caller=_key_holding("srv-deepwiki")
+    )
+
+    assert denied.value.status_code == 403
+    assert isinstance(response, ResponsesAPIResponse)
+    assert _output_summary(response.output) == (
+        ("mcp_list_tools", "gitmcp", None),
+        ("message", None, None),
+        ("function_call", None, "deepwiki-ask_question"),
+    )
+    assert mcp_client.list_tools.await_count == 1
+    assert _sent_tool_names(_sent_body(provider, 0)) == ("deepwiki-ask_question", "gitmcp-ask_question")
+    assert (mcp_client.call_tool.await_count, server.calls) == (0, ())

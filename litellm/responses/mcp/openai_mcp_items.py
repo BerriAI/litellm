@@ -48,7 +48,8 @@ class GatewayToolName:
 @dataclass(frozen=True, slots=True)
 class OpenAIMCPItems:
     """How the tools the gateway runs read in OpenAI's item shapes: one mcp_list_tools item per server, and the
-    caller's server_label and bare tool name for every tool name the model sees."""
+    caller's server_label and bare tool name for every tool name the model sees. A held server gets neither, since its
+    calls go back to the caller as function_call items the way they do without a claim."""
 
     list_items: tuple[Mapping[str, object], ...]
     names: Mapping[str, GatewayToolName]
@@ -221,11 +222,12 @@ def openai_mcp_items(
             for name, tool in direct.by_name.items()
         }
     )
+    run_here: Final = tuple(each for each in registered if held.lets_run(each.server_keys, server_labels))
     registered_items: Final = tuple(
         _list_item(
-            label, [_listed_tool(each.tool, each.name.name) for each in registered if each.name.server_label == label]
+            label, [_listed_tool(each.tool, each.name.name) for each in run_here if each.name.server_label == label]
         )
-        for label in _labels_in_order([each.name for each in registered])
+        for label in _labels_in_order([each.name for each in run_here])
     )
     direct_items: Final = tuple(
         _list_item(label, [_listed_tool(tool, tool.name) for tool in tools])
@@ -235,7 +237,7 @@ def openai_mcp_items(
         list_items=(*registered_items, *direct_items),
         names=MappingProxyType(
             {
-                **{each.tool.name: each.name for each in registered if held.lets_run(each.server_keys, server_labels)},
+                **{each.tool.name: each.name for each in run_here},
                 **direct_names,
             }
         ),

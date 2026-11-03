@@ -1048,7 +1048,12 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             self._tool_results_for_response = self.collected_response
 
     async def _create_follow_up_iterator(self) -> None:
-        """Create the follow-up response iterator with tool results"""
+        """Create the follow-up response iterator with tool results.
+
+        A round bridged through chat completions keeps the first round's response id, as OpenAI keeps one id for the
+        whole turn, because the gateway logs the turn under that id and resolves a later previous_response_id from
+        that row. A native Responses round takes its own id, because the provider stores each round and only the last
+        one holds the whole turn."""
         if self.collected_response is None or self.collected_response is not self._tool_results_for_response:
             # Either no response to follow up on, or the current round's
             # response had no tool calls (self.tool_results is stale from an
@@ -1110,7 +1115,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             if hasattr(follow_up_response, "__aiter__"):
                 self.base_iterator = follow_up_response
                 self.collected_response = None
-                self._cached_response_id = None
+                if not isinstance(follow_up_response, LiteLLMCompletionStreamingIterator):
+                    self._cached_response_id = None
                 self._round_index += 1
                 if self._round_billing is not None:
                     self._round_billing.record_billed_rounds(follow_up_response)
