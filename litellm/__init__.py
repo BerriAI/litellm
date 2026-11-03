@@ -1071,7 +1071,6 @@ _populate_provider_model_sets(model_cost)
 # Azure returns gpt-35-turbo in their responses, we need to map this to azure/gpt-3.5-turbo for token counting
 azure_llms = {
     "gpt-35-turbo": "azure/gpt-35-turbo",
-    "gpt-35-turbo-16k": "azure/gpt-35-turbo-16k",
     "gpt-35-turbo-instruct": "azure/gpt-35-turbo-instruct",
     "azure/gpt-41": "gpt-4.1",
     "azure/gpt-41-mini": "gpt-4.1-mini",

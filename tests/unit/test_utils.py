@@ -1976,7 +1976,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/together-mistral",
-                "together_ai/mistralai/Mistral-7B-Instruct-v0.1",
+                "together_ai/mistralai/Mistral-7B-Instruct-v0.3",
                 False,
             ),
             # Ollama with custom names (cannot be resolved)
