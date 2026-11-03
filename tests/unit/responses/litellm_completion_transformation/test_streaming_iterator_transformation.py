@@ -31,6 +31,8 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import GenericResponseOutputItem, build_web_search_call
 from litellm.types.utils import (
+    ChatCompletionTokenLogprob,
+    ChoiceLogprobs,
     Delta,
     ModelResponse,
     ModelResponseStream,
@@ -1566,3 +1568,75 @@ def test_bridged_events_answer_dict_reads_of_their_number():
     assert [event["sequence_number"] for event in events] == positions
     assert [event.get("sequence_number") for event in events] == positions
     assert all("sequence_number" in event for event in events)
+
+
+def _logprobs_chunk(content: str, logprob: float, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="gemini-3.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content=content),
+                finish_reason=finish_reason,
+                logprobs=ChoiceLogprobs(
+                    content=[ChatCompletionTokenLogprob(token=content, logprob=logprob, top_logprobs=[])]
+                ),
+            )
+        ],
+    )
+
+
+def test_streamed_chat_logprobs_reach_the_text_delta_and_done_events() -> None:
+    events: Final = [
+        event.model_dump(mode="json")
+        for event in _build_iterator(
+            [_logprobs_chunk("Hello", -0.25), _logprobs_chunk(".", -0.5, finish_reason="stop")]
+        )
+    ]
+    hello: Final = {"token": "Hello", "logprob": -0.25, "bytes": None, "top_logprobs": []}
+    period: Final = {"token": ".", "logprob": -0.5, "bytes": None, "top_logprobs": []}
+
+    deltas: Final = [event for event in events if event["type"] == "response.output_text.delta"]
+    done: Final = next(event for event in events if event["type"] == "response.output_text.done")
+    part_done: Final = next(event for event in events if event["type"] == "response.content_part.done")
+    item_done: Final = next(
+        event for event in events if event["type"] == "response.output_item.done" and event["item"]["type"] == "message"
+    )
+
+    assert [event["logprobs"] for event in deltas] == [[hello], [period]]
+    assert done["logprobs"] == [hello, period]
+    assert part_done["part"]["logprobs"] == [hello, period]
+    assert item_done["item"]["content"][0]["logprobs"] == [hello, period]
+    completed: Final = next(event for event in events if event["type"] == "response.completed")
+    assert completed["response"]["output"][0]["content"][0]["logprobs"] == [hello, period]
+
+
+def test_streamed_answer_logprobs_stay_off_the_reasoning_item_in_the_completed_snapshot() -> None:
+    events: Final = [
+        event.model_dump(mode="json")
+        for event in _build_iterator(
+            [_reasoning_chunk("let me think"), _logprobs_chunk("Hello", -0.25, finish_reason="stop")]
+        )
+    ]
+    hello: Final = {"token": "Hello", "logprob": -0.25, "bytes": None, "top_logprobs": []}
+
+    completed: Final = next(event for event in events if event["type"] == "response.completed")
+    by_type: Final = {item["type"]: item for item in completed["response"]["output"]}
+
+    assert by_type["message"]["content"][0]["logprobs"] == [hello]
+    assert all("logprobs" not in part for part in by_type["reasoning"]["content"])
+
+
+def test_streamed_chat_without_logprobs_emits_text_events_without_a_logprobs_key() -> None:
+    events: Final = [
+        event.model_dump(mode="json") for event in _build_iterator([_chunk("Hello"), _chunk("!", finish_reason="stop")])
+    ]
+
+    text_events: Final = [
+        event for event in events if event["type"] in {"response.output_text.delta", "response.output_text.done"}
+    ]
+
+    assert text_events and all("logprobs" not in event for event in text_events)

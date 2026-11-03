@@ -31,10 +31,19 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
+    stream_item_field,
+    stream_item_items,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
-from litellm.types.llms.openai import ChatCompletionToolCallChunk
+from litellm.types.llms.openai import (
+    ChatCompletionToolCallChunk,
+    ContentPartDoneEvent,
+    ContentPartDonePartOutputText,
+    OutputTextDeltaEvent,
+    OutputTextDoneEvent,
+    ResponsesAPIStreamEvents,
+)
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -4327,3 +4336,142 @@ async def test_a_guardrail_rewriting_another_turn_leaves_a_replayed_claude_tool_
     result: Final = await OpenAIResponsesHandler().process_input_messages(data, _WordMaskingGuardrail("Thanks"))
 
     assert result["input"] == [*_REPLAYED_CLAUDE_SEARCH_INPUT[:5], {"role": "user", "content": "[MASKED]"}]
+
+
+class _PersimmonTextMaskingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "texts": [text.replace("persimmon", "[MASKED]") for text in inputs.get("texts", [])]}
+
+
+_PERSIMMON_LOGPROBS: Final = (
+    {"token": "ripe", "logprob": -0.1, "bytes": None, "top_logprobs": []},
+    {"token": " persimmon", "logprob": -0.2, "bytes": None, "top_logprobs": []},
+)
+
+
+@pytest.mark.asyncio
+async def test_masked_output_text_drops_the_logprobs_that_spell_the_original_text() -> None:
+    response: Final = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_1",
+            "created_at": 1,
+            "model": "gpt-5.6",
+            "object": "response",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "ripe persimmon",
+                            "annotations": [],
+                            "logprobs": list(_PERSIMMON_LOGPROBS),
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    result: Final = await OpenAIResponsesHandler().process_output_response(
+        response, _PersimmonTextMaskingGuardrail(guardrail_name="mask")
+    )
+
+    part: Final = stream_item_items(result.output[0], "content")[0]
+    assert (stream_item_field(part, "text"), stream_item_field(part, "logprobs")) == ("ripe [MASKED]", None)
+
+
+class _PassThroughGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_a_passing_guardrail_keeps_the_output_text_logprobs() -> None:
+    response: Final = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_1",
+            "created_at": 1,
+            "model": "gpt-5.6",
+            "object": "response",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "ripe persimmon",
+                            "annotations": [],
+                            "logprobs": list(_PERSIMMON_LOGPROBS),
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    result: Final = await OpenAIResponsesHandler().process_output_response(
+        response, _PassThroughGuardrail(guardrail_name="pass")
+    )
+
+    part: Final = stream_item_items(result.output[0], "content")[0]
+    assert (stream_item_field(part, "text"), stream_item_field(part, "logprobs")) == (
+        "ripe persimmon",
+        list(_PERSIMMON_LOGPROBS),
+    )
+
+
+def test_stream_rewrite_drops_logprobs_from_the_delta_done_and_part_events() -> None:
+    delta: Final = OutputTextDeltaEvent(
+        type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+        item_id="msg_1",
+        output_index=0,
+        content_index=0,
+        delta="ripe persimmon",
+        logprobs=_PERSIMMON_LOGPROBS,
+    )
+    done: Final = OutputTextDoneEvent(
+        type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+        item_id="msg_1",
+        output_index=0,
+        content_index=0,
+        text="ripe persimmon",
+        logprobs=_PERSIMMON_LOGPROBS,
+    )
+    part_done: Final = ContentPartDoneEvent(
+        type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+        item_id="msg_1",
+        output_index=0,
+        content_index=0,
+        part=ContentPartDonePartOutputText(
+            type="output_text", text="ripe persimmon", annotations=[], logprobs=_PERSIMMON_LOGPROBS
+        ),
+    )
+
+    OpenAIResponsesHandler()._sync_stream_events_with_rewrites(
+        stream_events=(delta, done, part_done), rewrites_by_position={(0, 0): "ripe [MASKED]"}
+    )
+
+    assert (delta.delta, delta.logprobs) == ("ripe [MASKED]", None)
+    assert (done.text, done.logprobs) == ("ripe [MASKED]", None)
+    assert (part_done.part.text, part_done.part.logprobs) == ("ripe [MASKED]", None)

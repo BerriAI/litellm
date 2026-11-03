@@ -1,5 +1,5 @@
 import builtins
-from collections.abc import ItemsView, Iterable, Mapping
+from collections.abc import ItemsView, Iterable, Mapping, Sequence
 from enum import Enum
 from os import PathLike
 from types import MappingProxyType
@@ -85,7 +85,12 @@ from typing_extensions import (
     override,
 )
 
-from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject, LiteLLMBaseModel
+from litellm.types.llms.base import (
+    BaseLiteLLMOpenAIResponseObject,
+    CarriesOutputTextLogprobs,
+    LiteLLMBaseModel,
+    OutputTextLogprob,
+)
 from litellm.types.responses.main import (
     CustomToolCallOutputItem,
     GenericResponseOutputItem,
@@ -1813,7 +1818,7 @@ class ContentPartDonePartOutputText(BaseLiteLLMOpenAIResponseObject):
     type: Literal["output_text"]
     text: str
     annotations: list[BaseLiteLLMOpenAIResponseObject]
-    logprobs: list[OpenAIChatCompletionLogprobsContent] | None
+    logprobs: Sequence[OutputTextLogprob] | None = None
 
 
 class ContentPartDonePartRefusal(BaseLiteLLMOpenAIResponseObject):
@@ -1837,7 +1842,7 @@ class ContentPartDoneEvent(BaseResponsesStreamEvent):
     part: PART_UNION_TYPES
 
 
-class OutputTextDeltaEvent(BaseResponsesStreamEvent):
+class OutputTextDeltaEvent(CarriesOutputTextLogprobs, BaseResponsesStreamEvent):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA]
     item_id: str
     output_index: int
@@ -1854,7 +1859,7 @@ class OutputTextAnnotationAddedEvent(BaseResponsesStreamEvent):
     annotation: dict
 
 
-class OutputTextDoneEvent(BaseResponsesStreamEvent):
+class OutputTextDoneEvent(CarriesOutputTextLogprobs, BaseResponsesStreamEvent):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE]
     item_id: str
     output_index: int

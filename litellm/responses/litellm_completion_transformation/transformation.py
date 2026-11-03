@@ -88,6 +88,7 @@ from litellm.types.llms.openai import (
     OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
     OpenAIWebSearchUserLocation,
+    OutputTextLogprob,
     OutputTokensDetails,
     Reasoning,
     ResponseAPIUsage,
@@ -131,6 +132,7 @@ from .custom_tools import (
     validated_tool_search_execution,
     without_malformed_tool_flags,
 )
+from .logprobs import output_text_logprobs
 from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
 from .tool_search import (
     CompletionRoute,
@@ -587,6 +589,22 @@ class ChatCompletionSession(TypedDict, total=False):
 ########### End of Initialize Classes used for Responses API  ###########
 
 
+OUTPUT_TEXT_LOGPROBS_INCLUDE: Final = "message.output_text.logprobs"
+
+
+def _requested_top_logprobs(request_fields: Mapping[str, object]) -> int | None:
+    value: Final = request_fields.get("top_logprobs")
+    return value if isinstance(value, int) else None
+
+
+def _requests_output_text_logprobs(request_fields: Mapping[str, object]) -> bool:
+    """``top_logprobs`` or ``include: [message.output_text.logprobs]`` each ask the chat route for logprobs."""
+    include: Final = request_fields.get("include")
+    return _requested_top_logprobs(request_fields) is not None or (
+        isinstance(include, (list, tuple)) and OUTPUT_TEXT_LOGPROBS_INCLUDE in include
+    )
+
+
 class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def get_supported_openai_params(model: str) -> list:
@@ -607,6 +625,7 @@ class LiteLLMCompletionResponsesConfig:
             "text",
             "tool_choice",
             "tools",
+            "top_logprobs",
             "top_p",
             "user",
         ]
@@ -893,6 +912,7 @@ class LiteLLMCompletionResponsesConfig:
             and request_runs_tool_search(request_tools or (), model, custom_llm_provider),
         )
 
+        top_logprobs: Final = _requested_top_logprobs(responses_api_request)
         litellm_completion_request: dict = {
             "messages": (
                 list(
@@ -910,6 +930,8 @@ class LiteLLMCompletionResponsesConfig:
             ),
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
+            "top_logprobs": top_logprobs,
+            "logprobs": True if _requests_output_text_logprobs(responses_api_request) else None,
             "user": responses_api_request.get("user"),
             "temperature": responses_api_request.get("temperature"),
             "parallel_tool_calls": responses_api_request.get("parallel_tool_calls"),
@@ -3315,7 +3337,7 @@ class LiteLLMCompletionResponsesConfig:
                         role=choice.message.role,
                         content=[
                             LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
-                                choice.message
+                                choice.message, output_text_logprobs(getattr(choice, "logprobs", None))
                             )
                         ],
                     )
@@ -3368,6 +3390,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_chat_message_to_response_output_text(
         message: Message,
+        logprobs: Sequence[OutputTextLogprob] | None = None,
     ) -> OutputText:
         annotations: Final = getattr(message, "annotations", None)
         transformed_annotations: Final = (
@@ -3380,6 +3403,7 @@ class LiteLLMCompletionResponsesConfig:
             type="output_text",
             text=message.content,
             annotations=transformed_annotations,
+            logprobs=logprobs,
         )
 
     @staticmethod

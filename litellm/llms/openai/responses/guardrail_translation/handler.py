@@ -232,7 +232,7 @@ def _set_content_part_text(item: object, index: int, text: str) -> None:
     parts: Final = tuple(attribute_items(item, "content"))
     part: Final = parts[index] if index < len(parts) else None
     if isinstance(part, _TextPart):
-        part.text = text
+        OpenAIResponsesHandler._write_rewritten_text(part, "text", text)
 
 
 _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
@@ -1279,6 +1279,14 @@ class OpenAIResponsesHandler(BaseTranslation):
         else:
             setattr(event, field, value)
 
+    @staticmethod
+    def _write_rewritten_text(event: object, field: str, text: str) -> None:
+        """A rewrite replaces the text, so the logprobs that spell out the original text go with it."""
+        changed: Final = stream_item_field(event, field) != text
+        OpenAIResponsesHandler._write_event_field(event, field, text)
+        if changed and stream_item_field(event, "logprobs") is not None:
+            OpenAIResponsesHandler._write_event_field(event, "logprobs", None)
+
     def _sync_stream_events_with_rewrites(
         self,
         stream_events: Sequence[Any],
@@ -1307,13 +1315,13 @@ class OpenAIResponsesHandler(BaseTranslation):
                 continue
             position = (output_index, content_index)
             if event_type == "response.output_text.delta" and position in delta_replacements:
-                self._write_event_field(event, "delta", next(delta_replacements[position]))
+                self._write_rewritten_text(event, "delta", next(delta_replacements[position]))
             elif event_type == "response.output_text.done" and position in rewrites_by_position:
-                self._write_event_field(event, "text", rewrites_by_position[position])
+                self._write_rewritten_text(event, "text", rewrites_by_position[position])
             elif event_type == "response.content_part.done" and position in rewrites_by_position:
                 part = event.get("part")
                 if isinstance(part, dict) or hasattr(part, "text"):
-                    self._write_event_field(part, "text", rewrites_by_position[position])
+                    self._write_rewritten_text(part, "text", rewrites_by_position[position])
 
     @staticmethod
     def _sync_output_item_done_event(
@@ -1327,7 +1335,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         for (item_idx, content_idx), rewritten in rewrites_by_position.items():
             if item_idx != output_index or content_idx >= len(content):
                 continue
-            OpenAIResponsesHandler._write_event_field(content[content_idx], "text", rewritten)
+            OpenAIResponsesHandler._write_rewritten_text(content[content_idx], "text", rewritten)
 
     def _deliver_ended_stream_tool_call_rewrites(
         self,
@@ -1746,10 +1754,8 @@ class OpenAIResponsesHandler(BaseTranslation):
             if isinstance(output_item, GenericResponseOutputItem):
                 if output_item.content and content_idx < len(output_item.content):
                     content_item = output_item.content[content_idx]
-                    if isinstance(content_item, OutputText):
-                        content_item.text = guardrail_response
-                    elif isinstance(content_item, dict):
-                        content_item["text"] = guardrail_response
+                    if isinstance(content_item, (OutputText, dict)):
+                        self._write_rewritten_text(content_item, "text", guardrail_response)
             elif isinstance(output_item, BaseModel):
                 # Handle other Pydantic models by converting to GenericResponseOutputItem
                 try:
@@ -1765,10 +1771,8 @@ class OpenAIResponsesHandler(BaseTranslation):
             elif isinstance(output_item, dict):
                 content = output_item.get("content", [])
                 if content and content_idx < len(content):
-                    if isinstance(content[content_idx], dict):
-                        content[content_idx]["text"] = guardrail_response
-                    elif hasattr(content[content_idx], "text"):
-                        content[content_idx].text = guardrail_response
+                    if isinstance(content[content_idx], dict) or hasattr(content[content_idx], "text"):
+                        self._write_rewritten_text(content[content_idx], "text", guardrail_response)
 
     def build_block_sse_chunks(
         self,

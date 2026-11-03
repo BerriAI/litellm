@@ -7,7 +7,7 @@ from openai.types.responses.response_function_web_search import ActionSearchSour
 from pydantic import ConfigDict, PrivateAttr
 from typing_extensions import Any, TypedDict
 
-from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject, CarriesOutputTextLogprobs
 
 Phase = Literal["commentary", "final_answer"] | None
 
@@ -22,7 +22,7 @@ class GenericResponseOutputItemContentAnnotation(BaseLiteLLMOpenAIResponseObject
     title: str | None
 
 
-class OutputText(BaseLiteLLMOpenAIResponseObject):
+class OutputText(CarriesOutputTextLogprobs):
     """Text output content from an assistant message"""
 
     type: str | None  # "output_text"
