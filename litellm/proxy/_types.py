@@ -5064,7 +5064,9 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         description=(
             "Skip the allowed_routes eligibility check when selecting an existing virtual key in link_only mode "
             "or auto_register mode with auto_register_map_existing_key=True. Other eligibility checks and "
-            "request-time route permissions still apply."
+            "request-time route permissions still apply. JWTs inherit the selected key's existing permissions, "
+            "including management routes. Enable only when eligible user-assigned keys are intended to be "
+            "accessible through JWT authentication."
         ),
     )
     routing_overrides: list[JWTRoutingOverride] | None = Field(

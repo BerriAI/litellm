@@ -13,6 +13,7 @@ import re
 import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from enum import Enum
 from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol, Union, cast
 
@@ -1576,6 +1577,10 @@ _JWT_AUTH_DISABLED_HINT = (
 )
 
 
+class _JWTKeyMappingFailure(Enum):
+    NO_ELIGIBLE_KEY = "JWT Key Mapping: No eligible existing virtual key for this identity. Access denied."
+
+
 class _PendingAutoRegister(NamedTuple):
     """
     Signal returned by ``_resolve_jwt_to_virtual_key`` when the JWT's claim is
@@ -1632,7 +1637,7 @@ async def _auto_register_jwt_mapping(
     end_user_id: str | None = None,
     agent_id: str | None = None,
     behavior: UnregisteredJWTClientBehavior = UnregisteredJWTClientBehavior.AUTO_REGISTER,
-) -> UserAPIKeyAuth | None:
+) -> UserAPIKeyAuth | _JWTKeyMappingFailure | None:
     """
     Auto-register: create a new virtual key + mapping for an unrecognised JWT
     claim value, or point the mapping at a key the resolved user already owns
@@ -1670,10 +1675,7 @@ async def _auto_register_jwt_mapping(
         else None
     )
     if link_only and existing_token_hash is None:
-        raise HTTPException(
-            status_code=403,
-            detail="JWT Key Mapping: No eligible existing virtual key for this identity. Access denied.",
-        )
+        return _JWTKeyMappingFailure.NO_ELIGIBLE_KEY
     minted: Final = existing_token_hash is None
     if existing_token_hash is not None:
         token_hash = existing_token_hash
@@ -2505,6 +2507,8 @@ async def user_api_key_auth_builder(
                         if pending_auto_register is not None and prisma_client is not None
                         else None
                     )
+                    if isinstance(auto_registered, _JWTKeyMappingFailure):
+                        raise HTTPException(status_code=403, detail=auto_registered.value)
                     if auto_registered is not None:
                         auto_registered.jwt_claims = jwt_claims
                         auto_registered.user_email = user_email
