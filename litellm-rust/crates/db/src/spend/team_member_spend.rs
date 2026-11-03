@@ -49,7 +49,7 @@ pub async fn add_team_member_spend(
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error as StdError;
+    use std::{error::Error as StdError, time::Duration};
 
     use super::super::begin;
     use super::{TeamMemberSpend, add_team_member_spend};
@@ -90,7 +90,7 @@ mod tests {
         #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
     ) -> Result<(), Box<dyn StdError>> {
         let pool = database_pool?;
-        let mut tx = begin(&pool).await?;
+        let mut tx = begin(&pool, Duration::from_secs(5)).await?;
         #[expect(
             clippy::disallowed_methods,
             reason = "Fixture writes are outside the compile-checked query set"

@@ -1,12 +1,20 @@
+use std::time::Duration;
+
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::Error;
 
-pub async fn begin(pool: &PgPool) -> Result<Transaction<'static, Postgres>, Error> {
+pub async fn begin(
+    pool: &PgPool,
+    lock_timeout: Duration,
+) -> Result<Transaction<'static, Postgres>, Error> {
     let mut transaction = pool.begin().await?;
-    sqlx::query!("SELECT set_config('lock_timeout', '5000ms', true)")
-        .fetch_one(&mut *transaction)
-        .await?;
+    sqlx::query!(
+        "SELECT set_config('lock_timeout', $1::text, true)",
+        format!("{}ms", lock_timeout.as_millis())
+    )
+    .fetch_one(&mut *transaction)
+    .await?;
     Ok(transaction)
 }
 
@@ -22,7 +30,7 @@ pub async fn lock_team(
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error as StdError;
+    use std::{error::Error as StdError, time::Duration};
 
     use super::{begin, lock_team};
     use crate::test_support::database_pool;
@@ -42,7 +50,7 @@ mod tests {
             .max_connections(2)
             .connect_with(database_pool.connect_options().as_ref().clone())
             .await?;
-        let mut first = begin(&pool).await?;
+        let mut first = begin(&pool, Duration::from_millis(1500)).await?;
         let mut second = pool.begin().await?;
         #[expect(
             clippy::disallowed_methods,
@@ -60,7 +68,7 @@ mod tests {
             sqlx::query_as("SELECT pg_backend_pid(), current_setting('lock_timeout')")
                 .fetch_one(&mut *first)
                 .await?;
-        assert_eq!(timeout, "5s");
+        assert_eq!(timeout, "1500ms");
         #[expect(
             clippy::disallowed_methods,
             reason = "Test assertions are outside the compile-checked query set"
