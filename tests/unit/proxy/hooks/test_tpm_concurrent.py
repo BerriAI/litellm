@@ -4083,8 +4083,9 @@ def _embedding_uri(kind: str) -> str:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("limit_field", ["model_tpm_limit", "model_itpm_limit"])
 @pytest.mark.parametrize("kind", ["pdf", "video"])
+@pytest.mark.parametrize("shape", ["data_uri", "file_block"])
 async def test_project_token_limit_admits_document_embedding_up_to_the_model_input_limit(
-    rate_limiter: tuple[RateLimitHandler, DualCache], limit_field: str, kind: str
+    rate_limiter: tuple[RateLimitHandler, DualCache], limit_field: str, kind: str, shape: str
 ) -> None:
     handler, cache = rate_limiter
     uri: Final = _embedding_file_uri(kind)
@@ -4093,12 +4094,13 @@ async def test_project_token_limit_admits_document_embedding_up_to_the_model_inp
 
     def project_auth(limit: int) -> UserAPIKeyAuth:
         return UserAPIKeyAuth(
-            api_key=hash_token(f"sk-embedding-{kind}-{limit_field}-{limit}"),
-            project_id=f"proj-embedding-{kind}-{limit_field}-{limit}",
+            api_key=hash_token(f"sk-embedding-{kind}-{shape}-{limit_field}-{limit}"),
+            project_id=f"proj-embedding-{kind}-{shape}-{limit_field}-{limit}",
             project_metadata={limit_field: {_EMBEDDING_MODEL: limit}},
         )
 
-    request: Final = {"model": _EMBEDDING_MODEL, "input": [_EMBEDDING_CAPTION, uri]}
+    item: Final = uri if shape == "data_uri" else {"type": "file", "file": {"file_data": uri}}
+    request: Final = {"model": _EMBEDDING_MODEL, "input": [_EMBEDDING_CAPTION, item]}
     await handler.async_pre_call_hook(
         user_api_key_dict=project_auth(75_000), cache=cache, data=dict(request), call_type="aembedding"
     )
@@ -4149,7 +4151,14 @@ def _project_limited_embedding_call(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("limit_field", ["model_tpm_limit", "model_itpm_limit"])
 @pytest.mark.parametrize(
-    "backends", [(_TEXT_ONLY_EMBEDDING_MODEL,), (_EMBEDDING_MODEL, _TEXT_ONLY_EMBEDDING_MODEL)], ids=["text", "mixed"]
+    "backends",
+    [
+        (_TEXT_ONLY_EMBEDDING_MODEL,),
+        (_EMBEDDING_MODEL, _TEXT_ONLY_EMBEDDING_MODEL),
+        ("voyage/voyage-multimodal-3.5",),
+        ("oci/cohere.embed-v4.0",),
+    ],
+    ids=["text", "mixed", "voyage", "oci"],
 )
 async def test_project_token_limit_rejects_image_embedding_a_text_only_backend_reads_as_text(
     limit_field: str, backends: tuple[str, ...]
@@ -4174,6 +4183,60 @@ async def test_project_token_limit_admits_image_embedding_through_an_alias_of_an
             user_api_key_dict=auth,
             cache=cache,
             data={**request, "input": "word " * 100_000},
+            call_type="aembedding",
+        )
+    assert error.value.status_code == 429
+
+
+def _malformed_embedding_uri(shape: str) -> str:
+    payload: Final = _quota_media_payload("image", False)
+    words: Final = "word " * 100_000
+    return {
+        "no_comma": f"data:audio/wav;base64{words}",
+        "text_payload": f"data:image/png;base64,{words}",
+        "no_base64_marker": f"data:image/png,{payload}",
+        "header_past_256_chars": f"data:image/png;{'x' * 300};base64,{payload}",
+    }[shape]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", ["no_comma", "text_payload", "no_base64_marker", "header_past_256_chars"])
+async def test_project_token_limit_counts_a_malformed_data_uri_as_text(
+    rate_limiter: tuple[RateLimitHandler, DualCache], shape: str
+) -> None:
+    handler, cache = rate_limiter
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token(f"sk-embedding-malformed-{shape}"),
+        project_id=f"proj-embedding-malformed-{shape}",
+        project_metadata={"model_tpm_limit": {_EMBEDDING_MODEL: 75_000}},
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={"model": _EMBEDDING_MODEL, "input": _malformed_embedding_uri(shape)},
+            call_type="aembedding",
+        )
+    assert error.value.status_code == 429
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["cohere/embed-v4.0", "cohere.embed-v4:0"], ids=["cohere", "bedrock_cohere"])
+async def test_project_token_limit_counts_a_mixed_batch_as_text_when_the_backend_types_the_whole_batch(
+    backend: str,
+) -> None:
+    handler, cache, auth, request = _project_limited_embedding_call("model_tpm_limit", (backend,))
+    image_uri: Final = request["input"]
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth, cache=cache, data={**request, "input": [image_uri, image_uri]}, call_type="aembedding"
+    )
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={**request, "input": [image_uri, _EMBEDDING_CAPTION]},
             call_type="aembedding",
         )
     assert error.value.status_code == 429

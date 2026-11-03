@@ -657,17 +657,42 @@ def estimate_media_block_tokens(block: Mapping[str, object], models: Sequence[st
             )
 
 
+_PER_ITEM_DATA_URI_EMBEDDING_PROVIDERS: Final = frozenset({"vertex_ai", "gemini", "azure_ai", "bedrock"})
+
+_DataUriMediaScope: TypeAlias = Literal["per_item", "whole_batch"]
+
+
+def _data_uri_media_scope(model: str) -> _DataUriMediaScope | None:
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+    from litellm.utils import supports_embedding_image_input
+
+    if not supports_embedding_image_input(model):
+        return None
+    try:
+        resolved_model, provider, _, _ = litellm.get_llm_provider(model=model)
+    except litellm.exceptions.BadRequestError:
+        return None
+    if provider == "cohere" or (
+        provider == "bedrock" and BaseAWSLLM.get_bedrock_embedding_provider(resolved_model) == "cohere"
+    ):
+        return "whole_batch"
+    return "per_item" if provider in _PER_ITEM_DATA_URI_EMBEDDING_PROVIDERS else None
+
+
 def split_embedding_input_tokens(
     value: _EmbeddingInputT, media_models: Callable[[], Sequence[str]], fallback_model: str | None = None
 ) -> tuple[_EmbeddingInputT, int]:
-    from litellm.litellm_core_utils.prompt_templates.common_utils import split_embedding_media_for_tpm
-    from litellm.utils import supports_embedding_image_input
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        embedding_input_is_all_media,
+        split_embedding_media_for_tpm,
+    )
 
     text, media = split_embedding_media_for_tpm(value)
     if not media:
         return value, 0
     models: Final = tuple(media_models())
-    if not models or not all(supports_embedding_image_input(model) for model in models):
+    scopes: Final = frozenset(map(_data_uri_media_scope, models))
+    if not models or None in scopes or ("whole_batch" in scopes and not embedding_input_is_all_media(value)):
         return value, 0
     media_tokens: Final = sum(estimate_media_block_tokens(block, models, fallback_model) for block in media)
     return cast(_EmbeddingInputT, text), media_tokens  # cast-ok: the projection keeps the input's container shape

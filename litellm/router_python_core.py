@@ -135,7 +135,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
 from litellm.litellm_core_utils.dd_tracing import tracer
-from litellm.litellm_core_utils.deployment_pricing import deployment_pricing_models
+from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models, deployment_pricing_models
 from litellm.litellm_core_utils.get_litellm_params import SUPPLEMENTAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
@@ -14866,6 +14866,7 @@ class PythonCore(DeprecatedRouterMembers):
         input: str | list[object] | None,
         request_kwargs: Mapping[str, object] | None = None,
         tokenizer_model: str = "",
+        deployments: Sequence[Mapping[str, object]] = (),
     ) -> int:
         """
         Count input tokens for context-window pre-call checks.
@@ -14900,20 +14901,29 @@ class PythonCore(DeprecatedRouterMembers):
         if input is not None:
             from openai.types.responses.response_create_params import ResponseInputParam
 
+            from litellm.litellm_core_utils.token_counter import split_embedding_input_tokens
             from litellm.responses.litellm_completion_transformation.transformation import (
                 LiteLLMCompletionResponsesConfig,
             )
 
-            typed_input: Final = cast(str | ResponseInputParam, input)  # cast-ok: str | list matches transform input
+            text_input, media_tokens = split_embedding_input_tokens(
+                input, partial(deployment_backend_models, deployments)
+            )
+            typed_input: Final = cast(  # cast-ok: str | list matches transform input
+                str | ResponseInputParam, text_input
+            )
             input_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=typed_input,
                 responses_api_request={"instructions": instructions} if instructions is not None else {},
                 only_since_compaction=True,
             )
-            return self._host.invoke("token_counter")(
-                model=tokenizer_model,
-                messages=cast(list, input_messages),  # cast-ok: transformed chat messages
-                tools=tools,
+            return (
+                self._host.invoke("token_counter")(
+                    model=tokenizer_model,
+                    messages=cast(list, input_messages),  # cast-ok: transformed chat messages
+                    tools=tools,
+                )
+                + media_tokens
             )
         raise ValueError("Either messages or input must be provided to count tokens")
 
@@ -14972,6 +14982,7 @@ class PythonCore(DeprecatedRouterMembers):
                     self.served_openai_models(model) or served_openai_models(healthy_deployments)
                 )
                 or "",
+                deployments=healthy_deployments,
             )
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.error(
@@ -15002,6 +15013,7 @@ class PythonCore(DeprecatedRouterMembers):
                     self.served_openai_models(model) or served_openai_models(deployments)
                 )
                 or "",
+                deployments=deployments,
             )
         except Exception as e:
             verbose_router_logger.error(

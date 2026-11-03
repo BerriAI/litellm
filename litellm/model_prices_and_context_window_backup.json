@@ -45739,6 +45739,7 @@
         "mode": "embedding",
         "output_vector_size": 1024,
         "source": "https://www.oracle.com/artificial-intelligence/enterprise-ai/cost-estimator/",
+        "supports_embedding_image_input": true,
         "supports_vision": true
     },
     "oci/cohere.command-a-reasoning-08-2025": {
@@ -54172,7 +54173,8 @@
         "litellm_provider": "voyage",
         "max_input_tokens": 32000,
         "mode": "embedding",
-        "output_cost_per_token": 0.0
+        "output_cost_per_token": 0.0,
+        "supports_embedding_image_input": true
     },
     "wandb/openai/gpt-oss-120b": {
         "supports_reasoning": true,

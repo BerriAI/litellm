@@ -5,6 +5,7 @@ import functools
 import gc
 import itertools
 import io
+import base64
 import json
 import linecache
 import logging
@@ -8171,6 +8172,47 @@ def test_pre_call_checks_count_a_group_mixing_in_another_vendor_by_its_own_name(
     with pytest.raises(litellm.ContextWindowExceededError):
         router._pre_call_checks(
             model="prod", healthy_deployments=router.get_model_list(model_name="prod"), messages=_MULTILINGUAL_PROMPT
+        )
+
+
+_EMBEDDING_CONTEXT_WINDOW: Final = 8_192
+_EMBEDDING_IMAGE_INPUT: Final = f"data:image/png;base64,{base64.b64encode(bytes(range(256)) * 1024).decode()}"
+
+
+def _embedding_context_router(backend: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "embedder",
+                "litellm_params": {"model": backend, "api_key": "sk-test"},
+                "model_info": {"max_input_tokens": _EMBEDDING_CONTEXT_WINDOW},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+
+async def test_context_window_pre_call_check_counts_an_embedding_image_as_media_on_an_image_backend():
+    router: Final = _embedding_context_router("vertex_ai/gemini-embedding-2")
+    deployments: Final = router.get_model_list(model_name="embedder")
+
+    kept: Final = router._pre_call_checks(model="embedder", healthy_deployments=deployments, input=_EMBEDDING_IMAGE_INPUT)
+    counted: Final = await router._acount_pre_call_check_tokens(
+        model="embedder", healthy_deployments=deployments, messages=None, input=_EMBEDDING_IMAGE_INPUT, request_kwargs=None
+    )
+
+    assert len(kept) == 1
+    assert counted is not None and 0 < counted < _EMBEDDING_CONTEXT_WINDOW
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(model="embedder", healthy_deployments=deployments, input="word " * 20_000)
+
+
+def test_context_window_pre_call_check_counts_an_embedding_image_as_text_on_a_text_only_backend():
+    router: Final = _embedding_context_router("text-embedding-3-small")
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="embedder", healthy_deployments=router.get_model_list(model_name="embedder"), input=_EMBEDDING_IMAGE_INPUT
         )
 
 
