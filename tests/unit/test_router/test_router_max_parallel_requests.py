@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-
 from typing import Final
 
 import httpx
-import litellm
 import pytest
-from litellm.router import _hold_slot_until_closed
+
+import litellm
+from litellm.router_python_core import _hold_slot_until_closed
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.utils import calculate_max_parallel_requests

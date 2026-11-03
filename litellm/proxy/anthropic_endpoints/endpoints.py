@@ -8,13 +8,11 @@ from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import JsonValue, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.anthropic_interface.exceptions import (
-    AnthropicErrorDetail,
-    AnthropicErrorResponse,
     AnthropicExceptionMapping,
 )
 from litellm.integrations.custom_guardrail import ModifyResponseException
@@ -34,13 +32,14 @@ from litellm.proxy.common_request_processing import (
     resolve_counted_tool_fields,
     resolve_litellm_call_id,
 )
-from litellm.proxy.common_utils.error_body_call_id import error_body_call_id
+from litellm.proxy.common_utils.anthropic_error_payload import (
+    anthropic_handler_error_json_response,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
-    LITELLM_CALL_ID_HEADER,
     error_status_code,
     litellm_call_id_headers,
     openai_error_param,
@@ -54,50 +53,15 @@ from litellm.proxy.litellm_pre_call_utils import (
     should_auto_drop_params_for_agentic_cli,
 )
 from litellm.router import Router
+from litellm.types.utils import TokenCountResponse
 
 router: Final = APIRouter()
 
 _NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
-def _with_provider_specific_fields(exc: ProxyException, detail: AnthropicErrorDetail) -> AnthropicErrorDetail:
-    if not exc.provider_specific_fields:
-        return detail
-    with_fields: Final[AnthropicErrorDetail] = {**detail, "provider_specific_fields": exc.provider_specific_fields}
-    return with_fields
-
-
-def _anthropic_error_detail(
-    exc: ProxyException, detail: AnthropicErrorDetail, call_id: str | None
-) -> AnthropicErrorDetail:
-    if call_id is None:
-        return _with_provider_specific_fields(exc, detail)
-    with_call_id: Final[AnthropicErrorDetail] = {
-        **_with_provider_specific_fields(exc, detail),
-        "litellm_call_id": call_id,
-    }
-    return with_call_id
-
-
 def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
-    from litellm.proxy.proxy_server import (
-        _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; error JSONResponses returned by the route must stamp the OTel server span like the global ProxyException handler does
-        general_settings_view,
-    )
-
-    status_code: Final = int(exc.code) if exc.code is not None and exc.code.isdigit() else 500
-    _close_dangling_otel_server_span(request, status_code, exc=exc)
-    envelope: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
-        status_code=status_code,
-        raw_message=exc.message,
-        request_id=request.headers.get("x-request-id"),
-    )
-    body_call_id: Final = error_body_call_id(general_settings_view(), exc.headers.get(LITELLM_CALL_ID_HEADER))
-    content: Final[AnthropicErrorResponse] = {
-        **envelope,
-        "error": _anthropic_error_detail(exc, envelope["error"], body_call_id),
-    }
-    return JSONResponse(status_code=status_code, content=content, headers=exc.headers)
+    return anthropic_handler_error_json_response(exc, request)
 
 
 _TOKEN_COUNT_FIELDS: Final = ("model", "messages", "tools", "system")
@@ -334,6 +298,15 @@ def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: 
     }
 
 
+_PROVIDER_COUNT_REPLY: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+
+
+def _provider_context_management(response: TokenCountResponse) -> Mapping[str, object]:
+    original: Final = _PROVIDER_COUNT_REPLY.validate_python(response.original_response)
+    context_management: Final = original.get("context_management") if original is not None else None
+    return {} if context_management is None else {"context_management": context_management}
+
+
 @router.post(
     "/v1/messages/count_tokens",
     tags=["[beta] Anthropic Messages Token Counting"],
@@ -413,7 +386,11 @@ async def count_tokens(
         log_llm_api_exception(e, litellm_call_id)
         return _anthropic_error_json_response(proxy_exception_from_route_error(e), request)
     else:
-        return {"input_tokens": token_response.total_tokens, **count_source_fields(token_response)}
+        return {
+            "input_tokens": token_response.total_tokens,
+            **_provider_context_management(token_response),
+            **count_source_fields(token_response),
+        }
 
 
 @router.post(
