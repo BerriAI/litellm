@@ -332,7 +332,8 @@ def with_initial_prompt_tokens(usage: Usage, initial_prompt_tokens: int | None) 
 
 def parse_body(response: httpx.Response) -> GenerateContentResponseBody:
     try:
-        return GenerateContentResponseBody(**response.json())
+        body: Final[GenerateContentResponseBody] = response.json()
+        return GenerateContentResponseBody(**body)
     except Exception as e:
         raise VertexAIError(
             message=(

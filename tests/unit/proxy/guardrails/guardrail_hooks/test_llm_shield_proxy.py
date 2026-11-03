@@ -1239,6 +1239,23 @@ class TestFailClosed:
 
 class TestStreamingRehydration:
     @pytest.mark.asyncio
+    async def test_held_text_behind_a_chunk_that_cannot_be_copied_fails_closed(self):
+        guardrail: Final = _guardrail(event_hook="post_call")
+        _mock_post(guardrail, {"text": "", "carry": "[EMAIL"}, {"text": "a@b.com", "carry": ""})
+
+        async def stream():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(index=0, delta=SimpleNamespace(content="[EMAIL"), finish_reason=None)]
+            )
+
+        with pytest.raises(AttributeError, match="model_copy"):
+            await _drain(
+                guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=None, response=stream(), request_data={"messages": []}
+                )
+            )
+
+    @pytest.mark.asyncio
     async def test_split_placeholder_is_not_emitted_in_fragments(self):
         """The window holds back a partial placeholder and releases it once complete."""
         guardrail = _guardrail(event_hook="post_call")
@@ -1676,6 +1693,48 @@ class TestResponsesStreamRestoration:
         out = await _restore_stream(guardrail, [self._text_delta("see [EMAIL_1] a[", 1)])
 
         assert "".join(e.delta for e in out) == "see a@example.com a["
+
+    @pytest.mark.asyncio
+    async def test_a_flushed_delta_takes_the_done_events_number_and_later_events_move_up(self):
+        guardrail, _ = _shielded(self.VAULT)
+        done = OutputTextDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            text="Mail [EMAIL_1] x[",
+            sequence_number=3,
+        )
+
+        out = await _restore_stream(
+            guardrail,
+            [
+                self._text_delta("Mail [EMA", 1),
+                self._text_delta("IL_1] x[", 2),
+                done,
+                self._text_delta("next", 4, content_index=1),
+            ],
+        )
+
+        assert [(e.type, e.sequence_number) for e in out] == [
+            (ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, 1),
+            (ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, 2),
+            (ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, 3),
+            (ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE, 4),
+            (ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, 5),
+        ]
+        assert out[2].delta == "["
+
+    @pytest.mark.asyncio
+    async def test_a_truncated_stream_flush_continues_after_the_last_number(self):
+        guardrail, _ = _shielded(self.VAULT)
+
+        out = await _restore_stream(
+            guardrail, [self._text_delta("see [EMAIL_1] a[", 7), self._text_delta(" b", 8, content_index=1)]
+        )
+
+        assert [e.sequence_number for e in out] == [7, 8, 9]
+        assert out[-1].delta == "["
 
     @pytest.mark.asyncio
     async def test_completed_response_is_restored(self):

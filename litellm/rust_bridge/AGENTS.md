@@ -46,6 +46,12 @@
 - A failure after execution starts is terminal and never triggers fallback
 - Creating an unstarted native coroutine acquires no clients or credentials and captures no execution context
 
+# Native extension
+
+- `_native` ships in every wheel and the sdist builds it, so it is always importable
+- Import it with `from litellm.rust_bridge import _native` and use the attributes `_native.pyi` declares
+- Never add a `None` branch, `getattr` default or stand-in class for a missing extension
+
 # Verification
 
 - Check cross-language behavior against a freshly installed extension, covering unstarted-call release, setup ordering, exception identity, sync and async streams, cancellation and GC

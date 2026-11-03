@@ -72,6 +72,7 @@ import {
 } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { modelMaxBudgetUpdate, StoredModelMaxBudget } from "../key_team_helpers/modelMaxBudgetPayload";
 import {
+  ALL_PROXY_MODELS,
   computeTeamModelBadges,
   normalizeTeamModelSelection,
   TeamAccessGroupModelGrant,
@@ -135,6 +136,7 @@ import ResetMemberBudgetsDialog from "./ResetMemberBudgetsDialog";
 import { customBudgetMemberUserIds, shouldPromptMemberBudgetReset } from "./memberBudgetReset";
 import { useMemberBudgetReset } from "./useMemberBudgetReset";
 import { fetchClient } from "@/lib/http/api";
+import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
@@ -514,7 +516,7 @@ const computeEffectiveGuardrails = (info: TeamInfoRecord, globalGuardrailNames: 
 
 const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): TeamUpdateFormValues => ({
   team_alias: info.team_alias,
-  models: info.models,
+  models: info.models.length === 0 ? [ALL_PROXY_MODELS] : info.models,
   max_budget: info.max_budget,
   soft_budget: info.soft_budget,
   soft_budget_alerting_emails: Array.isArray(info.metadata?.soft_budget_alerting_emails)
@@ -1063,7 +1065,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
-        models: normalizeTeamModelSelection(values.models),
+        ...(form.getFieldState("models").isDirty ? { models: normalizeTeamModelSelection(values.models) } : {}),
         tpm_limit: numberOrNull(values.tpm_limit),
         rpm_limit: numberOrNull(values.rpm_limit),
         tpd_limit: numberOrNull(values.tpd_limit),
@@ -1375,7 +1377,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       children: (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           <Card className="block p-6">
-            <p>Budget Status</p>
+            <p>
+              Budget Status
+              <BudgetPeriodTooltip
+                spend={info.spend}
+                maxBudget={info.max_budget}
+                budgetDuration={info.budget_duration}
+                budgetResetAt={info.budget_reset_at}
+              />
+            </p>
             <div className="mt-2">
               <h3 className="text-lg font-medium">${formatNumberWithCommas(info.spend, 2)}</h3>
               <p>of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 2)}`}</p>

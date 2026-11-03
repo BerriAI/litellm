@@ -15,6 +15,7 @@ from litellm.types.rerank import OptionalRerankParams, RerankRequest, RerankResp
 from ..common_utils import CohereError
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class CohereRerankConfig(BaseRerankConfig):
@@ -144,7 +145,7 @@ class CohereRerankConfig(BaseRerankConfig):
         No transformation required, litellm follows cohere API response format
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
 

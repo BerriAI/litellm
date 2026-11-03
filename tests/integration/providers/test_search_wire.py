@@ -293,6 +293,95 @@ def test_concurrent_exa_searches_each_get_their_own_response_envelope(gateway: G
         assert len(wire.drain()) == len(queries)
 
 
+_TAVILY_KEY: Final = "synthetic-tavily-key"
+_TAVILY_ENVELOPE: Final = {
+    "query": _QUERY,
+    "answer": "Gateways route model traffic.",
+    "follow_up_questions": None,
+    "images": [{"url": "https://result.invalid/logo.png", "description": "logo"}],
+    "response_time": 1.67,
+    "usage": {"credits": 1},
+    "request_id": "tavily-request-7c2e9a",
+}
+_TAVILY_OPTIONS: Final = {"include_raw_content": "markdown", "include_answer": True, "include_favicon": True}
+_TAVILY_RESULTS: Final = (
+    {
+        "title": "Gateway guide",
+        "url": "https://result.invalid/guide",
+        "content": "Route traffic [...] track spend",
+        "score": 0.83,
+        "raw_content": "# Gateway guide\n\nRoute traffic and track spend.",
+        "favicon": "https://result.invalid/favicon.ico",
+    },
+    {"title": "Unfetched", "url": "https://result.invalid/unfetched", "content": "Excerpt", "raw_content": None},
+)
+_EXPECTED_TAVILY_RESPONSE: Final = {
+    "object": "search",
+    "results": [
+        {
+            "title": "Gateway guide",
+            "url": "https://result.invalid/guide",
+            "snippet": "Route traffic [...] track spend",
+            "date": None,
+            "last_updated": None,
+            "raw_content": "# Gateway guide\n\nRoute traffic and track spend.",
+            "score": 0.83,
+            "favicon": "https://result.invalid/favicon.ico",
+        },
+        {
+            "title": "Unfetched",
+            "url": "https://result.invalid/unfetched",
+            "snippet": "Excerpt",
+            "date": None,
+            "last_updated": None,
+            "raw_content": None,
+        },
+    ],
+    "provider_metadata": _TAVILY_ENVELOPE,
+}
+
+
+def _create_tavily_tool(gateway: Gateway, scenario: Scenario, name: str, api_base: str) -> None:
+    created: Final = gateway.post(
+        "/search_tools",
+        {
+            "search_tool": {
+                "search_tool_name": name,
+                "litellm_params": {"search_provider": "tavily", "api_key": _TAVILY_KEY, "api_base": api_base},
+            }
+        },
+    )
+    scenario.cleanups.callback(gateway.request, "DELETE", f"/search_tools/{created['search_tool_id']}")
+
+
+def test_tavily_raw_content_score_favicon_and_response_envelope_reach_the_caller_on_every_route_spelling(
+    gateway: Gateway,
+) -> None:
+    def respond(request: Request) -> Reply:
+        assert (request.method, request.target) == ("POST", "/tavily/search"), request.target
+        assert request.headers["authorization"] == f"Bearer {_TAVILY_KEY}", request.headers
+        assert json.loads(request.body) == {"query": _QUERY, "max_results": 2, **_TAVILY_OPTIONS}, request.body
+        return Reply(body=json.dumps({**_TAVILY_ENVELOPE, "results": list(_TAVILY_RESULTS)}).encode())
+
+    tool: Final = f"tavily-tool-{uuid.uuid4().hex}"
+    body: Final = {"query": _QUERY, "max_results": 2, **_TAVILY_OPTIONS}
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        _create_tavily_tool(gateway, scenario, tool, f"{wire.url}/tavily")
+        spellings: Final = (
+            (f"/v1/search/{tool}", body),
+            (f"/search/{tool}", body),
+            ("/v1/search", {"search_tool_name": tool, **body}),
+            ("/search", {"model": tool, **body}),
+        )
+        for path, payload in spellings:
+            response = gateway.request("POST", path, payload)
+            assert response.status_code == 200, f"{path}: {response.text}"
+            assert json.loads(response.content) == _EXPECTED_TAVILY_RESPONSE, f"{path}: {response.text}"
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/tavily/search")] * len(
+            spellings
+        )
+
+
 def _not_found(name: str) -> str:
     return f"Search tool '{name}' not found in router.search_tools"
 

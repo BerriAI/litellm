@@ -1,4 +1,4 @@
-use crate::cache::cache_error;
+use crate::cache::{HandleError, cache_error};
 use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -14,7 +14,7 @@ use litellm_cache_response::{
     CacheEntry, CacheKeyInput, ExactResponseCache, ResponseCache, ResponseCacheCodec,
     ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
 };
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use pyo3::{prelude::*, types::PyDict};
 
 #[pyclass(
     frozen,
@@ -37,9 +37,7 @@ enum Storage {
 impl NativeCacheHandle {
     fn check_process(&self) -> PyResult<()> {
         if self.pid != std::process::id() {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "recreate the v2 cache after fork",
-            ));
+            return Err(HandleError::Forked.into());
         }
         Ok(())
     }
@@ -61,7 +59,7 @@ impl NativeCacheHandle {
     fn memory(ttl: f64, capacity: usize, max_entry_bytes: usize) -> PyResult<Self> {
         let ttl = duration(ttl)?;
         if capacity == 0 || max_entry_bytes == 0 {
-            return Err(PyValueError::new_err("cache limits must be positive"));
+            return Err(HandleError::Limits.into());
         }
         let storage = Arc::new(InMemoryCache::new(Some(capacity), Some(ttl)));
         let backend = Arc::new(ResponseCache::new(storage.clone()).with_config(
@@ -89,9 +87,7 @@ impl NativeCacheHandle {
     ) -> PyResult<Self> {
         let ttl = duration(ttl)?;
         if namespace.is_empty() || max_entry_bytes == 0 {
-            return Err(PyValueError::new_err(
-                "namespace and a positive cache limit are required",
-            ));
+            return Err(HandleError::RedisLimits.into());
         }
         let storage = Arc::new(
             release_gil(py, || {
@@ -252,11 +248,12 @@ impl NativeCacheHandle {
     }
 }
 
-fn duration(seconds: f64) -> PyResult<Duration> {
-    Duration::try_from_secs_f64(seconds)
-        .ok()
-        .filter(|value| !value.is_zero())
-        .ok_or_else(|| PyValueError::new_err("cache durations must be finite and positive"))
+fn duration(seconds: f64) -> Result<Duration, HandleError> {
+    match Duration::try_from_secs_f64(seconds) {
+        Ok(duration) if !duration.is_zero() => Ok(duration),
+        Ok(_) => Err(HandleError::Duration(None)),
+        Err(error) => Err(HandleError::Duration(Some(error))),
+    }
 }
 
 pub(in crate::cache) fn native_handle<'py>(
@@ -277,11 +274,7 @@ pub(in crate::cache) fn configured(
     Option<Arc<dyn ResponseCacheService>>,
     litellm_cache_response::CacheOptions,
 )> {
-    let handle = native_handle(configured)?.ok_or_else(|| {
-        pyo3::exceptions::PyRuntimeError::new_err(
-            "native inference needs a v2 cache, the catalog keeps Python caches on Python",
-        )
-    })?;
+    let handle = native_handle(configured)?.ok_or(HandleError::NotNative)?;
     let cache = handle.extract::<PyRef<'_, NativeCacheHandle>>()?;
     cache.check_process()?;
     let controls = kwargs.get_item("cache")?.filter(|value| !value.is_none());
@@ -296,9 +289,7 @@ pub(in crate::cache) fn configured(
                 name.as_str(),
                 "no-cache" | "no-store" | "ttl" | "s-maxage" | "s-max-age" | "use-cache"
             ) {
-                return Err(PyValueError::new_err(format!(
-                    "unsupported v2 cache control: {name}"
-                )));
+                return Err(HandleError::Control(name).into());
             }
         }
     }
@@ -316,7 +307,7 @@ pub(in crate::cache) fn configured(
             .map(|values| values.get_item(name))
             .transpose()?
             .flatten()
-            .map(|value| duration(value.extract()?))
+            .map(|value| Ok(duration(value.extract()?)?))
             .transpose()
     };
     Ok((

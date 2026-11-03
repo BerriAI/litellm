@@ -5,6 +5,7 @@ from collections.abc import Coroutine, Mapping
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -23,6 +24,8 @@ from litellm.types.utils import CallTypes, LlmProviders, ModelResponse
 
 from ..chat.transformation import AnthropicConfig
 from ..common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP, AnthropicModelInfo
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AnthropicFilesHandler:
@@ -194,7 +197,7 @@ class AnthropicFilesHandler:
                 if not line.strip():
                     continue
 
-                anthropic_result: object = json.loads(line)
+                anthropic_result: object = _DECODED_JSON.validate_python(json.loads(line))
                 if not isinstance(anthropic_result, dict):
                     raise TypeError(
                         f"Anthropic batch result line is not a JSON object: {type(anthropic_result).__name__}"

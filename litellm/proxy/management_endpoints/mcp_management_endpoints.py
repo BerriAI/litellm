@@ -49,7 +49,7 @@ from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, public_catalog_operation
+from litellm.proxy.mcp_server.catalog import catalog_operation, public_catalog_operation
 
 try:
     from prisma.errors import RecordNotFoundError, UniqueViolationError
@@ -63,19 +63,6 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.proxy._experimental.mcp_server.utils import (
-    LITELLM_MCP_SERVER_DESCRIPTION,
-    LITELLM_MCP_SERVER_NAME,
-    MCP_SERVERS_TARGET,
-    McpServerPayloadLike,
-    build_env_var_setup_url,
-    collect_env_var_references,
-    get_server_prefix,
-    parse_admin_env_vars,
-)
-from litellm.proxy._experimental.mcp_server.utils import (
-    validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
-)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -86,6 +73,19 @@ from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
 from litellm.proxy.management_helpers.audit_logs import (
     get_audit_log_changed_by,
     is_audit_logging_enabled,
+)
+from litellm.proxy.mcp_server.utils import (
+    LITELLM_MCP_SERVER_DESCRIPTION,
+    LITELLM_MCP_SERVER_NAME,
+    MCP_SERVERS_TARGET,
+    McpServerPayloadLike,
+    build_env_var_setup_url,
+    collect_env_var_references,
+    get_server_prefix,
+    parse_admin_env_vars,
+)
+from litellm.proxy.mcp_server.utils import (
+    validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
 )
 from litellm.repositories.table_repositories import (
     MCPServerRepository,
@@ -102,6 +102,14 @@ TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX: Final = "litellm:mcp:temporary_server"
 
 class _HasServerId(Protocol):
     server_id: str
+
+
+class _TemporaryServerCacheWriter(Protocol):
+    async def async_set_cache(self, *, key: str, value: str, ttl: int) -> object: ...
+
+
+class _TemporaryServerCacheReader(Protocol):
+    async def async_get_cache(self, *, key: str) -> object: ...
 
 
 def _session_cookie_claims(claims: Mapping[str, object]) -> Mapping[str, object]:
@@ -151,63 +159,6 @@ if MCP_AVAILABLE:
         def validate_tool_name(name: str) -> _ToolNameValidationResult:
             return _ToolNameValidationResult()
 
-    from litellm.proxy._experimental.mcp_server.contracts import TargetCatalog
-    from litellm.proxy._experimental.mcp_server.db import (
-        McpIdentifierConflict,
-        approve_mcp_server,
-        create_draft_mcp_server,
-        create_mcp_server_if_identifier_free,
-        delete_mcp_server,
-        delete_user_credential,
-        delete_user_env_vars,
-        get_all_mcp_servers,
-        get_draft_mcp_server,
-        get_mcp_server,
-        get_mcp_servers,
-        get_mcp_submissions,
-        get_user_env_vars,
-        get_user_env_vars_bulk,
-        get_user_oauth_credential,
-        is_resubmitted_oauth_client,
-        list_server_user_credentials,
-        list_user_oauth_credentials,
-        mcp_oauth_token_identity,
-        merge_user_env_vars,
-        oauth_credentials_for_upstream_edit,
-        purge_user_oauth_credentials_for_server,
-        reject_mcp_server,
-        set_mcp_server_pinned_tools,
-        stale_mcp_auth_fields,
-        store_user_credential,
-        store_user_oauth_credential,
-        update_mcp_server,
-    )
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (  # noqa: F401  # legacy module exports
-        _raise_if_not_oauth2,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-        authorize_with_server,
-        client_supplied_application_type,
-        client_supplied_redirect_uris,
-        exchange_token_with_server,
-        get_request_base_url,
-        raise_if_not_oauth2,
-        redeem_passthrough_authorization_code,
-        register_client_with_server,
-        resolve_ephemeral_dcr_client,
-    )
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
-    from litellm.proxy._experimental.mcp_server.server_resolution import (
-        MCPServerTargetCatalog,
-        authorize_mcp_server,
-        resolve_mcp_server,
-    )
-    from litellm.proxy._experimental.mcp_server.ui_session_utils import (
-        admitted_user_context,
-        build_effective_auth_contexts,
-        granted_toolset_ids,
-        is_ui_session_credential,
-    )
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
         LiteLLM_ObjectPermissionTable,
@@ -258,6 +209,63 @@ if MCP_AVAILABLE:
         convert_connector_entries,
     )
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+    from litellm.proxy.mcp_server.contracts import TargetCatalog
+    from litellm.proxy.mcp_server.db import (
+        McpIdentifierConflict,
+        approve_mcp_server,
+        create_draft_mcp_server,
+        create_mcp_server_if_identifier_free,
+        delete_mcp_server,
+        delete_user_credential,
+        delete_user_env_vars,
+        get_all_mcp_servers,
+        get_draft_mcp_server,
+        get_mcp_server,
+        get_mcp_servers,
+        get_mcp_submissions,
+        get_user_env_vars,
+        get_user_env_vars_bulk,
+        get_user_oauth_credential,
+        is_resubmitted_oauth_client,
+        list_server_user_credentials,
+        list_user_oauth_credentials,
+        mcp_oauth_token_identity,
+        merge_user_env_vars,
+        oauth_credentials_for_upstream_edit,
+        purge_user_oauth_credentials_for_server,
+        reject_mcp_server,
+        set_mcp_server_pinned_tools,
+        stale_mcp_auth_fields,
+        store_user_credential,
+        store_user_oauth_credential,
+        update_mcp_server,
+    )
+    from litellm.proxy.mcp_server.discoverable_endpoints import (  # noqa: F401  # legacy module exports
+        _raise_if_not_oauth2,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+        authorize_with_server,
+        client_supplied_application_type,
+        client_supplied_redirect_uris,
+        exchange_token_with_server,
+        get_request_base_url,
+        raise_if_not_oauth2,
+        redeem_passthrough_authorization_code,
+        register_client_with_server,
+        resolve_ephemeral_dcr_client,
+    )
+    from litellm.proxy.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy.mcp_server.server_resolution import (
+        MCPServerTargetCatalog,
+        authorize_mcp_server,
+        resolve_mcp_server,
+    )
+    from litellm.proxy.mcp_server.ui_session_utils import (
+        admitted_user_context,
+        build_effective_auth_contexts,
+        granted_toolset_ids,
+        is_ui_session_credential,
+    )
     from litellm.types.mcp import (
         MCP_ADMIN_CONFIG_CREDENTIAL_KEYS,
         MCPAuth,
@@ -527,7 +535,7 @@ if MCP_AVAILABLE:
         """
         if litellm.cache is None or not hasattr(litellm.cache, "cache"):
             return
-        cache_backend: Final = getattr(litellm.cache, "cache", None)
+        cache_backend: Final[_TemporaryServerCacheWriter | None] = getattr(litellm.cache, "cache", None)
         if cache_backend is None or not hasattr(cache_backend, "async_set_cache"):
             return
 
@@ -566,7 +574,7 @@ if MCP_AVAILABLE:
         """
         if litellm.cache is None or not hasattr(litellm.cache, "cache"):
             return None
-        cache_backend: Final = getattr(litellm.cache, "cache", None)
+        cache_backend: Final[_TemporaryServerCacheReader | None] = getattr(litellm.cache, "cache", None)
         if cache_backend is None or not hasattr(cache_backend, "async_get_cache"):
             return None
 
@@ -1089,7 +1097,7 @@ if MCP_AVAILABLE:
         """
         Get all MCP tools available for the current key, including those from access groups
         """
-        from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
+        from litellm.proxy.mcp_server.server import _list_mcp_tools
 
         listing: Final = await _list_mcp_tools(
             user_api_key_auth=user_api_key_dict,
@@ -1114,7 +1122,7 @@ if MCP_AVAILABLE:
         """
         Get all available MCP access groups from the database AND config
         """
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
         from litellm.proxy.proxy_server import prisma_client
@@ -1670,7 +1678,7 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": "Admin access required to view MCP gateway sessions."},
             )
-        from litellm.proxy._experimental.mcp_server.server import (
+        from litellm.proxy.mcp_server.server import (
             get_mcp_gateway_sessions_report,
         )
 
@@ -1705,7 +1713,7 @@ if MCP_AVAILABLE:
                     "error": "Provide session_id_prefix and/or user_id to select the sessions to terminate.",
                 },
             )
-        from litellm.proxy._experimental.mcp_server.server import (
+        from litellm.proxy.mcp_server.server import (
             terminate_mcp_gateway_sessions,
         )
 
@@ -1769,7 +1777,7 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP server '{server_id}' not found in the database."},
             )
-        from litellm.proxy._experimental.mcp_server.rest_endpoints import fetch_pinnable_tool_catalog
+        from litellm.proxy.mcp_server.rest_endpoints import fetch_pinnable_tool_catalog
 
         snapshot: Final = await fetch_pinnable_tool_catalog(server, request, user_api_key_dict)
         if not snapshot:
@@ -2334,11 +2342,11 @@ if MCP_AVAILABLE:
         # issued to this client could mint fresh upstream access tokens through
         # us. Require normal LiteLLM auth for those.
         if not api_key:
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
-                global_mcp_server_manager,
-            )
             from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
                 get_request_route,
+            )
+            from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+                global_mcp_server_manager,
             )
 
             server_id: Final[str] = request.path_params.get("server_id", "")
@@ -2669,7 +2677,7 @@ if MCP_AVAILABLE:
             )
         if payload.save:
             await store_user_credential(prisma_client, user_id, server_id, payload.credential)
-            from litellm.proxy._experimental.mcp_server.server import (
+            from litellm.proxy.mcp_server.server import (
                 _invalidate_byok_cred_cache,
             )
 
@@ -2700,7 +2708,7 @@ if MCP_AVAILABLE:
             await delete_user_credential(prisma_client, target_user_id, server_id)
         except RecordNotFoundError:
             pass  # Already deleted or didn't exist
-        from litellm.proxy._experimental.mcp_server.server import (
+        from litellm.proxy.mcp_server.server import (
             _invalidate_byok_cred_cache,
         )
 
@@ -2724,7 +2732,7 @@ if MCP_AVAILABLE:
         """Persist the OAuth2 access token obtained by the calling user."""
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
         await _authorize_and_fetch_mcp_server(prisma_client, user_api_key_dict, server_id)
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # keep manager import lazy
+        from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # keep manager import lazy
             global_mcp_server_manager as _manager,
         )
 
@@ -2761,7 +2769,7 @@ if MCP_AVAILABLE:
             expires_in=payload.expires_in,
             scopes=payload.scopes,
         )
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+        from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415
             global_mcp_server_manager,
         )
 
@@ -2805,7 +2813,7 @@ if MCP_AVAILABLE:
                 await delete_user_credential(prisma_client, target_user_id, server_id)
             except RecordNotFoundError:
                 pass  # Already gone — treat as a successful delete
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+            from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415
                 global_mcp_server_manager,
             )
 
@@ -3099,7 +3107,7 @@ if MCP_AVAILABLE:
         allowed_names: Final = {spec["name"] for spec in user_specs}
         updates: Final = {k: v for k, v in payload.values.items() if k in allowed_names and v != ""}
         merged: Final = await merge_user_env_vars(prisma_client, user_id, server_id, updates, allowed_names)
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             invalidate_user_env_vars_cache,
         )
 
@@ -3126,7 +3134,7 @@ if MCP_AVAILABLE:
             )
         server: Final = await _authorize_and_fetch_mcp_server(prisma_client, user_api_key_dict, server_id)
         await delete_user_env_vars(prisma_client, user_id, server_id)
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             invalidate_user_env_vars_cache,
         )
 
@@ -3361,7 +3369,7 @@ if MCP_AVAILABLE:
         try:
             # Update the public model groups
             import litellm
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            from litellm.proxy.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
             from litellm.proxy.proxy_server import proxy_config
@@ -3524,7 +3532,7 @@ if MCP_AVAILABLE:
     # MCP Toolset endpoints
     # ---------------------------------------------------------------------------
 
-    from litellm.proxy._experimental.mcp_server.toolset_db import (
+    from litellm.proxy.mcp_server.toolset_db import (
         create_mcp_toolset,
         delete_mcp_toolset,
         get_mcp_toolset,
@@ -3569,7 +3577,7 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"error": f"A toolset named '{payload.toolset_name}' already exists."},
             )
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
 
@@ -3665,7 +3673,7 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"Toolset '{payload.toolset_id}' not found."},
             )
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
 
@@ -3695,7 +3703,7 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"Toolset '{toolset_id}' not found."},
             )
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
 
