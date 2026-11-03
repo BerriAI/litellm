@@ -15,6 +15,7 @@ from typing import Final, Literal
 
 import httpx
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -22,6 +23,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -44,6 +46,20 @@ INPUT_POSITIONING_MAP: Final = {
     Role.USER.value: 1,
     Role.ASSISTANT.value: 2,
 }
+
+_CONTENT_PARTS: Final = TypeAdapter(list[object])
+
+
+def _input_item_text(item: object) -> str:
+    """The text of one entry of a list ``input``: a string, or a Responses message's string or parts ``content``."""
+    if isinstance(item, str):
+        return item
+    content: Final = (as_str_mapping(item) or {}).get("content")
+    if isinstance(content, str):
+        return content
+    parts: Final = _CONTENT_PARTS.validate_python(content) if isinstance(content, list) else ()
+    part_texts: Final = ((as_str_mapping(part) or {}).get("text") for part in parts)
+    return "\n".join(text for text in part_texts if isinstance(text, str))
 
 
 class lakeraAI_Moderation(CustomGuardrail):
@@ -219,7 +235,7 @@ class lakeraAI_Moderation(CustomGuardrail):
                 }
             )
         elif "input" in data and isinstance(data["input"], list):
-            text = "\n".join(item for item in data["input"] if isinstance(item, str))
+            text = "\n".join(filter(None, map(_input_item_text, data["input"])))
             if not text:
                 verbose_proxy_logger.debug("Skipping lakera prompt injection, input has no text")
                 return
@@ -229,6 +245,10 @@ class lakeraAI_Moderation(CustomGuardrail):
                     **self.get_guardrail_dynamic_request_body_params(request_data=data),
                 }
             )
+
+        if not _json_data and call_type == "pass_through_endpoint":
+            verbose_proxy_logger.debug("Skipping lakera prompt injection, pass-through body has no messages or input")
+            return
 
         verbose_proxy_logger.debug("Lakera AI Request Args %s", _json_data)
 

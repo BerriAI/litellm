@@ -1940,6 +1940,43 @@ class TestGeminiContents:
                 call_type="pass_through_endpoint",
             )
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call_type", ["pass_through_endpoint", "agenerate_content_stream"])
+    async def test_streaming_only_global_guardrail_reads_a_gemini_stream(self, call_type: str):
+        guardrail: Final = LakeraAIGuardrail(
+            api_key="test_key", guardrail_name="lakera-global", default_on=True, stream_scope="streaming"
+        )
+        with (
+            patch.object(guardrail, "call_v2_guard", new=AsyncMock(return_value=(GEMINI_FLAGGED, {}))),
+            pytest.raises(HTTPException),
+        ):
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                cache=DualCache(),
+                data={**_gemini_request(), "stream": True},
+                call_type=call_type,
+            )
+
+    @pytest.mark.asyncio
+    async def test_tag_scoped_global_guardrail_reads_a_gemini_body_with_its_tag(self):
+        guardrail: Final = LakeraAIGuardrail(
+            api_key="test_key",
+            guardrail_name="lakera-global",
+            default_on=True,
+            event_hook=Mode(tags={"prod": "pre_call"}, default="during_call"),
+        )
+        with (
+            patch.object(guardrail, "call_v2_guard", new=AsyncMock(return_value=(GEMINI_FLAGGED, {}))),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            pytest.raises(HTTPException, match="Violated"),
+        ):
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                cache=DualCache(),
+                data={**_gemini_request(), "metadata": {"tags": ["prod"]}},
+                call_type="pass_through_endpoint",
+            )
+
     @pytest.mark.parametrize("chat_field", ["messages", "input"])
     def test_a_pass_through_chat_body_with_stray_contents_is_read_as_chat(self, chat_field: str):
         data: Final = {chat_field: [USER_MSG], "contents": [{"parts": [{"text": "stray"}]}]}
