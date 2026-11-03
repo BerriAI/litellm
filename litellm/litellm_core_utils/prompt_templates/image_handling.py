@@ -331,6 +331,11 @@ def _remember_pdf_verdict(url: str, verdict: bool, ttl: int) -> bool:
     return verdict
 
 
+def _remember_probe_response(url: str, response: Response) -> bool:
+    ttl: Final = _PDF_PROBE_VERDICT_TTL if response.status_code in _PDF_PROBE_STATUSES else _PDF_PROBE_FAILURE_TTL
+    return _remember_pdf_verdict(url, _serves_pdf(response), ttl)
+
+
 def _failed_pdf_probe(url: str, error: Exception) -> bool:
     verbose_logger.debug("PDF probe of %s failed, sending it as an image link: %s", url, error)
     return _remember_pdf_verdict(url, False, _PDF_PROBE_FAILURE_TTL)
@@ -351,7 +356,7 @@ def serves_pdf(url: str, timeout: float = NON_LLM_CONNECTION_TIMEOUT) -> bool:
         )
     except _PDF_PROBE_FAILURES as e:
         return _failed_pdf_probe(url, e)
-    return _remember_pdf_verdict(url, _serves_pdf(response), _PDF_PROBE_VERDICT_TTL)
+    return _remember_probe_response(url, response)
 
 
 async def async_serves_pdf(url: str, timeout: float = NON_LLM_CONNECTION_TIMEOUT) -> bool:
@@ -373,7 +378,7 @@ async def async_serves_pdf(url: str, timeout: float = NON_LLM_CONNECTION_TIMEOUT
         )
     except _ASYNC_PDF_PROBE_FAILURES as e:
         return _failed_pdf_probe(url, e)
-    return _remember_pdf_verdict(url, _serves_pdf(response), _PDF_PROBE_VERDICT_TTL)
+    return _remember_probe_response(url, response)
 
 
 def _parse_remote_image(fields: Mapping[str, object]) -> _RemoteImage | None:

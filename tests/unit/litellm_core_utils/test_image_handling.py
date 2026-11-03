@@ -7,11 +7,13 @@ import uuid
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
+from unittest.mock import MagicMock
 
 import pytest
 from httpx import Request, Response
 
 import litellm
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils import url_utils
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
@@ -908,6 +910,26 @@ async def test_serves_pdf_remembers_a_timed_out_probe_so_the_next_turn_does_not_
     assert (first, second) == (False, False)
     assert second_took < 0.1
     assert probe_server.seen == [("/report.pdf", "bytes=0-1023")]
+
+
+@pytest.mark.parametrize("mode", ("sync", "async"))
+@pytest.mark.parametrize("status", (404, 503))
+async def test_serves_pdf_probes_a_link_again_a_minute_after_its_host_answered_an_error(
+    probe_server, monkeypatch, mode, status
+):
+    clock: Final = MagicMock(return_value=1_000.0)
+    monkeypatch.setattr(image_handling, "pdf_probe_verdicts", InMemoryCache(clock=clock))
+    url = probe_server.serve("/report.pdf", _Served(status=status))
+
+    while_down = await _serves_pdf(mode, url)
+    probe_server.serve("/report.pdf", _Served())
+    clock.return_value = 1_030.0
+    within_the_minute = await _serves_pdf(mode, url)
+    clock.return_value = 1_061.0
+    after_the_minute = await _serves_pdf(mode, url)
+
+    assert (while_down, within_the_minute, after_the_minute) == (False, False, True)
+    assert len(probe_server.seen) == 2
 
 
 @pytest.mark.parametrize("mode", ("sync", "async"))
