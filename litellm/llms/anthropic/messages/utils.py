@@ -1,6 +1,7 @@
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
@@ -9,6 +10,7 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm.constants import X_LITELLM_DISABLE_CALLBACKS
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.internal_call_metadata import sanitize_user_api_key_auth
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, ModelInfo, StandardCallbackDynamicParams
@@ -83,6 +85,7 @@ PROXY_SUB_CALL_METADATA_KEYS: Final = (
 )
 _USER_API_KEY_AUTH_METADATA_KEY: Final = "user_api_key_auth"
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_LIST: Final = TypeAdapter(list[object])
 
 
 _NO_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
@@ -196,7 +199,34 @@ def requested_reasoning_summary(thinking: Mapping[str, object]) -> str | None:
     if isinstance(summary, str):
         return summary
     display: Final = thinking.get("display")
-    return "auto" if display is not None and display != "omitted" else None
+    if display is not None:
+        return None if display == "omitted" else "auto"
+    return "auto" if thinking.get("type") == "between_tools" else None
+
+
+def _list_items(value: object) -> Sequence[object]:
+    try:
+        return _OBJECT_LIST.validate_python(value, strict=True)
+    except ValidationError:
+        return ()
+
+
+def content_blocks(content: object) -> tuple[Mapping[str, object], ...]:
+    return tuple(block for block in map(as_str_mapping, _list_items(content)) if block is not None)
+
+
+def _final_user_turn(messages: object) -> Iterator[Mapping[str, object]]:
+    for message in map(as_str_mapping, reversed(_list_items(messages))):
+        if message is None or message.get("role") != "user":
+            return
+        yield message
+
+
+def is_between_tool_calls(request: Mapping[str, object]) -> bool:
+    blocks: Final = chain.from_iterable(
+        content_blocks(message.get("content")) for message in _final_user_turn(request.get("messages"))
+    )
+    return any(block.get("type") == "tool_result" for block in blocks)
 
 
 def _mapped_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:

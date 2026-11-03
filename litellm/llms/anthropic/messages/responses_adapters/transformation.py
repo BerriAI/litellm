@@ -6,8 +6,8 @@ path used for OpenAI and Azure models.
 """
 
 import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
-from itertools import chain, groupby
+from collections.abc import Iterable, Mapping, Sequence
+from itertools import groupby
 from typing import Any, Final, cast
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -29,6 +29,8 @@ from litellm.llms.anthropic.messages.native.utils import (
 )
 from litellm.llms.anthropic.messages.utils import (
     REASONING_EFFORT_OFF,
+    content_blocks,
+    is_between_tool_calls,
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
     prompt_cache_key_from_user_id,
@@ -128,16 +130,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             return {"type": "input_file", "file_url": url}
         return None
 
-    @staticmethod
-    def _content_blocks(content: object) -> tuple[Mapping[str, object], ...]:
-        if not isinstance(content, list):
-            return ()
-        return tuple(
-            cast(Mapping[str, object], block)  # cast-ok: untrusted client payload
-            for block in cast(Sequence[object], content)  # cast-ok: untyped client content list
-            if isinstance(block, dict)
-        )
-
     @classmethod
     def _tool_result_image_parts(
         cls, blocks: Sequence[Mapping[str, object]]
@@ -162,7 +154,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         block, the images Anthropic caches for the mark. The result's text and documents join into one output, which
         the mark covers whole.
         """
-        inner: Final = cls._content_blocks(block.get("content"))
+        inner: Final = content_blocks(block.get("content"))
         own_breakpoint: Final = block.get("prompt_cache_breakpoint")
         if own_breakpoint is not None:
             return own_breakpoint, cls._tool_result_image_parts(inner), ()
@@ -559,8 +551,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             return requested
         if thinking.get("display") is not None:
             return None
-        if thinking.get("type") == "between_tools":
-            return "auto"
         return auto_summary_level if is_reasoning_auto_summary_enabled() else None
 
     @classmethod
@@ -596,25 +586,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         summary: Final = cls._reasoning_summary(thinking_params, auto_summary_level)
         return {"effort": effort} if summary is None else {"effort": effort, "summary": summary}
 
-    @staticmethod
-    def _final_user_turn(messages: Sequence[object]) -> Iterator[Mapping[str, object]]:
-        for message in map(as_str_mapping, reversed(messages)):
-            if message is None or message.get("role") != "user":
-                return
-            yield message
-
-    @classmethod
-    def _is_between_tool_calls(cls, messages: Sequence[object]) -> bool:
-        blocks: Final = chain.from_iterable(
-            cls._content_blocks(message.get("content")) for message in cls._final_user_turn(messages)
-        )
-        return any(block.get("type") == "tool_result" for block in blocks)
-
     @classmethod
     def system_blocks_to_instructions(cls, system: object) -> str:
         return "\n".join(
             text
-            for block in cls._content_blocks(system)
+            for block in content_blocks(system)
             if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text
         )
 
@@ -704,7 +680,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             auto_summary_level=auto_summary_level,
             model=model,
             drop_params=drop_params,
-            between_tool_calls=self._is_between_tool_calls(messages_list),
+            between_tool_calls=is_between_tool_calls(anthropic_request),
         )
         if reasoning:
             responses_kwargs["reasoning"] = reasoning

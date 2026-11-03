@@ -20,6 +20,7 @@ import litellm
 from litellm.llms.anthropic.messages.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
+from litellm.llms.anthropic.messages.utils import maps_bare_output_effort
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 from litellm.router import Router
 from litellm.utils import reasoning_effort_with_summary_alias
@@ -582,3 +583,161 @@ class TestADeclaredDeploymentRoundsTheMessagesTierOntoItsLevels:
 
         sent: Final = json.loads(route.calls.last.request.read())
         assert functools.reduce(lambda body, key: body[key], effort_path, sent) == "minimal"
+
+
+TOOL_RESULT_TURN: Final = [
+    {"role": "user", "content": "multiply 6 by 7"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "multiply", "input": {"a": 6, "b": 7}}],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "42"}]},
+]
+CHAT_TARGETS: Final = [
+    ("databricks/databricks-qwen35-122b-a10b", "databricks"),
+    ("fireworks_ai/kimi-k3", "fireworks_ai"),
+    ("gemini/gemini-3.1-pro-preview", "gemini"),
+]
+GEMINI: Final = "gemini/gemini-3.1-pro-preview"
+
+
+def _chat_completion_kwargs(
+    model: str,
+    provider: str,
+    *,
+    thinking: dict[str, object] | None,
+    messages: list[dict[str, object]],
+    output_config: dict[str, str] | None = None,
+    reasoning_effort: str | None = None,
+) -> Mapping[str, object]:
+    extra_kwargs: Final = {
+        key: value
+        for key, value in (
+            ("custom_llm_provider", provider),
+            ("output_config", output_config),
+            ("reasoning_effort", reasoning_effort),
+        )
+        if value is not None
+    }
+    completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=1024,
+        messages=messages,
+        model=model,
+        thinking=thinking,
+        tools=[MULTIPLY_TOOL],
+        extra_kwargs=extra_kwargs,
+    )
+    return completion_kwargs
+
+
+def _gemini_includes_thoughts(sent: Mapping[str, object]) -> object:
+    gemini: Final = VertexGeminiConfig()
+    reasoning_effort: Final = reasoning_effort_with_summary_alias(
+        sent.get("reasoning_effort"), sent, accepts_summary=gemini.accepts_reasoning_summary_in_reasoning_effort
+    )
+    mapped: Final = gemini.map_openai_params({"reasoning_effort": reasoning_effort}, {}, GEMINI.split("/", 1)[1], True)
+    return mapped["thinkingConfig"]["includeThoughts"]
+
+
+class TestBetweenToolsAndABareEffortReachAChatTargetAsOnTheResponsesBridge:
+    @pytest.mark.parametrize("model, provider", CHAT_TARGETS)
+    @pytest.mark.parametrize("output_config, tier", [(None, "medium"), ({"effort": "high"}, "high")])
+    def test_between_tools_reasons_after_a_tool_result_at_the_declared_tier_or_medium(
+        self,
+        local_model_cost_map: None,
+        model: str,
+        provider: str,
+        output_config: dict[str, str] | None,
+        tier: str,
+    ) -> None:
+        sent: Final = _chat_completion_kwargs(
+            model, provider, thinking={"type": "between_tools"}, messages=TOOL_RESULT_TURN, output_config=output_config
+        )
+
+        assert sent["reasoning_effort"] == tier
+
+    @pytest.mark.parametrize("model, provider", CHAT_TARGETS)
+    def test_between_tools_turns_reasoning_off_on_a_turn_without_a_tool_result(
+        self, local_model_cost_map: None, model: str, provider: str
+    ) -> None:
+        sent: Final = _chat_completion_kwargs(
+            model, provider, thinking={"type": "between_tools"}, messages=MESSAGES, output_config={"effort": "high"}
+        )
+
+        assert sent["reasoning_effort"] == "none"
+        assert "reasoning_summary" not in sent
+
+    @pytest.mark.parametrize(
+        "thinking, messages, includes_thoughts",
+        [
+            ({"type": "between_tools"}, TOOL_RESULT_TURN, True),
+            ({"type": "between_tools", "display": "omitted"}, TOOL_RESULT_TURN, False),
+            ({"type": "between_tools", "display": "omitted", "summary": "concise"}, TOOL_RESULT_TURN, True),
+            ({"type": "between_tools", "summary": "concise"}, MESSAGES, False),
+        ],
+        ids=["after-a-tool-result", "display-omitted", "client-summary-wins", "first-turn"],
+    )
+    def test_between_tools_asks_gemini_for_thoughts_by_the_bridge_summary_rule(
+        self,
+        local_model_cost_map: None,
+        monkeypatch: pytest.MonkeyPatch,
+        thinking: dict[str, object],
+        messages: list[dict[str, object]],
+        includes_thoughts: bool,
+    ) -> None:
+        monkeypatch.setattr(litellm, "gemini_include_thoughts_default", False)
+
+        sent: Final = _chat_completion_kwargs(GEMINI, "gemini", thinking=thinking, messages=messages)
+
+        assert _gemini_includes_thoughts(sent) is includes_thoughts
+
+    def test_a_bridged_target_gets_the_plain_off_switch_on_a_turn_without_a_tool_result(
+        self, local_model_cost_map: None
+    ) -> None:
+        sent: Final = _chat_completion_kwargs(
+            "azure/responses/gpt-5.1", "azure", thinking={"type": "between_tools", "summary": "concise"}, messages=MESSAGES
+        )
+
+        assert sent["reasoning_effort"] == "none"
+
+    @pytest.mark.parametrize(
+        "model, provider", [*CHAT_TARGETS, ("openai/gpt-5.1", "openai"), ("hosted_vllm/unmapped-model", "hosted_vllm")]
+    )
+    def test_a_bare_output_effort_is_the_tier_when_the_model_reasons_unasked(
+        self, local_model_cost_map: None, model: str, provider: str
+    ) -> None:
+        sent: Final = _chat_completion_kwargs(
+            model, provider, thinking=None, messages=MESSAGES, output_config={"effort": "high"}
+        )
+
+        assert sent.get("reasoning_effort") == ("high" if maps_bare_output_effort(model, provider) else None)
+
+    def test_an_explicit_reasoning_effort_beats_a_bare_output_effort(self, local_model_cost_map: None) -> None:
+        sent: Final = _chat_completion_kwargs(
+            "databricks/databricks-qwen35-122b-a10b",
+            "databricks",
+            thinking=None,
+            messages=MESSAGES,
+            output_config={"effort": "high"},
+            reasoning_effort="low",
+        )
+
+        assert sent["reasoning_effort"] == "low"
+
+    @pytest.mark.parametrize(
+        "thinking, messages",
+        [(None, MESSAGES), ({"type": "between_tools"}, TOOL_RESULT_TURN), ({"type": "between_tools"}, MESSAGES)],
+        ids=["bare-effort", "between_tools-after-a-tool-result", "between_tools-first-turn"],
+    )
+    def test_a_claude_target_still_gets_no_reasoning_effort(
+        self, local_model_cost_map: None, thinking: dict[str, object] | None, messages: list[dict[str, object]]
+    ) -> None:
+        sent: Final = _chat_completion_kwargs(
+            "anthropic/claude-sonnet-4-5",
+            "anthropic",
+            thinking=thinking,
+            messages=messages,
+            output_config={"effort": "high"},
+        )
+
+        assert "reasoning_effort" not in sent

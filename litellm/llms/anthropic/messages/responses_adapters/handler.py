@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.reasoning_effort_capability import deployment_rounds_reasoning_effort
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -68,6 +69,8 @@ AnthropicContextManagementSpec: TypeAlias = dict[str, object] | list[dict[str, o
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
 _KNOWN_REASONING_EFFORTS: Final = frozenset(get_args(REASONING_EFFORT))
+_LOWEST_REASONING_TIERS: Final = ("minimal", "low")
+_UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL: Final = "must be verified to generate reasoning summaries"
 
 
 def _split_context_management(
@@ -255,6 +258,12 @@ def _rewritten_blocks(content: object, rewrite: BlockRewrite) -> Sequence[Mappin
         return ()
 
 
+def _lowest_tier_instead_of_off(levels: tuple[str, ...] | None) -> str | None:
+    if not levels or REASONING_EFFORT_OFF in levels:
+        return None
+    return next((tier for tier in _LOWEST_REASONING_TIERS if tier in levels), None)
+
+
 def _reasoning_off_for_target(
     reasoning: Mapping[str, object],
     *,
@@ -262,8 +271,12 @@ def _reasoning_off_for_target(
     custom_llm_provider: str | None,
     drop_params: bool,
 ) -> Mapping[str, object] | None:
-    if model_reasoning_efforts(model, custom_llm_provider) == ():
+    levels: Final = model_reasoning_efforts(model, custom_llm_provider)
+    if levels == ():
         return None
+    lowest_tier: Final = _lowest_tier_instead_of_off(levels)
+    if lowest_tier is not None:
+        return {**reasoning, "effort": lowest_tier}
     if (
         not drop_params
         or not supports_reasoning(model, custom_llm_provider)
@@ -307,7 +320,65 @@ def _reasoning_for_target(
         custom_llm_provider=custom_llm_provider,
         deployment_model_info=deployment_model_info,
     )
+    if drop_params and _model_excludes_effort(
+        normalized, model=model, custom_llm_provider=custom_llm_provider, deployment_model_info=deployment_model_info
+    ):
+        verbose_logger.warning(
+            "Dropping reasoning.effort=%r for %s, its model cost map entry does not list it, because drop_params is set",
+            normalized,
+            model,
+        )
+        return None
     return reasoning if normalized == effort else {**reasoning_params, "effort": normalized}
+
+
+def _model_excludes_effort(
+    effort: str, *, model: str, custom_llm_provider: str | None, deployment_model_info: object
+) -> bool:
+    if deployment_rounds_reasoning_effort(deployment_model_info):
+        return False
+    levels: Final = model_reasoning_efforts(model, custom_llm_provider) or ()
+    return bool(levels) and effort not in levels
+
+
+def _retry_without_refused_summary(
+    responses_kwargs: Mapping[str, object], error: litellm.BadRequestError, *, model: str, drop_params: bool
+) -> Mapping[str, object] | None:
+    reasoning: Final = as_str_mapping(responses_kwargs.get("reasoning"))
+    if not drop_params or reasoning is None or "summary" not in reasoning:
+        return None
+    if _UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL not in error.message:
+        return None
+    verbose_logger.warning(
+        "Retrying %s without reasoning.summary, its OpenAI organization cannot get reasoning summaries until it is "
+        "verified, because drop_params is set",
+        model,
+    )
+    return {**responses_kwargs, "reasoning": {key: value for key, value in reasoning.items() if key != "summary"}}
+
+
+async def _aresponses(responses_kwargs: Mapping[str, object], *, model: str, drop_params: bool) -> object:
+    try:
+        return await litellm.aresponses(**responses_kwargs)
+    except litellm.BadRequestError as error:
+        retry_kwargs: Final = _retry_without_refused_summary(
+            responses_kwargs, error, model=model, drop_params=drop_params
+        )
+        if retry_kwargs is None:
+            raise
+        return await litellm.aresponses(**retry_kwargs)
+
+
+def _responses(responses_kwargs: Mapping[str, object], *, model: str, drop_params: bool) -> object:
+    try:
+        return litellm.responses(**responses_kwargs)
+    except litellm.BadRequestError as error:
+        retry_kwargs: Final = _retry_without_refused_summary(
+            responses_kwargs, error, model=model, drop_params=drop_params
+        )
+        if retry_kwargs is None:
+            raise
+        return litellm.responses(**retry_kwargs)
 
 
 def _maps_reasoning(
@@ -500,7 +571,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
         )
 
         safeguards_evaluator: Final = request_safeguards_evaluator(kwargs, messages)
-        result: Final = await litellm.aresponses(**responses_kwargs)
+        result: Final = await _aresponses(
+            responses_kwargs, model=model, drop_params=drops_unsupported_params(kwargs.get("drop_params"))
+        )
 
         if stream:
             wrapper: Final = AnthropicResponsesStreamWrapper(
@@ -603,7 +676,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
             extra_kwargs=kwargs,
         )
 
-        result: Final = litellm.responses(**responses_kwargs)
+        result: Final = _responses(
+            responses_kwargs, model=model, drop_params=drops_unsupported_params(kwargs.get("drop_params"))
+        )
 
         if stream:
             wrapper: Final = AnthropicResponsesStreamWrapper(

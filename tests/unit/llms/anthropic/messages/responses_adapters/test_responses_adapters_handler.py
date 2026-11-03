@@ -7,6 +7,7 @@ from itertools import chain
 from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 import respx
 
@@ -21,6 +22,7 @@ from litellm.llms.anthropic.messages.responses_adapters.handler import (
     LiteLLMMessagesToResponsesAPIHandler,
     _build_responses_kwargs,
 )
+from litellm.llms.anthropic.messages.utils import model_reasoning_efforts
 from litellm.router import Router
 from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS, converted_stream_requested
@@ -134,35 +136,63 @@ def test_build_responses_kwargs_auto_summary_asks_each_target_for_a_level_it_acc
     assert cast(Mapping[str, object], responses_kwargs["reasoning"])["summary"] == summary
 
 
-@pytest.mark.parametrize("model", ["gpt-6-luna", "gpt-6.1-sol", "o3", "gpt-4.1", "gpt-bridge-unmapped"])
-def test_build_responses_kwargs_turns_reasoning_off_unless_the_map_knows_the_model_never_reasons(model: str) -> None:
+OFF_SWITCH_MODELS: Final = [
+    "gpt-5",
+    "gpt-5-mini",
+    "gpt-5-nano",
+    "gpt-6.1-sol",
+    "gpt-6-luna",
+    "gpt-5.1",
+    "chat-latest",
+    "o3",
+    "gpt-4.1",
+    "gpt-bridge-unmapped",
+]
+OFF_THINKING: Final = [{"type": "disabled"}, {"type": "between_tools"}]
+OFF_THINKING_IDS: Final = ["disabled", "between_tools-first-turn"]
+
+
+def _lowest_listed_off_switch(model: str) -> str:
+    levels: Final = model_reasoning_efforts(model, "openai") or ()
+    return next((level for level in ("none", "minimal", "low") if level in levels), "none")
+
+
+@pytest.mark.parametrize("thinking", OFF_THINKING, ids=OFF_THINKING_IDS)
+@pytest.mark.parametrize("model", OFF_SWITCH_MODELS)
+def test_build_responses_kwargs_turns_reasoning_off_at_the_lowest_level_the_model_lists_unless_it_never_reasons(
+    model: str, thinking: dict[str, object]
+) -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         max_tokens=1024,
         messages=MESSAGES,
         model=f"openai/{model}",
-        thinking={"type": "disabled"},
+        thinking=thinking,
         extra_kwargs={"custom_llm_provider": "openai"},
     )
 
     map_row: Final = litellm.model_cost.get(model)
     never_reasons: Final = map_row is not None and not map_row.get("supports_reasoning")
-    assert responses_kwargs.get("reasoning") == (None if never_reasons else {"effort": "none"})
+    assert responses_kwargs.get("reasoning") == (None if never_reasons else {"effort": _lowest_listed_off_switch(model)})
 
 
-@pytest.mark.parametrize("model", ["gpt-6-luna", "gpt-6.1-sol", "o3", "gpt-4.1", "gpt-bridge-unmapped"])
-def test_build_responses_kwargs_drops_reasoning_off_under_drop_params_unless_the_map_confirms_none(model: str) -> None:
+@pytest.mark.parametrize("thinking", OFF_THINKING, ids=OFF_THINKING_IDS)
+@pytest.mark.parametrize("model", OFF_SWITCH_MODELS)
+def test_build_responses_kwargs_under_drop_params_keeps_a_listed_lower_tier_and_drops_an_unconfirmed_none(
+    model: str, thinking: dict[str, object]
+) -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         max_tokens=1024,
         messages=MESSAGES,
         model=f"openai/{model}",
-        thinking={"type": "disabled"},
+        thinking=thinking,
         extra_kwargs={"custom_llm_provider": "openai", "drop_params": True},
     )
 
+    off_switch: Final = _lowest_listed_off_switch(model)
     map_row: Final = litellm.model_cost.get(model)
     confirms_none: Final = map_row is not None and map_row.get("supports_none_reasoning_effort") is True
     keeps_none: Final = map_row is None or (bool(map_row.get("supports_reasoning")) and confirms_none)
-    assert responses_kwargs.get("reasoning") == ({"effort": "none"} if keeps_none else None)
+    assert responses_kwargs.get("reasoning") == ({"effort": off_switch} if off_switch != "none" or keeps_none else None)
 
 
 @pytest.mark.parametrize("model", ["gpt-5.4-mini", "gpt-5.1", "gpt-6-luna", "gpt-bridge-unmapped"])
@@ -218,6 +248,42 @@ def test_build_responses_kwargs_drops_an_effort_no_reasoning_api_defines_only_un
     )
 
     assert responses_kwargs.get("reasoning") == (None if drop_params else {"effort": "turbo"})
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+@pytest.mark.parametrize("thinking", [None, {"type": "adaptive"}], ids=["thinking-left-out", "adaptive"])
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_build_responses_kwargs_drops_an_effort_the_model_does_not_list_only_under_drop_params(
+    effort: Literal["low", "medium", "high"], thinking: dict[str, object] | None, drop_params: bool
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/chat-latest",
+        output_config={"effort": effort},
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": drop_params},
+    )
+
+    listed: Final = effort in (model_reasoning_efforts("chat-latest", "openai") or ())
+    assert responses_kwargs.get("reasoning") == ({"effort": effort} if listed or not drop_params else None)
+
+
+def test_build_responses_kwargs_under_drop_params_leaves_an_unlisted_effort_to_a_deployment_that_rounds_it() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/chat-latest",
+        output_config={"effort": "high"},
+        thinking={"type": "adaptive"},
+        extra_kwargs={
+            "custom_llm_provider": "openai",
+            "drop_params": True,
+            "model_info": {"reasoning_effort_levels": ["low", "high"]},
+        },
+    )
+
+    assert responses_kwargs.get("reasoning") == {"effort": "high"}
 
 
 @pytest.mark.parametrize("effort", ["max", "xhigh"])
@@ -1190,3 +1256,122 @@ async def test_the_sync_path_reports_its_edits_on_the_streamed_message_delta(
     ]
     message_delta: Final = next(event for event in events if event["type"] == "message_delta")
     assert message_delta["context_management"]["applied_edits"][0]["cleared_tool_uses"] == 2
+
+
+SUMMARY_REFUSAL: Final = {
+    "error": {
+        "message": (
+            "Your organization must be verified to generate reasoning summaries. Please go to: "
+            "https://platform.openai.com/settings/organization/general and click on Verify Organization. "
+            "If you just verified, it can take up to 15 minutes for access to propagate."
+        ),
+        "type": "invalid_request_error",
+        "param": "reasoning.summary",
+        "code": "unsupported_value",
+    }
+}
+OTHER_SUMMARY_400: Final = {
+    "error": {
+        "message": "Unsupported value: 'reasoning.summary' does not support 'auto' with this model.",
+        "type": "invalid_request_error",
+        "param": "reasoning.summary",
+        "code": "unsupported_value",
+    }
+}
+
+
+def _upstream_answering_400_then_200(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, *, refusal: Mapping[str, object], stream: bool
+) -> respx.Route:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-summary-refusal-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    served: Final = (
+        httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=RESPONSES_SSE_BODY)
+        if stream
+        else httpx.Response(200, json=TEXT_RESPONSE)
+    )
+    return respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[httpx.Response(400, json=refusal), served]
+    )
+
+
+async def _summarized_turn(*, sync: bool, stream: bool, drop_params: bool) -> object:
+    if sync:
+        return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+            max_tokens=1024,
+            messages=MESSAGES,
+            model="openai/gpt-5.6-luna",
+            stream=stream,
+            custom_llm_provider="openai",
+            thinking={"type": "adaptive", "display": "summarized"},
+            output_config={"effort": "high"},
+            drop_params=drop_params,
+        )
+    return await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        stream=stream,
+        custom_llm_provider="openai",
+        thinking={"type": "adaptive", "display": "summarized"},
+        output_config={"effort": "high"},
+        drop_params=drop_params,
+    )
+
+
+async def _reply_types(served: object, *, stream: bool) -> list[object]:
+    if not stream:
+        return [cast(Mapping[str, object], served)["type"]]
+    return [
+        json.loads(chunk.decode().split("data: ", 1)[1])["type"]
+        async for chunk in cast(AsyncIterator[bytes], served)
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_under_drop_params_an_unverified_organization_gets_the_turn_again_without_the_summary(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool, stream: bool
+) -> None:
+    upstream: Final = _upstream_answering_400_then_200(respx_mock, monkeypatch, refusal=SUMMARY_REFUSAL, stream=stream)
+
+    reply_types: Final = await _reply_types(
+        await _summarized_turn(sync=sync, stream=stream, drop_params=True), stream=stream
+    )
+
+    first, second = (json.loads(call.request.content) for call in upstream.calls)
+    assert first["reasoning"]["summary"]
+    assert second["reasoning"] == {"effort": first["reasoning"]["effort"]}
+    assert {key: value for key, value in second.items() if key != "reasoning"} == {
+        key: value for key, value in first.items() if key != "reasoning"
+    }
+    assert (reply_types[0], reply_types[-1]) == (("message_start", "message_stop") if stream else ("message",) * 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_without_drop_params_an_unverified_organization_gets_the_400_after_one_request(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool, stream: bool
+) -> None:
+    upstream: Final = _upstream_answering_400_then_200(respx_mock, monkeypatch, refusal=SUMMARY_REFUSAL, stream=stream)
+
+    with pytest.raises(litellm.BadRequestError, match="must be verified to generate reasoning summaries"):
+        await _reply_types(await _summarized_turn(sync=sync, stream=stream, drop_params=False), stream=stream)
+
+    assert upstream.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_under_drop_params_another_400_about_the_summary_is_not_retried(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    upstream: Final = _upstream_answering_400_then_200(respx_mock, monkeypatch, refusal=OTHER_SUMMARY_400, stream=False)
+
+    with pytest.raises(litellm.BadRequestError, match="does not support 'auto' with this model"):
+        await _summarized_turn(sync=sync, stream=False, drop_params=True)
+
+    assert upstream.call_count == 1

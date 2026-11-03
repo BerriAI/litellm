@@ -32,6 +32,7 @@ from litellm.llms.anthropic.messages.safeguards import (
     with_safeguard_results,
 )
 from litellm.llms.anthropic.messages.utils import (
+    REASONING_EFFORT_OFF,
     ProxySubCallLoggingKwargs,
     is_reasoning_auto_summary_enabled,
     litellm_logging_obj_from_kwargs,
@@ -470,9 +471,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         *,
         thinking: Mapping[str, object] | None,
     ) -> _ChatTargetReasoning | None:
-        if not thinking:
-            return None
         reasoning_effort: Final = completion_kwargs.get("reasoning_effort")
+        if not thinking or reasoning_effort == REASONING_EFFORT_OFF:
+            return None
         wraps_summary: Final = isinstance(reasoning_effort, dict) and "summary" in reasoning_effort
         requested_summary: Final = requested_reasoning_summary(thinking)
         if not wraps_summary and requested_summary is None:
@@ -646,6 +647,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
             api_base=api_base if isinstance(api_base, str) else None,
             drop_params=drops_unsupported_params(extra_kwargs.get("drop_params")),
+            translate_bare_output_effort=extra_kwargs.get("reasoning_effort") is None,
         )
 
         if openai_request is None:
