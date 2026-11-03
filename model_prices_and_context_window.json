@@ -5131,6 +5131,7 @@
     },
     "azure_ai/model_router": {
         "deprecation_date": "2027-05-20",
+    "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "input_cost_per_token": 1.4e-07,
         "output_cost_per_token": 0,
         "litellm_provider": "azure_ai",
