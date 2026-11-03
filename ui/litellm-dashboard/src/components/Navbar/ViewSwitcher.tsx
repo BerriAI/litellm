@@ -87,6 +87,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
   const pathname = usePathname();
 
   const chatEnabled = Boolean(uiSettings?.values?.enable_chat_ui);
+  const moyaiEnabled = Boolean(uiSettings?.values?.enable_moyai_ui);
   const moyaiUrl = (uiSettings?.values?.moyai_url as string | undefined) ?? null;
 
   const normalizedPathname = (pathname ?? "").replace(/\/+$/, "");
@@ -137,6 +138,23 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
     onClick: chatEnabled ? () => window.location.assign(uiHref(CHAT)) : undefined,
   };
 
+  const moyaiItem: ViewSwitcherItem = {
+    key: MOYAI,
+    label: (
+      <div className="flex w-full items-center justify-between gap-6 py-0.5">
+        <span className="flex items-center gap-2">
+          <WorkspaceIcon workspace={MOYAI} />
+          <span className="flex flex-col">
+            <span className="font-medium">Moyai</span>{" "}
+            <span className="text-xs leading-snug text-muted-foreground">Cloud Coding Agent</span>
+          </span>
+        </span>
+        {isMoyaiRoute && <Check className="size-4 text-info" />}
+      </div>
+    ),
+    onClick: () => window.location.assign(moyaiUrl ?? uiHref(MOYAI)),
+  };
+
   const items: ViewSwitcherItem[] = [
     ...modeEntries.map((e) => ({
       key: e.key,
@@ -152,22 +170,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
       onClick: () => selectMode(e.key),
     })),
     chatItem,
-    {
-      key: MOYAI,
-      label: (
-        <div className="flex w-full items-center justify-between gap-6 py-0.5">
-          <span className="flex items-center gap-2">
-            <WorkspaceIcon workspace={MOYAI} />
-            <span className="flex flex-col">
-              <span className="font-medium">Moyai</span>{" "}
-              <span className="text-xs leading-snug text-muted-foreground">Cloud Coding Agent</span>
-            </span>
-          </span>
-          {isMoyaiRoute && <Check className="size-4 text-info" />}
-        </div>
-      ),
-      onClick: () => window.location.assign(moyaiUrl ?? uiHref(MOYAI)),
-    },
+    ...(moyaiEnabled ? [moyaiItem] : []),
   ];
 
   return (

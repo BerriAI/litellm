@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { useTerminology } from "@/contexts/TerminologyContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useUpdateUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUpdateUISettings";
@@ -53,6 +54,12 @@ function SettingRow({
   );
 }
 
+function moyaiStatusLabel(t: TFunction, isEnabled: boolean, url: string | null): string {
+  if (!isEnabled) return t("adminPanel.uiSettings.moyai.disabled");
+  if (url) return t("adminPanel.uiSettings.moyai.connectedTo", { url });
+  return t("adminPanel.uiSettings.moyai.notConnected");
+}
+
 export default function UISettings() {
   const { t } = useTranslation();
   const term = useTerminology();
@@ -68,6 +75,7 @@ export default function UISettings() {
   const forwardLLMProviderAuthHeadersProperty = schema?.properties?.forward_llm_provider_auth_headers;
   const enableProjectsUIProperty = schema?.properties?.enable_projects_ui;
   const enableChatUIProperty = schema?.properties?.enable_chat_ui;
+  const enableMoyaiUIProperty = schema?.properties?.enable_moyai_ui;
   const enabledPagesProperty = schema?.properties?.enabled_ui_pages_internal_users;
   const disableAgentsProperty = schema?.properties?.disable_agents_for_internal_users;
   const allowAgentsTeamAdminsProperty = schema?.properties?.allow_agents_for_team_admins;
@@ -81,6 +89,8 @@ export default function UISettings() {
     "last_7_days";
   const usageRangeConfigOwned = data?.source?.usage_default_time_range === "config";
   const moyaiUrl = (values.moyai_url as string | undefined) ?? null;
+  const isMoyaiEnabled = Boolean(values.enable_moyai_ui);
+  const moyaiStatus = moyaiStatusLabel(t, isMoyaiEnabled, moyaiUrl);
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
   const isAgentsDisabled = Boolean(values.disable_agents_for_internal_users);
@@ -175,6 +185,20 @@ export default function UISettings() {
         onSuccess: () => {
           toast.success(t("adminPanel.uiSettings.toasts.updatedRefreshing"));
           setTimeout(() => window.location.reload(), 1000);
+        },
+        onError: (error) => {
+          toast.fromError(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleEnableMoyaiUI = (checked: boolean) => {
+    updateSettings(
+      { enable_moyai_ui: checked },
+      {
+        onSuccess: () => {
+          toast.success(t("adminPanel.uiSettings.toasts.updated"));
         },
         onError: (error) => {
           toast.fromError(error);
@@ -447,6 +471,16 @@ export default function UISettings() {
                 enableChatUIProperty?.description ?? t("adminPanel.uiSettings.settings.enableChat.description")
               }
             />
+            <SettingRow
+              checked={isMoyaiEnabled}
+              disabled={isUpdating}
+              onCheckedChange={handleToggleEnableMoyaiUI}
+              ariaLabel={t("adminPanel.uiSettings.settings.enableMoyai.ariaLabel")}
+              label={t("adminPanel.uiSettings.settings.enableMoyai.label")}
+              description={
+                enableMoyaiUIProperty?.description ?? t("adminPanel.uiSettings.settings.enableMoyai.description")
+              }
+            />
 
             <BackgroundChatSettings />
 
@@ -454,17 +488,14 @@ export default function UISettings() {
             <div className="flex items-start justify-between gap-3">
               <div className="space-y-1">
                 <p className="text-sm font-medium text-foreground">Moyai</p>
-                <p className="text-sm text-muted-foreground">
-                  {moyaiUrl
-                    ? t("adminPanel.uiSettings.moyai.connectedTo", { url: moyaiUrl })
-                    : t("adminPanel.uiSettings.moyai.notConnected")}
-                </p>
+                <p className="text-sm text-muted-foreground">{moyaiStatus}</p>
               </div>
-              {moyaiUrl ? (
+              {moyaiUrl && (
                 <Button variant="outline" size="sm" disabled={isUpdating} onClick={handleDisconnectMoyai}>
                   {t("adminPanel.uiSettings.moyai.disconnect")}
                 </Button>
-              ) : (
+              )}
+              {!moyaiUrl && isMoyaiEnabled && (
                 <a href={uiHref("moyai")} className="text-sm text-primary underline underline-offset-4">
                   {t("adminPanel.uiSettings.moyai.connectLink")}
                 </a>

@@ -2853,6 +2853,11 @@
           "label": "Enable Chat page (page will refresh)",
           "description": "If enabled, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth."
         },
+        "enableMoyai": {
+          "ariaLabel": "Enable Moyai",
+          "label": "[BETA] Enable Moyai",
+          "description": "If enabled, shows Moyai in the workspace switcher and lets admins connect a Moyai deployment."
+        },
         "disableAgents": {
           "label": "Disable agents for internal users"
         },
@@ -2877,6 +2882,7 @@
       "moyai": {
         "connectedTo": "Connected to {{url}}",
         "notConnected": "Not connected",
+        "disabled": "Disabled",
         "disconnect": "Disconnect",
         "connectLink": "Connect from the Moyai page"
       }

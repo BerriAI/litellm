@@ -4035,6 +4035,36 @@ class TestEnableChatUISetting:
         assert response.json()["values"]["enable_chat_ui"] is False
 
 
+class TestEnableMoyaiUISetting:
+    def test_moyai_ui_is_off_when_nothing_is_stored(self, mock_auth, monkeypatch):
+        TestPtuCostAttributionUISetting._mock_prisma(monkeypatch)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["enable_moyai_ui"] is False
+
+    def test_admin_can_turn_moyai_ui_on(self, mock_auth, monkeypatch):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = TestPtuCostAttributionUISetting._mock_prisma(monkeypatch)
+
+        try:
+            response = client.patch("/update/ui_settings", json={"enable_moyai_ui": True})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        upsert_data = mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]
+        assert json.loads(upsert_data["create"]["ui_settings"])["enable_moyai_ui"] is True
+
+
 class TestApplyUserBudgetToTeamKeysUISetting:
     """``apply_user_budget_to_team_keys`` mirrors general_settings on every GET.
 

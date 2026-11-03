@@ -179,7 +179,9 @@ describe("ViewSwitcher", () => {
 
   it("should switch from Chat to the connected Moyai deployment", async () => {
     state.pathname = "/ui/chat";
-    const settings = { values: { enable_chat_ui: true, moyai_url: "https://moyai.example.com" } };
+    const settings = {
+      values: { enable_chat_ui: true, enable_moyai_ui: true, moyai_url: "https://moyai.example.com" },
+    };
     getUiSettingsMock.mockResolvedValue(settings);
     const user = userEvent.setup();
     renderSwitcher();
@@ -189,7 +191,20 @@ describe("ViewSwitcher", () => {
     expect(assignSpy).toHaveBeenCalledWith("https://moyai.example.com");
   });
 
+  it("should hide Moyai from the switcher until an admin enables it", async () => {
+    getUiSettingsMock.mockResolvedValue({
+      values: { enable_chat_ui: true, enable_moyai_ui: false, moyai_url: "https://moyai.example.com" },
+    });
+    const user = userEvent.setup();
+    renderSwitcher();
+
+    await user.click(screen.getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
+    await screen.findByRole("menuitem", { name: "Chat Chat UI for using LLMs, MCPs, Agents" });
+    expect(screen.queryByRole("menuitem", { name: /Moyai/ })).not.toBeInTheDocument();
+  });
+
   it("should keep the local Moyai route available when Chat is disabled", async () => {
+    getUiSettingsMock.mockResolvedValue({ values: { enable_chat_ui: false, enable_moyai_ui: true } });
     const user = userEvent.setup();
     renderSwitcher();
 
