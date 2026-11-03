@@ -781,3 +781,39 @@ class TestDisabledOnAnOffMapOpenAIDeployment:
         )
 
         assert "reasoning" not in sent
+
+    @pytest.mark.asyncio
+    async def test_the_chat_route_sends_none_when_the_operator_sets_the_deployment_mode(
+        self, respx_mock: respx.MockRouter, local_model_cost_map: None
+    ) -> None:
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            {**_OFF_MAP_OPENAI_DEPLOYMENT, "model": "openai/vendor/off-map-hybrid-reasoner"},
+            {"mode": "responses"},
+            r"https://compatible\.example\.test/v1/responses",
+            _RESPONSE,
+            thinking={"type": "disabled"},
+            stop_sequences=["STOP"],
+        )
+
+        assert sent["reasoning"]["effort"] == "none"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "messages_params",
+        [{"thinking": {"type": "disabled"}}, {"thinking": {"type": "adaptive"}, "output_config": {"effort": "none"}}],
+        ids=["disabled", "adaptive-effort-none"],
+    )
+    async def test_the_responses_bridge_sends_none_where_its_transformation_accepts_it(
+        self, respx_mock: respx.MockRouter, local_model_cost_map: None, messages_params: Mapping[str, object]
+    ) -> None:
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            {**_OFF_MAP_OPENAI_DEPLOYMENT, "model": "openai/vendor/off-map-hybrid-reasoner"},
+            {},
+            r"https://compatible\.example\.test/v1/responses",
+            _RESPONSE,
+            **messages_params,
+        )
+
+        assert sent["reasoning"] == {"effort": "none"}

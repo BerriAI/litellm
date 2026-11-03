@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.reasoning_effort_capability import deployment_rounds_reasoning_effort
 from litellm.litellm_core_utils.tool_fields import drops_mcp_servers, tools_without_mcp_servers
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -41,7 +42,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import REASONING_EFFORT, ResponsesAPIResponse
-from litellm.types.utils import CountContextManagement
+from litellm.types.utils import CountContextManagement, LlmProviders
 from litellm.utils import ProviderConfigManager
 
 from ..adapters.handler import context_management_explicitly_dropped, request_safeguards_evaluator
@@ -52,7 +53,6 @@ from ..convertible_blocks import reject_malformed_tool_result_text
 from ..safeguards import with_safeguard_results
 from ..utils import (
     REASONING_EFFORT_OFF,
-    cost_map_row_lacks_reasoning,
     litellm_logging_obj_from_kwargs,
     local_model_name,
     maps_bare_output_effort,
@@ -277,7 +277,7 @@ def _reasoning_for_target(
         return reasoning
     if effort == REASONING_EFFORT_OFF:
         off_level: Final = reasoning_off_level(model, custom_llm_provider, drop_params=drop_params)
-        if off_level is None or cost_map_row_lacks_reasoning(model, custom_llm_provider):
+        if off_level is None or _responses_api_refuses_reasoning_effort(model, custom_llm_provider):
             return None
         return {**reasoning_params, "effort": off_level}
     if drop_params and effort not in _KNOWN_REASONING_EFFORTS:
@@ -303,6 +303,12 @@ def _reasoning_for_target(
         )
         return None
     return reasoning if normalized == effort else {**reasoning_params, "effort": normalized}
+
+
+def _responses_api_refuses_reasoning_effort(model: str, custom_llm_provider: str | None) -> bool:
+    return custom_llm_provider == LlmProviders.OPENAI.value and not OpenAIResponsesAPIConfig.supports_reasoning_param(
+        model
+    )
 
 
 def _model_excludes_effort(
