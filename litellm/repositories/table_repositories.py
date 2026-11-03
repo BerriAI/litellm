@@ -110,6 +110,11 @@ def _accounting_payload(value: object) -> Mapping[str, object]:
     )
 
 
+def _charges_a_batch(row: Mapping[str, object]) -> bool:
+    spend: Final = row.get("spend")
+    return row.get("call_type") == "aretrieve_batch" and isinstance(spend, (int, float)) and spend > 0
+
+
 class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs"]):
     table_name = "litellm_spendlogs"
 
@@ -174,12 +179,34 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
                 [await transaction.query_raw(*spend_log_insert_statement(group)) for group in groups]
             )
         inserted: Final = frozenset(str(row["request_id"]) for row in chain.from_iterable(inserted_groups))
-        conflicts: Final = tuple(str(row["request_id"]) for row in local_rows if row["request_id"] not in inserted)
+        taken_over: Final = await SpendLogsRepository._take_over_uncharged_batches(
+            transaction, tuple(row for row in local_rows if row["request_id"] not in inserted)
+        )
+        conflicts: Final = tuple(
+            str(row["request_id"])
+            for row in local_rows
+            if row["request_id"] not in inserted and row["request_id"] not in taken_over
+        )
         if conflicts:
             await transaction.execute_raw(
                 'DELETE FROM "LiteLLM_SpendLogDelivery" WHERE request_id = ANY($1::text[])', conflicts
             )
         return len(accepted) - len(conflicts)
+
+    @staticmethod
+    async def _take_over_uncharged_batches(
+        transaction: LedgerTransaction, conflicting: Sequence[Mapping[str, object]]
+    ) -> frozenset[str]:
+        from litellm.repositories.spend_log_insert import spend_log_takeover_statement
+
+        updated: Final = tuple(
+            [
+                await transaction.query_raw(*spend_log_takeover_statement(row))
+                for row in conflicting
+                if _charges_a_batch(row)
+            ]
+        )
+        return frozenset(str(row["request_id"]) for row in chain.from_iterable(updated))
 
     async def batch_delivery(self, request_id: str) -> Mapping[str, object] | None:
         database: Final[LedgerTransaction] = self.prisma_client.writer_db

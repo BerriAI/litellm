@@ -893,6 +893,52 @@ async def test_batch_claim_failure_queues_an_atomic_retry_and_repeated_retrieve_
 
 
 @pytest.mark.asyncio
+async def test_failed_claim_over_a_legacy_zero_batch_row_still_charges_it_once(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.accounting.worker import flush_accounting_deliveries
+
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    client = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    client.spend_log_transactions = []
+    client.model_usage_transactions = []
+    writer = DBSpendUpdateWriter()
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": False})
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    await client.db.connect()
+    try:
+        assert await _retrieve_batch(writer, 0)
+        await drain_logging_tasks()
+        await SpendLogsRepository(client).insert_with_deliveries(tuple(client.spend_log_transactions))
+        client.spend_log_transactions = []
+        monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": True})
+        with psycopg.connect(parity_database, autocommit=True) as connection:
+            assert connection.execute(
+                'SELECT spend, accounting_path FROM "LiteLLM_SpendLogs" WHERE request_id=\'batch_batch_cost\''
+            ).fetchall() == [(0.0, "legacy")]
+            connection.execute('ALTER TABLE "LiteLLM_SpendLogDelivery" RENAME TO "LiteLLM_SpendLogDelivery_unavailable"')
+        assert await _retrieve_batch(writer, 0.25)
+        queued = tuple(client.spend_log_transactions)
+        assert [row["accounting_path"] for row in queued] == ["ledger"]
+        with psycopg.connect(parity_database, autocommit=True) as connection:
+            connection.execute('ALTER TABLE "LiteLLM_SpendLogDelivery_unavailable" RENAME TO "LiteLLM_SpendLogDelivery"')
+        assert await SpendLogsRepository(client).insert_with_deliveries(queued) == 1
+        await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
+        assert await _retrieve_batch(writer, 0.25) is False
+        await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
+        with psycopg.connect(parity_database) as connection:
+            assert connection.execute('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=\'key\'').fetchone() == (0.25,)
+            assert connection.execute(
+                'SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id=\'batch_batch_cost\''
+            ).fetchall() == [(0.25,)]
+            assert connection.execute('SELECT state::text FROM "LiteLLM_SpendLogDelivery"').fetchall() == [("applied",)]
+    finally:
+        await client.db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_worker_exposes_invalid_accounting_as_delayed_then_parked_work(
     parity_database: str, monkeypatch: pytest.MonkeyPatch
 ):

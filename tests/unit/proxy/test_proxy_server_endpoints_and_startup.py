@@ -16609,8 +16609,8 @@ def _accounting_window_env(cached: Mapping[str, object], client: MagicMock) -> I
 
 @pytest.mark.asyncio
 async def test_accounting_window_keys_cover_the_stored_key_and_the_cached_team():
-    key_reset: Final = datetime.now(timezone.utc) + timedelta(days=10)
-    team_reset: Final = datetime.now(timezone.utc) + timedelta(days=3)
+    key_reset: Final = datetime(2026, 11, 13, tzinfo=timezone.utc)
+    team_reset: Final = datetime(2026, 11, 6, tzinfo=timezone.utc)
     key_row: Final = _StoredRow(
         budget_limits=[{"budget_duration": "30d", "max_budget": 100.0, "reset_at": key_reset.isoformat()}]
     )
