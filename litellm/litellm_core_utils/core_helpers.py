@@ -312,12 +312,12 @@ def _raised_from(exception: BaseException) -> BaseException | None:
 
 
 def _http_status(exception: BaseException) -> int | None:
-    code: Final[object] = getattr(exception, "code", None)
-    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
-    if status_code is None or isinstance(status_code, bool):
+    status_code: Final[object] = getattr(exception, "status_code", None)
+    status: Final[object] = status_code if status_code is not None else getattr(exception, "code", None)
+    if status is None or isinstance(status, bool):
         return None
     try:
-        return int(str(status_code))
+        return int(str(status))
     except ValueError:
         return None
 

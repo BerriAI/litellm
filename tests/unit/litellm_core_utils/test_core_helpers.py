@@ -617,6 +617,15 @@ class TestIsClientCausedFailure:
                 ),
                 id="mapped_provider_400",
             ),
+            pytest.param(
+                BadRequestError(
+                    message="Invalid size '13x13'",
+                    model="gpt-image-2",
+                    llm_provider="openai",
+                    body={"code": "invalid_value", "param": "size", "type": "invalid_request_error"},
+                ),
+                id="mapped_provider_400_with_a_provider_error_code",
+            ),
             pytest.param(HTTPException(status_code=400), id="proxy_400"),
             pytest.param(HTTPException(status_code=403), id="proxy_403"),
             pytest.param(HTTPException(status_code=429), id="proxy_429"),
