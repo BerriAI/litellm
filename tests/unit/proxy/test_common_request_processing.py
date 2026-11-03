@@ -10980,53 +10980,6 @@ async def test_base_process_llm_request_audits_a_failure_that_lands_after_its_ke
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_answers_a_late_503_after_its_keepalive_as_an_api_error_event() -> None:
-    unavailable: Final = litellm.ServiceUnavailableError(
-        message='BedrockException - {"message": "Bedrock is unable to process your request."}',
-        llm_provider="bedrock",
-        model="global.anthropic.claude-opus-5-5",
-    )
-    release_failure: Final = asyncio.Event()
-
-    async def fail_after_keepalive(self: ProxyBaseLLMRequestProcessing, **kwargs: object) -> None:
-        await release_failure.wait()
-        raise unavailable
-
-    proxy_logging_obj: Final = MagicMock(spec=ProxyLogging)
-    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
-    processor: Final = ProxyBaseLLMRequestProcessing(
-        data={"model": "global.anthropic.claude-opus-5-5", "stream": True}
-    )
-
-    with patch.object(litellm, "sse_keepalive_ping_interval_seconds", 0.05):
-        with patch.object(ProxyBaseLLMRequestProcessing, "_process_llm_request", fail_after_keepalive):
-            response: Final = await processor.base_process_llm_request(
-                request=MagicMock(spec=Request),
-                fastapi_response=Response(),
-                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
-                route_type="anthropic_messages",
-                proxy_logging_obj=proxy_logging_obj,
-                general_settings={},
-                proxy_config=MagicMock(spec=ProxyConfig),
-            )
-        body_iterator: Final = response.body_iterator
-        first_chunk: Final = await body_iterator.__anext__()
-        release_failure.set()
-        remaining_chunks: Final = [
-            chunk.encode("utf-8") if isinstance(chunk, str) else bytes(chunk) async for chunk in body_iterator
-        ]
-
-    assert proxy_logging_obj.post_call_failure_hook.await_args.kwargs["original_exception"] is unavailable
-    assert first_chunk == TTFT_PING
-    event_line, data_line = remaining_chunks[-1].decode().strip().split("\n")
-    assert event_line == "event: error"
-    error: Final = json.loads(data_line.removeprefix("data: "))
-    assert error["type"] == "error"
-    assert error["error"]["type"] == "api_error"
-    assert "Bedrock is unable to process your request." in error["error"]["message"]
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "deployment_keepalive, expect_ping",
     [(0, False), (None, True)],

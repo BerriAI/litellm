@@ -1,3 +1,5 @@
+from typing import Final
+
 import openai
 import pytest
 
@@ -18,9 +20,9 @@ def _anthropic_internal_server_error(provider_status_code: int | None) -> litell
 
 @pytest.mark.parametrize("code", [400, 500, 503])
 def test_a_proxy_exception_passes_through_unchanged(code: int) -> None:
-    exc = ProxyException(message="budget service unavailable", type="None", param=None, code=code)
+    exc: Final = ProxyException(message="budget service unavailable", type="None", param=None, code=code)
 
-    answered_exc = with_answered_status(exc)
+    answered_exc: Final = with_answered_status(exc)
 
     assert answered_exc is exc
     assert exc.code == str(code)
@@ -76,9 +78,9 @@ def test_a_proxy_exception_passes_through_unchanged(code: int) -> None:
 def test_a_litellm_exception_answers_the_status_anthropic_gives_its_failure(
     exc: openai.APIStatusError, answered: int, copy: bool
 ) -> None:
-    raised_status = exc.status_code
+    raised_status: Final = exc.status_code
 
-    answered_exc = with_answered_status(exc)
+    answered_exc: Final = with_answered_status(exc)
 
     assert (answered_exc is not exc) is copy
     assert (type(answered_exc), answered_exc.status_code, str(answered_exc)) == (type(exc), answered, str(exc))
@@ -101,14 +103,14 @@ def test_the_answered_copy_keeps_the_raised_exceptions_cause_and_traceback() -> 
     with pytest.raises(litellm.InternalServerError) as raised:
         _raise_a_bedrock_overload_caused_by_a_reset()
 
-    answered_exc = with_answered_status(raised.value)
+    answered_exc: Final = with_answered_status(raised.value)
 
     assert isinstance(raised.value.__cause__, ConnectionError)
     assert (answered_exc.__cause__, answered_exc.__traceback__) == (raised.value.__cause__, raised.value.__traceback__)
 
 
 def test_an_exception_without_a_status_passes_through_unchanged() -> None:
-    exc = ValueError("no status")
+    exc: Final = ValueError("no status")
 
     assert with_answered_status(exc) is exc
     assert not hasattr(exc, "status_code")
