@@ -87,7 +87,7 @@ def _keyed_rows(model: str, quality: str) -> tuple[tuple[int, int, float], ...]:
     suffix: Final = f"/{model}"
     return tuple(
         (width, height, float(raw_cost))
-        for key in litellm.model_cost
+        for key in (*litellm.model_cost,)
         if isinstance(key, str) and key.startswith(prefix) and key.endswith(suffix)
         for size in (key[len(prefix) : -len(suffix)],)
         for dimensions in (_parse_keyed_dimensions(size),)

@@ -27,7 +27,7 @@ async fn handle(
         upload,
     }: InferenceBody,
 ) -> Result<Value, Error> {
-    let deployment = request::resolve_deployment(gateway, &body)?;
+    let deployment = request::resolve_deployment(gateway, "/audio/transcriptions", &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let audio = match upload {
         Some(upload) => {

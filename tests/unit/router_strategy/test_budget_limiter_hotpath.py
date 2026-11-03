@@ -1,6 +1,8 @@
 import asyncio
+import contextlib
 import gc
 import logging
+import threading
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -300,6 +302,27 @@ def test_router_add_deployment_registers_deployment_budget(disable_budget_sync, 
     assert config.max_budget == 0.000000000001
 
 
+def _leave_a_task_pending_on_a_closed_loop() -> None:
+    def park_a_task_then_close_the_loop() -> None:
+        loop: Final = asyncio.new_event_loop()
+
+        async def park() -> None:
+            await loop.create_future()
+
+        loop.create_task(park())
+        loop.call_soon(loop.stop)
+        loop.run_forever()
+        loop.close()
+
+    parker: Final = threading.Thread(target=park_a_task_then_close_the_loop)
+    parker.start()
+    parker.join()
+
+
+def _non_asyncio_log_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if record.name != "asyncio"]
+
+
 @pytest.mark.asyncio
 async def test_sync_refused_by_the_open_circuit_breaker_is_quiet_and_leaks_no_task(disable_budget_sync, caplog):
     """The budget sync runs every second, so an open breaker must not add an error line or an unretrieved task exception per cycle."""
@@ -321,11 +344,12 @@ async def test_sync_refused_by_the_open_circuit_breaker_is_quiet_and_leaks_no_ta
         with caplog.at_level(logging.ERROR):
             await limiter._sync_in_memory_spend_with_redis()
             await asyncio.sleep(0)
+            _leave_a_task_pending_on_a_closed_loop()
             gc.collect()
     finally:
         loop.set_exception_handler(None)
 
-    assert caplog.records == []
+    assert _non_asyncio_log_lines(caplog) == []
     unretrieved.assert_not_called()
     assert limiter.redis_increment_operation_queue == [
         {"key": "provider_spend:openai:1d", "increment_value": 0.5, "ttl": 60}
@@ -381,11 +405,12 @@ async def test_push_task_failure_is_logged_once_and_not_leaked(disable_budget_sy
         with caplog.at_level(logging.ERROR):
             await limiter._push_in_memory_increments_to_redis()
             await asyncio.sleep(0)
+            _leave_a_task_pending_on_a_closed_loop()
             gc.collect()
     finally:
         loop.set_exception_handler(None)
 
-    assert [record.getMessage() for record in caplog.records if record.name != "asyncio"] == [
+    assert _non_asyncio_log_lines(caplog) == [
         "Error syncing in-memory cache with Redis: Error 61 connecting to 127.0.0.1:6379"
     ]
     unretrieved.assert_not_called()
@@ -492,6 +517,8 @@ def _new_router_budget_limiter(
     budget_limiter._redis_increment_queue_lock = queue_lock if queue_lock is not None else asyncio.Lock()
     budget_limiter._redis_increment_flush_lock = asyncio.Lock()
     budget_limiter._detached_increment_operations = None
+    budget_limiter._retired = False
+    budget_limiter._flush_after_retire = None
     return budget_limiter
 
 
@@ -784,3 +811,57 @@ async def test_cancelled_flush_does_not_requeue_an_applied_batch(cancellations: 
     await limiter._push_in_memory_increments_to_redis()
     assert redis_cache.values[_SPEND_KEY] == 10.0
     assert limiter.redis_increment_operation_queue == []
+
+
+@pytest.mark.asyncio
+async def test_spend_queued_when_a_limiter_is_retired_reaches_redis_after_a_failed_write() -> None:
+    pipeline_started: Final = asyncio.Event()
+    pipeline_completed: Final = asyncio.Event()
+    redis_cache: Final = _MockRedisCache(
+        initial_values={},
+        pipeline_started=pipeline_started,
+        pipeline_completed=pipeline_completed,
+        should_fail_pipeline=True,
+    )
+    budget_limiter: Final = _new_router_budget_limiter(
+        redis_cache=redis_cache, redis_increment_operation_queue=[_increment(10.0)]
+    )
+    budget_limiter._sync_task = asyncio.create_task(asyncio.sleep(3600))
+
+    budget_limiter.retire()
+    await asyncio.wait_for(pipeline_started.wait(), timeout=1)
+    assert redis_cache.values == {}
+    redis_cache.should_fail_pipeline = False
+    await asyncio.wait_for(pipeline_completed.wait(), timeout=5)
+
+    assert redis_cache.values == {_SPEND_KEY: 10.0}
+    assert budget_limiter.redis_increment_operation_queue == []
+
+
+@pytest.mark.asyncio
+async def test_spend_in_flight_when_a_limiter_is_retired_reaches_redis_after_that_write_fails() -> None:
+    pipeline_started: Final = asyncio.Event()
+    allow_pipeline_to_complete: Final = asyncio.Event()
+    pipeline_completed: Final = asyncio.Event()
+    redis_cache: Final = _MockRedisCache(
+        initial_values={},
+        pipeline_started=pipeline_started,
+        allow_pipeline_to_complete=allow_pipeline_to_complete,
+        should_fail_pipeline=True,
+        pipeline_completed=pipeline_completed,
+    )
+    budget_limiter: Final = _new_router_budget_limiter(
+        redis_cache=redis_cache, redis_increment_operation_queue=[_increment(10.0)]
+    )
+    budget_limiter._sync_task = asyncio.create_task(budget_limiter.periodic_sync_in_memory_spend_with_redis())
+    await asyncio.wait_for(pipeline_started.wait(), timeout=1)
+
+    budget_limiter.retire()
+    allow_pipeline_to_complete.set()
+    with contextlib.suppress(asyncio.CancelledError):
+        await budget_limiter._sync_task
+    redis_cache.should_fail_pipeline = False
+    await asyncio.wait_for(pipeline_completed.wait(), timeout=5)
+
+    assert redis_cache.values == {_SPEND_KEY: 10.0}
+    assert budget_limiter.redis_increment_operation_queue == []

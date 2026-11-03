@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import type { KeyResponse } from "@/components/key_team_helpers/key_list";
+import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import { writeStorage } from "@/lib/storage";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { keyDetailHref } from "@/utils/entityLinks";
@@ -412,6 +413,33 @@ describe("CommandPalette integration", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(mocks.push).toHaveBeenCalledWith(uiHref("logs"));
   });
+
+  it.each([
+    [true, "si hub", /^SI Hub/],
+    [false, "ai hub", /^AI Hub/],
+  ])(
+    "lists and matches nav pages in the configured terminology when SI terminology is %s",
+    async (useSi, query, option) => {
+      const user = userEvent.setup();
+      mocks.pathname = "/teams";
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json({ ...UI_SETTINGS_RESPONSE, use_si_terminology: useSi })),
+      );
+      renderWithProviders(
+        <TerminologyProvider>
+          <CommandPaletteProvider>
+            <CommandPaletteTrigger />
+          </CommandPaletteProvider>
+        </TerminologyProvider>,
+      );
+
+      fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+      await user.type(await screen.findByRole("combobox", { name: "Search" }), query);
+
+      expect(await screen.findByRole("option", { name: option })).toBeVisible();
+    },
+  );
 
   it("clears the global query when switching to key search", async () => {
     const user = userEvent.setup();

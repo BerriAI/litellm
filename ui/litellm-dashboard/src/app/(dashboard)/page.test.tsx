@@ -43,7 +43,11 @@ vi.mock("@/app/(dashboard)/home/_components/HomePage", () => ({
 vi.mock("@/components/common_components/LoadingScreen", () => ({
   default: () => <div data-testid="loading-screen" />,
 }));
-vi.mock("@/components/networking", () => ({ proxyBaseUrl: "" }));
+vi.mock("@/components/networking", () => ({
+  getRuntimeBackendBaseUrl: () => null,
+  getUiPageUrl: (url: string) => url,
+  proxyBaseUrl: "",
+}));
 vi.mock("@/utils/uiHref", () => ({ uiHref: mockUiHref }));
 vi.mock("@/utils/returnUrlUtils", () => ({
   buildLoginUrlWithReturn: (u: string) => u,

@@ -8,13 +8,16 @@ import asyncio
 import copy
 import json
 import traceback
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import (
     AddTeamCallback,
     LiteLLM_AuditLogs,
@@ -43,6 +46,7 @@ from litellm.proxy.common_utils.callback_utils import (  # noqa: F401  # legacy 
     encrypt_callback_vars,
     is_sensitive_callback_key,
 )
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param
 from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
     _get_validated_callback_metadata,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     convert_key_logging_metadata_to_callback,
@@ -62,6 +66,11 @@ router: Final = APIRouter()
 
 
 _CALLBACK_VARS_REDACTED: Final = "***REDACTED***"
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _decrypted_metadata(metadata: object) -> Mapping[str, object]:
+    return as_str_mapping(_DECODED_JSON.validate_python(decrypt_callback_vars(metadata))) or {}
 
 
 def _callback_config_error(message: str) -> HTTPException:
@@ -147,7 +156,7 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
     if not isinstance(team_metadata, dict):
         return TeamCallbackMetadata()
 
-    decrypted: Final = decrypt_callback_vars(team_metadata)
+    decrypted: Final = _decrypted_metadata(team_metadata)
     logging_entries: Final = decrypted.get("logging")
 
     if logging_entries is not None:
@@ -357,7 +366,7 @@ async def add_team_callbacks(
 
         # Decrypted, because the checks compare the incoming values against
         # the stored ones and the credentials are encrypted at rest.
-        decrypted_logging: Final = decrypt_callback_vars(team_metadata).get("logging")
+        decrypted_logging: Final = _decrypted_metadata(team_metadata).get("logging")
         stored_callbacks: Final = stored_callback_entries(decrypted_logging)
         stored_entries: Final = decrypted_logging if isinstance(decrypted_logging, list) else ()
         stored_entry_vars: Final = [entry.get("callback_vars") or {} for entry in stored_entries]
@@ -411,8 +420,8 @@ async def add_team_callbacks(
         team_callback_settings.append(data.model_dump())
 
         team_metadata["logging"] = team_callback_settings
-        team_metadata = encrypt_callback_vars(team_metadata)
-        team_metadata_json: Final = json.dumps(team_metadata)  # update team_metadata
+        encrypted_metadata: Final = _DECODED_JSON.validate_python(encrypt_callback_vars(team_metadata))
+        team_metadata_json: Final = json.dumps(encrypted_metadata)
 
         new_team_row: Final = await TeamRepository(prisma_client).table.update(
             where={"team_id": team_id},
@@ -436,7 +445,7 @@ async def add_team_callbacks(
         await _emit_team_callback_audit_log(
             team_id=team_id,
             before_metadata=before_metadata,
-            after_metadata=team_metadata,
+            after_metadata=encrypted_metadata,
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
         )
@@ -455,7 +464,7 @@ async def add_team_callbacks(
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -541,7 +550,7 @@ async def delete_team_callback(
             raise _callback_error(404, f"callback_name = {callback_name} is not registered for team_id = {team_id}.")
 
         updated_metadata: Final = {**team_metadata, "logging": remaining_callbacks}
-        encrypted_metadata: Final[object] = encrypt_callback_vars(updated_metadata)
+        encrypted_metadata: Final = _DECODED_JSON.validate_python(encrypt_callback_vars(updated_metadata))
         team_metadata_json: Final = json.dumps(encrypted_metadata)
 
         updated_team: Final = await TeamRepository(prisma_client).table.update(
@@ -598,7 +607,7 @@ async def delete_team_callback(
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     else:
@@ -678,7 +687,7 @@ async def disable_team_logging(
         # _get_dynamic_logging_metadata stops at metadata["logging"], where the API
         # and Admin UI register callbacks, without ever reading callback_settings.
         team_metadata["logging"] = []
-        encrypted_metadata: Final[object] = encrypt_callback_vars(team_metadata)
+        encrypted_metadata: Final = _DECODED_JSON.validate_python(encrypt_callback_vars(team_metadata))
         team_metadata_json: Final = json.dumps(encrypted_metadata)
 
         # Update team in database
@@ -739,7 +748,7 @@ async def disable_team_logging(
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -830,7 +839,7 @@ async def get_team_callbacks(
             raise ProxyException(
                 message=getattr(e, "detail", f"Internal Server Error({e})"),
                 type=ProxyErrorTypes.internal_server_error.value,
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -838,6 +847,6 @@ async def get_team_callbacks(
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )

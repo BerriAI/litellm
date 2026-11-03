@@ -14,6 +14,8 @@ from integration._support.mcp import McpPeer, call_tool, mcp_peer, register_mcp,
 from integration._support.process import owned_proxy_process
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 TOKEN: Final = "USER_TOKEN"
 WORKSPACE: Final = "WORKSPACE"
 METHODS: Final = ("GET", "POST", "DELETE")

@@ -14,6 +14,7 @@ class VideoGenerationRequestUtils:
         model: str,
         video_generation_provider_config: BaseVideoConfig,
         video_generation_optional_params: VideoCreateOptionalRequestParams,
+        drop_params: bool = False,
     ) -> dict:
         """
         Get optional parameters for the video generation API.
@@ -30,7 +31,7 @@ class VideoGenerationRequestUtils:
         mapped_params: Final = video_generation_provider_config.map_openai_params(
             video_create_optional_params=video_generation_optional_params,
             model=model,
-            drop_params=litellm.drop_params,
+            drop_params=drop_params or litellm.drop_params is True,
         )
 
         # Merge extra_body params if present (for provider-specific parameters)

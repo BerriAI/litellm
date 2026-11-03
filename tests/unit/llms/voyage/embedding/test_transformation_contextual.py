@@ -562,3 +562,20 @@ def test_voyage_contextual_embedding_usage_that_is_not_an_object_is_rejected(usa
 def test_voyage_contextual_embedding_token_count_that_is_not_an_integer_is_rejected(usage):
     with pytest.raises(ValidationError):
         _transform({"data": [EMBEDDING_ROW], "usage": usage})
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/voyage/v1",
+        "https://gateway.example.com/voyage/v1/",
+        "https://gateway.example.com/voyage/v1/contextualizedembeddings/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        VoyageContextualEmbeddingConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="voyage-context-3", optional_params={}, litellm_params={}
+        )
+        == "https://gateway.example.com/voyage/v1/contextualizedembeddings"
+    )

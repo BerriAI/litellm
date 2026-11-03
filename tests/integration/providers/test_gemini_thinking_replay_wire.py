@@ -26,6 +26,8 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _BACKEND: Final = "gemini-2.5-flash"
 _API_KEY: Final = "synthetic-gemini-key"
 _PROJECT: Final = "scripted-project"

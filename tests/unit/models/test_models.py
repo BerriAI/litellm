@@ -464,6 +464,18 @@ class TestEndUserTable:
         eu = LiteLLM_EndUserTable(user_id="eu2", blocked=True, spend=None)
         assert eu.spend == 0.0
 
+    def test_end_user_from_model_instance(self):
+        class MockPrismaRecord(BaseModel):
+            user_id: str
+            blocked: bool
+            spend: float | None = None
+
+        record = MockPrismaRecord(user_id="u3", blocked=True, spend=None)
+        table = LiteLLM_EndUserTable.model_validate(record, from_attributes=True)
+        assert table.user_id == "u3"
+        assert table.spend == 0.0
+        assert table.blocked is True
+
 
 class TestBudgetTableFull:
     def test_full_adds_server_managed_fields(self):

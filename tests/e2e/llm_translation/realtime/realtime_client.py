@@ -47,6 +47,7 @@ class RealtimeProvider:
     id: str
     alias: str
     litellm_params: LiteLLMParamsBody
+    modalities: tuple[str, ...] = ("text",)
 
 
 PROVIDERS = (
@@ -75,6 +76,7 @@ PROVIDERS = (
             model="gemini/gemini-3.1-flash-live-preview",
             api_key="os.environ/GEMINI_API_KEY",
         ),
+        modalities=("audio",),
     ),
     RealtimeProvider(
         "vertex_ai",
@@ -84,8 +86,18 @@ PROVIDERS = (
             vertex_location="us-central1",
             vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
         ),
+        modalities=("audio",),
     ),
-    # RealtimeProvider("bedrock", "bedrock-realtime", ...) # TODO: Enable when Bedrock is passing
+    RealtimeProvider(
+        "bedrock",
+        "bedrock-realtime",
+        LiteLLMParamsBody(
+            model="bedrock/amazon.nova-2-sonic-v1:0",
+            aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+            aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+            aws_region_name="os.environ/AWS_REGION",
+        ),
+    ),
     # RealtimeProvider(
     #     "xai",
     #     "xai-realtime",

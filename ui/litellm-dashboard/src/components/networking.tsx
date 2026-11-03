@@ -48,7 +48,7 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
   }
 };
 
-export type AssembledPromptTierSource =
+type AssembledPromptTierSource =
   | { tierDefinitions: { name: string; description?: string }[] }
   | { tierLabels?: Record<string, string>; classificationRubric?: string };
 
@@ -89,6 +89,7 @@ export const getAutoRouterAssembledPromptCall = async (
 import { toast } from "@/lib/toast";
 import { clearTokenCookies, getCookie, storeLoginToken } from "@/utils/cookieUtils";
 import { decodeToken } from "@/utils/jwtUtils";
+import { normalizeBackendPageUrlToUiOrigin } from "@/utils/returnUrlUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
@@ -118,17 +119,14 @@ import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
-import type { RoutingDecision } from "./logs/detail/RoutingDecisionCard";
 import type {
-  SpanDetail,
-  SpanErrorPage,
-  SpanErrorQuery,
-  SpanQuery,
-  Trace,
-  TraceDetailQuery,
-  TraceListQuery,
-  TracePage,
-} from "@litellm/lens-ui";
+  SubscriptionAccountCreateRequest,
+  SubscriptionAccountDeleteRequest,
+  SubscriptionAccountUpdateRequest,
+  SubscriptionFee,
+  SubscriptionUsageResponse,
+} from "@/app/(dashboard)/usage/_components/components/SubscriptionCost/types";
+import type { RoutingDecision } from "./logs/detail/RoutingDecisionCard";
 import {
   createApiClient,
   deriveErrorMessage,
@@ -189,6 +187,9 @@ const _initialWorkerUrl = (() => {
   return null;
 })();
 export let proxyBaseUrl: string | null = _initialWorkerUrl ?? defaultProxyBaseUrl;
+let discoveredProxyBaseUrl: string | null = defaultProxyBaseUrl;
+let gatewayBaseUrl: string | null = null;
+let runtimeBackendBaseUrl: string | null = null;
 if (isLocal != true) {
   console.log = function () {};
 }
@@ -204,14 +205,13 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
   /**
    * Special function for updating the proxy base url. Should only be called by getUiConfig.
    */
-  // If a worker URL is in localStorage, don't let getUiConfig overwrite it
-  if (typeof window !== "undefined" && window.localStorage.getItem(WORKER_URL_KEY)) {
-    return;
-  }
-  proxyBaseUrl = resolveApiBase({
+  const resolvedProxyBaseUrl = resolveApiBase({
     explicitBase: receivedProxyBaseUrl || resolveDefaultBase(getWindowLocation()?.origin ?? null),
     serverRootPath,
   });
+  discoveredProxyBaseUrl = resolvedProxyBaseUrl || null;
+  if (typeof window !== "undefined" && window.localStorage.getItem(WORKER_URL_KEY)) return;
+  proxyBaseUrl = resolvedProxyBaseUrl;
 };
 
 const updateServerRootPath = (receivedServerRootPath: string) => {
@@ -224,6 +224,26 @@ export const getProxyBaseUrl = (): string => {
   }
   const browserLocation = getWindowLocation();
   return browserLocation?.origin ?? "";
+};
+
+export const getRuntimeBackendBaseUrl = (): string | null => runtimeBackendBaseUrl;
+
+export const getUiPageUrl = (url: string, relativePath = false): string => {
+  const browserLocation = getWindowLocation();
+  return normalizeBackendPageUrlToUiOrigin(url, runtimeBackendBaseUrl, browserLocation?.origin ?? null, relativePath);
+};
+
+const normalizeHttpUrl = (url: string | null | undefined): string | null => {
+  const trimmedUrl = (url ?? "").trim();
+  if (!trimmedUrl || !isValidHttpUrl(trimmedUrl)) return null;
+  return trimmedUrl.replace(/\/+$/, "");
+};
+
+export const getGatewayBaseUrl = (): string => {
+  if (typeof window !== "undefined" && window.localStorage.getItem(WORKER_URL_KEY)) {
+    return getProxyBaseUrl();
+  }
+  return gatewayBaseUrl ?? getProxyBaseUrl();
 };
 
 /**
@@ -252,7 +272,7 @@ export function switchToWorkerUrl(workerUrl: string | null): void {
       window.localStorage.removeItem(WORKER_URL_KEY);
     }
   }
-  proxyBaseUrl = workerUrl ?? defaultProxyBaseUrl;
+  proxyBaseUrl = workerUrl ?? discoveredProxyBaseUrl;
 }
 
 const HTTP_REQUEST = {
@@ -392,6 +412,7 @@ export interface WorkerInfo {
 export interface LiteLLMWellKnownUiConfig {
   server_root_path: string;
   proxy_base_url: string | null;
+  gateway_base_url?: string | null;
   auto_redirect_to_sso: boolean;
   admin_ui_disabled: boolean;
   sso_configured: boolean;
@@ -399,6 +420,7 @@ export interface LiteLLMWellKnownUiConfig {
   is_control_plane?: boolean;
   workers?: WorkerInfo[];
   mcp_stdio_enabled?: boolean;
+  use_si_terminology?: boolean;
 }
 
 export interface CredentialsResponse {
@@ -509,6 +531,12 @@ export const apiClient = createApiClient({
   onError: handleError,
 });
 
+const gatewayApiClient = createApiClient({
+  getBaseUrl: getGatewayBaseUrl,
+  getAuthHeaderName: getGlobalLitellmHeaderName,
+  onError: handleError,
+});
+
 registerBaseUrlGetter(getProxyBaseUrl);
 registerAuthHeaderNameGetter(getGlobalLitellmHeaderName);
 registerAuthTokenGetter(() => decodeToken(getCookie("token"))?.key ?? null);
@@ -531,8 +559,31 @@ export const makeModelGroupPublic = async (accessToken: string, modelGroups: str
 
 export const getUiConfig = async () => {
   /**Special route to get the proxy base url and server root path */
-  const url = defaultProxyBaseUrl
-    ? `${defaultProxyBaseUrl}/litellm/.well-known/litellm-ui-config`
+  const runtimeBackendUrl = defaultProxyBaseUrl
+    ? null
+    : await (async (): Promise<string | null> => {
+        try {
+          // eslint-disable-next-line no-restricted-syntax -- read the UI static config before the API origin is known
+          const response = await fetch("/ui/litellm-runtime-config.json", { cache: "no-store" });
+          if (!response.ok) return null;
+          const runtimeConfig: unknown = await response.json();
+          if (
+            typeof runtimeConfig !== "object" ||
+            runtimeConfig === null ||
+            !("backend_url" in runtimeConfig) ||
+            typeof runtimeConfig.backend_url !== "string"
+          ) {
+            return null;
+          }
+          return normalizeHttpUrl(runtimeConfig.backend_url);
+        } catch {
+          return null;
+        }
+      })();
+  runtimeBackendBaseUrl = runtimeBackendUrl;
+  const discoveryBaseUrl = defaultProxyBaseUrl ?? runtimeBackendUrl;
+  const url = discoveryBaseUrl
+    ? `${discoveryBaseUrl}/litellm/.well-known/litellm-ui-config`
     : `/litellm/.well-known/litellm-ui-config`;
   const response = await fetch(url);
   const jsonData: LiteLLMWellKnownUiConfig = await response.json();
@@ -540,7 +591,8 @@ export const getUiConfig = async () => {
    * Update the proxy base url and server root path
    */
   updateServerRootPath(jsonData.server_root_path);
-  updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
+  updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url || runtimeBackendUrl);
+  gatewayBaseUrl = normalizeHttpUrl(jsonData.gateway_base_url);
   return jsonData;
 };
 
@@ -1340,6 +1392,34 @@ export const dailyActivityAggregatedCall = (
     query: dailyActivityQuery(entity, req, req.apiKeyLimit === undefined ? {} : { api_key_limit: req.apiKeyLimit }),
   });
 
+export const subscriptionUsageCall = (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+): Promise<SubscriptionUsageResponse> =>
+  apiClient.get<SubscriptionUsageResponse>("/subscription_accounts/usage", {
+    accessToken,
+    query: { start_date: formatDate(startTime), end_date: formatDate(endTime) },
+  });
+
+export const subscriptionAccountCreateCall = (
+  accessToken: string,
+  body: SubscriptionAccountCreateRequest,
+): Promise<SubscriptionFee> => apiClient.post<SubscriptionFee>("/subscription_accounts/new", { accessToken, body });
+
+export const subscriptionAccountUpdateCall = (
+  accessToken: string,
+  body: SubscriptionAccountUpdateRequest,
+): Promise<SubscriptionFee> => apiClient.post<SubscriptionFee>("/subscription_accounts/update", { accessToken, body });
+
+export const subscriptionAccountDeleteCall = (
+  accessToken: string,
+  subscriptionAccountId: string,
+): Promise<SubscriptionFee> => {
+  const body: SubscriptionAccountDeleteRequest = { subscription_account_id: subscriptionAccountId };
+  return apiClient.post<SubscriptionFee>("/subscription_accounts/delete", { accessToken, body });
+};
+
 export const dailyActivityKeyPageCall = (
   entity: DailyActivityEntity,
   req: DailyActivityRequest,
@@ -1411,7 +1491,7 @@ export const teamSpendByUserCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  teamIds: string[],
+  teamIds: readonly string[],
 ): Promise<TeamUserSpendResponse> =>
   apiClient.get<TeamUserSpendResponse>(`/team/spend/by_user`, {
     accessToken,
@@ -1550,6 +1630,8 @@ export const modelInfoCall = async (
   modelName?: string,
   accessGroup?: string,
   wildcardOnly?: boolean,
+  blocked?: boolean,
+  options: { useStoredParams?: boolean } = {},
 ) => {
   /**
    * Get all models on proxy
@@ -1569,6 +1651,9 @@ export const modelInfoCall = async (
     if (modelId && modelId.trim()) {
       params.append("modelId", modelId.trim());
     }
+    if (options.useStoredParams) {
+      params.append("use_stored_params", "true");
+    }
     if (teamId && teamId.trim()) {
       params.append("teamId", teamId.trim());
     }
@@ -1586,6 +1671,9 @@ export const modelInfoCall = async (
     }
     if (wildcardOnly) {
       params.append("wildcard_only", "true");
+    }
+    if (blocked !== undefined) {
+      params.append("blocked", blocked ? "true" : "false");
     }
     if (params.toString()) {
       url += `?${params.toString()}`;
@@ -1621,37 +1709,6 @@ export const modelInfoCall = async (
     const data = await response.json();
     return data;
     // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const modelInfoV1Call = async (accessToken: string, modelId: string) => {
-  /**
-   * Get all models on proxy
-   */
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/model/info` : `/v1/model/info`;
-    url += `?litellm_model_id=${modelId}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1792,7 +1849,7 @@ export const modelAvailableCall = async (
    * Get all the models user has access to
    */
   try {
-    return await apiClient.get(`/models`, {
+    return await gatewayApiClient.get(`/models`, {
       accessToken,
       query: {
         include_model_access_groups: "True",
@@ -1802,66 +1859,6 @@ export const modelAvailableCall = async (
         scope: scope || undefined,
       },
     });
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const teamSpendLogsCall = async (accessToken: string) => {
-  try {
-    const data = await apiClient.get(`/global/spend/teams`, { accessToken });
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const tagsSpendLogsCall = async (
-  accessToken: string,
-  startTime: string | undefined,
-  endTime: string | undefined,
-  tags: string[] | undefined,
-) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/tags` : `/global/spend/tags`;
-
-    if (startTime && endTime) {
-      url = `${url}?start_date=${startTime}&end_date=${endTime}`;
-    }
-
-    // if tags, convert the list to a comma separated string
-    if (tags) {
-      url += `&tags=${tags.join(",")}`;
-    }
-
-    const response = await fetch(`${url}`, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const allTagNamesCall = async (accessToken: string) => {
-  try {
-    const data = await apiClient.get(`/global/spend/all_tag_names`, { accessToken });
-    return data;
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1983,214 +1980,6 @@ export const uiSpendLogsCall = async ({
   }
 };
 
-/**
- * Agent tracing. All three respond 501 `{detail}` when `general_settings.tracing` is not
- * configured; callers can detect that through the thrown `ApiError`'s `status`.
- */
-export const agentTraceListCall = async ({
-  accessToken,
-  startMs,
-  endMs,
-  cursor,
-}: {
-  accessToken: string;
-  startMs: number;
-  endMs: number;
-  cursor?: string | null;
-}): Promise<TracePage> => {
-  const query = { start_ms: startMs, end_ms: endMs, cursor: cursor ?? undefined } satisfies TraceListQuery;
-  return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
-};
-
-export const sendOtlpTraceCall = async (accessToken: string, exportRequest: object): Promise<void> =>
-  apiClient.post(`/v1/traces`, { accessToken, body: exportRequest });
-
-export const agentTraceCall = async (
-  accessToken: string,
-  traceId: string,
-  traceRef?: string,
-  cursor?: string | null,
-): Promise<Trace> =>
-  apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
-    accessToken,
-    query: { trace_ref: traceRef || undefined, cursor: cursor ?? undefined, page_size: 200 } satisfies TraceDetailQuery,
-  });
-
-export const agentTraceSpanCall = async (
-  accessToken: string,
-  traceId: string,
-  spanId: string,
-  traceRef?: string,
-): Promise<SpanDetail> =>
-  apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}`, {
-    accessToken,
-    query: { trace_ref: traceRef || undefined } satisfies SpanQuery,
-  });
-
-export const agentTraceSpanErrorCall = async (
-  accessToken: string,
-  traceId: string,
-  spanId: string,
-  options: { traceRef?: string; cursor?: string | null },
-): Promise<SpanErrorPage> =>
-  apiClient.get<SpanErrorPage>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}/error`, {
-    accessToken,
-    query: { trace_ref: options.traceRef || undefined, cursor: options.cursor || undefined } satisfies SpanErrorQuery,
-  });
-
-export const adminSpendLogsCall = async (accessToken: string) => {
-  try {
-    const data = await apiClient.get(`/global/spend/logs`, { accessToken });
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const adminTopKeysCall = async (accessToken: string) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/keys?limit=5` : `/global/spend/keys?limit=5`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const adminTopEndUsersCall = async (
-  accessToken: string,
-  keyToken: string | null,
-  startTime: string | undefined,
-  endTime: string | undefined,
-) => {
-  try {
-    const body = keyToken
-      ? { api_key: keyToken, startTime: startTime, endTime: endTime }
-      : { startTime: startTime, endTime: endTime };
-
-    const data = await apiClient.post(`/global/spend/end_users`, { accessToken, body });
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const adminspendByProvider = async (
-  accessToken: string,
-  startTime: string | undefined,
-  endTime: string | undefined,
-) => {
-  try {
-    const data = await apiClient.get(`/global/spend/provider`, {
-      accessToken,
-      query: {
-        ...(startTime && endTime ? { start_date: startTime, end_date: endTime } : {}),
-      },
-    });
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch spend data:", error);
-    throw error;
-  }
-};
-
-export const adminGlobalActivity = async (
-  accessToken: string,
-  startTime: string | undefined,
-  endTime: string | undefined,
-) => {
-  try {
-    const data = await apiClient.get(`/global/activity`, {
-      accessToken,
-      query: startTime && endTime ? { start_date: startTime, end_date: endTime } : undefined,
-    });
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch spend data:", error);
-    throw error;
-  }
-};
-
-export const adminGlobalActivityPerModel = async (
-  accessToken: string,
-  startTime: string | undefined,
-  endTime: string | undefined,
-) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity/model` : `/global/activity/model`;
-
-    if (startTime && endTime) {
-      url += `?start_date=${startTime}&end_date=${endTime}`;
-    }
-
-    const requestOptions = {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
-    };
-
-    const response = await fetch(url, requestOptions);
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch spend data:", error);
-    throw error;
-  }
-};
-
-export const adminTopModelsCall = async (accessToken: string) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/models?limit=5` : `/global/spend/models?limit=5`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
 export const testConnectionRequest = async (
   accessToken: string,
   litellm_params: Record<string, any>,
@@ -2282,7 +2071,7 @@ export const testModelGroupConnection = async (
 ): Promise<ModelGroupConnectionResult> => {
   const { path, body } = buildModelGroupTestRequest(modelGroup, mode, requestParams);
   try {
-    await apiClient.post(path, { accessToken, body });
+    await gatewayApiClient.post(path, { accessToken, body });
     return { status: "success" };
   } catch (error) {
     return { status: "error", error: error instanceof Error ? error.message : String(error) };
@@ -2323,7 +2112,7 @@ export const testAutoRouterRouting = async (
   }
 };
 
-export interface ComplexityRouterConfigValidation {
+interface ComplexityRouterConfigValidation {
   valid: boolean;
   error?: string | null;
 }
@@ -2635,7 +2424,7 @@ export interface UserConnectionStartResponse {
   flow_handle: string;
 }
 
-export type UserConnectionPollStatus = "pending" | "slow_down" | "expired" | "denied" | "no_copilot_seat" | "connected";
+type UserConnectionPollStatus = "pending" | "slow_down" | "expired" | "denied" | "no_copilot_seat" | "connected";
 
 export interface UserConnectionPollResponse {
   status: UserConnectionPollStatus;
@@ -3599,35 +3388,6 @@ export const getProxyUISettings = async (accessToken: string) => {
   }
 };
 
-export const getUISettings = async (accessToken: string) => {
-  /**
-   * Get UI-specific configuration flags from the database
-   */
-  try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_settings` : `/get/ui_settings`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      console.error("Failed to get UI settings:", errorMessage);
-      return null;
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to get UI settings:", error);
-    return null;
-  }
-};
-
 export const getMCPSemanticFilterSettings = async (accessToken: string) => {
   /**
    * Get MCP semantic filter configuration
@@ -3708,7 +3468,7 @@ export const testMCPSemanticFilter = async (accessToken: string, model: string, 
    * Returns both the response data and headers containing filter information
    */
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/responses` : `/v1/responses`;
+    const url = `${getGatewayBaseUrl()}/v1/responses`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -4175,81 +3935,6 @@ export const enrichPolicyTemplateStream = async (
   }
 };
 
-export interface UsageAiToolCallEvent {
-  tool_name: string;
-  tool_label: string;
-  arguments: Record<string, string>;
-  status: "running" | "complete" | "error";
-  error?: string;
-}
-
-export const usageAiChatStream = async (
-  accessToken: string,
-  messages: { role: string; content: string }[],
-  model: string,
-  onChunk: (content: string) => void,
-  onDone: () => void,
-  onError?: (error: string) => void,
-  onStatus?: (message: string) => void,
-  onToolCall?: (event: UsageAiToolCallEvent) => void,
-  signal?: AbortSignal,
-) => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/usage/ai/chat` : `/usage/ai/chat`;
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ messages, model }),
-    signal,
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json();
-    const errorMessage = deriveErrorMessage(errorData);
-    handleError(errorMessage);
-    throw new Error(errorMessage);
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("No response body");
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  // eslint-disable-next-line no-constant-condition -- stream read loop
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      try {
-        const event = JSON.parse(line.slice(6));
-        if (event.type === "chunk") {
-          onChunk(event.content);
-        } else if (event.type === "status") {
-          onStatus?.(event.message);
-        } else if (event.type === "tool_call") {
-          onToolCall?.(event as UsageAiToolCallEvent);
-        } else if (event.type === "done") {
-          onDone();
-        } else if (event.type === "error") {
-          onError?.(event.message);
-        }
-      } catch {
-        // skip malformed events
-      }
-    }
-  }
-};
-
 export const createPolicyCall = async (accessToken: string, policyData: any) => {
   try {
     const data = await apiClient.post(`/policies`, { accessToken, body: policyData });
@@ -4662,12 +4347,12 @@ export const createAgentCall = async (accessToken: string, agentData: any) => {
 
 export type DiscoveredAgentCard = Agent["agent_card_params"];
 
-export type DiscoverAgentCardResponse = Omit<components["schemas"]["DiscoverAgentResponse"], "agent_card"> & {
+type DiscoverAgentCardResponse = Omit<components["schemas"]["DiscoverAgentResponse"], "agent_card"> & {
   agent_card: DiscoveredAgentCard;
 };
 
 export type DiscoveryMode = components["schemas"]["DiscoveryMode"];
-export type DiscoverAgentCardOptions = Partial<
+type DiscoverAgentCardOptions = Partial<
   Pick<components["schemas"]["DiscoverAgentRequest"], "discovery_mode" | "params">
 >;
 
@@ -4676,9 +4361,14 @@ export const discoverAgentCardCall = async (
   url: string,
   options?: DiscoverAgentCardOptions,
 ): Promise<DiscoverAgentCardResponse> => {
-  const { data } = await fetchClient.POST("/v1/a2a/discover", {
+  const body: components["schemas"]["DiscoverAgentRequest"] = {
+    url,
+    ...options,
+    discovery_mode: options?.discovery_mode ?? "well_known_fallback",
+  };
+  const data = await gatewayApiClient.post<components["schemas"]["DiscoverAgentResponse"]>("/v1/a2a/discover", {
     headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
-    body: { url, ...options, discovery_mode: options?.discovery_mode ?? "well_known_fallback" },
+    body,
   });
   if (!data) throw new Error("Agent discovery response is empty");
   return { ...data, agent_card: toAgentCard(data.agent_card) };
@@ -4717,8 +4407,8 @@ export const uiSpendLogDetailsCall = async (accessToken: string, logId: string, 
   try {
     // Construct base URL
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/spend/logs/ui/${logId}?start_date=${encodeURIComponent(start_date)}`
-      : `/spend/logs/ui/${logId}?start_date=${encodeURIComponent(start_date)}`;
+      ? `${proxyBaseUrl}/spend/logs/ui/${encodeURIComponent(logId)}?start_date=${encodeURIComponent(start_date)}`
+      : `/spend/logs/ui/${encodeURIComponent(logId)}?start_date=${encodeURIComponent(start_date)}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -4777,12 +4467,13 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
 };
 
 export interface ConnectFlowStatus {
-  state: "unscoped" | "interactive" | "m2m" | "stale";
+  state: "unscoped" | "interactive" | "m2m" | "multi" | "stale";
   client_origin: string;
   server_id: string | null;
   server_name: string | null;
   connected: boolean | null;
   requested_scopes?: string[];
+  servers: { server_id: string; server_name: string; connected: boolean }[] | null;
 }
 
 /**
@@ -4795,11 +4486,20 @@ export interface ConnectFlowStatus {
 export const fetchConnectFlow = async (flowHandle: string): Promise<ConnectFlowStatus> =>
   apiClient.get(`/authorize/flow`, { query: { flow: flowHandle }, credentials: "include" });
 
-export const fetchMCPServers = async (accessToken: string, teamId?: string | null, connectedAppView?: boolean) => {
+export const fetchMCPServers = async (
+  accessToken: string,
+  teamId?: string | null,
+  connectedAppView?: boolean,
+  userId?: string | null,
+) => {
   try {
     return await apiClient.get(`/v1/mcp/server`, {
       accessToken,
-      query: { team_id: teamId || undefined, connected_app_view: connectedAppView || undefined },
+      query: {
+        team_id: teamId || undefined,
+        connected_app_view: connectedAppView || undefined,
+        user_id: userId || undefined,
+      },
     });
   } catch (error) {
     console.error("Failed to fetch MCP servers:", error);
@@ -5575,14 +5275,14 @@ export const vectorStoreListCall = async (
   }
 };
 
-export interface IndexesListResponse {
+interface IndexesListResponse {
   object: string;
   data: VectorStoreIndex[];
 }
 
 export const indexesListCall = async (accessToken: string): Promise<IndexesListResponse> => {
   try {
-    return await apiClient.get<IndexesListResponse>(`/v1/indexes`, { accessToken });
+    return await gatewayApiClient.get<IndexesListResponse>(`/v1/indexes`, { accessToken });
   } catch (error) {
     console.error("Error listing indexes:", error);
     throw error;
@@ -5674,7 +5374,8 @@ export const ragIngestCall = async (
   providerSpecificParams?: Record<string, any>,
 ): Promise<any> => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/rag/ingest` : `/rag/ingest`;
+    const gatewayBaseUrl = getGatewayBaseUrl();
+    const url = gatewayBaseUrl ? `${gatewayBaseUrl}/rag/ingest` : `/rag/ingest`;
 
     const formData = new FormData();
     formData.append("file", file);
@@ -5712,7 +5413,7 @@ export const ragIngestCall = async (
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.error?.message || error.detail || "Failed to ingest document");
+      throw new Error(deriveErrorMessage(error));
     }
 
     return await response.json();
@@ -6226,7 +5927,7 @@ export const applyGuardrail = async (
 };
 
 export const decisionsTestCall = async (accessToken: string, requestBody: DecisionTestBody, signal?: AbortSignal) =>
-  apiClient.post(`/v1/decisions`, { accessToken, body: requestBody, signal });
+  gatewayApiClient.post(`/v1/decisions`, { accessToken, body: requestBody, signal });
 
 interface TestCustomCodeGuardrailRequest {
   custom_code: string;
@@ -6812,7 +6513,7 @@ export const vectorStoreSearchCall = async (
   query: string,
 ): Promise<any> => {
   try {
-    const url = `${getProxyBaseUrl()}/v1/vector_stores/${vectorStoreId}/search`;
+    const url = `${getGatewayBaseUrl()}/v1/vector_stores/${vectorStoreId}/search`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -6845,7 +6546,7 @@ export const searchToolQueryCall = async (
   maxResults?: number,
 ): Promise<any> => {
   try {
-    const url = `${getProxyBaseUrl()}/v1/search/${searchToolName}`;
+    const url = `${getGatewayBaseUrl()}/v1/search/${searchToolName}`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -6861,7 +6562,7 @@ export const searchToolQueryCall = async (
     if (!response.ok) {
       const errorData = await response.text();
       await handleError(errorData);
-      return null;
+      throw new Error(errorData);
     }
 
     const data = await response.json();
@@ -7834,7 +7535,7 @@ export const fetchMemoryList = async (
     pageSize?: number;
   } = {},
 ): Promise<MemoryListResponse> => {
-  const base = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory` : `/v1/memory`;
+  const base = `${getGatewayBaseUrl()}/v1/memory`;
   const params = new URLSearchParams();
   // Backend precedence is search > key_prefix > key; only the winner is sent
   // to keep the URL clean and intent obvious.
@@ -7866,7 +7567,7 @@ export const createMemory = async (
   accessToken: string,
   payload: { key: string; value: string; metadata?: unknown },
 ): Promise<MemoryRow> => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory` : `/v1/memory`;
+  const url = `${getGatewayBaseUrl()}/v1/memory`;
   const body: Record<string, unknown> = {
     key: payload.key,
     value: payload.value,
@@ -7893,7 +7594,7 @@ export const updateMemory = async (
   payload: { value?: string; metadata?: unknown },
 ): Promise<MemoryRow> => {
   const encoded = encodeMemoryKeyForPath(key);
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory/${encoded}` : `/v1/memory/${encoded}`;
+  const url = `${getGatewayBaseUrl()}/v1/memory/${encoded}`;
   const response = await fetch(url, {
     method: "PUT",
     headers: {
@@ -7911,7 +7612,7 @@ export const updateMemory = async (
 
 export const deleteMemory = async (accessToken: string, key: string): Promise<void> => {
   const encoded = encodeMemoryKeyForPath(key);
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory/${encoded}` : `/v1/memory/${encoded}`;
+  const url = `${getGatewayBaseUrl()}/v1/memory/${encoded}`;
   const response = await fetch(url, {
     method: "DELETE",
     headers: {

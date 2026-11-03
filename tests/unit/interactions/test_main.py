@@ -236,6 +236,159 @@ class TestGoogleInteractionsCreate:
         assert json.loads(route.calls.last.request.content) == expected_body
         assert response.status == "completed"
 
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_create_with_agent_config_sends_it_to_gemini(self, respx_mock: MockRouter) -> None:
+        route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            return_value=httpx.Response(
+                200,
+                json={"id": "interaction-agent", "object": "interaction", "status": "completed"},
+            )
+        )
+
+        interactions.create(
+            agent="antigravity-preview-09-2026",
+            agent_config={"type": "antigravity", "model": "gemini-3.8-flash"},
+            input="Say hi in one word.",
+            environment="remote",
+            api_key="gemini-offline",
+        )
+
+        assert json.loads(route.calls.last.request.content) == {
+            "agent": "antigravity-preview-09-2026",
+            "agent_config": {"type": "antigravity", "model": "gemini-3.8-flash"},
+            "input": "Say hi in one word.",
+            "environment": "remote",
+        }
+
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_create_keeps_positional_response_settings_in_place(self, respx_mock: MockRouter) -> None:
+        route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            return_value=httpx.Response(200, json={"id": "interaction-model", "status": "completed"})
+        )
+
+        interactions.create(
+            "gemini/gemini-2.5-flash",
+            None,
+            "Describe a cat.",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            ["TEXT"],
+            api_key="gemini-offline",
+        )
+
+        assert json.loads(route.calls.last.request.content) == {
+            "model": "gemini-2.5-flash",
+            "input": "Describe a cat.",
+            "response_modalities": ["TEXT"],
+        }
+
+    @pytest.mark.parametrize(
+        ("target", "agent_config", "expected_target"),
+        [
+            pytest.param(
+                {"model": "gemini/gemini-2.5-flash"},
+                {"type": "antigravity", "model": "gemini-3.8-flash"},
+                {"model": "gemini-2.5-flash"},
+                id="model-drops-it",
+            ),
+            pytest.param(
+                {"agent": "antigravity-preview-09-2026"},
+                {"type": "antigravity", "model": "gemini-3.8-flash"},
+                {
+                    "agent": "antigravity-preview-09-2026",
+                    "agent_config": {"type": "antigravity", "model": "gemini-3.8-flash"},
+                },
+                id="agent-keeps-an-object",
+            ),
+            pytest.param(
+                {"agent": "antigravity-preview-09-2026"},
+                "antigravity",
+                {"agent": "antigravity-preview-09-2026"},
+                id="agent-drops-a-non-object",
+            ),
+            pytest.param(
+                {"agent": "antigravity-preview-09-2026"},
+                {"model": "gemini-3.8-flash"},
+                {"agent": "antigravity-preview-09-2026"},
+                id="agent-drops-an-object-without-a-type",
+            ),
+            pytest.param(
+                {"agent": "antigravity-preview-09-2026"},
+                {"type": 7, "model": "gemini-3.8-flash"},
+                {"agent": "antigravity-preview-09-2026"},
+                id="agent-drops-a-non-string-type",
+            ),
+        ],
+    )
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_create_with_drop_params_drops_agent_config_gemini_cannot_take(
+        self,
+        respx_mock: MockRouter,
+        target: Mapping[str, str],
+        agent_config: object,
+        expected_target: Mapping[str, object],
+    ) -> None:
+        route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            return_value=httpx.Response(200, json={"id": "interaction-drop", "status": "completed"})
+        )
+
+        interactions.create(
+            **target,
+            agent_config=agent_config,
+            input="Say hi in one word.",
+            drop_params=True,
+            api_key="gemini-offline",
+        )
+
+        assert json.loads(route.calls.last.request.content) == {**expected_target, "input": "Say hi in one word."}
+
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_create_rejects_agent_config_a_bridged_provider_cannot_take(self, respx_mock: MockRouter) -> None:
+        route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=_openai_response_body("resp-agent-config", "Hi"))
+        )
+
+        with pytest.raises(litellm.UnsupportedParamsError, match="'agent_config' is not supported for openai") as e:
+            interactions.create(
+                model="gpt-5.6",
+                agent_config={"type": "antigravity", "model": "gemini-3.8-flash"},
+                input="Say hi in one word.",
+                api_key="sk-offline",
+            )
+
+        assert e.value.status_code == 400
+        assert not route.called
+
+    @pytest.mark.parametrize(
+        "drop_kwargs",
+        [
+            pytest.param({"drop_params": True}, id="drop-params"),
+            pytest.param({"additional_drop_params": ["agent_config"]}, id="additional-drop-params"),
+        ],
+    )
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_create_with_drop_params_drops_agent_config_a_bridged_provider_cannot_take(
+        self, respx_mock: MockRouter, drop_kwargs: Mapping[str, object]
+    ) -> None:
+        route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=_openai_response_body("resp-agent-config", "Hi"))
+        )
+
+        interactions.create(
+            model="gpt-5.6",
+            agent_config={"type": "antigravity", "model": "gemini-3.8-flash"},
+            input="Say hi in one word.",
+            api_key="sk-offline",
+            **drop_kwargs,
+        )
+
+        assert json.loads(route.calls.last.request.content) == {"model": "gpt-5.6", "input": "Say hi in one word."}
+
     @pytest.mark.parametrize(
         ("model", "api_key", "url", "expected_body", "sse_body", "expected_chunks"),
         [
@@ -403,6 +556,32 @@ class TestInteractionsAcreateOffline:
         assert chunks == [
             {"event_type": "step.delta", "object": "interaction", "delta": {"type": "text", "text": "Hello"}},
         ]
+
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    @pytest.mark.asyncio
+    async def test_acreate_gemini_keeps_continuation_token_out_of_the_request(self, respx_mock: MockRouter) -> None:
+        route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "interaction-offline",
+                    "object": "interaction",
+                    "model": "gemini-3.8-flash",
+                    "status": "completed",
+                    "steps": [{"type": "model_output", "content": [{"type": "text", "text": "Hi"}]}],
+                    "usage": {"input_tokens": 6, "output_tokens": 3},
+                },
+            )
+        )
+        response: Final = await interactions.acreate(
+            model="gemini/gemini-3.8-flash",
+            input="Prove it",
+            continuation_token="dG9rLTE=",
+            api_key="gemini-offline",
+        )
+        # The Interactions API answered 400 "Unknown parameter 'continuation_token'." on 2026-10-13
+        assert json.loads(route.calls.last.request.content) == {"model": "gemini-3.8-flash", "input": "Prove it"}
+        assert response.status == "completed"
 
     @pytest.mark.usefixtures("fake_provider_credentials")
     @pytest.mark.asyncio

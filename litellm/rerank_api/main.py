@@ -1,8 +1,8 @@
 import asyncio
 import contextvars
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Coroutine
 from functools import partial
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
@@ -19,6 +19,12 @@ from litellm.types.rerank import RerankResponse
 from litellm.types.router import *
 from litellm.utils import ProviderConfigManager, client, exception_type
 
+_PROVIDERS_RESOLVING_THEIR_OWN_RERANK_BASE: Final = (
+    litellm.LlmProviders.DASHSCOPE,
+    litellm.LlmProviders.QWENCLOUD,
+    litellm.LlmProviders.QWEN_AI_PLATFORM,
+)
+
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
 together_rerank: Final = TogetherAIRerank()
@@ -31,7 +37,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 async def arerank(
     model: str,
     query: str,
-    documents: list[str | dict[str, Any]],
+    documents: list[str | dict[str, object]],
     custom_llm_provider: (
         Literal["cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx"] | None
     ) = None,
@@ -40,7 +46,7 @@ async def arerank(
     return_documents: bool | None = None,
     max_chunks_per_doc: int | None = None,
     **kwargs,
-) -> RerankResponse | Coroutine[Any, Any, RerankResponse]:
+) -> RerankResponse | Awaitable[RerankResponse]:
     """
     Async: Reranks a list of documents based on their relevance to the query
     """
@@ -76,7 +82,7 @@ async def arerank(
         func_with_context: Final = partial(ctx.run, func)
         init_response: Final = await loop.run_in_executor(None, func_with_context)
 
-        if asyncio.iscoroutine(init_response):
+        if isinstance(init_response, Coroutine):
             response = await init_response
         else:
             response = init_response
@@ -93,7 +99,7 @@ async def arerank(
 def rerank(
     model: str,
     query: str,
-    documents: list[str | dict[str, Any]],
+    documents: list[str | dict[str, object]],
     custom_llm_provider: (
         Literal[
             "cohere",
@@ -115,7 +121,7 @@ def rerank(
     max_chunks_per_doc: int | None = None,
     max_tokens_per_doc: int | None = None,
     **kwargs,
-) -> RerankResponse | Coroutine[Any, Any, RerankResponse]:
+) -> RerankResponse | Awaitable[RerankResponse]:
     """
     Reranks a list of documents based on their relevance to the query
     """
@@ -543,7 +549,11 @@ def rerank(
                 logging_obj=litellm_logging_obj,
                 timeout=optional_params.timeout,
                 api_key=dynamic_api_key or optional_params.api_key,
-                api_base=dynamic_api_base or optional_params.api_base,
+                api_base=(
+                    optional_params.api_base or dynamic_api_base
+                    if _custom_llm_provider in _PROVIDERS_RESOLVING_THEIR_OWN_RERANK_BASE
+                    else dynamic_api_base or optional_params.api_base
+                ),
                 _is_async=_is_async,
                 headers=headers or litellm.headers or {},
                 client=client,

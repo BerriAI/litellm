@@ -284,6 +284,66 @@ async def test_new_tag_persists_a_budget():
 
 
 @pytest.mark.asyncio
+async def test_new_tag_budget_reads_the_row_spend_not_spend_from_before_the_tag_existed():
+    """Spend on an unbudgeted request tag must not count against a budget created later.
+
+    The new row starts at the spend it persists, and a restart reloads only that row, so the
+    counter the budget check reads has to agree with it from the moment the tag is created.
+    """
+    from litellm.proxy.management_endpoints.tag_management_endpoints import new_tag
+    from litellm.proxy.proxy_server import get_current_spend, increment_spend_counter_cache
+
+    counter_key: Final = "spend:tag:spent-before-budget-tag"
+    await increment_spend_counter_cache(counter_key=counter_key, increment=5.0)
+
+    created_tag: Final = SimpleNamespace(
+        tag_name="spent-before-budget-tag",
+        description=None,
+        models=[],
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+        created_by="admin",
+    )
+
+    async def create_tag(data, **_):
+        created_tag.spend = data["spend"]
+        return created_tag
+
+    mock_db: Final = Mock()
+    mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=None)
+    mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_db.litellm_budgettable.create = AsyncMock(return_value=SimpleNamespace(budget_id="budget-1"))
+    mock_db.litellm_tagtable.create = create_tag
+    with (
+        patch(  # test-quality-ok: endpoint resolves the fake database through proxy_server
+            "litellm.proxy.proxy_server.prisma_client",
+            SimpleNamespace(db=mock_db, jsonify_object=lambda data: dict(data)),
+        ),
+        patch(  # test-quality-ok: endpoint reads the audit actor from proxy_server
+            "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+        ),
+        patch(  # test-quality-ok: endpoint requires a router before the budget write
+            "litellm.proxy.proxy_server.llm_router", object()
+        ),
+        patch(  # test-quality-ok: auth object cache invalidation is outside this counter contract
+            "litellm.proxy.management_endpoints.tag_management_endpoints._evict_tag_cache_keys", new=AsyncMock()
+        ),
+    ):
+        await new_tag(
+            tag=TagNewRequest(name="spent-before-budget-tag", max_budget=25.0),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    budget_check_spend: Final = await get_current_spend(
+        counter_key=counter_key,
+        fallback_spend=created_tag.spend,
+        max_budget=25.0,
+        fallback_authoritative=True,
+    )
+    assert budget_check_spend == created_tag.spend
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("budget_fields", "should_update", "expected_max_budget"),
     [
@@ -998,7 +1058,8 @@ async def test_internal_user_tag_daily_activity_is_scoped_to_their_keys():
 
 
 @pytest.mark.asyncio
-async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter():
+@pytest.mark.parametrize("api_key", ["unowned-key", "unattributed", "raw:unattributed", "raw:raw:unattributed"])
+async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter(api_key: str):
     """
     If an internal user filters tag usage by an API key they do not own, the
     endpoint should return an empty scoped filter instead of exposing that key's
@@ -1032,7 +1093,7 @@ async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter()
         result = await get_tag_daily_activity(
             start_date="2025-01-01",
             end_date="2025-01-31",
-            api_key="unowned-key",
+            api_key=api_key,
             user_api_key_dict=mock_user_auth,
         )
 
@@ -1249,13 +1310,13 @@ async def test_get_deployments_by_model_id():
         litellm_params=LiteLLM_Params(model="gpt-3.5-turbo"),
         model_info=ModelInfo(),
     )
-    mock_router.get_deployment.return_value = mock_deployment
+    mock_router.registry.return_value.deployment.return_value = mock_deployment
 
     result = await get_deployments_by_model("model-123", mock_router)
 
     assert len(result) == 1
     assert result[0] == mock_deployment
-    mock_router.get_deployment.assert_called_once_with(model_id="model-123")
+    mock_router.registry.return_value.deployment.assert_called_once_with("model-123")
 
 
 @pytest.mark.asyncio
@@ -1274,8 +1335,8 @@ async def test_get_deployments_by_model_name():
     mock_router = Mock()
 
     # Setup mock to not find by model_id but find by model_name
-    mock_router.get_deployment.return_value = None
-    mock_router.get_model_list.return_value = [
+    mock_router.registry.return_value.deployment.return_value = None
+    mock_router.registry.return_value.deployments.return_value = [
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "test-key"},
@@ -1288,8 +1349,8 @@ async def test_get_deployments_by_model_name():
     assert len(result) == 1
     assert result[0].model_name == "gpt-3.5-turbo"
     assert isinstance(result[0], Deployment)
-    mock_router.get_deployment.assert_called_once_with(model_id="gpt-3.5-turbo")
-    mock_router.get_model_list.assert_called_once_with(model_name="gpt-3.5-turbo")
+    mock_router.registry.return_value.deployment.assert_called_once_with("gpt-3.5-turbo")
+    mock_router.registry.return_value.deployments.assert_called_once_with("gpt-3.5-turbo")
 
 
 @pytest.mark.asyncio
@@ -1307,15 +1368,15 @@ async def test_get_deployments_by_model_not_found():
     mock_router = Mock()
 
     # Setup mock to not find model by either method
-    mock_router.get_deployment.return_value = None
-    mock_router.get_model_list.return_value = None
+    mock_router.registry.return_value.deployment.return_value = None
+    mock_router.registry.return_value.deployments.return_value = None
 
     result = await get_deployments_by_model("nonexistent-model", mock_router)
 
     assert len(result) == 0
     assert result == []
-    mock_router.get_deployment.assert_called_once_with(model_id="nonexistent-model")
-    mock_router.get_model_list.assert_called_once_with(model_name="nonexistent-model")
+    mock_router.registry.return_value.deployment.assert_called_once_with("nonexistent-model")
+    mock_router.registry.return_value.deployments.assert_called_once_with("nonexistent-model")
 
 
 @pytest.mark.asyncio

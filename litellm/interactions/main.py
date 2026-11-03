@@ -33,9 +33,9 @@ Usage:
 
 import asyncio
 import contextvars
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from functools import partial
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -49,6 +49,7 @@ from litellm.interactions.utils import (
     InteractionsAPIRequestUtils,
     get_provider_interactions_api_config,
 )
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.interactions import (
     CancelInteractionResult,
@@ -79,7 +80,7 @@ async def acreate(
     # System instruction
     system_instruction: str | None = None,
     # Generation config
-    generation_config: dict[str, Any] | None = None,
+    generation_config: Mapping[str, object] | None = None,
     # Streaming
     stream: bool | None = None,
     # Storage
@@ -90,16 +91,18 @@ async def acreate(
     environment: InteractionEnvironment | None = None,
     # Response format
     response_modalities: list[str] | None = None,
-    response_format: dict[str, Any] | None = None,
+    response_format: Mapping[str, object] | None = None,
     response_mime_type: str | None = None,
     # Continuation
     previous_interaction_id: str | None = None,
     # Extra params
-    extra_headers: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM params
     custom_llm_provider: str | None = None,
+    *,
+    agent_config: Mapping[str, object] | None = None,
     **kwargs,
 ) -> InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]:
     """
@@ -121,6 +124,7 @@ async def acreate(
             string, or a config object such as
             ``{"type": "remote", "sources": [...]}`` /
             ``{"type": "remote", "network": {...}}``
+        agent_config: Agent runtime config, e.g. ``{"type": "antigravity", "model": "gemini-3.8-flash"}``
         response_modalities: Requested response modalities (TEXT, IMAGE, AUDIO)
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
@@ -155,6 +159,7 @@ async def acreate(
             store=store,
             background=background,
             environment=environment,
+            agent_config=agent_config,
             response_modalities=response_modalities,
             response_format=response_format,
             response_mime_type=response_mime_type,
@@ -204,7 +209,7 @@ def create(
     # System instruction
     system_instruction: str | None = None,
     # Generation config
-    generation_config: dict[str, Any] | None = None,
+    generation_config: Mapping[str, object] | None = None,
     # Streaming
     stream: bool | None = None,
     # Storage
@@ -215,16 +220,18 @@ def create(
     environment: InteractionEnvironment | None = None,
     # Response format
     response_modalities: list[str] | None = None,
-    response_format: dict[str, Any] | None = None,
+    response_format: Mapping[str, object] | None = None,
     response_mime_type: str | None = None,
     # Continuation
     previous_interaction_id: str | None = None,
     # Extra params
-    extra_headers: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM params
     custom_llm_provider: str | None = None,
+    *,
+    agent_config: Mapping[str, object] | None = None,
     **kwargs,
 ) -> (
     InteractionsAPIResponse
@@ -250,6 +257,7 @@ def create(
             string, or a config object such as
             ``{"type": "remote", "sources": [...]}`` /
             ``{"type": "remote", "network": {...}}``
+        agent_config: Agent runtime config, e.g. ``{"type": "antigravity", "model": "gemini-3.8-flash"}``
         response_modalities: Requested response modalities (TEXT, IMAGE, AUDIO)
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
@@ -300,6 +308,15 @@ def create(
         # Check if this is a bridge provider (litellm_responses) - similar to responses API
         # Either provider is explicitly "litellm_responses" or no config found (bridge to responses)
         if custom_llm_provider == "litellm_responses" or interactions_api_config is None:
+            if optional_params.get("agent_config") is not None and not drops_unsupported_params(
+                kwargs.get("drop_params")
+            ):
+                raise litellm.UnsupportedParamsError(
+                    message=f"'agent_config' is not supported for {custom_llm_provider} interactions. "
+                    "Set drop_params to drop it.",
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                )
             # Bridge to litellm.responses() for non-native providers
             from litellm.interactions.litellm_responses_transformation.handler import (
                 LiteLLMResponsesInteractionsHandler,
@@ -359,7 +376,7 @@ def create(
 @client
 async def aget(
     interaction_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -402,7 +419,7 @@ async def aget(
 @client
 def get(
     interaction_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -461,7 +478,7 @@ def get(
 @client
 async def adelete(
     interaction_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs: object,
@@ -506,7 +523,7 @@ async def adelete(
 @client
 def delete(
     interaction_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -565,7 +582,7 @@ def delete(
 @client
 async def acancel(
     interaction_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -608,7 +625,7 @@ async def acancel(
 @client
 def cancel(
     interaction_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,

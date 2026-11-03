@@ -156,7 +156,7 @@ def test_apply_guardrail_returns_a_block_error_for_generic_guardrails(gateway: G
         assert error.model_dump() == {
             "error": {
                 "message": _BLOCK_REASON,
-                "type": "internal_server_error",
+                "type": "invalid_request_error",
                 "param": None,
                 "code": 400,
             }
@@ -212,8 +212,8 @@ def test_apply_guardrail_forwards_messages_to_the_guardrail(gateway: Gateway) ->
 
         requests: Final = akto.drain()
         assert [(request.method, request.target) for request in requests] == [
-            ("POST", "/api/http-proxy?akto_connector=litellm&guardrails=true"),
-            ("POST", "/api/http-proxy?akto_connector=litellm&guardrails=true"),
+            ("POST", "/api/http-proxy?akto_connector=litellm&guardrails=true&ingest_data=true"),
+            ("POST", "/api/http-proxy?akto_connector=litellm&guardrails=true&ingest_data=true"),
         ]
         assert [request.headers["authorization"] for request in requests] == ["synthetic-akto-apply-key"] * 2
         bodies: Final = tuple(

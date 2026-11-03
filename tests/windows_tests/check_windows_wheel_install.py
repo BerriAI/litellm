@@ -87,9 +87,19 @@ def main(argv):
             f"::error::installing {os.path.basename(wheel)} into a deep prefix failed"
         )
         return 1
-    if _run([python, "-c", "import litellm; import litellm.types.utils"]) != 0:
+    if _run([python, "-I", "-c", "import litellm; import litellm.types.utils"]) != 0:
         print("::error::litellm did not import after install (half-unpacked package)")
         return 1
+
+    checker = os.path.abspath(os.path.join("tests", "base_sdk_tests", "check_base_sdk_install.py"))
+    for rust in ("0", "1"):
+        result = subprocess.run(
+            [python, "-I", checker, "--profile", "native"],
+            env={**os.environ, "LITELLM_RUST": rust, "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
+            check=False,
+        )
+        if result.returncode != 0:
+            return result.returncode
 
     print(
         f"ok: {os.path.basename(wheel)} installs into a worst-case prefix and imports"

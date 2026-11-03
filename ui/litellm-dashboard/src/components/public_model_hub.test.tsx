@@ -28,6 +28,8 @@ vi.mock("./networking", async (importOriginal) => {
       litellm_version: "1.0.0",
       useful_links: {},
     }),
+    getProxyBaseUrl: vi.fn(() => "https://backend.example.com"),
+    getGatewayBaseUrl: vi.fn(() => "https://gateway.example.com"),
     agentHubPublicModelsCall: vi.fn().mockResolvedValue([]),
     mcpHubPublicServersCall: vi.fn().mockResolvedValue([]),
     skillHubPublicCall: vi.fn().mockResolvedValue({ plugins: [] }),
@@ -62,9 +64,14 @@ const model = (overrides: Partial<ModelGroupInfo> & { model_group: string }): Mo
 
 const DEFAULT_MODELS = [model({ model_group: "gpt-4" }), model({ model_group: "claude-3", providers: ["anthropic"] })];
 
-const respondWith = (rows: ModelGroupInfo[], totalCount: number = rows.length, pageSize: number = 50) =>
+const respondWith = (
+  rows: ModelGroupInfo[],
+  totalCount: number = rows.length,
+  pageSize: number = 50,
+  facetValues: Record<string, string[]> = FACET_VALUES,
+) =>
   apiGetMock.mockImplementation((path: string) => {
-    const facet = FACET_VALUES[path];
+    const facet = facetValues[path];
     if (facet) {
       return Promise.resolve({
         data: facet,
@@ -92,11 +99,11 @@ const facetPaths = (): string[] =>
 const modelQueries = (): QueryRecord[] => modelCalls().map((call) => (call[1] as { query: QueryRecord }).query);
 const lastModelQuery = (): QueryRecord => modelQueries()[modelQueries().length - 1];
 
-const renderHub = () => {
+const renderHub = (props: React.ComponentProps<typeof PublicModelHub> = {}) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
     <QueryClientProvider client={client}>
-      <PublicModelHub />
+      <PublicModelHub {...props} />
     </QueryClientProvider>,
   );
 };
@@ -127,6 +134,7 @@ beforeEach(() => {
     value: {
       pathname: "/",
       origin: "http://localhost:3000",
+      href: "http://localhost:3000/",
     },
   });
 });
@@ -141,6 +149,9 @@ describe("PublicModelHub", () => {
     renderHub();
 
     expect(await screen.findByText("gpt-4")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("button", { name: "gpt-4", exact: true })).queryByAltText(""),
+    ).not.toBeInTheDocument();
     expect(modelCalls()[0][0]).toBe(MODEL_HUB_PATH);
     expect(modelQueries()[0]).toEqual({ page: 1, page_size: 50, sort: "model_group" });
   });
@@ -277,6 +288,45 @@ describe("PublicModelHub", () => {
     await waitFor(() => expect(lastModelQuery()["filter[mode][in]"]).toBe("embedding"));
   });
 
+  it("shows decision models as decisions and filters on every spelling the route stores", async () => {
+    respondWith([model({ model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" })], 1, 50, {
+      ...FACET_VALUES,
+      [`${MODEL_HUB_PATH}/modes`]: ["chat", "evaluation", "decisions"],
+    });
+    const user = userEvent.setup();
+    renderHub();
+    const row = (await screen.findByText("jev-latest")).closest("tr");
+    expect(row).toHaveTextContent("decisions");
+    expect(row).not.toHaveTextContent("evaluation");
+
+    await user.click(screen.getByPlaceholderText("Select modes"));
+    expect(screen.getAllByRole("option", { name: "decisions" })).toHaveLength(1);
+    expect(screen.queryByRole("option", { name: "evaluation" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "decisions" }));
+
+    await waitFor(() => expect(lastModelQuery()["filter[mode][in]"]).toBe("evaluation,decisions"));
+  });
+
+  it("shows a decision model's usage example on /v1/systemone instead of chat completions", async () => {
+    respondWith([model({ model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" })]);
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "jev-latest" }));
+
+    const example = (await screen.findByText(/\/v1\/systemone/)).closest("pre");
+    expect(example).toHaveTextContent('"model": "jev-latest"');
+    expect(example).not.toHaveTextContent("chat.completions");
+  });
+
+  it("keeps the chat completions usage example for a chat model", async () => {
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "gpt-4" }));
+
+    const example = (await screen.findByText(/chat\.completions\.create/)).closest("pre");
+    expect(example).toHaveTextContent('model="gpt-4"');
+  });
+
   it("filters by several providers at once, and returns to the first page", async () => {
     const user = userEvent.setup();
     respondWith(DEFAULT_MODELS, 300);
@@ -396,6 +446,83 @@ describe("PublicModelHub", () => {
   });
 });
 
+describe("PublicModelHub chat variant", () => {
+  it("should render published models without dashboard chrome or unrelated hub requests", async () => {
+    const networkingModule = await import("./networking");
+    renderHub({ isEmbedded: true, variant: "chat" });
+
+    expect(await screen.findByRole("button", { name: /^gpt-4(?: |$)/ })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Search models" })).toBeInTheDocument();
+    expect(screen.queryByTestId("navbar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Available Models" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "About" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Useful Links" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/These are models, agents, and MCP servers/)).not.toBeInTheDocument();
+    expect(networkingModule.getPublicModelHubInfo).not.toHaveBeenCalled();
+    expect(networkingModule.agentHubPublicModelsCall).not.toHaveBeenCalled();
+    expect(networkingModule.mcpHubPublicServersCall).not.toHaveBeenCalled();
+    expect(networkingModule.skillHubPublicCall).not.toHaveBeenCalled();
+  });
+
+  it("should filter all published pages from the provider dropdown and clear the selection", async () => {
+    const user = userEvent.setup();
+    respondWith(DEFAULT_MODELS, 300);
+    renderHub({ isEmbedded: true, variant: "chat" });
+    const modelButton = await screen.findByRole("button", { name: /^gpt-4(?: |$)/ });
+    expect(within(modelButton).getByAltText("")).toBeInTheDocument();
+    expect(modelButton).toHaveTextContent("OpenAI");
+    expect(screen.getByRole("columnheader", { name: "Model" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Providers" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Tags" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Select providers" })).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("pagination-next"));
+    await waitFor(() => expect(lastModelQuery().page).toBe(2));
+
+    await user.click(screen.getByRole("combobox", { name: "Provider", exact: true }));
+    await user.click(await screen.findByRole("option", { name: "Anthropic", exact: true }));
+    await waitFor(() => expect(lastModelQuery()["filter[providers][in]"]).toBe("anthropic"));
+    expect(lastModelQuery().page).toBe(1);
+    expect(screen.getByRole("combobox", { name: "Provider", exact: true })).toHaveTextContent("Anthropic");
+    await user.click(screen.getByRole("combobox", { name: "Provider", exact: true }));
+    await user.click(await screen.findByRole("option", { name: "OpenAI", exact: true }));
+    await waitFor(() => expect(lastModelQuery()["filter[providers][in]"]).toBe("openai"));
+    expect(screen.getByRole("combobox", { name: "Provider", exact: true })).toHaveTextContent("OpenAI");
+    await user.click(screen.getByRole("combobox", { name: "Provider", exact: true }));
+    await user.click(await screen.findByRole("option", { name: "All providers", exact: true }));
+    await waitFor(() => expect(lastModelQuery()).not.toHaveProperty("filter[providers][in]"));
+  });
+
+  it("should preserve published model search and pagination in chat", async () => {
+    const user = userEvent.setup();
+    respondWith(DEFAULT_MODELS, 300);
+    renderHub({ isEmbedded: true, variant: "chat" });
+    await screen.findByRole("button", { name: /^gpt-4(?: |$)/ });
+
+    await user.type(screen.getByRole("textbox", { name: "Search models" }), "gpt");
+    await waitFor(() => expect(lastModelQuery().q).toBe("gpt"));
+    await user.click(screen.getByTestId("pagination-next"));
+    await waitFor(() => expect(lastModelQuery().page).toBe(2));
+    expect(lastModelQuery().q).toBe("gpt");
+  });
+
+  it("should retain costs and usage examples in a chat-themed model dialog", async () => {
+    const user = userEvent.setup();
+    respondWith([model({ model_group: "gpt-4", input_cost_per_token: 0.000001, output_cost_per_token: 0.000003 })]);
+    renderHub({ isEmbedded: true, variant: "chat" });
+    await user.click(await screen.findByRole("button", { name: /^gpt-4(?: |$)/ }));
+
+    const dialog = await screen.findByRole("dialog", { name: "gpt-4" });
+    expect(dialog).toHaveClass("chat-theme", "chat-model-hub-dialog");
+    expect(within(dialog).getByText("$1.0000")).toBeInTheDocument();
+    expect(within(dialog).getByText("$3.0000")).toBeInTheDocument();
+    expect(within(dialog).getByText("Usage Example")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Copy to clipboard" })).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: /close/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+});
+
 const PUBLIC_SERVER_URL = "https://mcp.exa.ai/mcp";
 
 const mockMcpServer: MCPServerData = {
@@ -471,6 +598,29 @@ describe("public hub MCP details modal", () => {
     // so finding it proves the modal rendered and the url assertion is not vacuous.
     await screen.findByText("Server Overview");
     expect(screen.queryByText(PUBLIC_SERVER_URL)).not.toBeInTheDocument();
+  });
+
+  it("uses the backend URL in displayed and copied MCP examples", async () => {
+    const networkingModule = await import("./networking");
+    vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValue([mockMcpServer]);
+
+    const user = userEvent.setup();
+    const clipboardWriteText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    renderHub();
+
+    await user.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
+    await user.click(await screen.findByRole("button", { name: "exa_test" }));
+    await screen.findByText("Server Overview");
+
+    expect(screen.getByText(/https:\/\/backend\.example\.com\/exa_test\/mcp/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Copy to clipboard" }));
+
+    expect(clipboardWriteText).toHaveBeenCalledWith(
+      expect.stringContaining('"url": "https://backend.example.com/exa_test/mcp"'),
+    );
+    const copiedSnippet = clipboardWriteText.mock.calls[0]?.[0] as string;
+    expect(copiedSnippet).not.toContain("https://gateway.example.com");
+    clipboardWriteText.mockRestore();
   });
 
   it("closes the server details modal from its close control", async () => {

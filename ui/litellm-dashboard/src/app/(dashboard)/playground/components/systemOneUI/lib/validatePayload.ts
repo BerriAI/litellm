@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { issueLabel } from "./issueLabel";
 import { openAIDecisionsRequestSchema, type OpenAIDecisionsRequest } from "./openAIDecisions";
 import {
   decisionsRequestSchema,
@@ -11,6 +12,7 @@ const RECOMMENDED_MAX_SCORE_LEVELS = 10;
 
 export interface SystemOnePayloadIssue {
   path: string;
+  label: string;
   message: string;
   severity: "error" | "warning";
 }
@@ -26,21 +28,28 @@ export type SystemOnePayloadValidation = PayloadValidation<PlaygroundRequest>;
 export const errorCount = (validation: PayloadValidation<unknown>): number =>
   validation.issues.filter((issue) => issue.severity === "error").length;
 
+const error = (path: readonly PropertyKey[], message: string): SystemOnePayloadIssue => ({
+  path: path.length > 0 ? path.join(".") : "root",
+  label: issueLabel(path),
+  message,
+  severity: "error",
+});
+
 const toIssue = (path: PropertyKey[], message: string): SystemOnePayloadIssue =>
   path[0] === "questions" && path[1] === ""
-    ? { path: "questions", message: "Give every question a name.", severity: "error" }
-    : { path: path.length > 0 ? path.join(".") : "root", message, severity: "error" };
+    ? error(["questions"], "Give every question a name.")
+    : error(path, message);
 
 const invalid = (path: string, message: string) => ({
   isValid: false,
-  issues: [{ path, message, severity: "error" as const }],
+  issues: [error([path], message)],
 });
 
 export function parseJson(raw: string): { ok: true; value: unknown } | { ok: false; message: string } {
   try {
     return { ok: true, value: JSON.parse(raw) };
-  } catch (error: unknown) {
-    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  } catch (cause: unknown) {
+    return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
   }
 }
 
@@ -49,6 +58,7 @@ const scoreLevelWarnings = (payload: PlaygroundRequest): SystemOnePayloadIssue[]
     .filter(([, question]) => question.type === "score" && question.criteria.length > RECOMMENDED_MAX_SCORE_LEVELS)
     .map(([id]) => ({
       path: `questions.${id}.criteria`,
+      label: issueLabel(["questions", id, "criteria"]),
       message: `More than ${RECOMMENDED_MAX_SCORE_LEVELS} score levels may reduce result quality.`,
       severity: "warning",
     }));
@@ -90,7 +100,7 @@ const requireContext = <T>(raw: string, path: "state" | "input", result: Payload
     ? {
         ...result,
         isValid: false,
-        issues: [{ path, message: "Add the text the model should decide about.", severity: "error" }],
+        issues: [error([path], "Add the text the model should decide about.")],
       }
     : result;
 

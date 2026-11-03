@@ -13,7 +13,6 @@ from rich.console import Console
 from rich.table import Table
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
-from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.litellm_core_utils.cli_keyring import (
     DISABLE_KEYRING_ENV_VAR,
     SYSTEM_KEYRING,
@@ -52,6 +51,7 @@ from .claude_settings import (
     refuse_while_owned,
     settings_file_owners,
 )
+from .config import pkce_default
 from .pkce_login import (
     Http,
     PkceFailure,
@@ -106,7 +106,7 @@ class _OptionalCliContextObjView(Protocol):
     def obj(self) -> CliContextObj | None: ...
 
 
-def _cli_context_obj(view: _CliContextObjView) -> CliContextObj:
+def cli_context_obj(view: _CliContextObjView) -> CliContextObj:
     return view.obj
 
 
@@ -141,6 +141,9 @@ class CliAuthResult(TypedDict):
 _TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+_PROXY_KEY_CHECK_TIMEOUT_SECONDS: Final = 3
+_PROXY_REJECTED_KEY_STATUSES: Final = frozenset({401, 403})
 
 KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
 
@@ -191,26 +194,26 @@ def storage_notice(outcome: SecretSave) -> str:
             )
 
 
-def keychain_unreadable_notice(vault: SecretVault) -> str:
+def keychain_unreadable_notice(vault: SecretVault, login_command: str = "lite login") -> str:
     """Explain why the secret half of a stored login cannot be produced, and what fixes it"""
     match vault.read():
         case KeyringNotInstalled():
             return (
                 "Your credential is in your OS keychain, which this install cannot read without the "
-                f"keyring package. Install it with: {KEYRING_INSTALL_HINT}, or run 'lite login' to start over."
+                f"keyring package. Install it with: {KEYRING_INSTALL_HINT}, or run '{login_command}' to start over."
             )
         case KeyringDisabled():
             return (
                 f"Your credential is in your OS keychain, which {DISABLE_KEYRING_ENV_VAR} is blocking. "
-                "Unset it, or run 'lite login' to start over."
+                f"Unset it, or run '{login_command}' to start over."
             )
         case KeyringUnreachable():
             return (
                 "Your credential is in your OS keychain, which could not be read. Unlock it, or run "
-                "'lite login' to start over."
+                f"'{login_command}' to start over."
             )
         case SecretFound() | SecretMissing():
-            return "Your credential could not be read from your OS keychain. Run 'lite login' to start over."
+            return f"Your credential could not be read from your OS keychain. Run '{login_command}' to start over."
 
 
 def context_secret_vault(ctx: click.Context) -> SecretVault:
@@ -884,21 +887,20 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
     ),
 )
 @click.option(
-    "--pkce",
-    is_flag=True,
-    default=False,
+    "--pkce/--no-pkce",
+    default=None,
     help=(
         "Sign in with OAuth authorization code + PKCE through your system browser (loopback redirect), "
         "with a refresh token that renews the key automatically. Requires a proxy that serves "
-        "/.well-known/litellm-cli-auth."
+        "/.well-known/litellm-cli-auth. Make it the default with `lite config set pkce true`."
     ),
 )
 @click.pass_context
-def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
+def login(ctx: click.Context, config_claude: bool, pkce: bool | None) -> None:
     """Login to LiteLLM proxy using SSO authentication"""
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
 
-    ctx_obj: Final = _cli_context_obj(ctx)
+    ctx_obj: Final = cli_context_obj(ctx)
     base_url: Final = ctx_obj["base_url"]
     if config_claude:
         settings_path: Final = claude_settings_path(os.environ)
@@ -908,7 +910,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
             raise click.ClickException(f"Cannot configure Claude Code, so not logging in: {e}")
 
     try:
-        if pkce:
+        if pkce if pkce is not None else pkce_default():
             _pkce_login(base_url, config_claude, context_secret_vault(ctx))
             return
         cli_sso_flow: Final = _start_cli_sso_flow(base_url=base_url)
@@ -1033,10 +1035,12 @@ def print_token(ctx: click.Context):
 
     Designed to be used as Claude Code's `apiKeyHelper`
     (https://docs.claude.com/en/docs/claude-code/settings): stdout must
-    contain only the token, so all diagnostics go to stderr. The token
-    expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h); a
-    `lite login --pkce` token renews itself here first, and once a token
-    has expired for good, run the same `lite login` command again.
+    contain only the token, so all diagnostics go to stderr. A token younger
+    than `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h) is printed without
+    asking the proxy. An older one is checked against the proxy and refused
+    only if the proxy rejects it. A `lite login --pkce`
+    token renews itself here first, and once a token has expired for good,
+    run the same `lite login` command again.
     """
     vault: Final = context_secret_vault(ctx)
     token_data: Final = load_token(vault=vault)
@@ -1048,14 +1052,14 @@ def print_token(ctx: click.Context):
     # explicitly pointed us at a server, trust whichever one `lite login`
     # actually issued this token for -- that's the whole point of not
     # needing a wrapper command.
-    ctx_obj: Final = _cli_context_obj(ctx)
+    ctx_obj: Final = cli_context_obj(ctx)
     issued_for_this_server: Final = token_data.get("base_url") == ctx_obj.get("base_url", "").rstrip("/")
     if ctx_obj.get("base_url_explicit") and not issued_for_this_server:
         click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
         sys.exit(1)
 
     renews: Final = "refresh_token" in token_data
-    if not is_cli_token_fresh(token_data) and not renews:
+    if not renews and token_expired(token_data):
         click.echo("Token expired. Run 'lite login' again.", err=True)
         sys.exit(1)
 
@@ -1111,8 +1115,32 @@ def whoami(ctx: click.Context):
     expires_at: Final = token_data.get("expires_at")
     if isinstance(expires_at, (int, float)):
         click.echo(_key_expiry_line(expires_at, renews="refresh_token" in token_data))
-    elif age_hours > CLI_JWT_EXPIRATION_HOURS:
-        click.echo(f"Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")
+    elif token_expired(token_data):
+        click.echo("Token expired. Run 'lite login' again.")
+
+
+def token_expired(token_data: Mapping[str, object]) -> bool:
+    if is_cli_token_fresh(token_data):
+        return False
+    if isinstance(token_data.get("expires_at"), (int, float)):
+        return True
+    return _proxy_rejects_key(token_data)
+
+
+def _proxy_rejects_key(token_data: Mapping[str, object]) -> bool:
+    key: Final = token_data.get("key")
+    base_url: Final = token_data.get("base_url")
+    if not isinstance(key, str) or not isinstance(base_url, str) or not base_url:
+        return True
+    try:
+        response: Final = requests.get(
+            f"{base_url}/v1/models",
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=_PROXY_KEY_CHECK_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException:
+        return False
+    return response.status_code in _PROXY_REJECTED_KEY_STATUSES
 
 
 def _key_expiry_line(expires_at: float, renews: bool) -> str:
