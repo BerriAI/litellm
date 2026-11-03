@@ -771,22 +771,22 @@ async def test_read_acs_post_data_rejects_oversized_stream_without_content_lengt
     assert exc.value.status_code == 413
 
 
-def _fake_request_with_scheme(scheme, headers=None, client_host="203.0.113.5"):
-    """A fuller fake Request than ``_fake_request``: adds ``url``, ``headers`` and
-    ``client``, which ``IPAddressUtils.is_request_https`` reads directly instead of
-    going through ``PROXY_BASE_URL``."""
-    return type(
-        "Req",
-        (),
+def _request_with_scheme(
+    scheme: str, headers: dict[str, str] | None = None, client_host: str = "203.0.113.5"
+) -> Request:
+    return Request(
         {
-            "base_url": URL(f"{scheme}://proxy.example.com/"),
-            "url": URL(f"{scheme}://proxy.example.com/sso/saml/login"),
-            "query_params": {},
-            "cookies": {},
-            "headers": headers or {},
-            "client": type("Client", (), {"host": client_host})(),
-        },
-    )()
+            "type": "http",
+            "scheme": scheme,
+            "path": "/sso/saml/login",
+            "query_string": b"",
+            "headers": [
+                (key.lower().encode(), value.encode())
+                for key, value in {"host": "proxy.example.com", **(headers or {})}.items()
+            ],
+            "client": (client_host, 1234),
+        }
+    )
 
 
 class TestSAMLAuthnCookieSecureFlag:
@@ -798,7 +798,7 @@ class TestSAMLAuthnCookieSecureFlag:
     async def test_secure_over_direct_https(self, saml_env, monkeypatch):
         monkeypatch.delenv("PROXY_BASE_URL", raising=False)
         cache = DualCache()
-        request = _fake_request_with_scheme("https")
+        request = _request_with_scheme("https")
         redirect = await SAMLAuthHandler.build_login_redirect(request, cache)
         cookie = redirect.headers["set-cookie"]
         assert "Secure" in cookie
@@ -808,7 +808,7 @@ class TestSAMLAuthnCookieSecureFlag:
     async def test_not_secure_over_direct_http(self, saml_env, monkeypatch):
         monkeypatch.delenv("PROXY_BASE_URL", raising=False)
         cache = DualCache()
-        request = _fake_request_with_scheme("http")
+        request = _request_with_scheme("http")
         redirect = await SAMLAuthHandler.build_login_redirect(request, cache)
         cookie = redirect.headers["set-cookie"]
         assert "Secure" not in cookie
@@ -825,7 +825,7 @@ class TestSAMLAuthnCookieSecureFlag:
             {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["10.0.0.0/8"]},
         )
         cache = DualCache()
-        request = _fake_request_with_scheme("http", headers={"X-Forwarded-Proto": "https"}, client_host="10.0.0.5")
+        request = _request_with_scheme("http", headers={"X-Forwarded-Proto": "https"}, client_host="10.0.0.5")
         redirect = await SAMLAuthHandler.build_login_redirect(request, cache)
         cookie = redirect.headers["set-cookie"]
         assert "Secure" in cookie
@@ -835,7 +835,7 @@ class TestSAMLAuthnCookieSecureFlag:
         monkeypatch.delenv("PROXY_BASE_URL", raising=False)
         monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
         cache = DualCache()
-        request = _fake_request_with_scheme("http", headers={"X-Forwarded-Proto": "https"}, client_host="203.0.113.5")
+        request = _request_with_scheme("http", headers={"X-Forwarded-Proto": "https"}, client_host="203.0.113.5")
         redirect = await SAMLAuthHandler.build_login_redirect(request, cache)
         cookie = redirect.headers["set-cookie"]
         assert "Secure" not in cookie
