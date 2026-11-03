@@ -67,7 +67,7 @@ from litellm.types.llms.base import (
     LiteLLMPydanticObjectBase,
 )
 from litellm.types.mcp import MCPServerCostInfo
-from litellm.types.token_count import TokenCountModelInfo, TokenCountSource, TokenCountTokenizer
+from litellm.types.token_count import LocalTokenizer, TokenCountModelInfo, TokenCountSource, TokenCountTokenizer
 from litellm.types.workload_identity import (
     ANTHROPIC_WIF_KWARGS_KEYS,
     OPENAI_WIF_KWARGS_KEYS,
@@ -4812,6 +4812,7 @@ class TokenCountResponse(LiteLLMPydanticObjectBase):
     model_used: str
     tokenizer_type: str
     count_source: TokenCountSource | None = None
+    count_tokenizer: LocalTokenizer | None = None
     original_response: dict | None = None
     """
     Original Response from upstream API call - if an API call was made for token counting

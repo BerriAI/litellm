@@ -2910,7 +2910,26 @@ def _return_huggingface_tokenizer(
     model: str, outcomes: _HuggingFaceTokenizerLoadOutcomes = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES
 ) -> SelectTokenizerResponse | _HuggingFaceTokenizerLoadFailure | None:
     kind: Final = huggingface_tokenizer_kind(model)
-    if kind is None or (kind not in _BUNDLED_TOKENIZER_LOAD_LOCKS and is_offline_mode()):
+    return None if kind is None else _huggingface_tokenizer_of_kind(kind, model, outcomes)
+
+
+def select_named_tokenizer(
+    name: Literal["openai"] | HuggingFaceTokenizerKind,
+    outcomes: _HuggingFaceTokenizerLoadOutcomes = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES,
+) -> SelectTokenizerResponse | None:
+    """The tokenizer `name` stands for, never another one: None when it cannot be loaded."""
+    if name == "openai":
+        return _return_openai_tokenizer(name)
+    if litellm.disable_hf_tokenizer_download is True and name not in _BUNDLED_TOKENIZER_LOAD_LOCKS:
+        return None
+    loaded: Final = _huggingface_tokenizer_of_kind(name, name, outcomes)
+    return None if loaded is None or isinstance(loaded, _HuggingFaceTokenizerLoadFailure) else loaded
+
+
+def _huggingface_tokenizer_of_kind(
+    kind: HuggingFaceTokenizerKind, model: str, outcomes: _HuggingFaceTokenizerLoadOutcomes
+) -> SelectTokenizerResponse | _HuggingFaceTokenizerLoadFailure | None:
+    if kind not in _BUNDLED_TOKENIZER_LOAD_LOCKS and is_offline_mode():
         return None
     key: Final = (kind, _huggingface_tokenizer_backend())
     with _BUNDLED_TOKENIZER_LOAD_LOCKS.get(kind, nullcontext()):

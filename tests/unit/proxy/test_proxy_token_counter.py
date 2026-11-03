@@ -4331,13 +4331,14 @@ async def test_messages_count_tokens_on_a_responses_api_bridge_rejects_an_invali
 
 
 class _CountTokensPeer:
-    def __init__(self, reply: Mapping[str, JsonValue]) -> None:
+    def __init__(self, reply: Mapping[str, JsonValue], status_code: int = 200) -> None:
         self._reply: Final = reply
+        self._status_code: Final = status_code
         self.requests: tuple[httpx.Request, ...] = ()
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests = (*self.requests, request)
-        return httpx.Response(200, json=dict(self._reply), request=request)
+        return httpx.Response(self._status_code, json=dict(self._reply), request=request)
 
 
 class _BedrockInvokeModel(BaseModel):
@@ -5359,3 +5360,331 @@ def test_utils_token_counter_line_stays_one_line_when_the_model_carries_a_newlin
     assert line["request_model"] == forged_model
     assert "\n" not in message
     assert message.startswith(f'token count - litellm_call_id="count log" request_model={json.dumps(forged_model)} ')
+
+
+_NOVA_PRO: Final = "us.amazon.nova-pro-v1:0"
+_AWS_CANNOT_COUNT: Final = "The provided model doesn't support counting tokens."
+_MIXED_SCRIPT_TURNS: Final[list[dict[str, JsonValue]]] = [
+    {"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}
+]
+_DEEPSEEK_TOKENIZER_JSON: Final = (
+    Path(litellm.__file__).parent / "litellm_core_utils/tokenizers/deepseek_tokenizer.json"
+)
+
+
+def _expected_local_count(model: str, tokenizer: str) -> int:
+    custom_tokenizer: Final = (
+        litellm.utils.create_tokenizer(_DEEPSEEK_TOKENIZER_JSON.read_text(encoding="utf-8"))
+        if tokenizer == "deepseek"
+        else None
+    )
+    return litellm.token_counter(model=model, messages=_MIXED_SCRIPT_TURNS, custom_tokenizer=custom_tokenizer)
+
+
+def _bedrock_router(model: str, model_info: Mapping[str, JsonValue]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "bedrock-agent",
+                "litellm_params": {
+                    "model": f"bedrock/{model}",
+                    "aws_access_key_id": "AKIATESTACCESSKEY",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-east-1",
+                },
+                "model_info": dict(model_info),
+            }
+        ]
+    )
+
+
+async def _bedrock_counts(
+    monkeypatch: pytest.MonkeyPatch, model: str, model_info: Mapping[str, JsonValue], body: Mapping[str, JsonValue]
+) -> tuple[object, TokenCountResponse | ProxyException, tuple[httpx.Request, ...]]:
+    from litellm.llms.bedrock.count_tokens import handler as bedrock_count_tokens_handler
+
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    peer: Final = _CountTokensPeer({"message": _AWS_CANNOT_COUNT}, status_code=400)
+    router: Final = _bedrock_router(model, model_info)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    with patch.object(
+        bedrock_count_tokens_handler,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    ):
+        messages_reply: Final = await _messages_endpoint_count(router, {**body, "model": "bedrock-agent"})
+        try:
+            utils_reply: TokenCountResponse | ProxyException = await token_counter(
+                request=TokenCountRequest.model_validate({**body, "model": "bedrock-agent"}), call_endpoint=True
+            )
+        except ProxyException as rejected:
+            utils_reply = rejected  # rebind-ok: the utils endpoint answers its rejection as a raised ProxyException
+    return messages_reply, utils_reply, peer.requests
+
+
+def _rejection(reply: object) -> tuple[int, str]:
+    assert isinstance(reply, JSONResponse), reply
+    return reply.status_code, json.loads(bytes(reply.body))["error"]["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tokenizer", ["openai", "deepseek"])
+async def test_a_named_token_count_tokenizer_counts_with_exactly_that_tokenizer_and_never_asks_the_provider(
+    monkeypatch: pytest.MonkeyPatch, tokenizer: str
+) -> None:
+    counts: Final = {name: _expected_local_count(_NOVA_PRO, name) for name in ("openai", "deepseek")}
+    assert counts["openai"] != counts["deepseek"], counts
+
+    messages_reply, utils_reply, sent = await _bedrock_counts(
+        monkeypatch, _NOVA_PRO, {"token_count_tokenizer": tokenizer}, {"messages": _MIXED_SCRIPT_TURNS}
+    )
+
+    assert sent == ()
+    assert messages_reply == {
+        "input_tokens": counts[tokenizer],
+        "litellm_count_source": "local_estimate",
+        "litellm_count_tokenizer": tokenizer,
+    }
+    assert isinstance(utils_reply, TokenCountResponse), utils_reply
+    assert (utils_reply.total_tokens, utils_reply.count_source, utils_reply.count_tokenizer) == (
+        counts[tokenizer],
+        "local_estimate",
+        tokenizer,
+    )
+
+
+@pytest.mark.asyncio
+async def test_without_a_named_tokenizer_a_model_the_provider_cannot_count_answers_the_providers_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    messages_reply, utils_reply, sent = await _bedrock_counts(
+        monkeypatch, _NOVA_PRO, {}, {"messages": _MIXED_SCRIPT_TURNS}
+    )
+
+    status, message = _rejection(messages_reply)
+    assert (status, _AWS_CANNOT_COUNT in message) == (400, True), message
+    assert isinstance(utils_reply, ProxyException), utils_reply
+    assert (utils_reply.code, _AWS_CANNOT_COUNT in utils_reply.message) == ("400", True), utils_reply.message
+    assert [request.url.path.endswith("/count-tokens") for request in sent] == [True, True]
+
+
+@pytest.mark.asyncio
+async def test_the_deployments_named_tokenizer_beats_the_tokenizer_the_cost_map_ships(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kimi: Final = "us.moonshotai.kimi-k3"
+    assert cost_map_entry(kimi).get("token_count_tokenizer") == "kimi_k3"
+
+    messages_reply, _, sent = await _bedrock_counts(
+        monkeypatch, kimi, {"token_count_tokenizer": "deepseek"}, {"messages": _MIXED_SCRIPT_TURNS}
+    )
+
+    assert sent == ()
+    assert messages_reply == {
+        "input_tokens": _expected_local_count(kimi, "deepseek")
+        + (cost_map_entry(kimi).get("token_count_framing") or 0),
+        "litellm_count_source": "local_estimate",
+        "litellm_count_tokenizer": "deepseek",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_info", "reason"),
+    [
+        ({"token_count_tokenizer": "local"}, "sets token_count_tokenizer to 'local', which is not one of openai, "),
+        (
+            {"token_count_tokenizer": "kimi_k3"},
+            "counts tokens with the kimi_k3 tokenizer set in token_count_tokenizer, which could not be loaded",
+        ),
+    ],
+    ids=["unknown_name", "tokenizer_that_cannot_load"],
+)
+async def test_a_named_tokenizer_litellm_cannot_count_with_answers_400_without_asking_the_provider(
+    monkeypatch: pytest.MonkeyPatch, model_info: dict[str, JsonValue], reason: str
+) -> None:
+    messages_reply, utils_reply, sent = await _bedrock_counts(
+        monkeypatch, _NOVA_PRO, model_info, {"messages": _MIXED_SCRIPT_TURNS}
+    )
+
+    status, message = _rejection(messages_reply)
+    assert (status, reason in message) == (400, True), message
+    assert isinstance(utils_reply, ProxyException), utils_reply
+    assert (utils_reply.code, reason in utils_reply.message) == ("400", True), utils_reply.message
+    assert sent == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unreadable_body",
+    [
+        pytest.param(
+            {
+                "messages": [
+                    {"role": "user", "content": "What is new?"},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "server_tool_use",
+                                "id": "srvtoolu_01",
+                                "name": "web_search",
+                                "input": {"query": "new"},
+                            },
+                            {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01", "content": []},
+                        ],
+                    },
+                ]
+            },
+            id="web_search_blocks",
+        ),
+        pytest.param(
+            {
+                "messages": [{"role": "user", "content": "Describe this"}],
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"text": "Describe this"},
+                            {"fileData": {"mimeType": "image/png", "fileUri": "gs://b/c.png"}},
+                        ],
+                    }
+                ],
+            },
+            id="google_contents_with_media_the_translation_dropped",
+        ),
+    ],
+)
+async def test_a_named_tokenizer_that_cannot_read_the_request_answers_400_never_500(
+    monkeypatch: pytest.MonkeyPatch, unreadable_body: dict[str, JsonValue]
+) -> None:
+    _, utils_reply, sent = await _bedrock_counts(
+        monkeypatch, _NOVA_PRO, {"token_count_tokenizer": "openai"}, unreadable_body
+    )
+
+    assert isinstance(utils_reply, ProxyException), utils_reply
+    assert utils_reply.code == "400", utils_reply.message
+    assert "counts tokens with the openai tokenizer set in token_count_tokenizer, which " in utils_reply.message
+    assert sent == ()
+
+
+_STORED_1998_TURN: Final[dict[str, JsonValue]] = {
+    "request_id": "chatcmpl-stored",
+    "call_type": "aresponses",
+    "session_id": "session-1",
+    "proxy_server_request": {"input": "Who won in 1998?", "model": "bedrock-agent"},
+    "response": {
+        "id": "chatcmpl-stored",
+        "object": "chat.completion",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "The Bulls."}, "finish_reason": "stop"}],
+    },
+    "status": "success",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("litellm_params", "served_model"),
+    [
+        (
+            {
+                "model": f"bedrock/{_NOVA_PRO}",
+                "aws_access_key_id": "AKIATESTACCESSKEY",
+                "aws_secret_access_key": "test-secret",
+                "aws_region_name": "us-east-1",
+            },
+            _NOVA_PRO,
+        ),
+        ({"model": "mistral/mistral-small-latest", "api_key": "sk-test"}, "mistral-small-latest"),
+    ],
+    ids=["provider_with_a_count_api", "provider_without_a_count_api"],
+)
+async def test_a_named_tokenizer_counts_the_turns_previous_response_id_replays(
+    monkeypatch: pytest.MonkeyPatch, litellm_params: dict[str, JsonValue], served_model: str
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "bedrock-agent",
+                    "litellm_params": litellm_params,
+                    "model_info": {"token_count_tokenizer": "openai"},
+                }
+            ]
+        ),
+    )
+    inline_turns: Final[list[dict[str, JsonValue]]] = [
+        {"role": "user", "content": "Who won in 1998?"},
+        {"role": "assistant", "content": "The Bulls."},
+        {"role": "user", "content": "And in 1999?"},
+    ]
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+        return_value=[_STORED_1998_TURN],
+    ):
+        replayed: Final = await count_request_tokens(
+            request=TokenCountRequest(model="bedrock-agent", messages=[{"role": "user", "content": "And in 1999?"}]),
+            call_endpoint=True,
+            responses_request={
+                "model": "bedrock-agent",
+                "input": "And in 1999?",
+                "previous_response_id": "chatcmpl-stored",
+            },
+        )
+    inline: Final = await count_request_tokens(
+        request=TokenCountRequest(model="bedrock-agent", messages=inline_turns),
+        call_endpoint=True,
+        responses_request={"model": "bedrock-agent", "input": inline_turns},
+    )
+
+    assert (replayed.count_source, replayed.count_tokenizer) == ("local_estimate", "openai")
+    assert (
+        replayed.total_tokens == inline.total_tokens == litellm.token_counter(model=served_model, messages=inline_turns)
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_named_tokenizer_answers_400_for_previous_response_id_turns_only_the_provider_stores(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    peer: Final = _CountTokensPeer({"input_tokens": 99})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "gpt-counted",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "test-key",
+                        "api_base": "https://count-tokens.test/v1",
+                    },
+                    "model_info": {"token_count_tokenizer": "openai"},
+                }
+            ]
+        ),
+    )
+
+    with (
+        patch.object(
+            openai_count_tokens_http,
+            "get_async_httpx_client",
+            return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+        ),
+        pytest.raises(ProxyException) as rejected,
+    ):
+        await count_request_tokens(
+            request=TokenCountRequest(model="gpt-counted", messages=[{"role": "user", "content": "again"}]),
+            call_endpoint=True,
+            responses_request={"model": "gpt-counted", "input": "again", "previous_response_id": "resp_original"},
+        )
+
+    assert rejected.value.code == "400", rejected.value.message
+    assert "cannot see the earlier turns previous_response_id points to" in rejected.value.message
+    assert peer.requests == ()

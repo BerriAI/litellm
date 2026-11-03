@@ -422,7 +422,7 @@ def _rendered(request: _ConverseRequest) -> _Segments:
     )
 
 
-def _text_tokens(encoding: tiktoken.Encoding, text: str) -> int:
+def kimi_k3_text_tokens(encoding: tiktoken.Encoding, text: str) -> int:
     spans: Final = (match.span() for match in _CHUNK.finditer(text))
     return sum(len(encoding.encode_ordinary(text[start:end])) for start, end in spans)
 
@@ -481,7 +481,7 @@ def kimi_k3_tokens(
     if request is None:
         return None
     return sum(
-        1 if isinstance(segment, _Control) else _text_tokens(encoding, segment) for segment in _rendered(request)
+        1 if isinstance(segment, _Control) else kimi_k3_text_tokens(encoding, segment) for segment in _rendered(request)
     )
 
 
