@@ -204,6 +204,11 @@ _blocked_response_cost_logging: Final = PassThroughEndpointLogging(log_dispatch=
 _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
 _DECODED_JSON: Final = TypeAdapter(object)
 _GUARDRAIL_ENTRIES: Final = TypeAdapter(list[object])
+_FIELDS_GUARDRAILS_READ_BY_SHAPE: Final = (
+    ("guardrails", (list, dict)),
+    ("guardrail_config", (dict,)),
+    ("proxy_server_request", (dict,)),
+)
 _POST_CALL_SELECTION_FIELDS: Final = ("_guardrail_pipelines", "_pipeline_managed_guardrails", "tags")
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
@@ -889,12 +894,11 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 def _drop_unmergeable_guardrail_fields(
     parsed_body: dict[str, object],  # mutable-ok: strips the request body in place before the guardrail merge
 ) -> None:
-    """Drop a ``guardrails`` that isn't a list or an object and a ``guardrail_config`` that isn't an object, which the
-    merge can't combine with the metadata's own. The provider receives neither field."""
-    if "guardrails" in parsed_body and not isinstance(parsed_body["guardrails"], list | dict):
-        parsed_body.pop("guardrails")
-    if "guardrail_config" in parsed_body and not isinstance(parsed_body["guardrail_config"], dict):
-        parsed_body.pop("guardrail_config")
+    """Drop a ``guardrails`` that isn't a list or an object, and a ``guardrail_config`` or ``proxy_server_request`` that
+    isn't an object, which the merge and the guardrails can't read. The provider receives none of these fields."""
+    for field, shape in _FIELDS_GUARDRAILS_READ_BY_SHAPE:
+        if field in parsed_body and not isinstance(parsed_body[field], shape):
+            parsed_body.pop(field)
 
 
 async def _inherit_auth_guardrails(
@@ -913,6 +917,7 @@ async def _inherit_auth_guardrails(
     if configured_guardrails or not inherit or not parsed_body:
         return configured_guardrails
     _drop_unmergeable_guardrail_fields(parsed_body)
+    client_sent_metadata: Final = "metadata" in parsed_body
     if not isinstance(parsed_body.get("metadata"), dict):
         parsed_body["metadata"] = {}  # rebind-ok: the merge below writes into the live request body's metadata
     client_named: Final = (as_str_mapping(parsed_body["metadata"]) or {}).get("guardrails")
@@ -922,6 +927,9 @@ async def _inherit_auth_guardrails(
         user_api_key_dict=user_api_key_dict,
     )
     metadata: Final = parsed_body["metadata"]
+    if not metadata and not client_sent_metadata:
+        parsed_body.pop("metadata")
+        return None
     merged: Final = (as_str_mapping(metadata) or {}).get("guardrails")
     if not isinstance(merged, list):
         return None
@@ -955,6 +963,12 @@ def _admin_guardrail_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str,
     )
 
 
+def _holds_resolved_pipelines(pipelines: object) -> bool:
+    """Whether a pipeline slot holds the policy engine's (name, pipeline) tuples, which a JSON body can't"""
+    entries: Final = as_object_list(pipelines)
+    return entries is not None and all(isinstance(entry, tuple) for entry in entries)
+
+
 def _post_call_selection_metadata(kwargs: Mapping[str, object], inherited: bool) -> Mapping[str, object]:
     """The policy pipelines resolved for a request that inherits auth guardrails, and the tags a tag-scoped guardrail
     mode reads, from the logging metadata that request setup moved the body's ``metadata`` into"""
@@ -962,7 +976,10 @@ def _post_call_selection_metadata(kwargs: Mapping[str, object], inherited: bool)
         return MappingProxyType({})
     litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
     metadata: Final = as_str_mapping(litellm_params.get("metadata")) or {}
-    return {field: metadata[field] for field in _POST_CALL_SELECTION_FIELDS if field in metadata}
+    selection: Final = {field: metadata[field] for field in _POST_CALL_SELECTION_FIELDS if field in metadata}
+    if "_guardrail_pipelines" in selection and not _holds_resolved_pipelines(selection["_guardrail_pipelines"]):
+        selection.pop("_guardrail_pipelines")
+    return selection
 
 
 def _starts_post_call_pass(guardrails: Sequence[object] | None, policy_pipelines: Mapping[str, object]) -> bool:
@@ -980,10 +997,11 @@ def _post_call_hook_data(
     """The body with what the post-call guardrails read and the kwargs split stripped: ``metadata`` naming the guardrails,
     which ``should_run_guardrail`` checks, the policy pipelines to run, and the logging object, which unified
     (apply_guardrail) guardrails resolve a pass-through response's call type from when the route has no
-    API_ROUTE_TO_CALL_TYPES entry"""
+    API_ROUTE_TO_CALL_TYPES entry. A custom endpoint whose guardrails don't run post_call gets no logging object, so a
+    global unified guardrail still can't resolve its response."""
     body: Final = parsed_body or {}
     admin_metadata: Final = _admin_guardrail_metadata(user_api_key_dict) if inherited else MappingProxyType({})
-    return {
+    data: Final = {
         **body,
         "metadata": {
             **(as_str_mapping(body.get("metadata")) or {}),
@@ -991,8 +1009,10 @@ def _post_call_hook_data(
             "guardrails": guardrails or (),
             **admin_metadata,
         },
-        "litellm_logging_obj": logging_obj,
     }
+    if not inherited and not _named_guardrail_runs_post_call(data, guardrails or ()):
+        return data
+    return {**data, "litellm_logging_obj": logging_obj}
 
 
 def _provider_charge_settlement(
