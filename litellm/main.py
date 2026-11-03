@@ -1101,7 +1101,8 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
     _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
 )
 from litellm.responses.bridge_check import (
-    bridge_reasoning_effort,  # noqa: E402  # imported at the old definition site, same as its neighbours
+    bridge_check_request_params,  # noqa: E402  # imported at the old definition site, same as its neighbours
+    bridge_reasoning_effort,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     responses_api_bridge_check as responses_api_bridge_check,  # pyright: ignore[reportUnknownVariableType]  # noqa: PLC0414  # re-export of moved function
@@ -5823,12 +5824,29 @@ def completion(
 
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
+        if responses_api_model_info.get("mode") != "responses":
+            route_request_params: Final = bridge_check_request_params(
+                cast(Mapping[str, object], kwargs)  # cast-ok: kwargs is the untyped request dict
+            )
+            responses_api_model_info, model = responses_api_bridge_check(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                web_search_options=web_search_options,
+                tools=tools,
+                reasoning_effort=bridge_reasoning_effort(reasoning_effort, route_request_params.get("extra_body")),
+                reasoning_summary=peek_reasoning_summary_aliases(route_request_params),
+                api_base=api_base,
+            )
         # check if user passed in any of the OpenAI optional params
         bridges_to_responses_api: Final = (
             responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
         )
         allowed_openai_params: Final[list[str] | None] = (
-            [*allowed_openai_param_names(kwargs.get("allowed_openai_params")), "reasoning_effort"]
+            [
+                *allowed_openai_param_names(kwargs.get("allowed_openai_params")),
+                "reasoning_effort",
+                "web_search_options",
+            ]
             if bridges_to_responses_api
             else kwargs.get("allowed_openai_params")
         )
@@ -6052,23 +6070,8 @@ def completion(
                 ),
             )
 
-        ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
-        # Only run the second bridge check if the first one didn't already
-        # detect responses mode (e.g. via the "responses/" prefix).  The second
-        # check handles cases like gpt-5.4+ with tools+reasoning_effort or
-        # reasoningSummary/reasoning_summary without tools (AI SDK) that the first
-        # (early) check doesn't cover.
+        ## RESPONSES API BRIDGE LOGIC ## - route the request over the Responses API when selected above
         _reasoning_summary_for_bridge: Final = peek_reasoning_summary_aliases(optional_params)
-        if responses_api_model_info.get("mode") != "responses":
-            responses_api_model_info, model = responses_api_bridge_check(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                web_search_options=web_search_options,
-                tools=tools,
-                reasoning_effort=bridge_reasoning_effort(reasoning_effort, optional_params.get("extra_body")),
-                reasoning_summary=_reasoning_summary_for_bridge,
-                api_base=api_base,
-            )
 
         # Use base_model (the true underlying model) for Azure model-type
         # detection when the deployment name differs from the model name.
