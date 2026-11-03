@@ -8,10 +8,13 @@ the shared multipart transport, since the SDK refuses to send them. A model-less
 request comes back as one of two 400s depending on whether any wildcard
 deployment happens to be registered on the shared proxy, so the assertion
 accepts either phrasing and holds both to naming the model as the problem.
+Streamed gpt-transcribe (stream=true) on OpenAI and Azure must send transcript
+deltas, a done event, and data: [DONE], and bill the call.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -20,10 +23,10 @@ from e2e_config import unique_marker
 from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from e2e_http import UnknownApiError, unwrap
 from lifecycle import ResourceManager
-from models import LiteLLMParamsBody
+from models import LiteLLMParamsBody, SpendLogRow
 from proxy_client import ProxyClient
 from pydantic import BaseModel, Field
-from sdk_clients import SdkClients
+from sdk_clients import SdkClients, response_header
 
 pytestmark = pytest.mark.e2e
 
@@ -221,3 +224,102 @@ class TestWhisperTranscriptionFormats:
         assert all(word.start <= word.end for word in transcript.words), (
             f"word timings out of order: {transcript.words}"
         )
+
+
+STREAM_DONE: Final = "[DONE]"
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamingTranscriber:
+    id: str
+    registry_route: str
+    provider: Provider
+    litellm_params: LiteLLMParamsBody
+
+
+STREAMING_TRANSCRIBERS: Final = (
+    _StreamingTranscriber(
+        "openai",
+        "openai",
+        Provider.OPENAI,
+        LiteLLMParamsBody(model="openai/gpt-transcribe", api_key="os.environ/OPENAI_API_KEY"),
+    ),
+    _StreamingTranscriber(
+        "azure",
+        "azure_openai",
+        Provider.AZURE,
+        LiteLLMParamsBody(
+            model="azure/gpt-transcribe",
+            api_base="os.environ/AZURE_API_BASE",
+            api_key="os.environ/AZURE_API_KEY",
+            api_version="v1",
+        ),
+    ),
+)
+
+STREAMING_PARAMS: Final = tuple(
+    pytest.param(
+        t,
+        id=t.id,
+        marks=(
+            pytest.mark.covers(f"llm.audio_transcriptions.{t.registry_route}.transcription.stream.works"),
+            meta(
+                Subject(
+                    domain=Domain.LLM_TRANSLATION,
+                    route=Route.AUDIO,
+                    providers=(t.provider,),
+                    models=(t.litellm_params.model,),
+                    mode=Mode.STREAM,
+                )
+            ),
+        ),
+    )
+    for t in STREAMING_TRANSCRIBERS
+)
+
+
+class _TranscriptStreamEvent(BaseModel):
+    type: str
+    delta: str = ""
+    text: str = ""
+
+
+def _has_billed_row(rows: list[SpendLogRow]) -> bool:
+    return any((row.spend or 0) > 0 for row in rows)
+
+
+class TestStreamedAudioTranscriptions:
+    @pytest.mark.parametrize("transcriber", STREAMING_PARAMS)
+    def test_stream_sends_transcript_deltas_then_done_and_bills_the_call(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, transcriber: _StreamingTranscriber
+    ) -> None:
+        model: Final = f"e2e-transcribe-stream-{transcriber.id}-{unique_marker()}"
+        model_id: Final = proxy.create_model(model, transcriber.litellm_params)
+        resources.defer(lambda: proxy.delete_model(model_id))
+        client: Final = sdk.openai(resources.key())
+
+        with client.audio.transcriptions.with_streaming_response.create(
+            model=model, file=(WEATHER_WAV.name, WEATHER_WAV.read_bytes(), "audio/wav"), stream=True
+        ) as response:
+            content_type: Final = response_header(response.headers, "content-type")
+            call_id: Final = response_header(response.headers, "x-litellm-call-id")
+            payloads: Final = tuple(
+                line.removeprefix("data: ") for line in response.iter_lines() if line.startswith("data: ")
+            )
+
+        assert "text/event-stream" in (content_type or ""), f"stream=true did not stream: {content_type!r}"
+        assert payloads and payloads[-1] == STREAM_DONE, f"the stream did not end with data: [DONE]: {payloads[-3:]}"
+        assert payloads.count(STREAM_DONE) == 1, f"data: [DONE] was sent more than once: {payloads}"
+        events: Final = tuple(_TranscriptStreamEvent.model_validate_json(payload) for payload in payloads[:-1])
+        deltas: Final = tuple(e.delta for e in events if e.type == "transcript.text.delta")
+        assert len(deltas) > 1, f"the transcript arrived in {len(deltas)} delta events, not as a stream: {events}"
+        done: Final = events[-1]
+        assert done.type == "transcript.text.done", f"the last event before [DONE] is not the done event: {done}"
+        assert "weather" in done.text.lower(), f"transcript of a spoken weather question lost the word: {done.text!r}"
+        assert "".join(deltas).strip() == done.text.strip(), (
+            f"the deltas {deltas} do not add up to the final transcript {done.text!r}"
+        )
+
+        assert call_id, "the streamed response carries no x-litellm-call-id to find its spend log"
+        rows: Final = proxy.poll_logs_for_request_id(call_id, predicate=_has_billed_row)
+        assert _has_billed_row(rows), f"the streamed transcription was not billed: {rows}"

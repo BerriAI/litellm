@@ -4,6 +4,7 @@ This file contains common utils for anthropic calls.
 
 import copy
 import json
+import os
 import re
 from collections.abc import Container, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
@@ -19,13 +20,15 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
+    ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH,
+    ANTHROPIC_MAX_USER_ID_LENGTH,
     DEFAULT_MODEL_CREATED_AT_TIME,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, lax_bool
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
     is_encrypted_reasoning_block,
@@ -58,6 +61,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
+    LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
     AnthropicMessagesToolChoice,
@@ -126,6 +130,8 @@ _JSON_VALUE: Final = TypeAdapter(JsonValue)
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
 
+NATIVE_COMPACTION_PROVIDERS: Final = frozenset({"anthropic", "azure_ai", "vertex_ai"})
+
 
 def is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
     if custom_llm_provider == "anthropic":
@@ -175,6 +181,40 @@ def tools_without_custom_field(tools: Sequence[object], hoist_defer_loading: boo
     return [_tool_without_custom_field(tool, hoist_defer_loading, drop_custom) for tool in tools]
 
 
+def anthropic_pass_through_api_base() -> str:
+    return os.getenv("ANTHROPIC_API_BASE") or os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
+
+
+def _same_host_and_port(url: httpx.URL, other: str) -> bool:
+    try:
+        other_url: Final = httpx.URL(other)
+    except httpx.InvalidURL:
+        return False
+    return (url.host, url.port) == (other_url.host, other_url.port)
+
+
+def anthropic_upstream_user_id_limit(url: str) -> int | None:
+    upstream: Final = httpx.URL(url)
+    if not upstream.path.removesuffix("/").endswith("/v1/messages"):
+        return None
+    if upstream.host == "api.anthropic.com":
+        return ANTHROPIC_MAX_USER_ID_LENGTH
+    return (
+        ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH
+        if _same_host_and_port(upstream, anthropic_pass_through_api_base())
+        else None
+    )
+
+
+def _has_email_shape(token: str) -> bool:
+    at_sign: Final = token.find("@", 1)
+    return at_sign != -1 and token.find(".", at_sign + 2, -1) != -1
+
+
+def anthropic_accepts_user_id(user_id: str, max_length: int) -> bool:
+    return len(user_id) <= max_length and user_id.isprintable() and not any(map(_has_email_shape, user_id.split()))
+
+
 def is_anthropic_messages_url(url: str) -> bool:
     """Check whether a URL addresses Anthropic's Messages API."""
     parsed_url: Final = urlparse(url)
@@ -204,7 +244,7 @@ def requires_native_compaction_beta(
     optional_params: Mapping[str, object],
     messages: Sequence[object],
 ) -> bool:
-    return custom_llm_provider == "anthropic" and (
+    return custom_llm_provider in NATIVE_COMPACTION_PROVIDERS and (
         optional_params.get("compaction") is not None or carries_signed_compaction_block(messages)
     )
 
@@ -246,9 +286,31 @@ def context_management_betas(context_management: JsonValue) -> tuple[str, ...]:
     )
 
 
-def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None) -> bool:
+def count_tokens_feature_betas(
+    custom_llm_provider: str,
+    optional_params: Mapping[str, object],
+    messages: Sequence[object],
+) -> tuple[str, ...]:
+    return tuple(
+        beta
+        for beta, used in (
+            (
+                ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value,
+                requires_native_compaction_beta(custom_llm_provider, optional_params, messages),
+            ),
+            (
+                ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
+                AnthropicModelInfo().is_mid_conversation_tool_change_used(messages),
+            ),
+        )
+        if used
+    )
+
+
+def supports_anthropic_cache_control(
+    model: str, custom_llm_provider: str | None, model_info: Mapping[str, object] | None = None
+) -> bool:
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-    from litellm.utils import supports_prompt_caching
 
     try:
         provider: Final = custom_llm_provider if custom_llm_provider is not None else get_llm_provider(model=model)[1]
@@ -257,8 +319,25 @@ def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None
     return (
         provider in ("anthropic", "bedrock", "vertex_ai", "azure_ai")
         and "claude" in model.lower()
-        and supports_prompt_caching(model=model, custom_llm_provider=provider)
+        and _deployment_supports_prompt_caching(model, provider, model_info)
     )
+
+
+def _deployment_supports_prompt_caching(model: str, provider: str, model_info: Mapping[str, object] | None) -> bool:
+    from litellm.utils import catalog_with_runtime_registrations, get_model_info, supports_prompt_caching
+
+    declared: Final = None if model_info is None else lax_bool(model_info.get("supports_prompt_caching"))
+    if declared is not None:
+        return declared
+    live: Final = supports_prompt_caching(model=model, custom_llm_provider=provider)
+    if model_info is None:
+        return live
+    try:
+        key: Final = get_model_info(model=model, custom_llm_provider=provider).get("key")
+    except Exception:  # noqa: BLE001  # an unmapped model keeps the live answer
+        return live
+    catalog_entry: Final = catalog_with_runtime_registrations().get(key)
+    return live if catalog_entry is None else catalog_entry.get("supports_prompt_caching") is True
 
 
 def _tool_config_point_control(points: object) -> Mapping[object, object] | None:
@@ -645,10 +724,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         file_ids: Final = get_file_ids_from_messages(messages)
         return len(file_ids) > 0
 
-    def is_thinking_display_updates_used(self, thinking: AnthropicThinkingParam | None) -> bool:
-        if not isinstance(thinking, dict):
-            return False
-        return thinking.get("type") in ("adaptive", "enabled") and thinking.get("display") == "updates"
+    def is_thinking_display_updates_used(self, thinking: object) -> bool:
+        match thinking:
+            case {"type": "adaptive" | "enabled", "display": "updates"}:
+                return True
+            case _:
+                return False
 
     def thinking_betas(self, thinking: AnthropicThinkingParam | None) -> tuple[str, ...]:
         return (
@@ -1130,7 +1211,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         budget_tokens: Final = _legacy_budget_tokens(thinking.get("budget_tokens", 0), drop_params=drop_params)
         display: Final = thinking.get("display")
-        supported_display: Final = {"display": display} if display in ("summarized", "omitted") else {}
+        keeps_display: Final = display in ("summarized", "omitted") or (
+            display == "updates" and custom_llm_provider in LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS
+        )
+        supported_display: Final = {"display": display} if keeps_display else {}
         carried_keys: Final = carried_thinking_keys(
             thinking, rebuilt_keys=frozenset(("type", "budget_tokens", "display")), drop_params=drop_params
         )
@@ -1231,7 +1315,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             return None
         return anthropic_beta_header.split(",")
 
-    def get_computer_tool_beta_header(self, computer_tool_version: str) -> str:
+    def get_computer_tool_beta_header(self, computer_tool_version: str) -> str | None:
         """
         Get the appropriate beta header for a given computer tool version.
 
@@ -1239,16 +1323,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             computer_tool_version: The computer tool version (e.g., 'computer_20250124', 'computer_20241022')
 
         Returns:
-            The corresponding beta header string
+            The corresponding beta header string, or None for a version with no known beta
         """
         computer_tool_beta_mapping: Final = {
+            "computer_20251124": "computer-use-2025-11-24",
             "computer_20250124": "computer-use-2025-01-24",
             "computer_20241022": "computer-use-2024-10-22",
         }
-        return computer_tool_beta_mapping.get(
-            computer_tool_version,
-            "computer-use-2024-10-22",  # Default fallback
-        )
+        return computer_tool_beta_mapping.get(computer_tool_version)
 
     def get_anthropic_beta_list(
         self,
@@ -1280,9 +1362,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if effort_used:
             betas.append(ANTHROPIC_EFFORT_BETA_HEADER)  # effort-2025-11-24
 
-        if computer_tool_used:
-            beta_header: Final = self.get_computer_tool_beta_header(computer_tool_used)
-            betas.append(beta_header)
+        if computer_tool_used and (computer_tool_beta := self.get_computer_tool_beta_header(computer_tool_used)):
+            betas.append(computer_tool_beta)
 
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
@@ -1371,9 +1452,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
         # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
-        if computer_tool_used:
-            beta_header: Final = self.get_computer_tool_beta_header(computer_tool_used)
-            betas.add(beta_header)
+        if computer_tool_used and (computer_tool_beta := self.get_computer_tool_beta_header(computer_tool_used)):
+            betas.add(computer_tool_beta)
         # if pdf_used:
         #     betas.add("pdfs-2024-09-25")
         if file_id_used:
@@ -2452,7 +2532,7 @@ def create_anthropic_model_list_response(
     }
 
 
-class RefusalStopFields(TypedDict, total=False):
+class StopReasonFields(TypedDict, total=False):
     stop_reason: ReadOnly[object]
     stop_details: ReadOnly[object]
 
@@ -2469,16 +2549,38 @@ def _dict_or_empty(value: object) -> object:
     return value if _is_dict(value) else _no_stop_fields()
 
 
-REFUSAL_STOP_FIELDS: Final[TypeAdapter[RefusalStopFields]] = TypeAdapter(
-    Annotated[RefusalStopFields, BeforeValidator(_dict_or_empty)]
+STOP_REASON_FIELDS: Final[TypeAdapter[StopReasonFields]] = TypeAdapter(
+    Annotated[StopReasonFields, BeforeValidator(_dict_or_empty)]
 )
 
+_STOP_REASONS_KEPT_RAW: Final = frozenset({"refusal", "pause_turn"})
 
-def refusal_provider_specific_fields(message: Mapping[str, object]) -> Mapping[str, object]:
+
+def stop_reason_provider_specific_fields(message: Mapping[str, object]) -> Mapping[str, object]:
     stop_reason: Final = message.get("stop_reason")
     stop_details: Final = message.get("stop_details")
     if stop_details is not None:
         return {"stop_reason": stop_reason, "stop_details": stop_details}
-    if stop_reason == "refusal":
+    if stop_reason in _STOP_REASONS_KEPT_RAW:
         return {"stop_reason": stop_reason}
     return {}
+
+
+class _RefusalStopDetails(TypedDict, total=False):
+    explanation: ReadOnly[object]
+
+
+_REFUSAL_STOP_DETAILS: Final[TypeAdapter[_RefusalStopDetails]] = TypeAdapter(
+    Annotated[_RefusalStopDetails, BeforeValidator(_dict_or_empty)]
+)
+
+
+class RefusalParams(TypedDict, total=False):
+    refusal: ReadOnly[str]
+
+
+def refusal_params(message: Mapping[str, object]) -> RefusalParams:
+    if message.get("stop_reason") != "refusal":
+        return {}
+    explanation: Final = _REFUSAL_STOP_DETAILS.validate_python(message.get("stop_details")).get("explanation")
+    return {"refusal": explanation} if isinstance(explanation, str) and explanation else {}
