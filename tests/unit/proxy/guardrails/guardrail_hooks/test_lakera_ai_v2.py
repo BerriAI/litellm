@@ -1775,6 +1775,12 @@ def _without_metadata(data: Mapping[str, object]) -> Mapping[str, object]:
     return {key: value for key, value in data.items() if key != "metadata"}
 
 
+GEMINI_FLAGGED: Final = {
+    "flagged": True,
+    "breakdown": [{"detector_type": "prompt_attack", "detected": True, "message_id": 0}],
+}
+
+
 class TestGeminiContents:
     def test_reads_system_instruction_and_text_parts(self):
         assert (
@@ -1854,6 +1860,85 @@ class TestGeminiContents:
         assert _build_lakera_inspection_messages(data, call_type="pass_through_endpoint") == [
             {"role": "user", "content": "card"}
         ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "gemini_fields",
+        [
+            pytest.param({"contents": []}, id="contents-empty"),
+            pytest.param({"contents": [{"parts": [{"text": "hello"}]}]}, id="contents-benign"),
+            pytest.param({"systemInstruction": {"parts": [{"text": "hello"}]}}, id="system-instruction"),
+        ],
+    )
+    async def test_monitor_masks_instructions_on_a_pass_through_body_with_gemini_fields(
+        self, gemini_fields: dict[str, object]
+    ):
+        guardrail: Final = LakeraAIGuardrail(api_key="test_key", on_flagged="monitor")
+        data: Final[dict[str, object]] = {  # mutable-ok: the hook masks the body in place
+            "instructions": "a@b.com is the contact",
+            "input": "",
+            **gemini_fields,
+        }
+        flagged: Final = {
+            "flagged": True,
+            "breakdown": [{"detector_type": "pii/email", "detected": True, "message_id": 0}],
+            "payload": [{"detector_type": "pii/email", "start": 0, "end": 7, "message_id": 0}],
+        }
+        with patch.object(guardrail, "call_v2_guard", new=AsyncMock(return_value=(flagged, {}))):
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                cache=DualCache(),
+                data=data,
+                call_type="pass_through_endpoint",
+            )
+        assert data["instructions"] == "[MASKED EMAIL] is the contact"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "key_fields",
+        [
+            pytest.param({"metadata": {"disable_global_guardrails": True}}, id="key-disables-global"),
+            pytest.param({"metadata": {"opted_out_global_guardrails": ["lakera-global"]}}, id="key-names-it"),
+            pytest.param({"team_metadata": {"disable_global_guardrails": True}}, id="team-disables-global"),
+            pytest.param({"team_metadata": {"opted_out_global_guardrails": ["lakera-global"]}}, id="team-names-it"),
+        ],
+    )
+    async def test_key_opted_out_of_a_global_guardrail_skips_it_on_a_gemini_pass_through_body(
+        self, key_fields: dict[str, dict[str, object]]
+    ):
+        guardrail: Final = LakeraAIGuardrail(api_key="test_key", guardrail_name="lakera-global", default_on=True)
+        data: Final = _gemini_request()
+        with patch.object(guardrail, "call_v2_guard", new=AsyncMock(return_value=(GEMINI_FLAGGED, {}))):
+            result: Final = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key", **key_fields),
+                cache=DualCache(),
+                data=data,
+                call_type="pass_through_endpoint",
+            )
+        assert result == data
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "key_fields",
+        [
+            pytest.param({}, id="no-opt-out"),
+            pytest.param({"metadata": {"opted_out_global_guardrails": ["another-guardrail"]}}, id="another-named"),
+        ],
+    )
+    async def test_key_not_opted_out_of_a_global_guardrail_is_blocked_on_a_gemini_pass_through_body(
+        self, key_fields: dict[str, dict[str, object]]
+    ):
+        guardrail: Final = LakeraAIGuardrail(api_key="test_key", guardrail_name="lakera-global", default_on=True)
+        with (
+            patch.object(guardrail, "call_v2_guard", new=AsyncMock(return_value=(GEMINI_FLAGGED, {}))),
+            pytest.raises(HTTPException),
+        ):
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key", **key_fields),
+                cache=DualCache(),
+                data=_gemini_request(),
+                call_type="pass_through_endpoint",
+            )
 
     @pytest.mark.parametrize("chat_field", ["messages", "input"])
     def test_a_pass_through_chat_body_with_stray_contents_is_read_as_chat(self, chat_field: str):

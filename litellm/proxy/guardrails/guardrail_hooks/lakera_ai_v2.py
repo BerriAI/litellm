@@ -279,15 +279,37 @@ def _gemini_tool_text(content: object) -> str:
 def _has_gemini_contents(data: object, call_type: str | None) -> bool:
     """True if ``data`` is a Gemini ``generateContent`` body on a pass-through or Google ``generateContent`` call,
     which carries its prompt in ``contents`` and ``systemInstruction``. A pass-through body with chat ``messages`` or
-    Responses ``input`` is read as chat, as before."""
+    Responses ``input`` or ``instructions`` is read as chat, as before."""
     fields: Final = as_str_mapping(data) or {}
     return (
         call_type in _GEMINI_BODY_CALL_TYPES
-        and not (call_type == CallTypes.pass_through.value and (fields.get("messages") or fields.get("input")))
+        and not (
+            call_type == CallTypes.pass_through.value
+            and (fields.get("messages") or fields.get("input") or fields.get("instructions"))
+        )
         and (
             isinstance(fields.get("contents"), list | dict)
             or isinstance(fields.get("systemInstruction") or fields.get("system_instruction"), dict)
         )
+    )
+
+
+def _opted_out_of_global_guardrail(guardrail: "LakeraAIGuardrail", user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """True if the key's or team's admin metadata opts out of this ``default_on`` guardrail. A pass-through body has no
+    admin metadata for ``should_run_guardrail`` to read, so it is read from the key here."""
+    admin_fields: Final = user_api_key_dict.model_dump(include={"metadata", "team_metadata"})
+    return (
+        guardrail.default_on is True
+        and guardrail.should_run_guardrail(  # pyright: ignore[reportUnknownMemberType]  # takes an untyped data dict
+            data={
+                "metadata": {
+                    "user_api_key_metadata": admin_fields.get("metadata"),
+                    "user_api_key_team_metadata": admin_fields.get("team_metadata"),
+                }
+            },
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        is not True
     )
 
 
@@ -647,7 +669,10 @@ class LakeraAIGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug("Lakera AI: pre_call_hook")
 
         event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.pre_call
-        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+        is_gemini_body: Final = _has_gemini_contents(data, call_type)  # pyright: ignore[reportUnknownArgumentType]  # hook data is an untyped dict
+        if self.should_run_guardrail(data=data, event_type=event_type) is not True or (
+            is_gemini_body and _opted_out_of_global_guardrail(self, user_api_key_dict)
+        ):
             verbose_proxy_logger.debug("Lakera AI: not running guardrail. Guardrail is disabled.")
             return data
 
@@ -679,7 +704,6 @@ class LakeraAIGuardrail(CustomGuardrail):
         # handled safely by _apply_redacted_messages_back_preserving_fields's
         # scope-index merge, which never touches a message outside the scope
         # it actually redacted instead of reconstructing the list from scratch.
-        is_gemini_body: Final = _has_gemini_contents(data, call_type)  # pyright: ignore[reportUnknownArgumentType]  # hook data is an untyped dict
         is_multimodal_input: Final = (
             has_non_string_content(data)
             or _has_combined_messages_and_input(data)
