@@ -16,13 +16,12 @@ LOCK_TIMEOUT_RE: Final = re.compile(
 )
 
 
-def first_transaction_statement(sql: str) -> str:
+def first_statement(sql: str) -> str:
     executable_sql: Final = "\n".join(
         line for line in sql.splitlines() if line.strip() and not line.lstrip().startswith("--")
     )
-    transaction_sql: Final = re.sub(r"\ABEGIN\s*;\s*", "", executable_sql.strip(), count=1, flags=re.IGNORECASE)
-    match: Final = re.search(r"(?s).*?;", transaction_sql)
-    return match.group().strip() if match is not None else transaction_sql.strip()
+    match: Final = re.search(r"(?s).*?;", executable_sql)
+    return match.group().strip() if match is not None else executable_sql.strip()
 
 
 def scan_migration(directory: Path) -> tuple[str, ...]:
@@ -33,11 +32,11 @@ def scan_migration(directory: Path) -> tuple[str, ...]:
     if "CONCURRENTLY" in sql.upper():
         return ()
 
-    if LOCK_TIMEOUT_RE.fullmatch(first_transaction_statement(sql)):
+    if LOCK_TIMEOUT_RE.fullmatch(first_statement(sql)):
         return ()
 
     return (
-        f"{directory.name}/migration.sql: first SQL statement after an optional BEGIN must be SET LOCAL lock_timeout; "
+        f"{directory.name}/migration.sql: first SQL statement must be SET LOCAL lock_timeout; "
         f"add this exact line: {LOCK_TIMEOUT_LINE}",
     )
 

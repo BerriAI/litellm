@@ -68,15 +68,28 @@ def _spend(table: str, key: tuple[tuple[str, str], ...], spend: float) -> Contri
 
 def _entity_contributions(row: Mapping[str, object], metadata: Mapping[str, object]) -> tuple[Contribution, ...]:
     spend: Final = _number(row.get("spend"))
+    entities: Final = _fields(metadata["accounting_entities"]) if "accounting_entities" in metadata else row
     identities: Final = (
-        ("LiteLLM_VerificationToken", "token", row.get("api_key")),
-        ("LiteLLM_UserTable", "user_id", row.get("user")),
-        ("LiteLLM_UserTable", "user_id", metadata.get("accounting_proxy_budget_name")),
-        ("LiteLLM_TeamTable", "team_id", row.get("team_id")),
-        ("LiteLLM_OrganizationTable", "organization_id", row.get("organization_id")),
-        ("LiteLLM_EndUserTable", "user_id", row.get("end_user")),
-        ("LiteLLM_AgentsTable", "agent_id", row.get("agent_id")),
-        ("LiteLLM_ProjectTable", "project_id", metadata.get("user_api_key_project_id")),
+        ("LiteLLM_VerificationToken", "token", entities.get("api_key")),
+        ("LiteLLM_UserTable", "user_id", entities.get("user")),
+        (
+            "LiteLLM_UserTable",
+            "user_id",
+            entities.get("proxy_budget_name")
+            if "accounting_entities" in metadata
+            else metadata.get("accounting_proxy_budget_name"),
+        ),
+        ("LiteLLM_TeamTable", "team_id", entities.get("team_id")),
+        ("LiteLLM_OrganizationTable", "organization_id", entities.get("organization_id")),
+        ("LiteLLM_EndUserTable", "user_id", entities.get("end_user")),
+        ("LiteLLM_AgentsTable", "agent_id", entities.get("agent_id")),
+        (
+            "LiteLLM_ProjectTable",
+            "project_id",
+            entities.get("project_id")
+            if "accounting_entities" in metadata
+            else metadata.get("user_api_key_project_id"),
+        ),
     )
     groups: Final = _STRINGS.validate_python(metadata.get("accounting_model_access_groups", ()))
     return (
@@ -87,7 +100,7 @@ def _entity_contributions(row: Mapping[str, object], metadata: Mapping[str, obje
         ),
         *(_spend("LiteLLM_TagTable", (("tag_name", tag),), spend) for tag in _tags(row) if tag),
         *(_spend("LiteLLM_ModelAccessGroupBudgetTable", (("access_group_name", group),), spend) for group in groups),
-        *_membership_contributions(row, spend),
+        *_membership_contributions(entities, spend),
     )
 
 
@@ -151,7 +164,14 @@ def _daily_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
         ("mcp_namespaced_tool_name", _text(row.get("mcp_namespaced_tool_name"))),
         ("endpoint", _text(endpoint)),
     )
-    return tuple(_daily_rows(row, shared_key, counters))
+    # The legacy daily organization writer uses the charged org argument, not
+    # SpendLogs' normalized empty-string identity for a request with no org.
+    daily_row: Final = (
+        {**row, "organization_id": _fields(metadata["accounting_entities"]).get("organization_id")}
+        if "accounting_entities" in metadata
+        else row
+    )
+    return tuple(_daily_rows(daily_row, shared_key, counters))
 
 
 def _daily_rows(
@@ -178,7 +198,7 @@ def _window_contributions(row: Mapping[str, object], metadata: Mapping[str, obje
         Contribution(
             "LiteLLM_BudgetWindowSpend",
             tuple((column, _text(window[column])) for column in ("entity_type", "entity_id", "window_duration")),
-            (("spend", _number(row.get("spend"))),),
+            (("spend", _number(window.get("spend", row.get("spend")))),),
             (("window_start", _text(window["window_start"])), ("started_at", _text(row.get("startTime")))),
         )
         for window in windows

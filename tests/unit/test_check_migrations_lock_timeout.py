@@ -60,15 +60,3 @@ def test_concurrently_migration_without_lock_timeout_passes(tmp_path: Path) -> N
     sql = "create index concurrently foo_bar_idx on foo (bar);"
 
     assert _scan(tmp_path, sql) == ()
-
-
-def test_transaction_sets_lock_timeout_before_acquiring_locks(tmp_path: Path) -> None:
-    assert _scan(tmp_path, "BEGIN;\nSET LOCAL lock_timeout = '10s';\nLOCK TABLE foo;\nCOMMIT;") == ()
-
-
-def test_transaction_without_lock_timeout_is_rejected(tmp_path: Path) -> None:
-    assert _scan(tmp_path, "BEGIN;\nLOCK TABLE foo;\nCOMMIT;")
-
-
-def test_transaction_cannot_set_lock_timeout_after_acquiring_locks(tmp_path: Path) -> None:
-    assert _scan(tmp_path, "BEGIN;\nLOCK TABLE foo;\nSET LOCAL lock_timeout = '10s';\nCOMMIT;")

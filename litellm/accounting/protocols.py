@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from collections.abc import Mapping
+from typing import Protocol
 
 from litellm.accounting.types import AggregateQuery, AggregateRow
 
-if TYPE_CHECKING:
-    from litellm.proxy._types import SpendLogsPayload
-
 
 class CostAggregator(Protocol):
-    async def apply(self, rows: tuple[SpendLogsPayload, ...]) -> None:
+    async def apply(self, rows: tuple[Mapping[str, object], ...]) -> None:
         """Apply stored request contributions atomically with their delivery receipts."""
         ...
 

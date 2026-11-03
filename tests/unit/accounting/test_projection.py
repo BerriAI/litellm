@@ -7,7 +7,9 @@ import pytest
 from pydantic import TypeAdapter
 
 from litellm.accounting.projection import project
+from litellm.accounting.snapshot import build_accounting_payload
 from litellm.constants import BILLED_RETRY_ATTEMPT_METADATA_KEY, INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.proxy_server import proxy_logging_obj
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
@@ -51,6 +53,23 @@ async def test_daily_projection_matches_legacy_writer(status: str, origin: str |
     assert dict(projected.increments) == {name: legacy[name] for name, _ in projected.increments}
     assert dict(projected.key)["date"] == legacy["date"]
     assert dict(projected.key)["api_key"] == legacy["api_key"]
+    accounting_input: Final[SpendLogsPayload] = {
+        **payload,
+        "spend": spend,
+        "metadata": json.dumps(metadata),
+        "request_duration_ms": 25,
+    }
+    accounting: Final = build_accounting_payload(
+        accounting_input,
+        entities={"api_key": payload["api_key"], "user": payload["user"]},
+        model_access_groups=(),
+        windows=(),
+        router=lambda: None,
+    )
+    restored: Final = _FIELDS.validate_json(json.dumps(accounting, default=str))
+    stored_daily: Final = next(item for item in project(restored) if item.table == "LiteLLM_DailyUserSpend")
+    assert dict(stored_daily.increments) == {name: legacy[name] for name, _ in stored_daily.increments}
+    assert not {"messages", "response", "proxy_server_request", "requester_ip_address"}.intersection(accounting)
 
 
 def test_projection_uses_frozen_savings_and_keeps_duplicate_entity_tags() -> None:
@@ -316,3 +335,24 @@ def test_report_only_or_invalid_guardrail_prices_remain_untracked(cost_fields: M
     model: Final = next(item for item in contributions if item.table == "LiteLLM_DailyModelUsage")
     assert dict(guardrail.increments) == {"units": 2, "cost": 0.0, "untracked_units": 2}
     assert dict(model.key)["task_type"] == "debugging"
+
+
+@pytest.mark.parametrize("organization_id", [None, "", "charged-org"])
+def test_daily_organization_uses_frozen_charged_identity(organization_id: str | None) -> None:
+    row: Final[Mapping[str, object]] = {
+        "startTime": _NOW,
+        "api_key": "key",
+        "model": "projection-test",
+        "model_group": "group",
+        "custom_llm_provider": "openai",
+        "organization_id": "stored-org",
+        "spend": 0.25,
+        "metadata": {"accounting_entities": {"organization_id": organization_id}},
+    }
+    daily: Final = tuple(item for item in project(row) if item.table == "LiteLLM_DailyOrganizationSpend")
+    if organization_id is None:
+        assert daily == ()
+    else:
+        assert len(daily) == 1
+        assert dict(daily[0].key)["organization_id"] == organization_id
+        assert dict(daily[0].increments)["spend"] == 0.25
