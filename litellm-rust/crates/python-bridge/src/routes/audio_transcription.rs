@@ -13,7 +13,7 @@ use crate::{
 };
 
 async fn execute(
-    http: Result<litellm_http::Client, litellm_http::Error>,
+    http: litellm_http::Client,
     secrets: std::sync::Arc<dyn litellm_secrets::source::SecretSource>,
     audio: Value,
     optional_params: Map<String, Value>,
@@ -27,7 +27,7 @@ async fn execute(
         extra_headers,
         timeout,
     } = options;
-    AudioTranscriptionRoute::new(http?, crate::http::resources().auth.clone(), secrets)
+    AudioTranscriptionRoute::new(http, crate::http::resources().auth.clone(), secrets)
         .execute(AudioTranscriptionRequest {
             model: &model,
             audio,
@@ -48,7 +48,8 @@ pub(crate) fn transcription(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py
         litellm_host_python::from_py_argument(&required_field(&arguments, "audio")?)?;
     let options = value_route_options(&arguments)?;
     let optional_params = optional_object_field(&arguments, "optional_params")?.unwrap_or_default();
-    let http = crate::http::provider_client(py, &call.kwargs, false)?;
+    let http = crate::http::provider_client(py, &call.kwargs, false)?
+        .map_err(crate::http::client_error)?;
     let secrets = crate::secrets::source(py)?;
     run_sync(
         py,
@@ -67,7 +68,8 @@ pub(crate) fn atranscription<'py>(
         litellm_host_python::from_py_argument(&required_field(&arguments, "audio")?)?;
     let options = value_route_options(&arguments)?;
     let optional_params = optional_object_field(&arguments, "optional_params")?.unwrap_or_default();
-    let http = crate::http::provider_client(py, &call.kwargs, true)?;
+    let http =
+        crate::http::provider_client(py, &call.kwargs, true)?.map_err(crate::http::client_error)?;
     let secrets = crate::secrets::source(py)?;
     run_async(
         py,

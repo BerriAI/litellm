@@ -228,7 +228,7 @@ async def systemone(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
-    Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+    Judge a `state` against one or more named `questions` and get one calibrated answer per question name.
 
     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,

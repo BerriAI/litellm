@@ -9,22 +9,27 @@ ARN unified_object_id) batches with no managed unified id.
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import copy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from queue import SimpleQueue
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import respx
 from fastapi import HTTPException
 
+import litellm
+from litellm.constants import MANAGED_OBJECT_STALENESS_CUTOFF_DAYS
 from litellm.types.router import LiteLLM_Params
 from litellm.types.utils import LiteLLMBatch
+from litellm_enterprise.proxy.common_utils.check_batch_cost import GIVE_UP_POLLING_AFTER
 
 if TYPE_CHECKING:
     from litellm.batches.batch_utils import BatchCostUsageResult
@@ -32,6 +37,11 @@ if TYPE_CHECKING:
 _IS_B64 = "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id"
 _CLAIM_UNIFIED_BATCH_ID = "dW5pZmllZF9iYXRjaF9pZA=="
 _CLAIM_OUTPUT_FILE_ID = "file-output-123"
+_NOW: Final = datetime(2026, 1, 15, 12, tzinfo=timezone.utc)
+
+
+def _fixed_clock() -> datetime:
+    return _NOW
 
 
 def test_batch_output_file_object_derives_metadata():
@@ -70,10 +80,11 @@ def _batch_cost_result(
     """Build the BatchCostUsageResult calculate_batch_cost_and_usage now returns,
     for mocking it in tests that only care about cost/usage/models."""
     from litellm.batches.batch_utils import BatchCostUsageResult
+    from litellm.types.utils import Usage
 
     return BatchCostUsageResult(
         cost=cost,
-        usage=usage,
+        usage=Usage(**usage),
         models=models,
         successful_requests=successful_requests,
         failed_requests=failed_requests,
@@ -152,24 +163,8 @@ class TestCheckBatchCost:
             proxy_logging_obj=mock_proxy_logging_obj,
             prisma_client=mock_prisma_client,
             llm_router=mock_llm_router,
+            clock=_fixed_clock,
         )
-
-    @pytest.mark.asyncio
-    async def test_cleanup_scoped_to_batch_file_purpose(self, check_batch_cost_instance, mock_prisma_client):
-        """_cleanup_stale_managed_objects scopes its update to file_purpose='batch' only."""
-        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
-        # Return empty so the main poll loop exits immediately
-        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[])
-
-        await check_batch_cost_instance.check_batch_cost()
-
-        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-        stale_call = calls[0]
-        assert stale_call[1]["data"] == {"status": "stale_expired"}
-        where = stale_call[1]["where"]
-        assert where["file_purpose"] == "batch"
-        assert "stale_expired" in where["status"]["not_in"]
-        assert "created_at" in where
 
     @pytest.mark.asyncio
     async def test_startup_probe_confirms_batch_processed_support(self, check_batch_cost_instance, mock_prisma_client):
@@ -251,7 +246,7 @@ class TestCheckBatchCost:
         fallback_where = calls[1][1]["where"]
         assert "batch_processed" not in fallback_where
         assert "stale_expired" in fallback_where["status"]["not_in"]
-        assert calls[1][1]["take"] == MAX_OBJECTS_PER_POLL_CYCLE
+        assert calls[2][1]["take"] == MAX_OBJECTS_PER_POLL_CYCLE
         # Column absence is now cached — next call should go straight to fallback
         assert check_batch_cost_instance._has_batch_processed_column is False
         assert check_batch_cost_instance.batch_processed_support_confirmed is False
@@ -303,13 +298,13 @@ class TestCheckBatchCost:
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.custom_llm_provider = "openai"
         mock_deployment.litellm_params.model = "gpt-4"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         mock_file_content = MagicMock()
         mock_file_content.content = b'{"id":"req-1"}'
@@ -396,7 +391,7 @@ class TestCheckBatchCost:
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+        mock_llm_router.registry.return_value.credentials = MagicMock(
             return_value={
                 "custom_llm_provider": "bedrock",
                 "s3_bucket_name": "configured-batch-bucket",
@@ -408,7 +403,7 @@ class TestCheckBatchCost:
         mock_deployment.litellm_params.custom_llm_provider = "bedrock"
         mock_deployment.litellm_params.model = "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         mock_file_content = MagicMock()
         mock_file_content.content = b'{"recordId":"req-1"}'
@@ -504,7 +499,7 @@ class TestCheckBatchCost:
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+        mock_llm_router.registry.return_value.credentials = MagicMock(
             return_value={"custom_llm_provider": "bedrock", "aws_region_name": "us-east-1"}
         )
 
@@ -512,7 +507,7 @@ class TestCheckBatchCost:
         mock_deployment.litellm_params.custom_llm_provider = "bedrock"
         mock_deployment.litellm_params.model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         mock_file_content = MagicMock()
         mock_file_content.content = b'{"recordId":"req-1"}'
@@ -604,14 +599,14 @@ class TestCheckBatchCost:
         mock_response.error_file_id = None
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.custom_llm_provider = "openai"
         mock_deployment.litellm_params.model = "gpt-5.4-mini"
         mock_deployment.litellm_params.api_base = "https://gateway.example.com/v1?key=AIzaSyVERYSECRET7890"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         output_line = json.dumps(
             {
@@ -688,13 +683,13 @@ class TestCheckBatchCost:
         )
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.custom_llm_provider = "openai"
         mock_deployment.litellm_params.model = "gpt-4"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         mock_file_content = MagicMock()
         mock_file_content.content = b'{"id":"req-1"}'
@@ -744,7 +739,7 @@ class TestCheckBatchCost:
 
             await check_batch_cost_instance.check_batch_cost()
 
-        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 2, (
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 1, (
             "Expected update() to be called exactly once for the completed job"
         )
         update_data = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
@@ -802,13 +797,13 @@ class TestCheckBatchCost:
         )
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.custom_llm_provider = "openai"
         mock_deployment.litellm_params.model = "gpt-4"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         mock_file_content = MagicMock()
         mock_file_content.content = b'{"id":"req-1"}'
@@ -877,7 +872,7 @@ class TestCheckBatchCost:
 
         mock_update_database.assert_awaited_once()
         assert mock_update_database.call_args.kwargs["response_cost"] == 0.01
-        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 2, (
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 1, (
             "the job must still be marked processed once cost tracking succeeds"
         )
 
@@ -910,7 +905,7 @@ class TestCheckBatchCost:
         mock_response.output_file_id = "msgbatch_01WA5hdsa2Xx8w4zyPjV1frs"
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+        mock_llm_router.registry.return_value.credentials = MagicMock(
             return_value={"api_key": "sk-test", "custom_llm_provider": "anthropic"}
         )
 
@@ -979,7 +974,7 @@ class TestCheckBatchCost:
 
         await check_batch_cost_instance.check_batch_cost()
 
-        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 2, (
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 1, (
             f"Expected update() to be called exactly once for a {terminal_status} job"
         )
         update_data = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
@@ -1085,13 +1080,9 @@ class TestCheckBatchCost:
         assert owner.user_id == "user-1"
         assert owner.team_id == "team-1"
 
-        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 2
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 1
         update_call = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args
-        assert update_call.kwargs["where"] == {
-            "id": "job-terminal-mint-1",
-            "batch_processed": False,
-            "updated_at": mock_job.updated_at,
-        }
+        assert update_call.kwargs["where"] == {"id": "job-terminal-mint-1", "batch_processed": False}
         update_data = update_call.kwargs["data"]
         assert update_data["status"] == terminal_status
         assert update_data["batch_processed"] is True
@@ -1148,7 +1139,7 @@ class TestCheckBatchCost:
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
         # Billing reads credentials off the router; if it is touched we billed a batch
         # that has no output, which is the behaviour this test guards against.
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         with patch(
             "litellm.files.main.afile_content",
@@ -1156,7 +1147,7 @@ class TestCheckBatchCost:
         ) as mock_afile_content:
             await check_batch_cost_instance.check_batch_cost()
 
-        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 2, (
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 1, (
             "a completed batch with no output file must be marked processed exactly once"
         )
         update_data = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
@@ -1165,7 +1156,7 @@ class TestCheckBatchCost:
             "completed-without-output update() must set batch_processed=True so polling stops"
         )
         assert mock_afile_content.await_count == 0, "a batch with no output file must not be billed"
-        assert mock_llm_router.get_deployment_credentials_with_provider.call_count == 0, (
+        assert mock_llm_router.registry.return_value.credentials.call_count == 0, (
             "a batch with no output file must not enter the cost-tracking path"
         )
 
@@ -1205,6 +1196,7 @@ class TestCheckBatchCost:
             b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
         ).decode()
         mock_job.created_by = "user-1"
+        mock_job.created_at = _NOW
 
         assert check_batch_cost_instance._has_batch_processed_column is True
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
@@ -1216,7 +1208,7 @@ class TestCheckBatchCost:
         mock_response.request_counts = request_counts
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         with patch(
             "litellm.files.main.afile_content",
@@ -1245,6 +1237,7 @@ class TestCheckBatchCost:
         mock_job.id = "job-in-progress-1"
         mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
         mock_job.created_by = "user-1"
+        mock_job.created_at = _NOW
 
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
 
@@ -1315,13 +1308,13 @@ class TestCheckBatchCost:
         )
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.custom_llm_provider = "openai"
         mock_deployment.litellm_params.model = "gpt-4"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         mock_file_content = MagicMock()
         mock_file_content.content = b'{"id":"req-1"}'
@@ -1375,7 +1368,7 @@ class TestCheckBatchCost:
             f"{terminal_status} batch with an output file must fetch results and be billed"
         )
         mock_logging_obj.async_success_handler.assert_awaited_once()
-        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 2
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 1
         update_data = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
         assert update_data["batch_processed"] is True
         assert update_data["status"] == terminal_status, (
@@ -1417,13 +1410,13 @@ class TestCheckBatchCost:
         mock_response.error_file_id = "file-error-456"
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.custom_llm_provider = "openai"
         mock_deployment.litellm_params.model = "gpt-4"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         succeeded_line = json.dumps(
             {
@@ -1527,7 +1520,7 @@ class TestCheckBatchCost:
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"failed"}'
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         with (
             patch(
@@ -1548,7 +1541,7 @@ class TestCheckBatchCost:
 
         assert mock_afile_content.await_count == 1
         mock_calculate.assert_not_awaited()
-        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 2, (
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 1, (
             "a terminal batch with a 404ing output file must be retired, not retried forever"
         )
         update_data = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
@@ -1591,14 +1584,14 @@ class TestCheckBatchCost:
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.custom_llm_provider = "azure"
         mock_deployment.litellm_params.model = "azure/gpt-5-mini"
         mock_deployment.model_name = "gpt-5-batch"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         mock_hook = MagicMock(spec=ManagedBatchOutputFileWriter)
         mock_hook.get_unified_output_file_id.side_effect = [
@@ -1723,8 +1716,8 @@ class TestUnmanagedVertexRouting:
 
         assert result is None
         prom.record_check_batch_cost_error.assert_called_once_with("invalid_unified_id")
-        router.resolve_model_name_from_model_id.assert_not_called()
-        router.get_model_ids.assert_not_called()
+        router.registry.return_value.resolve.assert_not_called()
+        router.registry.return_value.names.assert_not_called()
 
     def _vertex_deployment(self):
         deployment = MagicMock()
@@ -1736,9 +1729,9 @@ class TestUnmanagedVertexRouting:
         """Flag on: derive the bare model from the gs:// path, resolve it to a deployment id,
         and use the raw unified_object_id as the provider batch id."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = "gemini-2.5-flash"
-        router.get_model_ids.return_value = ["deploy-1"]
-        router.get_deployment = MagicMock(return_value=self._vertex_deployment())
+        router.registry.return_value.resolve.return_value = "gemini-2.5-flash"
+        router.registry.return_value.names.return_value = ["deploy-1"]
+        router.registry.return_value.deployment = MagicMock(return_value=self._vertex_deployment())
         instance = self._instance(track_unmanaged=True, router=router)
 
         with patch(_IS_B64, return_value=False):
@@ -1746,8 +1739,8 @@ class TestUnmanagedVertexRouting:
 
         assert result == ("deploy-1", "8823717160934178816")
         # bare model name (trailing GCS segment), not the full publishers/.. path
-        router.resolve_model_name_from_model_id.assert_called_once_with("gemini-2.5-flash")
-        router.get_model_ids.assert_called_once_with(model_name="gemini-2.5-flash")
+        router.registry.return_value.resolve.assert_called_once_with("gemini-2.5-flash", kind="from_id")
+        router.registry.return_value.names.assert_called_once_with("gemini-2.5-flash", kind="ids")
 
     def test_flag_on_routes_fine_tuned_endpoint_to_vertex_deployment(self):
         """A fine-tuned Gemini batch stores `endpoints/<id>` in the gs:// path; the bare model
@@ -1755,8 +1748,8 @@ class TestUnmanagedVertexRouting:
         `vertex_ai/gemini/<id>` (LIT-6899)."""
         endpoint_id = "7768560373388541952"
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = None
-        router.get_model_list.return_value = [
+        router.registry.return_value.resolve.return_value = None
+        router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "gemini-2.5-flash-dts-usc1",
                 "litellm_params": {
@@ -1778,16 +1771,63 @@ class TestUnmanagedVertexRouting:
 
         assert result == ("deploy-ft", "8823717160934178816")
 
+    def _two_team_deployments(self):
+        """Two Vertex deployments sharing the base model, team A listed first."""
+        return [
+            {
+                "model_name": f"gemini-2.5-flash-team-{team}",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "custom_llm_provider": "vertex_ai"},
+                "model_info": {"id": f"deploy-team-{team}"},
+            }
+            for team in ("a", "b")
+        ]
+
+    def test_flag_on_prefers_the_deployment_stored_on_the_row_over_the_first_base_model_match(self):
+        """Regression (LIT-10326): two deployments share gemini-2.5-flash with different
+        buckets. A batch created on team B's deployment stores deploy-team-b in file_object,
+        so the poller must read it back through team B, not the first match (team A)."""
+        router: Final = MagicMock()
+        router.registry.return_value.resolve.return_value = None
+        router.registry.return_value.deployments.return_value = self._two_team_deployments()
+        router.registry.return_value.deployment = MagicMock(return_value=self._vertex_deployment())
+        instance: Final = self._instance(track_unmanaged=True, router=router)
+        job: Final = self._job(
+            file_object=json.dumps({**json.loads(_unmanaged_vertex_file_object()), "model_id": "deploy-team-b"})
+        )
+
+        with patch(_IS_B64, return_value=False):
+            result: Final = instance._resolve_job_routing(job, MagicMock())
+
+        assert result == ("deploy-team-b", "8823717160934178816")
+        router.registry.return_value.deployment.assert_called_once_with("deploy-team-b")
+
+    def test_flag_on_falls_back_to_base_model_match_when_the_stored_deployment_is_gone(self):
+        """The stored deployment was removed from the config after the batch was created:
+        the row still routes through today's base-model lookup instead of being skipped."""
+        router: Final = MagicMock()
+        router.registry.return_value.resolve.return_value = None
+        router.registry.return_value.deployments.return_value = self._two_team_deployments()
+        router.registry.return_value.deployment = MagicMock(return_value=None)
+        instance: Final = self._instance(track_unmanaged=True, router=router)
+        job: Final = self._job(
+            file_object=json.dumps({**json.loads(_unmanaged_vertex_file_object()), "model_id": "deploy-removed"})
+        )
+
+        with patch(_IS_B64, return_value=False):
+            result: Final = instance._resolve_job_routing(job, MagicMock())
+
+        assert result == ("deploy-team-a", "8823717160934178816")
+
     def test_flag_on_skips_non_vertex_deployment_sharing_model_group(self):
         """Flag on, but the only deployment for the model group is a non-vertex_ai
         provider: must not be selected, even though the model group name matches."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = "gemini-2.5-flash"
-        router.get_model_ids.return_value = ["deploy-openai"]
+        router.registry.return_value.resolve.return_value = "gemini-2.5-flash"
+        router.registry.return_value.names.return_value = ["deploy-openai"]
         non_vertex_deployment = MagicMock()
         non_vertex_deployment.litellm_params.custom_llm_provider = "openai"
         non_vertex_deployment.litellm_params.model = "gpt-4o"
-        router.get_deployment = MagicMock(return_value=non_vertex_deployment)
+        router.registry.return_value.deployment = MagicMock(return_value=non_vertex_deployment)
         instance = self._instance(track_unmanaged=True, router=router)
         prom = MagicMock()
 
@@ -1799,13 +1839,13 @@ class TestUnmanagedVertexRouting:
 
     def test_flag_on_uses_later_vertex_deployment_with_matching_suffix(self):
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = "azure-gemini"
-        router.get_model_ids.return_value = ["deploy-azure"]
+        router.registry.return_value.resolve.return_value = "azure-gemini"
+        router.registry.return_value.names.return_value = ["deploy-azure"]
         non_vertex_deployment = MagicMock()
         non_vertex_deployment.litellm_params.custom_llm_provider = "azure"
         non_vertex_deployment.litellm_params.model = "azure/gemini-2.5-flash"
-        router.get_deployment = MagicMock(return_value=non_vertex_deployment)
-        router.get_model_list.return_value = [
+        router.registry.return_value.deployment = MagicMock(return_value=non_vertex_deployment)
+        router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "azure-gemini",
                 "litellm_params": {
@@ -1829,13 +1869,13 @@ class TestUnmanagedVertexRouting:
             result = instance._resolve_job_routing(self._job(), MagicMock())
 
         assert result == ("deploy-vertex", "8823717160934178816")
-        router.get_model_ids.assert_called_once_with(model_name="azure-gemini")
+        router.registry.return_value.names.assert_called_once_with("azure-gemini", kind="ids")
 
     def test_flag_on_no_matching_deployment_records_metric(self):
         """Flag on but no vertex_ai deployment for the model: skip with a distinct metric."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = None
-        router.get_model_ids.return_value = []
+        router.registry.return_value.resolve.return_value = None
+        router.registry.return_value.names.return_value = []
         instance = self._instance(track_unmanaged=True, router=router)
         prom = MagicMock()
 
@@ -1858,7 +1898,7 @@ class TestUnmanagedVertexRouting:
 
         assert result is None
         prom.record_check_batch_cost_error.assert_called_once_with("invalid_unified_id")
-        router.resolve_model_name_from_model_id.assert_not_called()
+        router.registry.return_value.resolve.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_end_to_end_costs_unmanaged_batch(self):
@@ -1866,8 +1906,8 @@ class TestUnmanagedVertexRouting:
         computes cost, and marks batch_processed=True. Fails before this change (the row is
         skipped at the unified-id gate)."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = "gemini-2.5-flash"
-        router.get_model_ids.return_value = ["deploy-1"]
+        router.registry.return_value.resolve.return_value = "gemini-2.5-flash"
+        router.registry.return_value.names.return_value = ["deploy-1"]
 
         mock_response: Final = LiteLLMBatch(
             id="8823717160934178816",
@@ -1880,7 +1920,7 @@ class TestUnmanagedVertexRouting:
             object="batch",
         )
         router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        router.get_deployment_credentials_with_provider = MagicMock(
+        router.registry.return_value.credentials = MagicMock(
             return_value={"vertex_project": "p", "vertex_location": "us-central1"}
         )
 
@@ -1889,7 +1929,7 @@ class TestUnmanagedVertexRouting:
         deployment.litellm_params.model = "vertex_ai/gemini-2.5-flash"
         deployment.model_name = "gemini-2.5-flash"
         deployment.model_info.model_dump.return_value = {}
-        router.get_deployment = MagicMock(return_value=deployment)
+        router.registry.return_value.deployment = MagicMock(return_value=deployment)
 
         instance = self._instance(track_unmanaged=True, router=router)
         instance.proxy_logging_obj.get_proxy_hook.return_value = None
@@ -1946,7 +1986,7 @@ class TestUnmanagedVertexRouting:
         mock_logging_obj.async_success_handler.assert_awaited_once()
         assert mock_logging_obj.async_success_handler.call_args[1]["batch_cost"] == 0.01
 
-        assert prisma.db.litellm_managedobjecttable.update_many.call_count == 2
+        assert prisma.db.litellm_managedobjecttable.update_many.call_count == 1
         update_data = prisma.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
         assert update_data["batch_processed"] is True
         assert update_data["status"] == "complete"
@@ -1993,16 +2033,16 @@ class TestUnmanagedBedrockRouting:
 
         assert result is None
         prom.record_check_batch_cost_error.assert_called_once_with("invalid_unified_id")
-        router.resolve_model_name_from_model_id.assert_not_called()
-        router.get_model_ids.assert_not_called()
+        router.registry.return_value.resolve.assert_not_called()
+        router.registry.return_value.names.assert_not_called()
 
     def test_flag_on_routes_to_bedrock_deployment(self):
         """Flag on: derive the bare model from the s3:// object key (":" restored to "-" is
         matched fuzzily), resolve it to a deployment id, and use the raw ARN as the batch id."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = "claude-sonnet-4"
-        router.get_model_ids.return_value = ["deploy-1"]
-        router.get_deployment = MagicMock(return_value=self._bedrock_deployment())
+        router.registry.return_value.resolve.return_value = "claude-sonnet-4"
+        router.registry.return_value.names.return_value = ["deploy-1"]
+        router.registry.return_value.deployment = MagicMock(return_value=self._bedrock_deployment())
         instance = self._instance(track_unmanaged=True, router=router)
 
         with patch(_IS_B64, return_value=False):
@@ -2014,12 +2054,12 @@ class TestUnmanagedBedrockRouting:
         """Flag on, but the only deployment for the model group is a non-bedrock provider:
         must not be selected, even though the model group name matches."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = "claude-sonnet-4"
-        router.get_model_ids.return_value = ["deploy-anthropic"]
+        router.registry.return_value.resolve.return_value = "claude-sonnet-4"
+        router.registry.return_value.names.return_value = ["deploy-anthropic"]
         non_bedrock_deployment = MagicMock()
         non_bedrock_deployment.litellm_params.custom_llm_provider = "anthropic"
         non_bedrock_deployment.litellm_params.model = "claude-sonnet-4-20250514"
-        router.get_deployment = MagicMock(return_value=non_bedrock_deployment)
+        router.registry.return_value.deployment = MagicMock(return_value=non_bedrock_deployment)
         instance = self._instance(track_unmanaged=True, router=router)
         prom = MagicMock()
 
@@ -2033,9 +2073,9 @@ class TestUnmanagedBedrockRouting:
         """The S3 object key has ':' replaced with '-' (e.g. 'v1-0'), but the configured
         deployment's actual bedrock model id uses ':' (e.g. 'v1:0'). Routing must still match."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = None
-        router.get_model_ids.return_value = []
-        router.get_model_list.return_value = [
+        router.registry.return_value.resolve.return_value = None
+        router.registry.return_value.names.return_value = []
+        router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "claude-sonnet-4",
                 "litellm_params": {
@@ -2055,9 +2095,9 @@ class TestUnmanagedBedrockRouting:
     def test_flag_on_no_matching_deployment_records_metric(self):
         """Flag on but no bedrock deployment for the model: skip with a distinct metric."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = None
-        router.get_model_ids.return_value = []
-        router.get_model_list.return_value = []
+        router.registry.return_value.resolve.return_value = None
+        router.registry.return_value.names.return_value = []
+        router.registry.return_value.deployments.return_value = []
         instance = self._instance(track_unmanaged=True, router=router)
         prom = MagicMock()
 
@@ -2080,15 +2120,15 @@ class TestUnmanagedBedrockRouting:
 
         assert result is None
         prom.record_check_batch_cost_error.assert_called_once_with("invalid_unified_id")
-        router.resolve_model_name_from_model_id.assert_not_called()
+        router.registry.return_value.resolve.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_end_to_end_costs_unmanaged_batch(self):
         """Flag on, completed unmanaged batch: the poller polls Bedrock with the raw ARN,
         computes cost, and marks batch_processed=True."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = "claude-sonnet-4"
-        router.get_model_ids.return_value = ["deploy-1"]
+        router.registry.return_value.resolve.return_value = "claude-sonnet-4"
+        router.registry.return_value.names.return_value = ["deploy-1"]
 
         mock_response: Final = LiteLLMBatch(
             id=self._ARN,
@@ -2101,12 +2141,12 @@ class TestUnmanagedBedrockRouting:
             object="batch",
         )
         router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        router.get_deployment_credentials_with_provider = MagicMock(return_value={"aws_region_name": "us-east-1"})
+        router.registry.return_value.credentials = MagicMock(return_value={"aws_region_name": "us-east-1"})
 
         deployment = self._bedrock_deployment()
         deployment.model_name = "claude-sonnet-4"
         deployment.model_info.model_dump.return_value = {}
-        router.get_deployment = MagicMock(return_value=deployment)
+        router.registry.return_value.deployment = MagicMock(return_value=deployment)
 
         instance = self._instance(track_unmanaged=True, router=router)
         instance.proxy_logging_obj.get_proxy_hook.return_value = None
@@ -2163,7 +2203,7 @@ class TestUnmanagedBedrockRouting:
         mock_logging_obj.async_success_handler.assert_awaited_once()
         assert mock_logging_obj.async_success_handler.call_args[1]["batch_cost"] == 0.02
 
-        assert prisma.db.litellm_managedobjecttable.update_many.call_count == 2
+        assert prisma.db.litellm_managedobjecttable.update_many.call_count == 1
         update_data = prisma.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
         assert update_data["batch_processed"] is True
         assert update_data["status"] == "complete"
@@ -2179,11 +2219,11 @@ class TestUnmanagedBatchCostFlagIsGeneralized:
         )
 
         router = MagicMock()
-        router.resolve_model_name_from_model_id.side_effect = [
+        router.registry.return_value.resolve.side_effect = [
             "gemini-2.5-flash",
             "claude-sonnet-4",
         ]
-        router.get_model_ids.side_effect = [["deploy-vertex"], ["deploy-bedrock"]]
+        router.registry.return_value.names.side_effect = [["deploy-vertex"], ["deploy-bedrock"]]
 
         def _get_deployment(model_id):
             if model_id == "deploy-vertex":
@@ -2196,7 +2236,7 @@ class TestUnmanagedBatchCostFlagIsGeneralized:
             deployment.litellm_params.model = "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
             return deployment
 
-        router.get_deployment = MagicMock(side_effect=_get_deployment)
+        router.registry.return_value.deployment = MagicMock(side_effect=_get_deployment)
 
         instance = CheckBatchCost(
             proxy_logging_obj=MagicMock(),
@@ -2272,13 +2312,13 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
         from litellm.types.utils import LiteLLMBatch
 
         router = MagicMock()
-        router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
         deployment = MagicMock()
         deployment.litellm_params.custom_llm_provider = "azure"
         deployment.litellm_params.model = "azure/gpt-5.5"
         deployment.model_name = self._PUBLIC_MODEL_GROUP
         deployment.model_info.model_dump.return_value = {}
-        router.get_deployment = MagicMock(return_value=deployment)
+        router.registry.return_value.deployment = MagicMock(return_value=deployment)
 
         hook = MagicMock(spec=ManagedBatchOutputFileWriter)
         hook.get_unified_output_file_id = lambda output_file_id, model_id, model_name: (
@@ -2710,6 +2750,7 @@ class TestPollPageStarvation:
             proxy_logging_obj=proxy_logging_obj,
             prisma_client=prisma,
             llm_router=llm_router,
+            clock=_fixed_clock,
         )
 
     def _prisma(self, jobs):
@@ -2725,6 +2766,7 @@ class TestPollPageStarvation:
         job.id = job_id
         job.unified_object_id = unified_object_id
         job.created_by = "user-1"
+        job.created_at = _NOW
         return job
 
     @staticmethod
@@ -2794,7 +2836,7 @@ class TestPollPageStarvation:
             ]
         )
         llm_router = MagicMock()
-        llm_router.get_deployment = MagicMock(return_value=None)
+        llm_router.registry.return_value.deployment = MagicMock(return_value=None)
         llm_router.aretrieve_batch = AsyncMock(
             side_effect=litellm.NotFoundError(
                 message="No batch found with id 'batch_alive'.",
@@ -2910,6 +2952,173 @@ class TestPollPageStarvation:
 
         prisma.db.litellm_managedobjecttable.update.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_a_new_batch_is_polled_every_cycle_while_an_older_batch_stays_unbilled(self) -> None:
+        """An unbilled batch older than the arrival window used to take every other cycle away from the arrival
+        lane, so a new batch waited two poll intervals to be billed."""
+        now: Final = _NOW
+        rows: Final = tuple(
+            SimpleNamespace(
+                id=f"job-{name}",
+                unified_object_id=self._encode(f"litellm_proxy;model_id:model-123;llm_batch_id:batch_{name}"),
+                created_by="user-1",
+                created_at=now - age,
+                updated_at=now,
+                status="in_progress",
+            )
+            for name, age in (("old", timedelta(days=3)), ("new", timedelta(hours=1)))
+        )
+        prisma: Final = self._prisma([])
+        prisma.db.litellm_managedobjecttable = _FakeManagedObjectPages(rows)
+        llm_router: Final = MagicMock()
+        llm_router.aretrieve_batch = AsyncMock(return_value=MagicMock(status="in_progress"))
+        poller: Final = self._instance(prisma, llm_router)
+
+        async def _batches_polled_in_one_cycle() -> tuple[str, ...]:
+            llm_router.aretrieve_batch.reset_mock()
+            await poller.check_batch_cost()
+            return tuple(sorted(call.kwargs["batch_id"] for call in llm_router.aretrieve_batch.await_args_list))
+
+        assert [await _batches_polled_in_one_cycle() for _ in range(4)] == [("batch_new", "batch_old")] * 4
+
+    def _unbilled_rows(self, ages: dict[str, timedelta]) -> tuple[SimpleNamespace, ...]:
+        now: Final = _NOW
+        return tuple(
+            SimpleNamespace(
+                id=f"job-{name}",
+                unified_object_id=self._encode(f"litellm_proxy;model_id:model-123;llm_batch_id:batch_{name}"),
+                created_by="user-1",
+                created_at=now - age,
+                updated_at=now,
+                status="in_progress",
+            )
+            for name, age in ages.items()
+        )
+
+    async def _poll_cycles(
+        self, monkeypatch: pytest.MonkeyPatch, ages: dict[str, timedelta], cycles: int, page_size: int = 2
+    ) -> list[frozenset[str]]:
+        from litellm_enterprise.proxy.common_utils import check_batch_cost
+
+        monkeypatch.setattr(check_batch_cost, "MAX_OBJECTS_PER_POLL_CYCLE", page_size)
+        prisma: Final = self._prisma([])
+        prisma.db.litellm_managedobjecttable = _FakeManagedObjectPages(self._unbilled_rows(ages))
+        llm_router: Final = MagicMock()
+        llm_router.aretrieve_batch = AsyncMock(return_value=MagicMock(status="in_progress"))
+        poller: Final = self._instance(prisma, llm_router)
+
+        async def _batches_polled_in_one_cycle() -> frozenset[str]:
+            llm_router.aretrieve_batch.reset_mock()
+            await poller.check_batch_cost()
+            return frozenset(call.kwargs["batch_id"] for call in llm_router.aretrieve_batch.await_args_list)
+
+        return [await _batches_polled_in_one_cycle() for _ in range(cycles)]
+
+    @pytest.mark.asyncio
+    async def test_an_old_batch_is_polled_every_cycle_while_new_batches_fill_the_page(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        new_batches: Final = {f"new{n}": timedelta(hours=5 - n) for n in range(1, 5)}
+        polled: Final = await self._poll_cycles(monkeypatch, {"old": timedelta(days=3), **new_batches}, cycles=8)
+
+        assert all("batch_old" in cycle for cycle in polled)
+        assert all(f"batch_{name}" in frozenset().union(*polled[:4]) for name in new_batches)
+
+    @pytest.mark.asyncio
+    async def test_old_batches_that_fill_the_page_never_push_a_new_batch_out(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        polled: Final = await self._poll_cycles(
+            monkeypatch,
+            {"old1": timedelta(days=3, hours=1), "old2": timedelta(days=3), "new": timedelta(hours=1)},
+            cycles=6,
+        )
+
+        assert all("batch_new" in cycle for cycle in polled)
+        assert frozenset({"batch_old1", "batch_old2"}) <= frozenset().union(*polled[:2])
+
+    @pytest.mark.asyncio
+    async def test_old_and_new_batches_each_get_half_the_page_when_both_overflow_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ages: Final = {
+            **{f"old{n}": timedelta(days=3, hours=n) for n in range(3)},
+            **{f"new{n}": timedelta(hours=n + 1) for n in range(3)},
+        }
+        polled: Final = await self._poll_cycles(monkeypatch, ages, cycles=6)
+
+        assert [sorted(batch_id[len("batch_") : -1] for batch_id in cycle) for cycle in polled] == [["new", "old"]] * 6
+        assert frozenset().union(*polled) == frozenset(f"batch_{name}" for name in ages)
+
+    @pytest.mark.asyncio
+    async def test_old_and_new_batches_take_turns_on_a_one_row_page(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        polled: Final = await self._poll_cycles(
+            monkeypatch, {"old": timedelta(days=3), "new": timedelta(hours=1)}, cycles=4, page_size=1
+        )
+
+        assert polled == [frozenset({"batch_old"}), frozenset({"batch_new"})] * 2
+
+    @pytest.mark.asyncio
+    async def test_new_batches_fill_the_page_when_no_old_batch_needs_polling(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        polled: Final = await self._poll_cycles(
+            monkeypatch, {f"new{n}": timedelta(hours=n + 1) for n in range(3)}, cycles=4
+        )
+
+        assert [len(cycle) for cycle in polled] == [2] * 4
+
+    @pytest.mark.asyncio
+    async def test_a_failed_expiry_write_leaves_the_rest_of_the_page_polled(self) -> None:
+        rows: Final = self._unbilled_rows({"old": _PAST_THE_GIVE_UP_AGE, "new": timedelta(hours=1)})
+        table: Final = _FakeManagedObjectPages(rows)
+        table.update_many = AsyncMock(side_effect=RuntimeError("database unavailable"))
+        prisma: Final = self._prisma([])
+        prisma.db.litellm_managedobjecttable = table
+        llm_router: Final = MagicMock()
+        llm_router.aretrieve_batch = AsyncMock(side_effect=_A_REJECTED_KEY)
+        poller: Final = self._instance(prisma, llm_router)
+
+        await poller.check_batch_cost()
+
+        assert table.update_many.await_count == 1
+        assert {call.kwargs["batch_id"] for call in llm_router.aretrieve_batch.await_args_list} == {
+            "batch_old",
+            "batch_new",
+        }
+
+
+class _FakeManagedObjectPages:
+    """A LiteLLM_ManagedObjectTable double over several unbilled rows that pages them the way Postgres would:
+    inside the lane's created_at window, after the keyset cursor, in created_at then id order, take at most."""
+
+    def __init__(self, rows: tuple[SimpleNamespace, ...]) -> None:
+        self.rows = rows
+        self.find_many = AsyncMock(side_effect=self._find_many)
+        self.find_first = AsyncMock(return_value=None)
+        self.update_many = AsyncMock(return_value=0)
+        self.update = AsyncMock()
+
+    @staticmethod
+    def _selected(row: SimpleNamespace, where: Mapping[str, object]) -> bool:
+        window: Final = where["created_at"]
+        cursor: Final = where.get("OR")
+        return (
+            row.created_at <= window["lte"]
+            and ("gt" not in window or row.created_at > window["gt"])
+            and (
+                cursor is None
+                or row.created_at > cursor[0]["created_at"]["gt"]
+                or (row.created_at == cursor[1]["created_at"] and row.id > cursor[1]["id"]["gt"])
+            )
+        )
+
+    async def _find_many(
+        self, *, where: Mapping[str, object], take: int, order: Sequence[Mapping[str, str]]
+    ) -> tuple[SimpleNamespace, ...]:
+        selected: Final = (row for row in self.rows if self._selected(row, where))
+        return tuple(sorted(selected, key=lambda row: (row.created_at, row.id))[:take])
+
 
 class _FakeManagedObjectRow:
     """One managed batch row the provider has finished but nothing has costed yet."""
@@ -2940,9 +3149,12 @@ class _FakeManagedObjectRow:
 class _FakeManagedObjectTable:
     """A LiteLLM_ManagedObjectTable double backed by one real, mutable row.
 
-    It honours the batch_processed and status filters, so the poller's compare-and-swap
-    and the managed-files deletion guard both read the same state a shared Postgres row
-    would give them. Staleness sweeps (the only queries scoped by created_at) never match.
+    It honours the batch_processed and status filters and the deletion guard's created_at cutoff, so the
+    poller's compare-and-swap and the managed-files deletion guard both read the state a shared Postgres row
+    would give them. The poll lanes' created_at windows are ignored, so every lane sees the row, and each
+    read hands back a snapshot, so a write that lands mid-cycle is invisible to the row the poller holds.
+    Writes journal "claim" or "release" when they flip batch_processed, "expire" when they mark the row
+    stale_expired, and "finalize" otherwise.
     """
 
     def __init__(self, row: _FakeManagedObjectRow, journal: list):
@@ -2956,7 +3168,7 @@ class _FakeManagedObjectTable:
     def _matches(self, where: dict) -> bool:
         for key, value in where.items():
             if key == "created_at":
-                if "lt" in value and not self.row.created_at < value["lt"]:
+                if "gte" in value and not self.row.created_at >= value["gte"]:
                     return False
                 continue
             if key == "status":
@@ -2971,10 +3183,12 @@ class _FakeManagedObjectTable:
     async def _update_many(self, *, where: dict, data: dict) -> int:
         if not self._matches(where):
             return 0
-        if "updated_at" in where:
+        if "batch_processed" in data:
+            self.journal.append("claim" if data["batch_processed"] else "release")
+        elif data.get("status") == "stale_expired":
+            self.journal.append("expire")
+        else:
             self.journal.append("finalize")
-        elif "batch_processed" in where:
-            self.journal.append("claim" if data.get("batch_processed") else "release")
         for key, value in data.items():
             setattr(self.row, key, value)
         return 1
@@ -2985,7 +3199,7 @@ class _FakeManagedObjectTable:
             setattr(self.row, key, value)
 
     async def _find_many(self, *, where: dict, take=None, order=None) -> list:
-        return [self.row] if self._matches(where) else []
+        return [copy(self.row)] if self._matches(where) else []
 
 
 class TestMultiPodBatchCostClaim:
@@ -3008,6 +3222,7 @@ class TestMultiPodBatchCostClaim:
             proxy_logging_obj=proxy_logging_obj,
             prisma_client=prisma,
             llm_router=llm_router,
+            clock=_fixed_clock,
         )
 
     @staticmethod
@@ -3044,8 +3259,8 @@ class TestMultiPodBatchCostClaim:
 
         router = MagicMock()
         router.aretrieve_batch = AsyncMock(return_value=response)
-        router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
-        router.get_deployment = MagicMock(return_value=deployment)
+        router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
+        router.registry.return_value.deployment = MagicMock(return_value=deployment)
         return router
 
     @staticmethod
@@ -3094,7 +3309,7 @@ class TestMultiPodBatchCostClaim:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=_batch_cost_result(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["gpt-4"]),
+                return_value=_batch_cost_result(0.01, {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}, ["gpt-4"]),
             ),
             patch(
                 "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
@@ -3203,7 +3418,7 @@ class TestMultiPodBatchCostClaim:
         )
         prisma: Final = self._prisma(row, [])
         router: Final = self._router()
-        router.get_deployment.return_value = Deployment(
+        router.registry.return_value.deployment.return_value = Deployment(
             model_name="batch-alias",
             litellm_params=LiteLLM_Params(model="openai/batch-test-model"),
             model_info=ModelInfo(id="model-123"),
@@ -3324,7 +3539,7 @@ class TestMultiPodBatchCostClaim:
         )
         prisma: Final = self._prisma(row, [])
         router: Final = self._router()
-        router.get_deployment.return_value = Deployment(
+        router.registry.return_value.deployment.return_value = Deployment(
             model_name="batch-alias",
             litellm_params=LiteLLM_Params(model=deployment_model, custom_llm_provider="openai"),
             model_info=ModelInfo(id="model-123"),
@@ -3339,7 +3554,7 @@ class TestMultiPodBatchCostClaim:
             object="batch",
             status="completed",
         )
-        router.get_deployment_credentials_with_provider.return_value = {
+        router.registry.return_value.credentials.return_value = {
             "api_key": "synthetic-key",
             "custom_llm_provider": "openai",
         }
@@ -3465,7 +3680,7 @@ class TestMultiPodBatchCostClaim:
         cache = MagicMock()
         cache.async_get_cache = AsyncMock(return_value=None)
         cache.async_set_cache = AsyncMock()
-        guard = PROXY_LiteLLMManagedFiles(internal_usage_cache=cache, prisma_client=prisma)
+        guard = PROXY_LiteLLMManagedFiles(internal_usage_cache=cache, prisma_client=prisma, clock=_fixed_clock)
 
         scheduler = MagicMock()
         scheduler.get_job.return_value = MagicMock()
@@ -3509,7 +3724,17 @@ class TestMultiPodBatchCostClaim:
 
         assert journal == ["fetch", "claim", "bill"]
         assert row.status == "complete"
-        assert json.loads(row.file_object)["usage"] == {"prompt_tokens": 10, "completion_tokens": 5}
+        assert json.loads(row.file_object)["usage"] == {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "prompt_tokens_details": None,
+            "completion_tokens_details": None,
+            "input_tokens": 10,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 5,
+            "output_tokens_details": {"reasoning_tokens": 0},
+        }
         logging_obj.async_success_handler.assert_awaited_once()
         assert row.batch_processed is True
 
@@ -3683,12 +3908,15 @@ class TestBatchLineItemsFromThePoller:
 
     @classmethod
     @contextmanager
-    def _provider(cls, journal: list):
-        """The provider's batch files by id, and a spend-log writer that journals each write."""
+    def _provider(cls, journal: list[str], missing_file_error: Exception | None = None) -> Iterator[None]:
+        """The provider's batch files by id, and a spend-log writer that journals each write. Reading any other
+        file raises missing_file_error, or the NotFoundError OpenAI answers with."""
         files = {"file-input-1": cls._INPUT, _CLAIM_OUTPUT_FILE_ID: cls._OUTPUT, "file-err-1": cls._ERROR}
 
         async def _afile_content(**kwargs):
             journal.append(f"read {kwargs['file_id']}")
+            if kwargs["file_id"] not in files and missing_file_error is not None:
+                raise missing_file_error
             if kwargs["file_id"] not in files:
                 from litellm.exceptions import NotFoundError
 
@@ -3861,7 +4089,7 @@ class TestBatchLineItemsFromThePoller:
             await instance.check_batch_cost()
             await self._stored(instance)
 
-        assert journal == ["finalize", "read file-err-1", "read file-input-1", "lines"]
+        assert journal == ["claim", "read file-err-1", "read file-input-1", "lines"]
         (payload,) = logger.payloads
         assert [(line["custom_id"], line["status"], line["response_cost"]) for line in payload["lines"]] == [
             ("ok-1", "failure", 0.0)
@@ -3892,7 +4120,7 @@ class TestBatchLineItemsFromThePoller:
             await instance.check_batch_cost()
             await self._stored(instance)
 
-        assert journal == ["finalize", "read file-err-1", "read file-input-1", "lines"]
+        assert journal == ["claim", "read file-err-1", "read file-input-1", "lines"]
         ((line,),) = [payload["lines"] for payload in logger.payloads]
         assert line["request"] == json.loads(self._INPUT)
 
@@ -3910,7 +4138,7 @@ class TestBatchLineItemsFromThePoller:
             await instance.check_batch_cost()
             await self._stored(instance)
 
-        assert journal == ["finalize", "read file-err-1", "read file-input-1"]
+        assert journal == ["claim", "read file-err-1", "read file-input-1"]
         assert logger.payloads == []
 
     @pytest.mark.asyncio
@@ -3970,10 +4198,36 @@ class TestBatchLineItemsFromThePoller:
             await instance.check_batch_cost()
             await self._stored(instance)
 
-        assert journal == ["read file-out-deleted", "finalize", "read file-err-1", "read file-input-1", "lines"]
+        assert journal == ["read file-out-deleted", "claim", "read file-err-1", "read file-input-1", "lines"]
         (payload,) = logger.payloads
         assert [(line["custom_id"], line["status"]) for line in payload["lines"]] == [("ok-1", "failure")]
         assert row.batch_processed is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("status_code", "missing_object", "retired"),
+        (
+            (404, "bucket/job-1/predictions.jsonl", True),
+            (404, "bucket/job-2/predictions.jsonl", False),
+            (500, "bucket/job-1/predictions.jsonl", False),
+        ),
+    )
+    async def test_a_storage_404_for_the_output_object_retires_the_batch_unbilled(
+        self, status_code: int, missing_object: str, retired: bool
+    ) -> None:
+        """Vertex AI reports a deleted gs:// output as a VertexAIError 404 that names the object without its
+        scheme, and no later poll can read that object either."""
+        from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+        journal: list[str] = []
+        row, instance = self._setup(journal, output_file_id="gs://bucket/job-1/predictions.jsonl")
+        missing: Final = VertexAIError(status_code=status_code, message=f"No such object: {missing_object}")
+
+        with self._provider(journal, missing_file_error=missing):
+            await instance.check_batch_cost()
+
+        assert row.batch_processed is retired
+        assert "bill" not in journal
 
     @pytest.mark.asyncio
     async def test_a_terminal_batch_with_no_lines_sends_nothing(self, monkeypatch):
@@ -3988,7 +4242,7 @@ class TestBatchLineItemsFromThePoller:
             await instance.check_batch_cost()
             await self._stored(instance)
 
-        assert journal == ["finalize"]
+        assert journal == ["claim"]
         assert logger.payloads == []
 
     @pytest.mark.asyncio
@@ -4088,16 +4342,19 @@ class TestBatchLineItemsFromThePoller:
         _, instance = self._setup(journal)
         monkeypatch.setattr(litellm, "batch_line_item_callbacks", (self._recording_logger(journal),))
 
-        async def _an_earlier_batch_waits_to_store_its_lines():
+        find_jobs: Final = instance._find_jobs
+
+        async def _an_earlier_batch_waits_to_store_its_lines(where: Mapping[str, object]) -> Sequence[object]:
             instance._store_batch_line_items_in_background(
                 MagicMock(), MagicMock(), "model-123", "batch-earlier", billed=True
             )
             await asyncio.sleep(0.01)
+            return await find_jobs(where)
 
         async def _store(job, response, model_id, batch_id, *, billed):
             journal.append(f"store {batch_id}")
 
-        monkeypatch.setattr(instance, "_cleanup_stale_managed_objects", _an_earlier_batch_waits_to_store_its_lines)
+        monkeypatch.setattr(instance, "_find_jobs", _an_earlier_batch_waits_to_store_its_lines)
         monkeypatch.setattr(instance, "_store_batch_line_items", _store)
         with self._provider(journal):
             await instance.check_batch_cost()
@@ -4150,9 +4407,9 @@ class TestBatchLineItemsFromThePoller:
         row, instance = self._setup(journal)
         logger = self._recording_logger(journal)
         monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
-        deployment = instance.llm_router.get_deployment.return_value
-        instance.llm_router.get_deployment = MagicMock(
-            side_effect=lambda **_: None if instance._poll_idle.is_set() else deployment
+        deployment = instance.llm_router.registry.return_value.deployment.return_value
+        instance.llm_router.registry.return_value.deployment = MagicMock(
+            side_effect=lambda _model_id: None if instance._poll_idle.is_set() else deployment
         )
 
         with self._provider(journal), caplog.at_level(logging.ERROR):
@@ -4260,6 +4517,17 @@ class TestCreatorTurnedOffMessageLogging:
         assert await instance._creator_turned_off_message_logging(self._job()) is expected
 
     @pytest.mark.asyncio
+    async def test_a_job_without_creator_fields_falls_back_to_the_proxy_setting(self, monkeypatch):
+        from types import SimpleNamespace
+
+        import litellm
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+        instance: Final = self._instance()
+
+        assert await instance._creator_turned_off_message_logging(SimpleNamespace(id="job-1")) is False
+
+    @pytest.mark.asyncio
     async def test_a_team_that_turned_off_message_logging_covers_its_keys(self, monkeypatch):
         from types import SimpleNamespace
 
@@ -4334,23 +4602,261 @@ class TestCreatorTurnedOffMessageLogging:
         instance.prisma_client.db.litellm_verificationtoken.find_unique.assert_not_called()
 
 
+_PAST_THE_STALENESS_CUTOFF: Final = timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS, microseconds=1)
+_INSIDE_THE_STALENESS_CUTOFF: Final = timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+_PAST_THE_GIVE_UP_AGE: Final = GIVE_UP_POLLING_AFTER + timedelta(microseconds=1)
+_INSIDE_THE_GIVE_UP_AGE: Final = GIVE_UP_POLLING_AFTER
+
+
+def _provider_batch(status: str) -> LiteLLMBatch:
+    return LiteLLMBatch(
+        id="batch-456",
+        status=status,
+        output_file_id=None,
+        error_file_id=None,
+        created_at=1,
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id="file-input-1",
+        object="batch",
+    )
+
+
 @pytest.mark.asyncio
-async def test_old_completed_batch_remains_available_for_costing() -> None:
+async def test_an_unbilled_batch_past_the_staleness_cutoff_no_longer_blocks_deleting_its_input_file() -> None:
     row: Final = _FakeManagedObjectRow()
     row.status = "completed"
-    row.created_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    row.created_at = _NOW - _PAST_THE_STALENESS_CUTOFF
     prisma: Final = TestMultiPodBatchCostClaim._prisma(row, [])
-    poller: Final = TestMultiPodBatchCostClaim._instance(prisma, TestMultiPodBatchCostClaim._router())
 
-    await poller._cleanup_stale_managed_objects()
+    await TestMultiPodBatchCostClaim._run_deletion_guard(prisma, "file-input-1")
 
     assert row.batch_processed is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("age", "file_field", "file_id"),
+    (
+        (_INSIDE_THE_STALENESS_CUTOFF, "input_file_id", "file-input-1"),
+        (_PAST_THE_STALENESS_CUTOFF, "output_file_id", _CLAIM_OUTPUT_FILE_ID),
+        (_PAST_THE_STALENESS_CUTOFF, "error_file_id", "file-error-1"),
+    ),
+    ids=("input_inside_the_cutoff", "output_past_the_cutoff", "error_past_the_cutoff"),
+)
+async def test_an_unbilled_batch_still_blocks_deleting_a_file_its_cost_may_need(
+    age: timedelta, file_field: str, file_id: str
+) -> None:
+    row: Final = _FakeManagedObjectRow()
+    row.status = "completed"
+    row.created_at = _NOW - age
+    row.file_object = json.dumps({"id": "batch-456", "status": "completed", file_field: file_id})
+    prisma: Final = TestMultiPodBatchCostClaim._prisma(row, [])
+
+    with pytest.raises(HTTPException) as refused:
+        await TestMultiPodBatchCostClaim._run_deletion_guard(prisma, file_id)
+
+    assert refused.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_a_stale_expired_batch_no_longer_blocks_deleting_its_output_file() -> None:
+    row: Final = _FakeManagedObjectRow()
+    row.status = "stale_expired"
+    prisma: Final = TestMultiPodBatchCostClaim._prisma(row, [])
+
+    await TestMultiPodBatchCostClaim._run_deletion_guard(prisma, _CLAIM_OUTPUT_FILE_ID)
+
+    assert row.status == "stale_expired"
+
+
+@pytest.mark.asyncio
+async def test_a_batch_past_the_give_up_age_that_the_provider_finished_is_still_billed() -> None:
+    row: Final = _FakeManagedObjectRow()
+    row.created_at = _NOW - _PAST_THE_GIVE_UP_AGE
+    journal: Final = []
+    prisma: Final = TestMultiPodBatchCostClaim._prisma(row, journal)
+    poller: Final = TestMultiPodBatchCostClaim._instance(prisma, TestMultiPodBatchCostClaim._router())
+
+    with TestMultiPodBatchCostClaim._billing_patches(journal):
+        await poller.check_batch_cost()
+
+    assert journal == ["fetch", "claim", "bill"]
+    assert row.batch_processed is True
+
+
+_A_REJECTED_KEY: Final = litellm.AuthenticationError(message="invalid api key", llm_provider="openai", model="gpt-4")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("unified_object_id", "retrieve"),
+    (
+        (_CLAIM_UNIFIED_BATCH_ID, _provider_batch("in_progress")),
+        (_CLAIM_UNIFIED_BATCH_ID, RuntimeError("timed out")),
+        (
+            _CLAIM_UNIFIED_BATCH_ID,
+            litellm.InternalServerError(message="upstream error", llm_provider="openai", model="gpt-4"),
+        ),
+        (_CLAIM_UNIFIED_BATCH_ID, litellm.RateLimitError(message="rate limited", llm_provider="openai", model="gpt-4")),
+        (_CLAIM_UNIFIED_BATCH_ID, _A_REJECTED_KEY),
+        ("batch-raw-1", _provider_batch("in_progress")),
+    ),
+    ids=(
+        "still_running",
+        "retrieve_timed_out",
+        "provider_5xx",
+        "provider_429",
+        "key_rejected",
+        "unroutable",
+    ),
+)
+@pytest.mark.parametrize(
+    ("age", "db_status", "after_the_poll"),
+    (
+        (_PAST_THE_GIVE_UP_AGE, "in_progress", ("stale_expired", False)),
+        (_PAST_THE_GIVE_UP_AGE, "completed", ("completed", False)),
+        (_INSIDE_THE_GIVE_UP_AGE, "in_progress", ("in_progress", False)),
+        (_INSIDE_THE_GIVE_UP_AGE, "completed", ("completed", False)),
+    ),
+    ids=("unfinished_past_the_age", "finished_past_the_age", "unfinished_at_the_age", "finished_at_the_age"),
+)
+async def test_only_an_unfinished_batch_a_poll_cannot_settle_is_given_up_once_past_the_give_up_age(
+    unified_object_id: str,
+    retrieve: LiteLLMBatch | Exception,
+    age: timedelta,
+    db_status: str,
+    after_the_poll: tuple[str, bool],
+) -> None:
+    row: Final = _FakeManagedObjectRow()
+    row.created_at = _NOW - age
+    row.status = db_status
+    row.unified_object_id = unified_object_id
+    router: Final = TestMultiPodBatchCostClaim._router()
+    router.aretrieve_batch.side_effect = [retrieve]
+    poller: Final = TestMultiPodBatchCostClaim._instance(TestMultiPodBatchCostClaim._prisma(row, []), router)
+
+    with TestMultiPodBatchCostClaim._billing_patches([]):
+        await poller.check_batch_cost()
+
+    assert (row.status, row.batch_processed) == after_the_poll
+
+
+async def _a_vertex_job_that_no_longer_exists(
+    *, model: str, batch_id: str, litellm_metadata: Mapping[str, object]
+) -> LiteLLMBatch:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    raise VertexAIError(
+        status_code=404,
+        message='Error: 404 {"error":{"code":404,"message":"The BatchPredictionJob does not exist.","status":"NOT_FOUND"}}',
+    )
+
+
+async def _a_finished_batch_whose_output_never_appeared(
+    *, model: str, batch_id: str, litellm_metadata: Mapping[str, object]
+) -> LiteLLMBatch:
+    return _provider_batch("completed")
+
+
+async def _an_output_file_the_key_cannot_read() -> None:
+    raise litellm.PermissionDeniedError(
+        message="forbidden",
+        llm_provider="openai",
+        model="gpt-4",
+        response=httpx.Response(403, request=httpx.Request("GET", "https://api.openai.com/v1/files")),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("db_status", ("in_progress", "completed"))
+async def test_a_batch_past_the_give_up_age_whose_output_id_lags_is_billed_once_it_appears(db_status: str) -> None:
+    row: Final = _FakeManagedObjectRow()
+    row.created_at = _NOW - _PAST_THE_GIVE_UP_AGE
+    row.status = db_status
+    journal: Final = []
+    router: Final = TestMultiPodBatchCostClaim._router()
+    router.aretrieve_batch.side_effect = [
+        _provider_batch("completed"),
+        _provider_batch("completed"),
+        router.aretrieve_batch.return_value,
+    ]
+    poller: Final = TestMultiPodBatchCostClaim._instance(TestMultiPodBatchCostClaim._prisma(row, journal), router)
+
+    with TestMultiPodBatchCostClaim._billing_patches(journal):
+        for _ in range(3):
+            await poller.check_batch_cost()
+
+    assert journal == ["fetch", "claim", "bill"]
+    assert row.batch_processed is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("retrieve", "during_fetch"),
+    (
+        (_A_REJECTED_KEY, None),
+        (_a_vertex_job_that_no_longer_exists, None),
+        (_a_finished_batch_whose_output_never_appeared, None),
+        (None, _an_output_file_the_key_cannot_read),
+    ),
+    ids=("key_rejected", "batch_404_without_its_id", "output_id_pending", "output_unreadable"),
+)
+async def test_a_finished_batch_a_poll_cannot_bill_past_the_give_up_age_bills_once_the_cause_is_fixed(
+    retrieve: Exception | Callable[..., Awaitable[LiteLLMBatch]] | None,
+    during_fetch: Callable[[], Awaitable[None]] | None,
+) -> None:
+    row: Final = _FakeManagedObjectRow()
+    row.created_at = _NOW - _PAST_THE_GIVE_UP_AGE
+    row.status = "completed"
+    router: Final = TestMultiPodBatchCostClaim._router()
+    router.aretrieve_batch.side_effect = retrieve
+    journal: Final = []
+    prisma: Final = TestMultiPodBatchCostClaim._prisma(row, journal)
+    poller: Final = TestMultiPodBatchCostClaim._instance(prisma, router)
+
+    with TestMultiPodBatchCostClaim._billing_patches(journal, during_fetch=during_fetch):
+        await poller.check_batch_cost()
+
+    assert (row.status, row.batch_processed) == ("completed", False)
+    with pytest.raises(HTTPException):
+        await TestMultiPodBatchCostClaim._run_deletion_guard(prisma, _CLAIM_OUTPUT_FILE_ID)
+
+    router.aretrieve_batch.side_effect = None
+    with TestMultiPodBatchCostClaim._billing_patches(journal):
+        await poller.check_batch_cost()
+
+    assert journal[-1] == "bill"
+    assert row.batch_processed is True
+
+
+@pytest.mark.asyncio
+async def test_giving_up_on_a_batch_keeps_a_finished_status_a_client_wrote_meanwhile() -> None:
+    row: Final = _FakeManagedObjectRow()
+    row.created_at = _NOW - _PAST_THE_GIVE_UP_AGE
+    router: Final = TestMultiPodBatchCostClaim._router()
+
+    async def _a_client_reads_the_finished_batch_while_the_poller_retrieve_is_refused(
+        *, model: str, batch_id: str, litellm_metadata: Mapping[str, object]
+    ) -> LiteLLMBatch:
+        row.status = "completed"
+        raise _A_REJECTED_KEY
+
+    router.aretrieve_batch.side_effect = _a_client_reads_the_finished_batch_while_the_poller_retrieve_is_refused
+    poller: Final = TestMultiPodBatchCostClaim._instance(TestMultiPodBatchCostClaim._prisma(row, []), router)
+
+    with TestMultiPodBatchCostClaim._billing_patches([]):
+        await poller.check_batch_cost()
+
     assert row.status == "completed"
+    assert row.batch_processed is False
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("progress", ["claimed", "refreshed"])
-async def test_stale_retirement_preserves_concurrent_progress(progress: str) -> None:
+async def test_stale_retirement_lands_unless_another_pod_claimed_the_row(progress: str) -> None:
+    """A client GET that rewrote the row while the poller held it moves updated_at but leaves the batch unbilled,
+    so the retirement still lands."""
     row: Final = _FakeManagedObjectRow()
     selected: Final = copy(row)
     if progress == "claimed":
@@ -4361,13 +4867,16 @@ async def test_stale_retirement_preserves_concurrent_progress(progress: str) -> 
 
     await poller._retire_job(selected, "provider batch disappeared")
 
-    assert row.batch_processed is (progress == "claimed")
-    assert row.updated_at > selected.updated_at
+    assert row.batch_processed is True
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("progress", ["claimed", "refreshed"])
-async def test_stale_terminal_response_preserves_concurrent_progress(progress: str) -> None:
+@pytest.mark.parametrize(
+    ("progress", "finalized", "expected_status"), [("claimed", False, "in_progress"), ("refreshed", True, "failed")]
+)
+async def test_stale_terminal_response_lands_unless_another_pod_claimed_the_row(
+    progress: str, finalized: bool, expected_status: str
+) -> None:
     from litellm.types.utils import LiteLLMBatch
 
     row: Final = _FakeManagedObjectRow()
@@ -4388,11 +4897,10 @@ async def test_stale_terminal_response_preserves_concurrent_progress(progress: s
         status="failed",
     )
 
-    assert await poller._finalize_unbilled_terminal_job(selected, response) is False
+    assert await poller._finalize_unbilled_terminal_job(selected, response) is finalized
 
-    assert row.file_object == '{"revision":"fresh"}'
-    assert row.status == "in_progress"
-    assert row.batch_processed is (progress == "claimed")
+    assert row.status == expected_status
+    assert row.batch_processed is True
 
 
 @pytest.mark.asyncio
@@ -4436,7 +4944,19 @@ def test_another_resource_in_a_404_is_not_permanent_loss(resource_id: str, other
 
 
 @pytest.mark.parametrize("resource_id", ("batch-123", "file-123", "gs://bucket/job/predictions.jsonl"))
-@pytest.mark.parametrize("message", ("No object found with id '{id}'.", 'File "{id}" does not exist', "{id} not found"))
+@pytest.mark.parametrize(
+    "message",
+    (
+        "No object found with id '{id}'.",
+        'File "{id}" does not exist',
+        "{id} not found",
+        "No such object: {id}.",
+        "{id}: not found",
+        "Missing {id}, giving up",
+        "Not found (id {id})",
+        "Not found ({id})",
+    ),
+)
 def test_a_404_naming_the_exact_resource_is_permanent_loss(resource_id: str, message: str) -> None:
     from litellm.exceptions import NotFoundError
     from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
@@ -4444,6 +4964,23 @@ def test_a_404_naming_the_exact_resource_is_permanent_loss(resource_id: str, mes
     error: Final = NotFoundError(message=message.format(id=resource_id), model="test", llm_provider="openai")
     assert CheckBatchCost._is_batch_gone_at_provider(error, resource_id) is True
     assert CheckBatchCost._is_output_file_gone_at_provider(error, resource_id) is True
+
+
+@pytest.mark.parametrize(
+    ("missing_key", "gone"), (("out/job-123/input.jsonl.out", True), ("out/job-123/other.jsonl.out", False))
+)
+def test_an_s3_no_such_key_for_the_output_object_is_permanent_loss(missing_key: str, gone: bool) -> None:
+    from litellm.llms.bedrock.common_utils import BedrockError
+    from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+    # S3 GetObject 404 body shape, checked live against a missing key on 2026-10-20
+    error: Final = BedrockError(
+        status_code=404,
+        message='<?xml version="1.0" encoding="UTF-8"?>\n<Error><Code>NoSuchKey</Code>'
+        f"<Message>The specified key does not exist.</Message><Key>{missing_key}</Key>"
+        "<RequestId>R</RequestId><HostId>H</HostId></Error>",
+    )
+    assert CheckBatchCost._is_output_file_gone_at_provider(error, "s3://qa-bucket/out/job-123/input.jsonl.out") is gone
 
 
 @pytest.mark.parametrize("output_file_id", (None, ""))
@@ -4548,8 +5085,10 @@ async def test_batch_cost_reaches_configured_success_callbacks(
         proxy_logging_obj=SimpleNamespace(get_proxy_hook=lambda _: None),
         prisma_client=prisma,
         llm_router=SimpleNamespace(
-            get_deployment_credentials_with_provider=lambda _: credentials,
-            get_deployment=lambda **_: deployment,
+            registry=lambda: SimpleNamespace(
+                credentials=lambda _model_id, form: credentials,
+                deployment=lambda _model_id: deployment,
+            ),
         ),
     )
     job: Final = SimpleNamespace(

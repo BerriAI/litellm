@@ -1,46 +1,73 @@
-use thiserror::Error as ThisError;
+use litellm_error::Source;
 
-#[derive(Clone, Debug, ThisError, PartialEq, Eq)]
+#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
-    #[error("AWS profile credentials failed: {0}")]
-    AwsProfile(String),
-    #[error("AWS default credentials failed: {0}")]
-    AwsDefaultChain(String),
-    #[error("AWS role credentials failed: {0}")]
-    AwsAssumeRole(String),
-    #[error("AWS web identity credentials failed: {0}")]
-    AwsWebIdentity(String),
-    #[error("AWS web identity expiration was invalid: {0}")]
-    AwsWebIdentityExpiration(String),
-    #[error("AWS signing parameters failed: {0}")]
-    AwsSigningParameters(String),
-    #[error("AWS signable request failed: {0}")]
-    AwsSignableRequest(String),
-    #[error("AWS request signing failed: {0}")]
-    AwsSigning(String),
+    #[error("could not load AWS {flow} credentials")]
+    Credentials {
+        flow: CredentialFlow,
+        #[source]
+        source: Source,
+    },
     #[error("AWS web identity response had no credentials")]
-    AwsMissingWebIdentityCredentials,
+    MissingWebIdentityCredentials,
+    #[error("AWS web identity response had an invalid expiration")]
+    WebIdentityExpiration(#[source] Source),
+    #[error("header {name} has a value that is not visible ASCII")]
+    NonAsciiHeader { name: String },
+    #[error("{stage}")]
+    Signing {
+        stage: SigningStage,
+        #[source]
+        source: Source,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum CredentialFlow {
+    #[error("profile")]
+    Profile,
+    #[error("default chain")]
+    DefaultChain,
+    #[error("assumed role")]
+    AssumeRole,
+    #[error("web identity")]
+    WebIdentity,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SigningStage {
+    #[error("SigV4 signing parameters are invalid")]
+    Parameters,
+    #[error("SigV4 cannot sign this request")]
+    Request,
+    #[error("SigV4 could not compute the signature")]
+    Signature,
+    #[error("SigV4 produced an invalid header")]
+    Output,
+}
+
+impl Error {
+    pub(crate) fn credentials<E: std::error::Error + Send + Sync + 'static>(
+        flow: CredentialFlow,
+    ) -> impl FnOnce(E) -> Self {
+        move |source| Self::Credentials {
+            flow,
+            source: Source::new(source),
+        }
+    }
+
+    pub(crate) fn signing<E: std::error::Error + Send + Sync + 'static>(
+        stage: SigningStage,
+    ) -> impl FnOnce(E) -> Self {
+        move |source| Self::Signing {
+            stage,
+            source: Source::new(source),
+        }
+    }
 }
 
 impl From<Error> for litellm_auth_types::Error {
     fn from(error: Error) -> Self {
-        Self::ProviderAuthentication(error.to_string())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Error;
-
-    #[test]
-    fn converts_to_shared_auth_error_without_losing_context() {
-        let error = litellm_auth_types::Error::from(Error::AwsProfile("profile not found".into()));
-
-        assert_eq!(
-            error,
-            litellm_auth_types::Error::ProviderAuthentication(
-                "AWS profile credentials failed: profile not found".into()
-            )
-        );
+        Self::provider(error)
     }
 }

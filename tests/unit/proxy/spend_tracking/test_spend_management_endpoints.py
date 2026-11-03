@@ -5,19 +5,21 @@ import hashlib
 import json
 import re
 import sqlite3
+from collections.abc import Mapping, Sequence
 from datetime import timezone
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import prisma
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 
 import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.auth.authorization import OwnedRows
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup, load_permitted_log_team_ids
+from litellm.proxy.auth.route_checks import RouteChecks
 
 
 def _default_date_range():
@@ -268,6 +270,8 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
 
 from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.proxy._types import (
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
     LitellmUserRoles,
     Member,
     ProxyException,
@@ -1892,6 +1896,91 @@ async def test_ui_view_spend_logs_user_filter_intersects_permitted_team_scope(cl
         )
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.parametrize(
+    ("team_role", "selected_user", "expected_ids"),
+    (
+        ("admin", None, ("member-in-team", "second-member-in-team")),
+        ("admin", "member", ("member-in-team",)),
+        ("admin", "caller", ()),
+        ("admin", "outsider", ()),
+        ("user", None, None),
+        (None, "member", None),
+    ),
+)
+def test_ui_client_usage_enforces_selected_team_and_member_scope(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    team_role: Literal["admin", "user"] | None,
+    selected_user: str | None,
+    expected_ids: tuple[str, ...] | None,
+) -> None:
+    logs: Final = tuple(
+        {
+            "request_id": request_id,
+            "user": user_id,
+            "team_id": team_id,
+            "api_key": "shared-key",
+            "spend": 0.1,
+            "startTime": "2026-01-02T12:00:00+00:00",
+            "model": "test-model",
+        }
+        for request_id, user_id, team_id in (
+            ("member-in-team", "member", "selected-team"),
+            ("same-member-other-team", "member", "other-team"),
+            ("second-member-in-team", "second-member", "selected-team"),
+            ("caller-personal", "caller", None),
+            ("outsider-request", "outsider", "other-team"),
+        )
+    )
+    team: Final = LiteLLM_TeamTable(
+        team_id="selected-team",
+        members_with_roles=([Member(user_id="caller", role=team_role)] if team_role else [])
+        + [Member(user_id="member", role="user"), Member(user_id="second-member", role="user")],
+        team_member_permissions=[],
+    )
+
+    async def team_lookup(where: Mapping[str, object]) -> LiteLLM_TeamTable | None:
+        return team if where.get("team_id") == team.team_id else None
+
+    def filter_logs(where: Mapping[str, object]) -> tuple[dict[str, str | float | None], ...]:
+        return tuple(
+            row
+            for row in logs
+            if (where.get("team_id") is None or row["team_id"] == where["team_id"])
+            and (where.get("user") is None or row["user"] == where["user"])
+        )
+
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller")
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="caller", user_role=LitellmUserRoles.INTERNAL_USER.value),
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route="/spend/logs/ui",
+        request=Request({"type": "http", "method": "GET", "path": "/spend/logs/ui", "query_string": b""}),
+        valid_token=auth,
+        request_data={},
+    )
+    monkeypatch.setattr(ps, "prisma_client", make_ui_spend_logs_mock_prisma(logs, filter_logs, team_lookup))
+    monkeypatch.setitem(app.dependency_overrides, ps.user_api_key_auth, lambda: auth)
+    response: Final = client.get(
+        "/spend/logs/ui",
+        params={
+            "start_date": "2026-01-01 00:00:00",
+            "end_date": "2026-01-03 00:00:00",
+            "team_id": "selected-team",
+            "page_size": 1000,
+            "group_by_session": "false",
+            **({"user_id": selected_user} if selected_user else {}),
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+    if expected_ids is None:
+        assert response.status_code == 403
+        return
+    assert response.status_code == 200
+    assert tuple(row["request_id"] for row in response.json()["data"]) == expected_ids
+    assert response.json()["total"] == len(expected_ids)
 
 
 @pytest.mark.asyncio
@@ -6524,7 +6613,6 @@ def test_ui_view_request_response_reads_from_cold_storage(client, monkeypatch):
 
 from litellm.proxy._types import (
     LiteLLM_OrganizationMembershipTable,
-    LiteLLM_UserTable,
     LiteLLMRoutes,
     hash_token,
 )
@@ -7063,37 +7151,19 @@ def test_scoped_spend_report_range_at_max_allowed(client, monkeypatch):
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
-def test_parse_session_cursor():
-    from litellm.proxy.spend_tracking.spend_management_endpoints import (
-        _parse_session_cursor,
-    )
-
-    assert _parse_session_cursor(None) is None
-    assert _parse_session_cursor("no-delimiter") is None
-    assert _parse_session_cursor("2026-08-29 10:00:00|sess-1") is None
-    assert _parse_session_cursor("|hashed-key|sess-1") is None
-    assert _parse_session_cursor("2026-08-29 10:00:00|hashed-key|") is None
-    assert _parse_session_cursor("2026-08-29 10:00:00|hashed-key|sess-1") == (
-        "2026-08-29 10:00:00",
-        "sess-1",
-        "hashed-key",
-    )
-    assert _parse_session_cursor("2026-08-29 10:00:00.123|hashed-key|sess|with|pipes") == (
-        "2026-08-29 10:00:00.123",
-        "sess|with|pipes",
-        "hashed-key",
-    )
-
-
 SESSION_GROUP_KEY_SQL = "COALESCE(NULLIF(session_id, ''), request_id), api_key"
 
 
-def _session_grouped_mock_prisma(session_page_rows, session_total, representative_rows):
+def _session_grouped_mock_prisma(
+    session_page_rows: Sequence[Mapping[str, object]],
+    session_total: int,
+    representative_rows: Sequence[Mapping[str, object]],
+) -> MagicMock:
     """Mock prisma dispatching the raw queries the keyset grouped path emits."""
 
-    async def mock_query_raw(sql_query, *params):
-        if "COUNT(*) AS total_count" in sql_query:
-            return [{"total_count": session_total}]
+    async def mock_query_raw(sql_query: str, *params: object) -> Sequence[Mapping[str, object]]:
+        if "rows_read" in sql_query:
+            return _session_read_rows(session_page_rows, session_total)
         if "DISTINCT ON" in sql_query:
             return representative_rows
         if "COALESCE(SUM(spend)" in sql_query:
@@ -7111,7 +7181,7 @@ def _session_grouped_mock_prisma(session_page_rows, session_total, representativ
                     "session_models": ["gpt-4o"],
                 }
             ]
-        return session_page_rows
+        raise AssertionError(f"unexpected query:\n{sql_query}")
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
@@ -7140,23 +7210,33 @@ def _session_page_row(session_key, last_activity):
     return {"session_key": session_key, "api_key": "hashed-key", "last_activity": last_activity}
 
 
-def _session_grouped_paginating_prisma(sessions, counted_total=None):
-    """Mock prisma serving the grouped page query out of ``sessions``, honoring the LIMIT and OFFSET it asks for."""
+def _session_read_rows(
+    page_rows: Sequence[Mapping[str, object]], session_count: int
+) -> tuple[Mapping[str, object], ...]:
+    """The read query's rows for ``page_rows``, as if the read held every matching row."""
+    summary: Final = {"rows_read": 0, "session_count": session_count}
+    if not page_rows:
+        return ({"session_key": None, "api_key": None, "last_activity": None, "settled": None, **summary},)
+    return tuple({**row, "settled": True, **summary} for row in page_rows)
 
-    async def mock_query_raw(sql_query, *params):
-        if "COUNT(*) AS total_count" in sql_query:
-            return [{"total_count": min(len(sessions) if counted_total is None else counted_total, params[-1])}]
+
+def _session_grouped_paginating_prisma(sessions: Sequence[tuple[str, str]]) -> MagicMock:
+    """Mock prisma serving the grouped page read out of ``sessions``, honoring the LIMIT and OFFSET it asks for."""
+
+    async def mock_query_raw(sql_query: str, *params: object) -> Sequence[Mapping[str, object]]:
         if "DISTINCT ON" in sql_query:
             return [_session_representative_row(f"req-{session_key}", session_key) for session_key in params[-2]]
         if "COALESCE(SUM(spend)" in sql_query:
             return []
-        bounds = re.search(r"LIMIT \$(\d+)(?: OFFSET \$(\d+))?", sql_query)
-        limit = params[int(bounds.group(1)) - 1]
-        offset = params[int(bounds.group(2)) - 1] if bounds.group(2) else 0
-        return [
-            _session_page_row(session_key, last_activity)
-            for session_key, last_activity in sessions[offset : offset + limit]
-        ]
+        bounds: Final = re.search(r"LIMIT (\d+)(?: OFFSET (\d+))?\s+\) AS page", sql_query)
+        limit, offset = int(bounds.group(1)), int(bounds.group(2) or 0)
+        return _session_read_rows(
+            [
+                _session_page_row(session_key, last_activity)
+                for session_key, last_activity in sessions[offset : offset + limit]
+            ],
+            len(sessions),
+        )
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
@@ -7208,20 +7288,15 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
         assert data["data"][1]["session_total_count"] == 1
 
         emitted = [call.args for call in mock_prisma.db.query_raw.await_args_list]
+        assert len(emitted) == 3, "one read picks the page and counts it, then the representatives and their totals"
         page_query_sql = emitted[0][0]
-        assert f"GROUP BY {SESSION_GROUP_KEY_SQL}" in page_query_sql
         assert "OFFSET" not in page_query_sql
-        assert "HAVING" not in page_query_sql
-        assert emitted[0][-1] == 3, "page query fetches page_size + 1 sessions to detect has_more"
+        assert "LIMIT 3 " in page_query_sql, "the read fetches page_size + 1 sessions to detect has_more"
 
-        count_sql = emitted[1][0]
-        assert f"GROUP BY {SESSION_GROUP_KEY_SQL}" in count_sql
-        assert "LIMIT" in count_sql and "FROM (" in count_sql, "the grouped count must stay bounded"
-
-        rep_call = emitted[2]
+        rep_call: Final = emitted[1]
         assert f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in rep_call[0]
         assert (
-            f"ORDER BY {SESSION_GROUP_KEY_SQL}, " + spend_management_endpoints._SESSION_REPRESENTATIVE_ORDER_SQL
+            f"ORDER BY {SESSION_GROUP_KEY_SQL}, " + spend_management_endpoints.SESSION_REPRESENTATIVE_ORDER_SQL
         ) in rep_call[0]
         assert rep_call[-2] == ["sess-1", "req-solo"]
         assert rep_call[-1] == ["hashed-key", "hashed-key"]
@@ -7231,7 +7306,7 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypatch):
-    """A session_cursor becomes a HAVING keyset predicate instead of an OFFSET."""
+    """A session_cursor becomes a keyset predicate on the read's sessions instead of an OFFSET."""
     page_rows = [_session_page_row("sess-2", "2026-08-29 07:00:00")]
     reps = [_session_representative_row("req-2", "sess-2")]
     mock_prisma = _session_grouped_mock_prisma(page_rows, 3, reps)
@@ -7264,7 +7339,7 @@ async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypat
 
         page_query_call = mock_prisma.db.query_raw.await_args_list[0]
         page_query_sql = page_query_call.args[0]
-        assert f'HAVING (MAX("startTime"), {SESSION_GROUP_KEY_SQL}) <' in page_query_sql
+        assert "WHERE (last_activity, session_key, api_key) <" in page_query_sql
         assert "OFFSET" not in page_query_sql
         cursor_index = page_query_call.args.index("2026-08-29 09:00:00")
         assert page_query_call.args[cursor_index : cursor_index + 3] == (
@@ -7315,9 +7390,9 @@ async def test_ui_view_spend_logs_group_by_session_jumps_to_page_without_cursor(
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_group_by_session_short_page_totals_itself(client, monkeypatch):
-    """A page that runs out of sessions is the end of the list, so the total comes from it and nothing is counted."""
+    """A page that runs out of sessions has read every matching row, so that one read gives the total."""
     sessions = tuple((f"sess-{index:02d}", f"2026-08-29 10:{59 - index:02d}:00") for index in range(10))
-    mock_prisma = _session_grouped_paginating_prisma(sessions, counted_total=999)
+    mock_prisma: Final = _session_grouped_paginating_prisma(sessions)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     monkeypatch.setattr(
         "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
@@ -7341,10 +7416,12 @@ async def test_ui_view_spend_logs_group_by_session_short_page_totals_itself(clie
         )
         assert response.status_code == 200, response.text
         data = response.json()
-        assert data["total"] == 10, "the count query's 999 would have won if it had been asked"
+        assert data["total"] == 10
         assert data["total_is_capped"] is False
         assert data["total_pages"] == 1
         assert len(data["data"]) == 10
+        reads: Final = tuple(call for call in mock_prisma.db.query_raw.await_args_list if "rows_read" in call.args[0])
+        assert len(reads) == 1, "a page that ends the list is not read again for its total"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -7429,7 +7506,7 @@ async def test_ui_view_spend_logs_group_by_session_page_past_count_cap_is_empty(
         assert past_cap_data["data"] == []
         assert past_cap_data["has_more"] is False
         assert past_cap_data["total"] == cap
-        assert mock_prisma.db.query_raw.await_count == 1, "only the bounded count query runs past the capped window"
+        assert mock_prisma.db.query_raw.await_count == 1, "only the bounded read runs past the capped window"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -7732,14 +7809,14 @@ def test_session_representative_uses_completed_agent_outcome(parent_status, chil
         )
         result = connection.execute(
             "SELECT request_id, status FROM logs ORDER BY "
-            + spend_management_endpoints._SESSION_REPRESENTATIVE_ORDER_SQL
+            + spend_management_endpoints.SESSION_REPRESENTATIVE_ORDER_SQL
             + " LIMIT 1"
         ).fetchone()
         assert result == ("parent", expected)
         connection.execute("DELETE FROM logs WHERE call_type = 'asend_message'")
         fallback = connection.execute(
             "SELECT request_id, status FROM logs ORDER BY "
-            + spend_management_endpoints._SESSION_REPRESENTATIVE_ORDER_SQL
+            + spend_management_endpoints.SESSION_REPRESENTATIVE_ORDER_SQL
             + " LIMIT 1"
         ).fetchone()
         assert fallback == ("llm", "success")
@@ -8180,3 +8257,19 @@ async def test_global_spend_refresh_runs_the_refresh_on_the_writer_when_a_reader
     assert [statement for statement in journal.statements if statement[1].startswith("REFRESH")] == [
         ("writer", 'REFRESH MATERIALIZED VIEW "MonthlyGlobalSpend";')
     ]
+
+
+def test_spend_calculate_rejection_body_is_openai_shaped(client):
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user", api_key="hashed-k"
+    )
+    try:
+        response = client.post("/spend/calculate", json={}, headers={"Authorization": "Bearer sk-test"})
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] is None
+    assert error["code"] == "400"
