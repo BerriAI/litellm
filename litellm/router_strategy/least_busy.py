@@ -3,6 +3,7 @@ import logging
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
@@ -49,7 +50,6 @@ class _Deployment(TypedDict):
 _CALL_KWARGS: Final = TypeAdapter(_CallKwargs)
 _DEPLOYMENTS: Final = TypeAdapter(list[_Deployment])
 _MEMORY_COUNTS: Final = TypeAdapter(tuple[float | None, ...] | None)
-_ATTEMPTS: Final[TypeAdapter[tuple[str, ...] | None]] = TypeAdapter(tuple[str, ...] | None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,22 +140,28 @@ class LeastBusyLoggingHandler(CustomLogger):
         self._worker_id = uuid.uuid4().hex
         self._attempt_numbers = itertools.count(1)
         self._attempts_lock = threading.Lock()
+        self._attempts: OrderedDict[str, tuple[float, tuple[str, ...]]] = OrderedDict()
 
-    def _attempts(self, attempts_key: str) -> tuple[str, ...]:
-        try:
-            cached: Final = self.router_cache.in_memory_cache.get_cache(attempts_key)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # InMemoryCache.get_cache leaves key and value untyped
-            return _ATTEMPTS.validate_python(cached) or ()
-        except ValidationError:
-            return ()
+    def _forget_stale_attempts(self, now: float) -> None:
+        cutoff: Final = now - IN_FLIGHT_COUNT_TTL_SECONDS
+        while self._attempts:
+            oldest_key, (last_started_at, _) = next(iter(self._attempts.items()))
+            if last_started_at >= cutoff:
+                return
+            del self._attempts[oldest_key]
 
-    def _start_attempt(self, shared_key: str, call_id: str) -> str:
-        """Name a new sorted-set member for this call, never reused even when callers repeat a ``litellm_call_id``."""
+    def _start_attempt(self, shared_key: str, call_id: str, started_at: float) -> str:
+        """Name a new sorted-set member for this call, never reused even when callers repeat a ``litellm_call_id``.
+
+        Attempts live on the handler rather than the router cache, whose bounded size would let them
+        evict live entries such as concurrency limiters.
+        """
         member: Final = f"{call_id}:{self._worker_id}:{next(self._attempt_numbers)}"
-        attempts_key: Final = f"{shared_key}:{call_id}:attempts"
+        attempts_key: Final = f"{shared_key}:{call_id}"
         with self._attempts_lock:
-            self.router_cache.in_memory_cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache.set_cache leaves key and value untyped
-                attempts_key, (*self._attempts(attempts_key), member), ttl=IN_FLIGHT_COUNT_TTL_SECONDS
-            )
+            self._forget_stale_attempts(started_at)
+            _, members = self._attempts.pop(attempts_key, (started_at, ()))
+            self._attempts[attempts_key] = (started_at, (*members, member))
         return member
 
     def _finish_attempt(self, shared_key: str, call_id: str) -> str | None:
@@ -164,18 +170,18 @@ class LeastBusyLoggingHandler(CustomLogger):
         Callbacks cannot tell which same-id attempt finished, so drop the oldest: a call still
         running then keeps a start time no earlier than its own and never ages out early.
         """
-        attempts_key: Final = f"{shared_key}:{call_id}:attempts"
+        attempts_key: Final = f"{shared_key}:{call_id}"
         with self._attempts_lock:
-            attempts: Final = self._attempts(attempts_key)
-            if not attempts:
+            self._forget_stale_attempts(self._clock())
+            attempts: Final = self._attempts.get(attempts_key)
+            if attempts is None:
                 return None
-            if len(attempts) == 1:
-                self.router_cache.in_memory_cache.delete_cache(attempts_key)
+            last_started_at, members = attempts
+            if len(members) == 1:
+                del self._attempts[attempts_key]
             else:
-                self.router_cache.in_memory_cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache.set_cache leaves key and value untyped
-                    attempts_key, attempts[1:], ttl=IN_FLIGHT_COUNT_TTL_SECONDS
-                )
-            return attempts[0]
+                self._attempts[attempts_key] = (last_started_at, members[1:])
+            return members[0]
 
     @with_service_target("router_usage")
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
@@ -269,8 +275,12 @@ class LeastBusyLoggingHandler(CustomLogger):
                 return
             shared_key: Final = _in_flight_key(ref.model_group, ref.deployment_id)
             if delta > 0:
+                started_at: Final = self._clock()
                 redis_cache.track_in_flight(
-                    shared_key, self._start_attempt(shared_key, ref.call_id), self._clock(), IN_FLIGHT_COUNT_TTL_SECONDS
+                    shared_key,
+                    self._start_attempt(shared_key, ref.call_id, started_at),
+                    started_at,
+                    IN_FLIGHT_COUNT_TTL_SECONDS,
                 )
                 return
             finished: Final = self._finish_attempt(shared_key, ref.call_id)
@@ -295,8 +305,12 @@ class LeastBusyLoggingHandler(CustomLogger):
                 return
             shared_key: Final = _in_flight_key(ref.model_group, ref.deployment_id)
             if delta > 0:
+                started_at: Final = self._clock()
                 await redis_cache.async_track_in_flight(
-                    shared_key, self._start_attempt(shared_key, ref.call_id), self._clock(), IN_FLIGHT_COUNT_TTL_SECONDS
+                    shared_key,
+                    self._start_attempt(shared_key, ref.call_id, started_at),
+                    started_at,
+                    IN_FLIGHT_COUNT_TTL_SECONDS,
                 )
                 return
             finished: Final = self._finish_attempt(shared_key, ref.call_id)

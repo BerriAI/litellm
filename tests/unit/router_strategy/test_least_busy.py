@@ -196,6 +196,19 @@ async def test_a_call_sharing_its_call_id_with_an_earlier_one_keeps_its_own_star
     assert await worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
 
 
+def test_tracking_many_open_calls_keeps_other_entries_in_the_router_cache(shared_redis: RedisCache) -> None:
+    """The router cache holds a bounded number of entries, including live concurrency limiters.
+    Keeping one attempt record per open call there evicted them once enough calls were open"""
+    worker: Final = _worker(shared_redis)
+    worker.router_cache.in_memory_cache.set_cache("dep-b_max_parallel_requests_client", "limiter")  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache.set_cache leaves key and value untyped
+
+    for call in range(250):
+        worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", f"call-{call}"))
+
+    assert worker.router_cache.in_memory_cache.get_cache("dep-b_max_parallel_requests_client") == "limiter"  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache.get_cache leaves key untyped
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+
 @pytest.mark.asyncio
 async def test_a_request_nobody_finished_stops_counting_once_it_is_older_than_the_ttl(
     shared_redis: RedisCache,
