@@ -1,5 +1,6 @@
 import React from "react";
 import { useFieldArray, useFormContext } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,6 +48,7 @@ interface AgentFormFieldsProps {
 }
 
 const SkillsFieldArray = () => {
+  const { t } = useTranslation();
   const { control } = useFormContext<AgentFormValues>();
   const { fields, append, remove } = useFieldArray({ control, name: "skills" });
 
@@ -57,14 +59,14 @@ const SkillsFieldArray = () => {
           <FieldGroup>
             <AgentFormField
               name={`skills.${index}.id`}
-              label={SKILL_FIELD_CONFIG.id.label}
-              rules={SKILL_FIELD_CONFIG.id.required ? { required: "Required" } : undefined}
+              label={t(SKILL_FIELD_CONFIG.id.labelKey)}
+              rules={SKILL_FIELD_CONFIG.id.required ? { required: t("agents.formFields.errors.required") } : undefined}
             >
               {({ value, onChange, ref, ...control }) => (
                 <Input
                   {...control}
                   ref={ref}
-                  placeholder={SKILL_FIELD_CONFIG.id.placeholder}
+                  placeholder={t(SKILL_FIELD_CONFIG.id.placeholderKey)}
                   value={typeof value === "string" ? value : ""}
                   onChange={onChange}
                 />
@@ -73,14 +75,16 @@ const SkillsFieldArray = () => {
 
             <AgentFormField
               name={`skills.${index}.name`}
-              label={SKILL_FIELD_CONFIG.name.label}
-              rules={SKILL_FIELD_CONFIG.name.required ? { required: "Required" } : undefined}
+              label={t(SKILL_FIELD_CONFIG.name.labelKey)}
+              rules={
+                SKILL_FIELD_CONFIG.name.required ? { required: t("agents.formFields.errors.required") } : undefined
+              }
             >
               {({ value, onChange, ref, ...control }) => (
                 <Input
                   {...control}
                   ref={ref}
-                  placeholder={SKILL_FIELD_CONFIG.name.placeholder}
+                  placeholder={t(SKILL_FIELD_CONFIG.name.placeholderKey)}
                   value={typeof value === "string" ? value : ""}
                   onChange={onChange}
                 />
@@ -89,15 +93,19 @@ const SkillsFieldArray = () => {
 
             <AgentFormField
               name={`skills.${index}.description`}
-              label={SKILL_FIELD_CONFIG.description.label}
-              rules={SKILL_FIELD_CONFIG.description.required ? { required: "Required" } : undefined}
+              label={t(SKILL_FIELD_CONFIG.description.labelKey)}
+              rules={
+                SKILL_FIELD_CONFIG.description.required
+                  ? { required: t("agents.formFields.errors.required") }
+                  : undefined
+              }
             >
               {({ value, onChange, ref, ...control }) => (
                 <Textarea
                   {...control}
                   ref={ref}
                   rows={SKILL_FIELD_CONFIG.description.rows}
-                  placeholder={SKILL_FIELD_CONFIG.description.placeholder}
+                  placeholder={t(SKILL_FIELD_CONFIG.description.placeholderKey)}
                   value={typeof value === "string" ? value : ""}
                   onChange={onChange}
                 />
@@ -106,26 +114,28 @@ const SkillsFieldArray = () => {
 
             <AgentFormField
               name={`skills.${index}.tags`}
-              label={SKILL_FIELD_CONFIG.tags.label}
-              rules={SKILL_FIELD_CONFIG.tags.required ? { required: "Required" } : undefined}
+              label={t(SKILL_FIELD_CONFIG.tags.labelKey)}
+              rules={
+                SKILL_FIELD_CONFIG.tags.required ? { required: t("agents.formFields.errors.required") } : undefined
+              }
             >
               {({ id, value, onChange }) => (
                 <AgentTagsInput
                   id={id}
                   value={Array.isArray(value) ? (value as string[]) : []}
                   onValueChange={onChange}
-                  placeholder={SKILL_FIELD_CONFIG.tags.placeholder}
+                  placeholder={t(SKILL_FIELD_CONFIG.tags.placeholderKey)}
                 />
               )}
             </AgentFormField>
 
-            <AgentFormField name={`skills.${index}.examples`} label={SKILL_FIELD_CONFIG.examples.label}>
+            <AgentFormField name={`skills.${index}.examples`} label={t(SKILL_FIELD_CONFIG.examples.labelKey)}>
               {({ id, value, onChange }) => (
                 <AgentTagsInput
                   id={id}
                   value={Array.isArray(value) ? (value as string[]) : []}
                   onValueChange={onChange}
-                  placeholder={SKILL_FIELD_CONFIG.examples.placeholder}
+                  placeholder={t(SKILL_FIELD_CONFIG.examples.placeholderKey)}
                 />
               )}
             </AgentFormField>
@@ -138,19 +148,20 @@ const SkillsFieldArray = () => {
             onClick={() => remove(index)}
           >
             <Trash2 />
-            Remove Skill
+            {t("agents.formFields.skills.remove")}
           </Button>
         </div>
       ))}
       <Button type="button" variant="outline" className="w-full border-dashed" onClick={() => append({})}>
         <Plus />
-        Add Skill
+        {t("agents.formFields.skills.add")}
       </Button>
     </>
   );
 };
 
 const StaticHeadersFieldArray = () => {
+  const { t } = useTranslation();
   const { control } = useFormContext<AgentFormValues>();
   const { fields, append, remove } = useFieldArray({ control, name: "static_headers" });
 
@@ -158,25 +169,31 @@ const StaticHeadersFieldArray = () => {
     <>
       {fields.map((item, index) => (
         <div key={item.id} className="flex items-start gap-2">
-          <AgentFormField name={`static_headers.${index}.header`} rules={{ required: "Header name required" }}>
+          <AgentFormField
+            name={`static_headers.${index}.header`}
+            rules={{ required: t("agents.formFields.staticHeaders.errors.nameRequired") }}
+          >
             {({ value, onChange, ref, ...control }) => (
               <Input
                 {...control}
                 ref={ref}
                 className="w-55"
-                placeholder="Header name (e.g. Authorization)"
+                placeholder={t("agents.formFields.staticHeaders.namePlaceholder")}
                 value={typeof value === "string" ? value : ""}
                 onChange={onChange}
               />
             )}
           </AgentFormField>
-          <AgentFormField name={`static_headers.${index}.value`} rules={{ required: "Value required" }}>
+          <AgentFormField
+            name={`static_headers.${index}.value`}
+            rules={{ required: t("agents.formFields.staticHeaders.errors.valueRequired") }}
+          >
             {({ value, onChange, ref, ...control }) => (
               <Input
                 {...control}
                 ref={ref}
                 className="w-65"
-                placeholder="Value (e.g. Bearer token123)"
+                placeholder={t("agents.formFields.staticHeaders.valuePlaceholder")}
                 value={typeof value === "string" ? value : ""}
                 onChange={onChange}
               />
@@ -186,7 +203,7 @@ const StaticHeadersFieldArray = () => {
             type="button"
             variant="ghost"
             size="icon"
-            aria-label="Remove static header"
+            aria-label={t("agents.formFields.staticHeaders.remove")}
             className="text-destructive hover:text-destructive/80"
             onClick={() => remove(index)}
           >
@@ -196,13 +213,14 @@ const StaticHeadersFieldArray = () => {
       ))}
       <Button type="button" variant="outline" className="w-full border-dashed" onClick={() => append({})}>
         <Plus />
-        Add Static Header
+        {t("agents.formFields.staticHeaders.add")}
       </Button>
     </>
   );
 };
 
 const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName = true, visiblePanels }) => {
+  const { t } = useTranslation();
   const shouldShow = (key: string) => !visiblePanels || visiblePanels.includes(key);
 
   return (
@@ -211,14 +229,14 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
         <FieldGroup className="mb-4">
           <AgentFormField
             name="agent_name"
-            label={labelWithHint("Agent Name", "Unique identifier for the agent")}
-            rules={{ required: "Please enter a unique agent name" }}
+            label={labelWithHint(t("agents.formFields.agentName.label"), t("agents.formFields.agentName.hint"))}
+            rules={{ required: t("agents.formFields.agentName.required") }}
           >
             {({ value, onChange, ref, ...control }) => (
               <Input
                 {...control}
                 ref={ref}
-                placeholder="e.g., customer-support-agent"
+                placeholder={t("agents.formFields.agentName.placeholder")}
                 value={typeof value === "string" ? value : ""}
                 onChange={onChange}
               />
@@ -231,7 +249,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
         {shouldShow(AGENT_FORM_CONFIG.basic.key) && (
           <AgentFormPanel
             panelKey={AGENT_FORM_CONFIG.basic.key}
-            title={`${AGENT_FORM_CONFIG.basic.title} (Required)`}
+            title={t("agents.formFields.requiredSection", { section: t(AGENT_FORM_CONFIG.basic.titleKey) })}
             panels={panels}
           >
             {AGENT_FORM_CONFIG.basic.fields.map((field) => (
@@ -239,8 +257,12 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
                 key={field.name}
                 name={field.name}
                 label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
-                description={field.helpText}
-                rules={field.required ? { required: `Please enter ${field.label.toLowerCase()}` } : undefined}
+                description={field.helpTextKey ? t(field.helpTextKey) : undefined}
+                rules={
+                  field.required
+                    ? { required: t("agents.formFields.errors.enterField", { field: field.label.toLowerCase() }) }
+                    : undefined
+                }
               >
                 {({ value, onChange, ref, ...control }) => {
                   const text = typeof value === "string" ? value : "";
@@ -284,7 +306,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
         {shouldShow(AGENT_FORM_CONFIG.skills.key) && (
           <AgentFormPanel
             panelKey={AGENT_FORM_CONFIG.skills.key}
-            title={AGENT_FORM_CONFIG.skills.title}
+            title={t(AGENT_FORM_CONFIG.skills.titleKey)}
             panels={panels}
           >
             <SkillsFieldArray />
@@ -294,7 +316,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
         {shouldShow(AGENT_FORM_CONFIG.capabilities.key) && (
           <AgentFormPanel
             panelKey={AGENT_FORM_CONFIG.capabilities.key}
-            title={AGENT_FORM_CONFIG.capabilities.title}
+            title={t(AGENT_FORM_CONFIG.capabilities.titleKey)}
             panels={panels}
           >
             {AGENT_FORM_CONFIG.capabilities.fields.map((field) => (
@@ -310,7 +332,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
         {shouldShow(AGENT_FORM_CONFIG.optional.key) && (
           <AgentFormPanel
             panelKey={AGENT_FORM_CONFIG.optional.key}
-            title={AGENT_FORM_CONFIG.optional.title}
+            title={t(AGENT_FORM_CONFIG.optional.titleKey)}
             panels={panels}
           >
             {AGENT_FORM_CONFIG.optional.fields.map((field) => (
@@ -334,7 +356,11 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
         )}
 
         {shouldShow(AGENT_FORM_CONFIG.cost.key) && (
-          <AgentFormPanel panelKey={AGENT_FORM_CONFIG.cost.key} title={AGENT_FORM_CONFIG.cost.title} panels={panels}>
+          <AgentFormPanel
+            panelKey={AGENT_FORM_CONFIG.cost.key}
+            title={t(AGENT_FORM_CONFIG.cost.titleKey)}
+            panels={panels}
+          >
             <CostConfigFields />
           </AgentFormPanel>
         )}
@@ -342,7 +368,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
         {shouldShow(AGENT_FORM_CONFIG.litellm.key) && (
           <AgentFormPanel
             panelKey={AGENT_FORM_CONFIG.litellm.key}
-            title={AGENT_FORM_CONFIG.litellm.title}
+            title={t(AGENT_FORM_CONFIG.litellm.titleKey)}
             panels={panels}
           >
             {AGENT_FORM_CONFIG.litellm.fields.map((field) => (
@@ -366,12 +392,16 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
         )}
 
         {shouldShow(AUTH_HEADERS_PANEL_KEY) && (
-          <AgentFormPanel panelKey={AUTH_HEADERS_PANEL_KEY} title="Authentication Headers" panels={panels}>
+          <AgentFormPanel
+            panelKey={AUTH_HEADERS_PANEL_KEY}
+            title={t("agents.formFields.authHeaders.title")}
+            panels={panels}
+          >
             <Field>
               <FieldTitle>
                 {labelWithHint(
-                  "Static Headers",
-                  "Headers always sent to the backend agent, regardless of the client request. Admin-configured, static wins on conflict.",
+                  t("agents.formFields.authHeaders.staticHeaders"),
+                  t("agents.formFields.authHeaders.staticHeadersHint"),
                 )}
               </FieldTitle>
               <div className="flex flex-col gap-2">
@@ -382,8 +412,8 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
             <AgentFormField
               name="extra_headers"
               label={labelWithHint(
-                "Forward Client Headers",
-                "Header names to extract from the client's request and forward to the agent. Type a name and press Enter.",
+                t("agents.formFields.authHeaders.forwardHeaders"),
+                t("agents.formFields.authHeaders.forwardHeadersHint"),
               )}
             >
               {({ id, value, onChange }) => (
@@ -391,7 +421,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
                   id={id}
                   value={Array.isArray(value) ? (value as string[]) : []}
                   onValueChange={onChange}
-                  placeholder="e.g. x-api-key, Authorization"
+                  placeholder={t("agents.formFields.authHeaders.forwardHeadersPlaceholder")}
                 />
               )}
             </AgentFormField>
@@ -399,7 +429,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
         )}
 
         {shouldShow(KILL_SWITCH_PANEL_KEY) && (
-          <AgentFormPanel panelKey={KILL_SWITCH_PANEL_KEY} title="Kill Switch" panels={panels}>
+          <AgentFormPanel panelKey={KILL_SWITCH_PANEL_KEY} title={t("agents.formFields.killSwitch")} panels={panels}>
             <KillSwitchFormFields />
           </AgentFormPanel>
         )}

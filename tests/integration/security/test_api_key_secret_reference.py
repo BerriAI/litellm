@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
+import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -46,7 +49,18 @@ _SEARCH_PATH: Final = f"/v1/vector_stores/{_VECTOR_STORE}/search"
 _BATCH_DEPLOYMENT: Final = "wif-vllm-batch"
 _BEDROCK_MODEL: Final = "bedrock/converse/us.anthropic.claude-sonnet-5-5"
 _PROVIDER_INPUT_TOKENS: Final = 7919
-_UNSUPPORTED_REFERENCE: Final = "oidc/google/https://example.invalid"
+_UNSUPPORTED_REFERENCE: Final = "oidc/github/https://example.invalid"
+_GOOGLE_MODEL: Final = "hosted_vllm/wif-google"
+_GOOGLE_AUDIENCES: Final = MappingProxyType(
+    {
+        "config_inline": "https://vllm-inline.example.test",
+        "config_credential": "https://vllm-credential.example.test",
+        "db_credential": "https://vllm-db-credential.example.test",
+    }
+)
+_UNAVAILABLE_AUDIENCE: Final = "https://vllm-unavailable.example.test"
+_HUNG_AUDIENCE: Final = "https://vllm-hung.example.test"
+_IDENTITY_PATH: Final = "/computeMetadata/v1/instance/service-accounts/default/identity"
 _RUN_SECRETS_TOKEN: Final = "/run/secrets/wif-absent-token"
 _SOURCES: Final = ("config_credential", "config_inline", "db_credential", "db_inline")
 _UNREADABLE: Final = MappingProxyType(
@@ -106,6 +120,45 @@ class _Secrets:
 
 def _reference(path: Path) -> str:
     return f"oidc/file/{path}"
+
+
+def _google_reference(audience: str) -> str:
+    return f"oidc/google/{audience}"
+
+
+def _jwt_segment(part: Mapping[str, JsonValue]) -> str:
+    return base64.urlsafe_b64encode(json.dumps(part).encode()).decode().rstrip("=")
+
+
+@dataclass(frozen=True, slots=True)
+class _Google:
+    expires: int
+
+    def token(self, audience: str) -> str:
+        claims: Final = _jwt_segment({"iss": "https://accounts.google.com", "aud": audience, "exp": self.expires})
+        return f"{_jwt_segment({'alg': 'RS256', 'typ': 'JWT'})}.{claims}.signature"
+
+    def bearers(self) -> frozenset[str]:
+        return frozenset(f"Bearer {self.token(audience)}" for audience in _GOOGLE_AUDIENCES.values())
+
+
+def _metadata_server(google: _Google) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        target: Final = httpx.URL(request.target)
+        audience: Final = target.params.get("audience")
+        if audience is None or (request.method, target.path, request.headers.get("metadata-flavor")) != (
+            "GET",
+            _IDENTITY_PATH,
+            "Google",
+        ):
+            return Reply(status=404, body=b"not found", content_type="text/plain")
+        if audience == _UNAVAILABLE_AUDIENCE:
+            return Reply(status=503, body=b"metadata server unavailable", content_type="text/plain")
+        if audience == _HUNG_AUDIENCE:
+            return Reply(chunks=(b"never sent",), gate_before_first=threading.Event(), content_type="text/plain")
+        return Reply(body=google.token(audience).encode(), content_type="text/plain")
+
+    return respond
 
 
 def _secrets(directory: Path) -> _Secrets:
@@ -169,9 +222,9 @@ def _served(request: Request) -> Reply:
             return openai_error(404)
 
 
-def _provider(secrets: _Secrets) -> Callable[[Request], Reply]:
+def _provider(secrets: _Secrets, google: _Google) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
-        if request.headers.get("authorization") != f"Bearer {secrets.current()}":
+        if request.headers.get("authorization") not in {f"Bearer {secrets.current()}", *google.bearers()}:
             return openai_error(401)
         return _served(request)
 
@@ -225,6 +278,27 @@ def _config(directory: Path, secrets: _Secrets, provider: str) -> Path:
                 },
             ),
             _deployment(
+                "wif-google-inline",
+                {
+                    "model": _GOOGLE_MODEL,
+                    "api_key": _google_reference(_GOOGLE_AUDIENCES["config_inline"]),
+                    "api_base": provider,
+                },
+            ),
+            _deployment("wif-google-credential", _named(_GOOGLE_MODEL, "wif-google")),
+            _deployment(
+                "wif-google-unavailable",
+                {"model": _GOOGLE_MODEL, "api_key": _google_reference(_UNAVAILABLE_AUDIENCE), "api_base": provider},
+            ),
+            _deployment(
+                "wif-google-unavailable-count",
+                {"model": _CHAT_MODEL, "api_key": _google_reference(_UNAVAILABLE_AUDIENCE), "api_base": provider},
+            ),
+            _deployment(
+                "wif-google-hung",
+                {"model": _GOOGLE_MODEL, "api_key": _google_reference(_HUNG_AUDIENCE), "api_base": provider},
+            ),
+            _deployment(
                 "wif-mistral-passthrough",
                 {
                     "model": "mistral/mistral-small-latest",
@@ -239,6 +313,7 @@ def _config(directory: Path, secrets: _Secrets, provider: str) -> Path:
             _credential("wif-outside", _reference(secrets.outside), provider),
             _credential("wif-unsupported", _UNSUPPORTED_REFERENCE, provider),
             _credential("wif-run-secrets", f"oidc/file/{_RUN_SECRETS_TOKEN}", provider),
+            _credential("wif-google", _google_reference(_GOOGLE_AUDIENCES["config_credential"]), provider),
         ],
         "vector_store_registry": [
             {
@@ -312,6 +387,8 @@ class _Rig:
     owned: OwnedProxy
     provider: Recorder
     intruder: Recorder
+    metadata: Recorder
+    google: _Google
     provider_base: str
     intruder_base: str
     secrets: _Secrets
@@ -339,17 +416,24 @@ def _is_discovery(request: Request) -> bool:
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     directory: Final = tmp_path_factory.mktemp("api_key_secret_reference").resolve()
     secrets: Final = _secrets(directory)
+    google: Final = _Google(expires=int(time.time()) + 3600)
     with (
         gateway_from_environment() as gateway,
-        wire_server(_provider(secrets)) as provider_wire,
+        wire_server(_provider(secrets, google)) as provider_wire,
         wire_server(_intruder) as intruder_wire,
+        wire_server(_metadata_server(google)) as metadata_wire,
     ):
         provider: Final = Recorder(provider_wire)
         provider_base: Final = f"{provider_wire.url}/v1"
         with owned_proxy_process(
             gateway,
             directory,
-            {**secrets.overrides(), "MISTRAL_API_BASE": provider_wire.url},
+            {
+                **secrets.overrides(),
+                "MISTRAL_API_BASE": provider_wire.url,
+                "GCE_METADATA_HOST": httpx.URL(metadata_wire.url).netloc.decode(),
+                "GCE_METADATA_TIMEOUT": "1",
+            },
             config=_config(directory, secrets, provider_base),
             workers=2,
             healthcheck=WorkerHealthcheck.LENIENT,
@@ -361,6 +445,8 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
                     owned=owned,
                     provider=provider,
                     intruder=Recorder(intruder_wire),
+                    metadata=Recorder(metadata_wire),
+                    google=google,
                     provider_base=provider_base,
                     intruder_base=f"{intruder_wire.url}/v1",
                     secrets=secrets,
@@ -708,7 +794,92 @@ def test_team_row_naming_the_credential_sends_the_token_only_to_its_host(rig: _R
 
 def test_startup_discovery_sends_the_boot_token(rig: _Rig) -> None:
     sent: Final = frozenset(_bearers(tuple(request for request in rig.boot if _is_discovery(request))))
-    assert sent == {f"Bearer {rig.boot_token}"}, sent
+    assert sent - rig.google.bearers() == {f"Bearer {rig.boot_token}"}, sent
+
+
+def _discovery_bearers(rig: _Rig) -> frozenset[str | None]:
+    return frozenset(_bearers(tuple(request for request in rig.provider.requests() if _is_discovery(request))))
+
+
+def test_startup_discovery_sends_the_google_token(rig: _Rig) -> None:
+    expected: Final = frozenset(
+        f"Bearer {rig.google.token(_GOOGLE_AUDIENCES[source])}" for source in ("config_inline", "config_credential")
+    )
+    sent: Final = eventually(
+        partial(_discovery_bearers, rig), lambda seen: expected <= seen, seconds=30, return_last_on_timeout=True
+    )
+    assert expected <= sent, sent
+
+
+def _google_model(rig: _Rig, scenario: Scenario, source: str) -> str:
+    match source:
+        case "config_inline":
+            return "wif-google-inline"
+        case "config_credential":
+            return "wif-google-credential"
+        case "db_credential":
+            credential: Final = f"db-google-{uuid.uuid4().hex}"
+            rig.owned.gateway.post(
+                "/credentials",
+                _credential(credential, _google_reference(_GOOGLE_AUDIENCES[source]), rig.provider_base),
+            )
+            scenario.cleanups.callback(_delete_credential, rig.owned.gateway, credential)
+            name, identity = _created_model(
+                rig.owned.gateway,
+                scenario,
+                _deployment(f"db-google-{uuid.uuid4().hex}", _named(_GOOGLE_MODEL, credential)),
+            )
+            eventually(partial(rig.owned.serves_only_on_every_worker, name, identity), bool, seconds=120)
+            return name
+        case _:
+            pytest.fail(f"unknown source {source}")
+
+
+def _asked_audiences(rig: _Rig) -> frozenset[str | None]:
+    return frozenset(httpx.URL(request.target).params.get("audience") for request in rig.metadata.requests())
+
+
+@pytest.mark.parametrize("source", tuple(_GOOGLE_AUDIENCES))
+def test_google_reference_sends_the_metadata_server_token_for_its_audience(rig: _Rig, source: str) -> None:
+    audience: Final = _GOOGLE_AUDIENCES[source]
+    with rig.owned.gateway.scenario() as scenario:
+        marker: Final = _marker()
+        response: Final = _chat(rig.owned.gateway, _google_model(rig, scenario, source), marker)
+        sent: Final = _bearers(_carrying(rig.provider.requests(), marker))
+    assert (response.status_code, sent) == (200, (f"Bearer {rig.google.token(audience)}",)), response.text
+    assert audience in _asked_audiences(rig)
+
+
+def test_google_reference_fails_closed_when_the_metadata_server_fails(rig: _Rig) -> None:
+    marker: Final = _marker()
+    response: Final = _chat(rig.owned.gateway, "wif-google-unavailable", marker)
+    reached: Final = _carrying(rig.provider.requests(), marker)
+    assert (response.status_code, reached) == (503, ()), (response.text, _bearers(reached))
+    assert "oidc/google secret reference could not be resolved" in response.text, response.text
+    assert _UNAVAILABLE_AUDIENCE.removeprefix("https://") not in response.text, response.text
+    assert _UNAVAILABLE_AUDIENCE in _asked_audiences(rig)
+
+
+def test_google_reference_answers_503_when_the_metadata_server_never_finishes_its_reply(rig: _Rig) -> None:
+    marker: Final = _marker()
+    response: Final = _chat(rig.owned.gateway, "wif-google-hung", marker)
+    reached: Final = _carrying(rig.provider.requests(), marker)
+    assert (response.status_code, reached) == (503, ()), (response.text, _bearers(reached))
+    assert "the metadata server did not return an ID token" in response.text, response.text
+    assert _HUNG_AUDIENCE in _asked_audiences(rig)
+
+
+def test_input_token_count_answers_503_when_the_metadata_server_fails(rig: _Rig) -> None:
+    marker: Final = _marker()
+    response: Final = rig.owned.gateway.request(
+        "POST",
+        "/v1/responses/input_tokens",
+        {"model": "wif-google-unavailable-count", "input": f"say {marker}"},
+        headers=_CLOSE,
+    )
+    reached: Final = _carrying(rig.provider.requests(), marker)
+    assert (response.status_code, reached) == (503, ()), (response.text, _bearers(reached))
+    assert "oidc/google secret reference could not be resolved" in response.text, response.text
 
 
 def _side_call(rig: _Rig, seam: str, marker: str) -> tuple[httpx.Response, Callable[[Request], bool]]:

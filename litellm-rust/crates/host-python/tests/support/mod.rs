@@ -92,6 +92,8 @@ impl std::fmt::Display for Error {
     }
 }
 
+impl std::error::Error for Error {}
+
 impl From<MachineFault> for Error {
     fn from(fault: MachineFault) -> Self {
         Self(format!("{fault:?}"))

@@ -54,6 +54,57 @@
           ],
           "title": "ValidationError",
           "type": "object"
+        },
+        "_A2AJsonRpcResponse": {
+          "additionalProperties": true,
+          "properties": {
+            "error": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id"
+            },
+            "jsonrpc": {
+              "const": "2.0",
+              "title": "Jsonrpc",
+              "type": "string"
+            },
+            "result": {
+              "anyOf": [
+                {},
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Result"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id"
+          ],
+          "title": "_A2AJsonRpcResponse",
+          "type": "object"
         }
       }
     },
@@ -242,6 +293,119 @@
           ]
         }
       },
+      "/a2a/{agent_id}/message/stream": {
+        "post": {
+          "description": "Invoke an agent using the A2A protocol (JSON-RPC 2.0).\n\nSupported methods:\n- message/send: Send a message and get a response\n- message/stream: Send a message and stream the response",
+          "operationId": "invoke_agent_a2a_a2a__agent_id__message_stream_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "agent_id",
+              "required": true,
+              "schema": {
+                "title": "Agent Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "id": "stream-1",
+                  "jsonrpc": "2.0",
+                  "method": "message/stream",
+                  "params": {
+                    "message": {
+                      "kind": "message",
+                      "messageId": "message-1",
+                      "parts": [
+                        {
+                          "kind": "text",
+                          "text": "Hello"
+                        }
+                      ],
+                      "role": "user"
+                    }
+                  }
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Id"
+                    },
+                    "jsonrpc": {
+                      "const": "2.0",
+                      "title": "Jsonrpc",
+                      "type": "string"
+                    },
+                    "method": {
+                      "title": "Method",
+                      "type": "string"
+                    },
+                    "params": {
+                      "additionalProperties": true,
+                      "title": "Params",
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "method",
+                    "params"
+                  ],
+                  "title": "_A2AJsonRpcRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/_A2AJsonRpcResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Invoke Agent A2A",
+          "tags": [
+            "a2a"
+          ]
+        }
+      },
       "/v1/a2a/{agent_id}/message/send": {
         "post": {
           "description": "Invoke an agent using the A2A protocol (JSON-RPC 2.0).\n\nSupported methods:\n- message/send: Send a message and get a response\n- message/stream: Send a message and stream the response",
@@ -262,6 +426,119 @@
               "content": {
                 "application/json": {
                   "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Invoke Agent A2A",
+          "tags": [
+            "a2a"
+          ]
+        }
+      },
+      "/v1/a2a/{agent_id}/message/stream": {
+        "post": {
+          "description": "Invoke an agent using the A2A protocol (JSON-RPC 2.0).\n\nSupported methods:\n- message/send: Send a message and get a response\n- message/stream: Send a message and stream the response",
+          "operationId": "invoke_agent_a2a_v1_a2a__agent_id__message_stream_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "agent_id",
+              "required": true,
+              "schema": {
+                "title": "Agent Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "id": "stream-1",
+                  "jsonrpc": "2.0",
+                  "method": "message/stream",
+                  "params": {
+                    "message": {
+                      "kind": "message",
+                      "messageId": "message-1",
+                      "parts": [
+                        {
+                          "kind": "text",
+                          "text": "Hello"
+                        }
+                      ],
+                      "role": "user"
+                    }
+                  }
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Id"
+                    },
+                    "jsonrpc": {
+                      "const": "2.0",
+                      "title": "Jsonrpc",
+                      "type": "string"
+                    },
+                    "method": {
+                      "title": "Method",
+                      "type": "string"
+                    },
+                    "params": {
+                      "additionalProperties": true,
+                      "title": "Params",
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "method",
+                    "params"
+                  ],
+                  "title": "_A2AJsonRpcRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/_A2AJsonRpcResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -1648,7 +1925,7 @@
       },
       "/access_group/{access_group}/update": {
         "put": {
-          "description": "Update an access group's model names.\n\nThis will:\n1. Remove the access group from all current deployments\n2. Add the access group to all deployments for the new model_names list\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/update' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model_names\": [\"gpt-4\", \"claude-3-sonnet\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- model_names: List[str] - New list of model groups to include\n\nReturns:\n- NewModelGroupResponse with the updated access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 404: If access group not found",
+          "description": "Update an access group's model names.\n\nThis will:\n1. Add the access group to all deployments for the new model_names list\n2. Remove the access group from every other deployment\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/update' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model_names\": [\"gpt-4\", \"claude-3-sonnet\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- model_names: List[str] - New list of model groups to include\n\nReturns:\n- NewModelGroupResponse with the updated access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 404: If access group not found\n- HTTPException 409: If another edit holds the group or one of its models for 30 s",
           "operationId": "update_access_group_access_group__access_group__update_put",
           "parameters": [
             {
@@ -3487,6 +3764,14 @@
               "title": "Entities",
               "type": "object"
             },
+            "guardrails": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/GuardrailMetric"
+              },
+              "description": "Spend by guardrail ID, already included in key and model spend. Populated on user, team and organization aggregated activity only, without a model filter",
+              "title": "Guardrails",
+              "type": "object"
+            },
             "mcp_servers": {
               "additionalProperties": {
                 "$ref": "#/components/schemas/MetricWithMetadata"
@@ -3801,6 +4086,82 @@
           ],
           "title": "ExportType",
           "type": "string"
+        },
+        "GuardrailKeyMetric": {
+          "properties": {
+            "metadata": {
+              "$ref": "#/components/schemas/KeyMetadata",
+              "description": "API key alias and existence information"
+            },
+            "metrics": {
+              "$ref": "#/components/schemas/GuardrailSpendMetrics",
+              "description": "Guardrail spend and unpriced units for this API key"
+            }
+          },
+          "required": [
+            "metrics",
+            "metadata"
+          ],
+          "title": "GuardrailKeyMetric",
+          "type": "object"
+        },
+        "GuardrailMetadata": {
+          "properties": {
+            "guardrail_name": {
+              "description": "Guardrail display name, falling back to the guardrail ID",
+              "title": "Guardrail Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "guardrail_name"
+          ],
+          "title": "GuardrailMetadata",
+          "type": "object"
+        },
+        "GuardrailMetric": {
+          "properties": {
+            "api_key_breakdown": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/GuardrailKeyMetric"
+              },
+              "description": "Per-key guardrail spend and unpriced units, limited to keys in the day's API key breakdown",
+              "title": "Api Key Breakdown",
+              "type": "object"
+            },
+            "metadata": {
+              "$ref": "#/components/schemas/GuardrailMetadata",
+              "description": "Guardrail name information"
+            },
+            "metrics": {
+              "$ref": "#/components/schemas/GuardrailSpendMetrics",
+              "description": "Guardrail spend and unpriced units across all matching API keys"
+            }
+          },
+          "required": [
+            "metrics",
+            "metadata"
+          ],
+          "title": "GuardrailMetric",
+          "type": "object"
+        },
+        "GuardrailSpendMetrics": {
+          "properties": {
+            "spend": {
+              "default": 0.0,
+              "description": "Guardrail spend in USD, already included in key and model spend",
+              "title": "Spend",
+              "type": "number"
+            },
+            "untracked_units": {
+              "default": 0,
+              "description": "Guardrail units with no known price, excluded from spend",
+              "title": "Untracked Units",
+              "type": "integer"
+            }
+          },
+          "title": "GuardrailSpendMetrics",
+          "type": "object"
         },
         "HTTPAuthSecurityScheme": {
           "description": "Defines a security scheme using HTTP authentication.",
@@ -7741,7 +8102,7 @@
     "paths": {
       "/claude-code/marketplace.json": {
         "get": {
-          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nWithout `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`\nthe key is authenticated and the catalog also holds the disabled plugins granted\nto it through `object_permission.skills` or an access group on the key or its team.\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin marketplace add \"http://localhost:4000/claude-code/marketplace.json?key=sk-...\"\n    claude plugin install my-plugin@litellm\n    ```",
+          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nWithout a key the catalog holds the enabled (public) plugins. With `?key=sk-...`\nthe key is authenticated and the catalog also holds the disabled plugins granted\nto it through `object_permission.skills` or an access group on the key or its team.\n\nWith `general_settings.claude_code_marketplace_auth_required: true` the key must come\nin the `Authorization` or `x-litellm-api-key` header (Claude Code sends them from the\nmarketplace source's `headers`), `?key=` is ignored, and a caller with no valid key\ngets a 401 with `WWW-Authenticate: Bearer`.\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin marketplace add \"http://localhost:4000/claude-code/marketplace.json?key=sk-...\"\n    claude plugin install my-plugin@litellm\n    ```",
           "operationId": "get_marketplace_claude_code_marketplace_json_get",
           "parameters": [
             {
@@ -8668,6 +9029,184 @@
           "summary": "Update Cloudzero Settings",
           "tags": [
             "cloudzero"
+          ]
+        }
+      }
+    }
+  },
+  "codex_passthrough": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/backend-api/codex/{endpoint}": {
+        "get": {
+          "description": "Forward a client's ChatGPT subscription with separate LiteLLM authentication.",
+          "operationId": "codex_passthrough_route_backend_api_codex__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "enum": [
+                  "models",
+                  "responses"
+                ],
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Codex Passthrough Route",
+          "tags": [
+            "codex_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Forward a client's ChatGPT subscription with separate LiteLLM authentication.",
+          "operationId": "codex_passthrough_route_backend_api_codex__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "enum": [
+                  "models",
+                  "responses"
+                ],
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                },
+                "text/event-stream": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Unmodified Codex response or server-sent events"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Codex Passthrough Route",
+          "tags": [
+            "codex_passthrough"
           ]
         }
       }
@@ -9829,6 +10368,249 @@
           "title": "DecisionsUsage",
           "type": "object"
         },
+        "ExtractionAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "confidence": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
+            },
+            "guess": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "mean": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "median": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "p10": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "p90": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "p_above": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "P Above"
+            },
+            "p_below": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "P Below"
+            },
+            "p_null": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "P Null"
+            },
+            "quantiles": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/JsonValue"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Quantiles"
+            },
+            "span": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Span"
+            },
+            "spans": {
+              "anyOf": [
+                {
+                  "items": {
+                    "items": {
+                      "type": "integer"
+                    },
+                    "type": "array"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Spans"
+            },
+            "steps": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/JsonValue"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Steps"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/components/schemas/JsonValue",
+              "description": "The answer, null when the input does not determine it"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "ExtractionAnswer",
+          "type": "object"
+        },
+        "ExtractionResponse": {
+          "additionalProperties": true,
+          "properties": {
+            "answers": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/ExtractionAnswer"
+              },
+              "title": "Answers",
+              "type": "object"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            },
+            "state_text": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State Text"
+            },
+            "truncated": {
+              "title": "Truncated",
+              "type": "boolean"
+            },
+            "usage": {
+              "$ref": "#/components/schemas/ExtractionUsage"
+            }
+          },
+          "required": [
+            "model",
+            "answers",
+            "truncated",
+            "usage"
+          ],
+          "title": "ExtractionResponse",
+          "type": "object"
+        },
+        "ExtractionUsage": {
+          "additionalProperties": true,
+          "properties": {
+            "image_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Image Tokens"
+            },
+            "input_tokens": {
+              "title": "Input Tokens",
+              "type": "integer"
+            },
+            "output_tokens": {
+              "title": "Output Tokens",
+              "type": "integer"
+            },
+            "passes": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Passes"
+            },
+            "schema_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Schema Tokens"
+            },
+            "state_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State Tokens"
+            }
+          },
+          "required": [
+            "input_tokens",
+            "output_tokens"
+          ],
+          "title": "ExtractionUsage",
+          "type": "object"
+        },
+        "JsonValue": {},
         "NoulAnswer": {
           "additionalProperties": true,
           "properties": {
@@ -10765,9 +11547,406 @@
           ]
         }
       },
+      "/extraction": {
+        "post": {
+          "description": "Read a `state` text and up to 4 images and get one typed answer per named field in `fields`.\n\nField types are `text`, `number`, `date`, `time`, `datetime`, `duration`, `list` (set `items`), `estimate`\n(set `min` and `max`) and `forecast` (set `min`, `max` and `horizon`). Each answer carries its `value`, which is\nnull when the input does not determine it, plus `confidence`, `p_null`, text `span`s into the state and, for\nestimates, `mean`, `median`, `p10` and `p90`. Images are data URLs or `{content_type, base64}` objects, remote\nURLs are not accepted. An unknown field type, a field name that is not 1 to 64 letters, digits, `_`, `.` or `-`\nstarting with a letter or `_`, a remote image URL or more than 4 images is rejected with a 400 before any\nprovider is called. Any other top-level key, `stream: true` and OpenAI generation settings such as `temperature`\nincluded, is rejected with a 400 naming it unless `drop_params` or the deployment's `additional_drop_params`\ndrops it. Settings inside `fields` and `options` go to the provider as sent, so a field missing a setting its\ntype needs or an empty `state` with no images comes back with the provider's own error. `model` is any\nextraction model in the proxy model list, such as Cloudflare Clairic. The request and the answers keep the\nprovider's format.",
+          "operationId": "extraction_extraction_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "fields": {
+                    "days_to_pay": {
+                      "max": 90,
+                      "min": 0,
+                      "type": "estimate"
+                    },
+                    "invoice_date": {
+                      "type": "date"
+                    },
+                    "items": {
+                      "instructions": "What was bought?",
+                      "items": "text",
+                      "type": "list"
+                    },
+                    "total": {
+                      "type": "number",
+                      "unit": "USD"
+                    },
+                    "vendor": {
+                      "instructions": "Who sent the invoice?",
+                      "type": "text"
+                    }
+                  },
+                  "model": "clairic",
+                  "state": "Invoice #4471 from Acme Tools, dated 2026-03-03. 12 hammers. Total $174. Payment due in 30 days."
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "fields": {
+                      "description": "Field name to typed field spec. Each name becomes a key in the answers",
+                      "minProperties": 1,
+                      "patternProperties": {
+                        "^[A-Za-z_][A-Za-z0-9_.\\-]{0,63}$": {
+                          "additionalProperties": true,
+                          "properties": {
+                            "decimals": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Numbers, durations and number lists only, 0 to 6",
+                              "title": "Decimals"
+                            },
+                            "horizon": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Forecast only, number of steps",
+                              "title": "Horizon"
+                            },
+                            "instructions": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "What the field should contain",
+                              "title": "Instructions"
+                            },
+                            "integer": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Numbers and durations only",
+                              "title": "Integer"
+                            },
+                            "interval": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "step",
+                                    "minute",
+                                    "hour",
+                                    "day",
+                                    "week",
+                                    "month",
+                                    "quarter",
+                                    "year"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Interval"
+                            },
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "text",
+                                    "number",
+                                    "date"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Item type, required for list fields",
+                              "title": "Items"
+                            },
+                            "max": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Estimate and forecast upper bound",
+                              "title": "Max"
+                            },
+                            "min": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Estimate and forecast lower bound",
+                              "title": "Min"
+                            },
+                            "null_threshold": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Probability of null above which the value is null",
+                              "title": "Null Threshold"
+                            },
+                            "scale": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "linear",
+                                    "log"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Scale"
+                            },
+                            "step": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Estimate grid step, or month or year",
+                              "title": "Step"
+                            },
+                            "type": {
+                              "description": "The answer type for this field",
+                              "enum": [
+                                "text",
+                                "number",
+                                "date",
+                                "time",
+                                "datetime",
+                                "duration",
+                                "list",
+                                "estimate",
+                                "forecast"
+                              ],
+                              "title": "Type",
+                              "type": "string"
+                            },
+                            "unit": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Unit label. For durations, seconds through years",
+                              "title": "Unit"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "title": "ExtractionField",
+                          "type": "object"
+                        }
+                      },
+                      "title": "Fields",
+                      "type": "object"
+                    },
+                    "images": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "pattern": "^[Dd][Aa][Tt][Aa]:",
+                                "type": "string"
+                              },
+                              {
+                                "additionalProperties": true,
+                                "properties": {
+                                  "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "title": "Base64",
+                                    "type": "string"
+                                  },
+                                  "content_type": {
+                                    "description": "The image media type, such as image/png",
+                                    "title": "Content Type",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "content_type",
+                                  "base64"
+                                ],
+                                "title": "ExtractionBase64Image",
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "maxItems": 4,
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Up to 4 images as data URLs or content_type plus base64, no remote URLs",
+                      "title": "Images"
+                    },
+                    "model": {
+                      "description": "An extraction model from the proxy model_list",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "options": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "properties": {
+                            "include_quantiles": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Add 99 percentiles to estimates",
+                              "title": "Include Quantiles"
+                            },
+                            "return_state_text": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Return the text that spans index into",
+                              "title": "Return State Text"
+                            }
+                          },
+                          "title": "ExtractionOptions",
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reference_date": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "ISO date that anchors dates written without a year",
+                      "title": "Reference Date"
+                    },
+                    "state": {
+                      "default": "",
+                      "description": "The text to read. Must be non-empty unless images are sent. Text answers are spans of it",
+                      "title": "State",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fields",
+                    "model"
+                  ],
+                  "title": "ExtractionRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ExtractionResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Extract typed fields from a state",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
       "/systemone": {
         "post": {
-          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge a `state` against one or more named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "systemone_systemone_post",
           "requestBody": {
             "content": {
@@ -11173,7 +12352,6 @@
                         ]
                       },
                       "description": "Named noul, choice and score questions. Each key becomes a key in the answers",
-                      "maxProperties": 128,
                       "minProperties": 1,
                       "propertyNames": {
                         "minLength": 1
@@ -11775,9 +12953,406 @@
           ]
         }
       },
+      "/v1/extraction": {
+        "post": {
+          "description": "Read a `state` text and up to 4 images and get one typed answer per named field in `fields`.\n\nField types are `text`, `number`, `date`, `time`, `datetime`, `duration`, `list` (set `items`), `estimate`\n(set `min` and `max`) and `forecast` (set `min`, `max` and `horizon`). Each answer carries its `value`, which is\nnull when the input does not determine it, plus `confidence`, `p_null`, text `span`s into the state and, for\nestimates, `mean`, `median`, `p10` and `p90`. Images are data URLs or `{content_type, base64}` objects, remote\nURLs are not accepted. An unknown field type, a field name that is not 1 to 64 letters, digits, `_`, `.` or `-`\nstarting with a letter or `_`, a remote image URL or more than 4 images is rejected with a 400 before any\nprovider is called. Any other top-level key, `stream: true` and OpenAI generation settings such as `temperature`\nincluded, is rejected with a 400 naming it unless `drop_params` or the deployment's `additional_drop_params`\ndrops it. Settings inside `fields` and `options` go to the provider as sent, so a field missing a setting its\ntype needs or an empty `state` with no images comes back with the provider's own error. `model` is any\nextraction model in the proxy model list, such as Cloudflare Clairic. The request and the answers keep the\nprovider's format.",
+          "operationId": "extraction_v1_extraction_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "fields": {
+                    "days_to_pay": {
+                      "max": 90,
+                      "min": 0,
+                      "type": "estimate"
+                    },
+                    "invoice_date": {
+                      "type": "date"
+                    },
+                    "items": {
+                      "instructions": "What was bought?",
+                      "items": "text",
+                      "type": "list"
+                    },
+                    "total": {
+                      "type": "number",
+                      "unit": "USD"
+                    },
+                    "vendor": {
+                      "instructions": "Who sent the invoice?",
+                      "type": "text"
+                    }
+                  },
+                  "model": "clairic",
+                  "state": "Invoice #4471 from Acme Tools, dated 2026-03-03. 12 hammers. Total $174. Payment due in 30 days."
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "fields": {
+                      "description": "Field name to typed field spec. Each name becomes a key in the answers",
+                      "minProperties": 1,
+                      "patternProperties": {
+                        "^[A-Za-z_][A-Za-z0-9_.\\-]{0,63}$": {
+                          "additionalProperties": true,
+                          "properties": {
+                            "decimals": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Numbers, durations and number lists only, 0 to 6",
+                              "title": "Decimals"
+                            },
+                            "horizon": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Forecast only, number of steps",
+                              "title": "Horizon"
+                            },
+                            "instructions": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "What the field should contain",
+                              "title": "Instructions"
+                            },
+                            "integer": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Numbers and durations only",
+                              "title": "Integer"
+                            },
+                            "interval": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "step",
+                                    "minute",
+                                    "hour",
+                                    "day",
+                                    "week",
+                                    "month",
+                                    "quarter",
+                                    "year"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Interval"
+                            },
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "text",
+                                    "number",
+                                    "date"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Item type, required for list fields",
+                              "title": "Items"
+                            },
+                            "max": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Estimate and forecast upper bound",
+                              "title": "Max"
+                            },
+                            "min": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Estimate and forecast lower bound",
+                              "title": "Min"
+                            },
+                            "null_threshold": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Probability of null above which the value is null",
+                              "title": "Null Threshold"
+                            },
+                            "scale": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "linear",
+                                    "log"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Scale"
+                            },
+                            "step": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Estimate grid step, or month or year",
+                              "title": "Step"
+                            },
+                            "type": {
+                              "description": "The answer type for this field",
+                              "enum": [
+                                "text",
+                                "number",
+                                "date",
+                                "time",
+                                "datetime",
+                                "duration",
+                                "list",
+                                "estimate",
+                                "forecast"
+                              ],
+                              "title": "Type",
+                              "type": "string"
+                            },
+                            "unit": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Unit label. For durations, seconds through years",
+                              "title": "Unit"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "title": "ExtractionField",
+                          "type": "object"
+                        }
+                      },
+                      "title": "Fields",
+                      "type": "object"
+                    },
+                    "images": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "pattern": "^[Dd][Aa][Tt][Aa]:",
+                                "type": "string"
+                              },
+                              {
+                                "additionalProperties": true,
+                                "properties": {
+                                  "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "title": "Base64",
+                                    "type": "string"
+                                  },
+                                  "content_type": {
+                                    "description": "The image media type, such as image/png",
+                                    "title": "Content Type",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "content_type",
+                                  "base64"
+                                ],
+                                "title": "ExtractionBase64Image",
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "maxItems": 4,
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Up to 4 images as data URLs or content_type plus base64, no remote URLs",
+                      "title": "Images"
+                    },
+                    "model": {
+                      "description": "An extraction model from the proxy model_list",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "options": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "properties": {
+                            "include_quantiles": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Add 99 percentiles to estimates",
+                              "title": "Include Quantiles"
+                            },
+                            "return_state_text": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Return the text that spans index into",
+                              "title": "Return State Text"
+                            }
+                          },
+                          "title": "ExtractionOptions",
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reference_date": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "ISO date that anchors dates written without a year",
+                      "title": "Reference Date"
+                    },
+                    "state": {
+                      "default": "",
+                      "description": "The text to read. Must be non-empty unless images are sent. Text answers are spans of it",
+                      "title": "State",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fields",
+                    "model"
+                  ],
+                  "title": "ExtractionRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ExtractionResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Extract typed fields from a state",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
       "/v1/systemone": {
         "post": {
-          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge a `state` against one or more named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "systemone_v1_systemone_post",
           "requestBody": {
             "content": {
@@ -12183,7 +13758,6 @@
                         ]
                       },
                       "description": "Named noul, choice and score questions. Each key becomes a key in the answers",
-                      "maxProperties": 128,
                       "minProperties": 1,
                       "propertyNames": {
                         "minLength": 1
@@ -13802,7 +15376,7 @@
           ]
         },
         "post": {
-          "description": "Create a named custom agent on the Gemini side.\n\nExample:\n```bash\ncurl -X POST \"http://localhost:4000/v1beta/agents\" \\\n    -H \"Authorization: Bearer sk-...\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"name\": \"my-custom-slides-agent\",\n        \"base_agent\": \"waverunner\",\n        \"instructions\": \"You are a helpful assistant that creates slides.\",\n        \"base_environment\": {\n            \"type\": \"remote\",\n            \"sources\": [\n                {\"type\": \"gcs\", \"source\": \"gs://eap-templates/slides-skill\",\n                 \"target\": \"/.agents/skills/slides-skill\"}\n            ]\n        }\n    }'\n```",
+          "description": "Create a named custom agent on the Gemini side.\n\nExample:\n```bash\ncurl -X POST \"http://localhost:4000/v1beta/agents\" \\\n    -H \"Authorization: Bearer sk-...\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"id\": \"my-custom-slides-agent\",\n        \"base_agent\": \"antigravity-preview-09-2026\",\n        \"system_instruction\": \"You are a helpful assistant that creates slides.\",\n        \"agent_config\": {\"type\": \"antigravity\", \"model\": \"gemini-3.8-flash\"},\n        \"base_environment\": {\n            \"type\": \"remote\",\n            \"sources\": [\n                {\"type\": \"gcs\", \"source\": \"gs://eap-templates/slides-skill\",\n                 \"target\": \"/.agents/skills/slides-skill\"}\n            ]\n        }\n    }'\n```",
           "operationId": "create_gemini_agent_v1beta_agents_post",
           "responses": {
             "200": {
@@ -14028,6 +15602,10 @@
                 }
               ],
               "title": "Metadata"
+            },
+            "response_format": {
+              "$ref": "#/components/schemas/GuardrailResponseFormat",
+              "default": "standard"
             },
             "text": {
               "title": "Text",
@@ -14906,6 +16484,14 @@
           "title": "BedrockChecksSensitiveInformationModel",
           "type": "object"
         },
+        "BedrockGuardrailOutputScope": {
+          "enum": [
+            "INTERVENTIONS",
+            "FULL"
+          ],
+          "title": "BedrockGuardrailOutputScope",
+          "type": "string"
+        },
         "BlockedWord": {
           "description": "Represents a blocked word with its action and optional description",
           "properties": {
@@ -15449,6 +17035,14 @@
           "title": "GuardrailInfoResponse",
           "type": "object"
         },
+        "GuardrailResponseFormat": {
+          "enum": [
+            "standard",
+            "native"
+          ],
+          "title": "GuardrailResponseFormat",
+          "type": "string"
+        },
         "GuardrailSubmissionItem": {
           "properties": {
             "created_at": {
@@ -15701,6 +17295,7 @@
           "title": "HTTPValidationError",
           "type": "object"
         },
+        "JsonValue": {},
         "LakeraCategoryThresholds": {
           "additionalProperties": true,
           "properties": {
@@ -16627,6 +18222,18 @@
               "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
+            "file_checkpoint_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "File-checkpoint ID for the Ovalix Tracker service (falls back to pre/post).",
+              "title": "File Checkpoint Id"
+            },
             "file_guardrail_timeout": {
               "anyOf": [
                 {
@@ -17044,6 +18651,7 @@
                 {
                   "enum": [
                     "block",
+                    "mask",
                     "monitor",
                     "inject_system_message"
                   ],
@@ -17054,7 +18662,7 @@
                 }
               ],
               "default": "block",
-              "description": "Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)",
+              "description": "Action to take when content is flagged: 'block' (raise exception), 'mask' (mask PII-only detections and allow, block anything else), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)",
               "title": "On Flagged"
             },
             "on_flagged_action": {
@@ -17127,6 +18735,17 @@
                 }
               ],
               "description": "Optional parameters for the guardrail"
+            },
+            "outputScope": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/BedrockGuardrailOutputScope"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ApplyGuardrail response scope. FULL includes detected and non-detected findings. Omit to retain Bedrock's default of returning detected findings only."
             },
             "output_parse_pii": {
               "anyOf": [
@@ -19010,7 +20629,24 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                      },
+                      {
+                        "additionalProperties": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "items": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "array"
+                      }
+                    ],
+                    "title": "Response Apply Guardrail Apply Guardrail Post"
                   }
                 }
               },
@@ -19102,7 +20738,24 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                      },
+                      {
+                        "additionalProperties": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "items": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "array"
+                      }
+                    ],
+                    "title": "Response Apply Guardrail Guardrails Apply Guardrail Post"
                   }
                 }
               },
@@ -21823,6 +23476,25 @@
           "title": "Body_image_edit_api_openai_deployments__model__images_edits_post",
           "type": "object"
         },
+        "CacheWriteTokensDetails": {
+          "additionalProperties": true,
+          "properties": {
+            "ttl_12h_tokens": {
+              "title": "Ttl 12H Tokens",
+              "type": "integer"
+            },
+            "ttl_30m_tokens": {
+              "title": "Ttl 30M Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "ttl_30m_tokens",
+            "ttl_12h_tokens"
+          ],
+          "title": "CacheWriteTokensDetails",
+          "type": "object"
+        },
         "CachedTokensDetails": {
           "properties": {
             "audio_tokens": {
@@ -21860,6 +23532,39 @@
             }
           },
           "title": "CachedTokensDetails",
+          "type": "object"
+        },
+        "ChoiceAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "choice": {
+              "title": "Choice",
+              "type": "string"
+            },
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "probabilities": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Probabilities",
+              "type": "object"
+            },
+            "type": {
+              "const": "choice",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "choice",
+            "confidence",
+            "probabilities"
+          ],
+          "title": "ChoiceAnswer",
           "type": "object"
         },
         "Click": {
@@ -22626,6 +24331,112 @@
           "title": "ErrorResponse",
           "type": "object"
         },
+        "EuJevDecisionResponse": {
+          "properties": {
+            "answers": {
+              "additionalProperties": {
+                "discriminator": {
+                  "mapping": {
+                    "choice": "#/components/schemas/ChoiceAnswer",
+                    "noul": "#/components/schemas/NoulAnswer",
+                    "score": "#/components/schemas/ScoreAnswer"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ChoiceAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/NoulAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ScoreAnswer"
+                  }
+                ]
+              },
+              "description": "One answer per question, under the same names",
+              "title": "Answers",
+              "type": "object"
+            },
+            "meta": {
+              "$ref": "#/components/schemas/EuJevMeta"
+            },
+            "model": {
+              "description": "The release that answered, such as eu-jeff-1.0.0",
+              "title": "Model",
+              "type": "string"
+            },
+            "usage": {
+              "$ref": "#/components/schemas/EuJevUsage"
+            }
+          },
+          "required": [
+            "model",
+            "answers",
+            "usage",
+            "meta"
+          ],
+          "title": "EuJevDecisionResponse",
+          "type": "object"
+        },
+        "EuJevMeta": {
+          "properties": {
+            "cost_eur": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The exact charge in euros, on authenticated requests",
+              "title": "Cost Eur"
+            },
+            "latency_ms": {
+              "description": "Server-side time for token quoting, credit reservation and inference",
+              "title": "Latency Ms",
+              "type": "integer"
+            },
+            "mode": {
+              "const": "live",
+              "title": "Mode",
+              "type": "string"
+            },
+            "request_id": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "request_id",
+            "mode",
+            "latency_ms"
+          ],
+          "title": "EuJevMeta",
+          "type": "object"
+        },
+        "EuJevUsage": {
+          "properties": {
+            "input_tokens": {
+              "minimum": 0.0,
+              "title": "Input Tokens",
+              "type": "integer"
+            },
+            "output_tokens": {
+              "minimum": 0.0,
+              "title": "Output Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "input_tokens",
+            "output_tokens"
+          ],
+          "title": "EuJevUsage",
+          "type": "object"
+        },
         "FileSearchTool": {
           "additionalProperties": true,
           "description": "A tool that searches for relevant content from uploaded files.\n\nLearn more about the [file search tool](https://platform.openai.com/docs/guides/tools-file-search).",
@@ -22812,7 +24623,14 @@
           "properties": {
             "content": {
               "items": {
-                "$ref": "#/components/schemas/OutputText"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/OutputText"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ResponseOutputRefusal"
+                  }
+                ]
               },
               "title": "Content",
               "type": "array"
@@ -23316,6 +25134,27 @@
                 }
               ],
               "title": "Audio Tokens"
+            },
+            "cache_write_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cache Write Tokens"
+            },
+            "cache_write_tokens_details": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CacheWriteTokensDetails"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "cached_tokens": {
               "default": 0,
@@ -24263,6 +26102,26 @@
             "type"
           ],
           "title": "NamespaceTool",
+          "type": "object"
+        },
+        "NoulAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "noul": {
+              "title": "Noul",
+              "type": "number"
+            },
+            "type": {
+              "const": "noul",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "noul"
+          ],
+          "title": "NoulAnswer",
           "type": "object"
         },
         "OperationCreateFile": {
@@ -27203,6 +29062,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/OutputToolSearchCall"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ResponseCompactionItem"
                       }
                     ]
                   },
@@ -27532,6 +29394,59 @@
             }
           },
           "title": "Result",
+          "type": "object"
+        },
+        "ScoreAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "legend": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "items": {},
+                    "type": "array"
+                  }
+                ]
+              },
+              "title": "Legend",
+              "type": "object"
+            },
+            "probabilities": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Probabilities",
+              "type": "object"
+            },
+            "score": {
+              "title": "Score",
+              "type": "number"
+            },
+            "type": {
+              "const": "score",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "score",
+            "confidence",
+            "legend",
+            "probabilities"
+          ],
+          "title": "ScoreAnswer",
           "type": "object"
         },
         "Screenshot": {
@@ -30426,6 +32341,315 @@
           ]
         }
       },
+      "/eu_jev/v1/systemone": {
+        "post": {
+          "description": "Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.\n\n`POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)\nand returns one answer per question name, with spend booked from the reported `usage`. `custom_body` and\n`stream` are rejected with a 400. A pass-through endpoint configured at this path keeps serving it.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
+          "operationId": "eu_jev_proxy_route_eu_jev_v1_systemone_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "model": "eu-jeff-latest",
+                  "questions": {
+                    "frustration": {
+                      "criteria": [
+                        "calm",
+                        "mildly annoyed",
+                        "angry"
+                      ],
+                      "instructions": "How frustrated is the customer?",
+                      "type": "score"
+                    },
+                    "is_refund_request": {
+                      "instructions": "Is the customer asking for a refund?",
+                      "type": "noul"
+                    },
+                    "team": {
+                      "criteria": {
+                        "billing": "Payments, invoices, and refunds",
+                        "support": "Technical issues and bugs"
+                      },
+                      "instructions": "Which team should handle this?",
+                      "type": "choice"
+                    }
+                  },
+                  "state": "I was charged twice. Can I get a refund?"
+                },
+                "schema": {
+                  "properties": {
+                    "model": {
+                      "default": "eu-jeff-latest",
+                      "description": "eu-jeff-latest follows the current release, eu-jeff-1.0.0 pins it",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "questions": {
+                      "additionalProperties": {
+                        "discriminator": {
+                          "propertyName": "type"
+                        },
+                        "oneOf": [
+                          {
+                            "properties": {
+                              "criteria": {
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference"
+                                },
+                                "description": "Two to 64 options, option name to description. A null description uses the option name",
+                                "maxProperties": 64,
+                                "minProperties": 2,
+                                "title": "Criteria",
+                                "type": "object"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "choice",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "criteria"
+                            ],
+                            "title": "EuJevChoiceQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "criteria": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "additionalProperties": true,
+                                          "type": "object"
+                                        },
+                                        {
+                                          "items": {},
+                                          "type": "array"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "propertyNames": {
+                                      "enum": [
+                                        "true",
+                                        "false"
+                                      ]
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Optional descriptions of what true and false mean",
+                                "title": "Criteria"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "noul",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "EuJevNoulQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "criteria": {
+                                "description": "Two to 10 level descriptions, ordered from low to high",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference"
+                                },
+                                "maxItems": 10,
+                                "minItems": 2,
+                                "title": "Criteria",
+                                "type": "array"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "score",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "criteria"
+                            ],
+                            "title": "EuJevScoreQuestion",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "description": "One to eight questions, keyed by names of up to 80 characters",
+                      "maxProperties": 8,
+                      "minProperties": 1,
+                      "propertyNames": {
+                        "maxLength": 80,
+                        "minLength": 1
+                      },
+                      "title": "Questions",
+                      "type": "object"
+                    },
+                    "state": {
+                      "anyOf": [
+                        {
+                          "maxLength": 100000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        {
+                          "items": {},
+                          "type": "array"
+                        }
+                      ],
+                      "description": "The content to evaluate, a string of up to 100,000 characters or a JSON object or array",
+                      "title": "State"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "questions"
+                  ],
+                  "title": "EuJevDecisionRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/EuJevDecisionResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Eu Jev Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
       "/fal_ai/{endpoint}": {
         "delete": {
           "operationId": "fal_ai_proxy_route_fal_ai__endpoint__delete",
@@ -32308,7 +34532,7 @@
           ]
         },
         "get": {
-          "description": "Get a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Returns cumulative cached content from background responses\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get\n\n```bash\n# Get polling response\ncurl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Get provider response\ncurl -X GET http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
+          "description": "Get a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Returns cumulative cached content from background responses\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get\n\n```bash\n# Get polling response\ncurl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Get provider response\ncurl -X GET http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Resume a background response's event stream after sequence number 7\ncurl -N \"http://localhost:4000/v1/responses/resp_abc123?stream=true&starting_after=7\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "get_response_openai_v1_responses__response_id__get",
           "parameters": [
             {
@@ -32319,6 +34543,46 @@
                 "title": "Response Id",
                 "type": "string"
               }
+            },
+            {
+              "description": "Replay the response's events as server-sent events (OpenAI, Azure, and Azure AI Foundry)",
+              "in": "query",
+              "name": "stream",
+              "required": false,
+              "schema": {
+                "type": "boolean"
+              }
+            },
+            {
+              "description": "With stream=true, replay only the events after this sequence number",
+              "in": "query",
+              "name": "starting_after",
+              "required": false,
+              "schema": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            {
+              "description": "Additional output data to include, forwarded to the provider",
+              "in": "query",
+              "name": "include",
+              "required": false,
+              "schema": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            {
+              "description": "With stream=true, whether delta events carry obfuscation padding",
+              "in": "query",
+              "name": "include_obfuscation",
+              "required": false,
+              "schema": {
+                "type": "boolean"
+              }
             }
           ],
           "responses": {
@@ -32327,6 +34591,12 @@
                 "application/json": {
                   "schema": {
                     "$ref": "#/components/schemas/ResponsesAPIResponse"
+                  }
+                },
+                "text/event-stream": {
+                  "schema": {
+                    "description": "Server sent events when stream=true",
+                    "type": "string"
                   }
                 }
               },
@@ -46378,6 +48648,12 @@
                       },
                       {
                         "$ref": "#/components/schemas/ChatCompletionImageObject"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ChatCompletionAudioObject"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ChatCompletionFileObject"
                       }
                     ]
                   },
@@ -46514,8 +48790,11 @@
         },
         "ChatCompletionAudioObject": {
           "properties": {
+            "cache_control": {
+              "$ref": "#/components/schemas/ChatCompletionCachedContent"
+            },
             "input_audio": {
-              "$ref": "#/components/schemas/InputAudio"
+              "$ref": "#/components/schemas/ChatCompletionInputAudio"
             },
             "type": {
               "const": "input_audio",
@@ -46524,8 +48803,8 @@
             }
           },
           "required": [
-            "input_audio",
-            "type"
+            "type",
+            "input_audio"
           ],
           "title": "ChatCompletionAudioObject",
           "type": "object"
@@ -46762,12 +49041,35 @@
             "url": {
               "title": "Url",
               "type": "string"
+            },
+            "video_metadata": {
+              "additionalProperties": true,
+              "title": "Video Metadata",
+              "type": "object"
             }
           },
           "required": [
             "url"
           ],
           "title": "ChatCompletionImageUrlObject",
+          "type": "object"
+        },
+        "ChatCompletionInputAudio": {
+          "properties": {
+            "data": {
+              "title": "Data",
+              "type": "string"
+            },
+            "format": {
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          "required": [
+            "data",
+            "format"
+          ],
+          "title": "ChatCompletionInputAudio",
           "type": "object"
         },
         "ChatCompletionMessageToolCall": {
@@ -47055,6 +49357,12 @@
                       },
                       {
                         "$ref": "#/components/schemas/ChatCompletionImageObject"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ChatCompletionAudioObject"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ChatCompletionFileObject"
                       },
                       {
                         "$ref": "#/components/schemas/ChatCompletionToolReferenceObject"
@@ -47493,28 +49801,6 @@
             }
           },
           "title": "HTTPValidationError",
-          "type": "object"
-        },
-        "InputAudio": {
-          "properties": {
-            "data": {
-              "title": "Data",
-              "type": "string"
-            },
-            "format": {
-              "enum": [
-                "wav",
-                "mp3"
-              ],
-              "title": "Format",
-              "type": "string"
-            }
-          },
-          "required": [
-            "data",
-            "format"
-          ],
-          "title": "InputAudio",
           "type": "object"
         },
         "PolicyGuardrailsResponse": {
@@ -56091,7 +58377,7 @@
     "paths": {
       "/toolset/{toolset_name}/mcp": {
         "delete": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_delete",
           "parameters": [
             {
@@ -56130,7 +58416,7 @@
           ]
         },
         "get": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_get",
           "parameters": [
             {
@@ -56169,7 +58455,7 @@
           ]
         },
         "head": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_head",
           "parameters": [
             {
@@ -56208,7 +58494,7 @@
           ]
         },
         "options": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_options",
           "parameters": [
             {
@@ -56247,7 +58533,7 @@
           ]
         },
         "patch": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_patch",
           "parameters": [
             {
@@ -56286,7 +58572,7 @@
           ]
         },
         "post": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_post",
           "parameters": [
             {
@@ -56325,7 +58611,7 @@
           ]
         },
         "put": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_put",
           "parameters": [
             {
@@ -56855,163 +59141,6 @@
           "summary": "Delete Tool Policy Override",
           "tags": [
             "tools"
-          ]
-        }
-      }
-    }
-  },
-  "usage_ai": {
-    "components": {
-      "schemas": {
-        "ChatMessage": {
-          "properties": {
-            "content": {
-              "title": "Content",
-              "type": "string"
-            },
-            "role": {
-              "enum": [
-                "user",
-                "assistant"
-              ],
-              "title": "Role",
-              "type": "string"
-            }
-          },
-          "required": [
-            "role",
-            "content"
-          ],
-          "title": "ChatMessage",
-          "type": "object"
-        },
-        "HTTPValidationError": {
-          "properties": {
-            "detail": {
-              "items": {
-                "$ref": "#/components/schemas/ValidationError"
-              },
-              "title": "Detail",
-              "type": "array"
-            }
-          },
-          "title": "HTTPValidationError",
-          "type": "object"
-        },
-        "UsageAIChatRequest": {
-          "properties": {
-            "messages": {
-              "description": "Chat messages (user/assistant history)",
-              "items": {
-                "$ref": "#/components/schemas/ChatMessage"
-              },
-              "title": "Messages",
-              "type": "array"
-            },
-            "model": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Model to use for AI chat",
-              "title": "Model"
-            }
-          },
-          "required": [
-            "messages"
-          ],
-          "title": "UsageAIChatRequest",
-          "type": "object"
-        },
-        "ValidationError": {
-          "properties": {
-            "ctx": {
-              "title": "Context",
-              "type": "object"
-            },
-            "input": {
-              "title": "Input"
-            },
-            "loc": {
-              "items": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "integer"
-                  }
-                ]
-              },
-              "title": "Location",
-              "type": "array"
-            },
-            "msg": {
-              "title": "Message",
-              "type": "string"
-            },
-            "type": {
-              "title": "Error Type",
-              "type": "string"
-            }
-          },
-          "required": [
-            "loc",
-            "msg",
-            "type"
-          ],
-          "title": "ValidationError",
-          "type": "object"
-        }
-      }
-    },
-    "paths": {
-      "/usage/ai/chat": {
-        "post": {
-          "description": "AI chat about usage data. Streams SSE events with the AI response.\nThe AI agent has access to tools that query aggregated daily activity data.",
-          "operationId": "usage_ai_chat_usage_ai_chat_post",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UsageAIChatRequest"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Usage Ai Chat",
-          "tags": [
-            "usage_ai"
           ]
         }
       }

@@ -4,12 +4,11 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 TokenCountSource: TypeAlias = Literal["provider", "token_count_model", "local_estimate"]
 TokenCountTokenizer: TypeAlias = Literal["kimi_k3"]
-TokenCountEndpoint: TypeAlias = Literal["bedrock", "bedrock_mantle"]
-TokenCountProvider: TypeAlias = TokenCountEndpoint | Literal["local"]
+TokenCountProvider: TypeAlias = Literal["bedrock", "bedrock_mantle"]
 
 
 class TokenCountModelInfo(TypedDict):
-    model: ReadOnly[NotRequired[str]]
+    model: ReadOnly[str]
     region: ReadOnly[NotRequired[str]]
     litellm_provider: ReadOnly[NotRequired[TokenCountProvider]]
 

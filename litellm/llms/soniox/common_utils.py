@@ -3,7 +3,7 @@ Shared utilities for the Soniox provider (https://soniox.com).
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Final, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SubtitleToken,
@@ -16,6 +16,8 @@ SonioxToken: TypeAlias = Mapping[str, object]
 
 # Soniox API base URL.
 SONIOX_API_BASE: Final[str] = "https://api.soniox.com"
+
+SONIOX_REALTIME_MODEL_PREFIX: Final = "stt-rt-"
 
 # Default polling interval in seconds when waiting for an async transcription
 # to finish. Mirrors the Soniox SDK default.
@@ -52,6 +54,10 @@ SONIOX_SECRET_FIELDS: Final[list[str]] = ["webhook_auth_header_value"]
 
 class SonioxException(BaseLLMException):
     """Provider-specific exception class for Soniox."""
+
+
+def soniox_health_check_mode(model: str) -> Literal["realtime"] | None:
+    return "realtime" if model.startswith(SONIOX_REALTIME_MODEL_PREFIX) else None
 
 
 def get_soniox_api_key(api_key: str | None = None) -> str | None:

@@ -1,4 +1,5 @@
 import anthropicLogo from "../../../../../../../public/assets/logos/anthropic.svg";
+import claudeLogo from "../../../../../../../public/assets/logos/claude.svg";
 import cursorLogo from "../../../../../../../public/assets/logos/cursor.svg";
 import copilotLogo from "../../../../../../../public/assets/logos/github_copilot.svg";
 import githubLogo from "../../../../../../../public/assets/logos/github.svg";
@@ -17,6 +18,17 @@ import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 export type TagSummaryRow = components["schemas"]["TagSummaryMetrics"];
 
 export type AgentKind = "agent" | "sdk";
+
+export enum UsageClient {
+  ClaudeDesktop = "claude-desktop",
+  ClaudeCode = "claude-code",
+}
+
+export const parseUsageClient = (value: string | null): UsageClient | null => {
+  if (value === UsageClient.ClaudeDesktop) return UsageClient.ClaudeDesktop;
+  if (value === UsageClient.ClaudeCode) return UsageClient.ClaudeCode;
+  return null;
+};
 
 export interface AgentRow {
   id: string;
@@ -45,17 +57,32 @@ interface AgentFamily {
 /**
  * Most specific first. Coding agents beat the SDK they are built on, so `codex_sdk_ts` lands on
  * Codex and only a bare `OpenAI/...` client falls through to the OpenAI SDK. Codex wears OpenAI's
- * mark as in the Lens trace view; Claude Code gets its own spark tile rather than Anthropic's wordmark.
+ * mark as in the Lens trace view; Claude clients use the bundled Claude brand mark.
  */
 const FAMILIES: readonly AgentFamily[] = [
   {
-    id: "claude-code",
+    id: UsageClient.ClaudeDesktop,
+    label: "Claude Desktop",
+    description: "Anthropic's desktop assistant",
+    kind: "agent",
+    logo: claudeLogo.src,
+    match: /^claude[-_ ]desktop\b|^claude-cli\/[^\s]+\s+\((?:[^)]*,\s*)?claude-desktop-3p\s*[,)]/i,
+  },
+  {
+    id: UsageClient.ClaudeCode,
     label: "Claude Code",
     description: "Anthropic's coding agent",
     kind: "agent",
-    // No Claude asset ships in the repo, so TopAgents draws the spark tile itself.
-    logo: null,
-    match: /^(claude-cli|claude-code|claude_code|claude-user)\b/i,
+    logo: claudeLogo.src,
+    match: /^(claude-code|claude_code|claude-user)\b|^claude-cli\/[^\s]+\s+\((?:[^)]*,\s*)?cli\s*[,)]/i,
+  },
+  {
+    id: "claude-unspecified",
+    label: "Claude (unspecified)",
+    description: "Client not identified",
+    kind: "agent",
+    logo: claudeLogo.src,
+    match: /^claude-cli\b/i,
   },
   {
     id: "codex",
@@ -210,6 +237,9 @@ export const userAgentProduct = (tag: string): string => {
 const familyFor = (product: string): AgentFamily | null =>
   FAMILIES.find((family) => family.match.test(product)) ?? null;
 
+export const usageClientFromUserAgent = (userAgent: string): UsageClient | null =>
+  parseUsageClient(familyFor(userAgent.trim().replace(USER_AGENT_PREFIX, ""))?.id ?? null);
+
 const isBareTag = (row: TagSummaryRow, product: string) =>
   row.tag.trim().replace(USER_AGENT_PREFIX, "").trim() === product;
 
@@ -246,8 +276,43 @@ const mergeAgents = (a: AgentRow, b: AgentRow): AgentRow => ({
   tokens: a.tokens + b.tokens,
   requests: a.requests + b.requests,
   users: Math.max(a.users, b.users),
-  tags: [...a.tags, ...b.tags],
+  tags: a.tags.length && b.tags.length ? [...a.tags, ...b.tags] : [],
 });
+
+const agentsForProduct = (product: string, rows: readonly TagSummaryRow[]): AgentRow[] => {
+  if (product.toLowerCase() !== "claude-cli") return [agentFor(product, contributingRows(product, rows))];
+  const bare = rows.find((row) => isBareTag(row, product));
+  const versions = rows.filter((row) => !isBareTag(row, product));
+  const versionAgents = versions.map((row) => agentFor(row.tag.trim().replace(USER_AGENT_PREFIX, ""), [row]));
+  if (!bare) return versionAgents;
+  const rollup = agentFor(product, [bare]);
+  if (!versions.length) return [rollup];
+  const emptyTotals = { spend: 0, tokens: 0, requests: 0, users: 0 };
+  const totals = versionAgents.reduce(
+    (sum, agent) => ({
+      spend: sum.spend + agent.spend,
+      tokens: sum.tokens + agent.tokens,
+      requests: sum.requests + agent.requests,
+      users: sum.users + agent.users,
+    }),
+    emptyTotals,
+  );
+  if (totals.spend > rollup.spend + 1e-9 || totals.tokens > rollup.tokens || totals.requests > rollup.requests) {
+    return [rollup];
+  }
+  const residual = {
+    ...rollup,
+    spend: Math.max(0, rollup.spend - totals.spend),
+    tokens: rollup.tokens - totals.tokens,
+    requests: rollup.requests - totals.requests,
+    users: Math.max(0, rollup.users - totals.users),
+    // A bare tag also selects the identified clients, so it cannot filter the residual alone.
+    tags: [],
+  };
+  return residual.spend > 1e-9 || residual.tokens > 0 || residual.requests > 0
+    ? [...versionAgents, residual]
+    : versionAgents;
+};
 
 /**
  * One row per agent from `/tag/summary`. Products are keyed case-sensitively: prod reports `python`
@@ -256,13 +321,10 @@ const mergeAgents = (a: AgentRow, b: AgentRow): AgentRow => ({
 export const topAgents = (rows: readonly TagSummaryRow[]): AgentRow[] => {
   const userAgentRows = rows.filter((row) => isUserAgentTag(row.tag) && userAgentProduct(row.tag));
   const products = [...new Set(userAgentRows.map((row) => userAgentProduct(row.tag)))];
-  const perProduct = products.map((product) =>
-    agentFor(
+  const perProduct = products.flatMap((product) =>
+    agentsForProduct(
       product,
-      contributingRows(
-        product,
-        userAgentRows.filter((row) => userAgentProduct(row.tag) === product),
-      ),
+      userAgentRows.filter((row) => userAgentProduct(row.tag) === product),
     ),
   );
   const byAgent = perProduct.reduce<ReadonlyMap<string, AgentRow>>((acc, agent) => {

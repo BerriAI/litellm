@@ -7,14 +7,16 @@ import hashlib
 import json
 import statistics
 from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
-from itertools import chain
+from itertools import chain, groupby
+from types import MappingProxyType
 from typing import Final, Literal
 
 from e2e_http import NoBody, get_external, post_external, unwrap
 from memory_readings import RssCapture, RssReading, WorkerKey
 from pydantic import BaseModel
+from typing_extensions import ReadOnly, TypedDict
 
 from setup.datastore import (
     DbCounters,
@@ -27,7 +29,9 @@ from setup.datastore import (
     statement_deltas,
 )
 from setup.mocks.reply_common import Provider
-from setup.performance_test_case import Limit, Metric, MockLatency, PerformanceTestCase
+from setup.performance_test_case import Limit, Metric, MockLatency, PerformanceTestCase, Ramp
+from setup.ramp import StepReading, render_steps, sustained_rps
+from setup.series import Series
 from setup.telemetry import GatewayTelemetry
 from setup.wire import WireRecord
 
@@ -122,6 +126,10 @@ class Observation:
     telemetry_before: GatewayTelemetry | None = None
     telemetry_after: GatewayTelemetry | None = None
     peak_connections: int | None = None
+    ramp: Ramp | None = None
+    cpu_series: Series[float] | None = None
+    connection_series: Series[int] | None = None
+    telemetry_series: Series[GatewayTelemetry] | None = None
 
     @property
     def telemetry(self) -> GatewayTelemetry | None:
@@ -238,6 +246,67 @@ class Observation:
         pre: Final = Counter(call.marker for call in self.guardrail_calls if call.input_type == "request")
         post: Final = Counter(call.marker for call in self.guardrail_calls if call.input_type == "response")
         return sum(1 for record in self.served if pre[record.marker] != 1 or post[record.marker] != 1)
+
+    def steps(self) -> tuple[StepReading, ...]:
+        """One reading per step of a ramped run: the gateway's added latency over the step's requests, the rate
+        at which requests completed inside the step's window, the step's unexpected statuses, and what the pod
+        was doing in that window (CPU per completed request, Redis latency, Postgres connections)."""
+        ramp: Final = self.ramp
+        if ramp is None or not self.records:
+            return ()
+        started: Final = min(record.started_at for record in self.records)
+        added: Final = _by_step(ramp, self.latency_pairs("gateway_added_seconds"))
+        first_token: Final = _by_step(ramp, self.latency_pairs("time_to_first_token_seconds"))
+        completed: Final = Counter(
+            int((record.started_at + record.total_s - started) // ramp.step_seconds) for record in self.records
+        )
+        unexpected: Final = Counter(
+            ramp.step_of(record.seq) for record in self.records if not record.blocked and record.status != 200
+        )
+        return tuple(
+            StepReading(
+                rps=rate,
+                planned=count,
+                completed_rps=completed[index] / ramp.step_seconds,
+                gateway_added_p99=percentile(added.get(index, ()), 99),
+                unexpected=unexpected[index],
+                held_p99_seconds=ramp.held_p99_seconds,
+                gateway_added_p50=percentile(added.get(index, ()), 50),
+                time_to_first_token_p99=percentile(first_token.get(index, ()), 99),
+                **self._window_readings(started + index * ramp.step_seconds, ramp.step_seconds, completed[index]),
+            )
+            for index, (rate, count) in enumerate(zip(ramp.rates, ramp.counts, strict=True))
+        )
+
+    def _window_readings(self, start: float, seconds: float, completed: int) -> WindowReadings:
+        end: Final = start + seconds
+        cpu: Final = None if self.cpu_series is None else sum(self.cpu_series.between(start, end))
+        conns: Final = None if self.connection_series is None else self.connection_series.between(start, end)
+        before: Final = None if self.telemetry_series is None else self.telemetry_series.last_before(start)
+        after: Final = None if self.telemetry_series is None else self.telemetry_series.last_before(end)
+        return WindowReadings(
+            cpu_seconds_per_request=None if cpu is None or completed == 0 else cpu / completed,
+            redis_latency_mean_seconds=None
+            if before is None or after is None
+            else after.minus(before).redis_latency.mean,
+            postgres_peak_connections=max(conns, default=None) if conns else None,
+        )
+
+
+class WindowReadings(TypedDict):
+    cpu_seconds_per_request: ReadOnly[float | None]
+    redis_latency_mean_seconds: ReadOnly[float | None]
+    postgres_peak_connections: ReadOnly[int | None]
+
+
+def _by_step(ramp: Ramp, pairs: Iterable[tuple[WireRecord, float]]) -> Mapping[int, tuple[float, ...]]:
+    ordered: Final = sorted(pairs, key=lambda pair: pair[0].seq)
+    return MappingProxyType(
+        {
+            step: tuple(value for _, value in group)
+            for step, group in groupby(ordered, key=lambda pair: ramp.step_of(pair[0].seq))
+        }
+    )
 
 
 def _text_sha1(text: str, *, intervened: bool) -> str:
@@ -415,6 +484,8 @@ def observe(
     if metric == "cpu_seconds_per_request":
         cpu: Final = observation.gateway_cpu_seconds
         return None if cpu is None or not observation.records else cpu / len(observation.records)
+    if metric == "sustained_rps":
+        return None if observation.ramp is None else sustained_rps(observation.steps())
     return worst_worker_growth_mb(observation.rss_before, observation.rss_after)
 
 
@@ -424,6 +495,7 @@ class Row:
     percentile: int | None
     observed: float | None
     limit: float | None
+    floor: float | None = None
     detail: str = ""
     breakdown: tuple[Contributor, ...] = ()
 
@@ -437,11 +509,22 @@ class Row:
 
     @property
     def over(self) -> bool:
-        return self.limit is not None and self.observed is not None and self.observed > self.limit
+        """Past the limit: above a max, or below a floor."""
+        if self.observed is None:
+            return False
+        return (self.limit is not None and self.observed > self.limit) or (
+            self.floor is not None and self.observed < self.floor
+        )
 
     @property
     def missing(self) -> bool:
-        return self.limit is not None and self.observed is None
+        return (self.limit is not None or self.floor is not None) and self.observed is None
+
+    @property
+    def bound(self) -> str:
+        if self.limit is not None:
+            return f"{self.limit:.4f}"
+        return "" if self.floor is None else f">= {self.floor:.4f}"
 
 
 REPORTED: Final[tuple[tuple[Metric, int | None], ...]] = (
@@ -476,6 +559,8 @@ def evaluate(case: PerformanceTestCase, observation: Observation) -> tuple[list[
         (limit.metric, limit.percentile): limit for limit in case.limits
     }
     keys: list[tuple[Metric, int | None]] = list(REPORTED)
+    if observation.ramp is not None:
+        keys.append(("sustained_rps", None))
     keys.extend(key for key in limits if key not in keys)
     rows: list[Row] = []
     for metric, rank in keys:
@@ -486,18 +571,21 @@ def evaluate(case: PerformanceTestCase, observation: Observation) -> tuple[list[
                 percentile=rank,
                 observed=observe(metric, rank, observation, case.background_cap_exempt_tables),
                 limit=limit.max if limit else None,
+                floor=limit.min if limit else None,
                 detail=_detail(metric, observation, case.background_cap_exempt_tables),
                 breakdown=breakdown(metric, rank, observation, case.background_cap_exempt_tables),
             )
         )
-    exceeded: Final = [
-        f"{row.label}: observed {row.observed:.4f} > limit {row.limit:.4f}{f' ({row.detail})' if row.detail else ''}"
-        if row.over and row.observed is not None and row.limit is not None
-        else f"{row.label}: limit set but nothing observed"
-        for row in rows
-        if row.over or row.missing
-    ]
+    exceeded: Final = [_breach(row) for row in rows if row.over or row.missing]
     return rows, exceeded
+
+
+def _breach(row: Row) -> str:
+    if row.observed is None:
+        return f"{row.label}: limit set but nothing observed"
+    if row.floor is not None:
+        return f"{row.label}: observed {row.observed:.4f} < floor {row.floor:.4f}"
+    return f"{row.label}: observed {row.observed:.4f} > limit {row.bound}{f' ({row.detail})' if row.detail else ''}"
 
 
 def _detail(metric: Metric, observation: Observation, exempt_tables: frozenset[str]) -> str:
@@ -516,12 +604,13 @@ def _detail(metric: Metric, observation: Observation, exempt_tables: frozenset[s
 def _row_properties(row: Row) -> tuple[tuple[str, float | str], ...]:
     observed: Final = ((row.property_name, row.observed),) if row.observed is not None else ()
     limit: Final = ((f"{row.property_name}_limit", row.limit),) if row.limit is not None else ()
+    floor: Final = ((f"{row.property_name}_floor", row.floor),) if row.floor is not None else ()
     contributors: Final = (
         ((f"{row.property_name}_breakdown", json.dumps([asdict(item) for item in row.breakdown])),)
         if row.breakdown
         else ()
     )
-    return observed + limit + contributors
+    return observed + limit + floor + contributors
 
 
 def junit_properties(rows: Iterable[Row]) -> tuple[tuple[str, float | str], ...]:
@@ -546,9 +635,17 @@ def render(case: PerformanceTestCase, observation: Observation, rows: list[Row])
     ]
     for row in rows:
         observed = "n/a" if row.observed is None else f"{row.observed:.4f}"
-        limit = "" if row.limit is None else f"{row.limit:.4f}"
-        flag = "  OVER" if row.over else "  MISSING" if row.missing else ""
-        lines.append(f"  {row.label:32} {observed:>12} {limit:>12}{flag}")
+        flag = (
+            "  UNDER"
+            if row.over and row.floor is not None
+            else "  OVER"
+            if row.over
+            else "  MISSING"
+            if row.missing
+            else ""
+        )
+        lines.append(f"  {row.label:32} {observed:>12} {row.bound:>12}{flag}")
+    lines.extend(render_steps(observation.steps()))
     lines.extend(_diagnostics(observation))
     lines.extend(_datastore_lines(observation))
     for record in failures:
@@ -565,6 +662,7 @@ def _diagnostics(observation: Observation) -> list[str]:
     return [
         "  diagnostics (not limits):",
         f"    bodies off reply {observation.bodies_off_reply()}",
+        f"    mock routes {_mock_routes(observation)}",
         f"    guardrail calls per request {len(observation.guardrail_calls) / count:.3f}",
         f"    guardrail missed {observation.guardrail_missed() if observation.guardrail_calls else 'n/a'}",
         f"    retried share {len(observation.retried_markers) / count:.4f}",
@@ -573,6 +671,12 @@ def _diagnostics(observation: Observation) -> list[str]:
         f"    redis commands per request {_fmt(observation.per_request(_commands(observation.redis_before), _commands(observation.redis_after)))}",
         f"    redis connected clients {_clients(observation.redis_before)} -> {_clients(observation.redis_after)}",
     ]
+
+
+def _mock_routes(observation: Observation) -> str:
+    """Which provider route each request landed on, so a direct-vs-bridge case shows its split."""
+    counts: Final = Counter(f"{seen.provider}/{seen.route}" for seen in observation.mock_requests)
+    return ", ".join(f"{route} {count}" for route, count in sorted(counts.items())) or "n/a"
 
 
 def _datastore_lines(observation: Observation) -> list[str]:

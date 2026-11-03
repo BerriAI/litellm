@@ -22,6 +22,7 @@ import os
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
@@ -35,6 +36,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -117,6 +119,11 @@ class CiscoAIDefenseGuardrailAPIError(Exception):
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
     """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+
+def _streamed_choice_index(choice: object) -> int:
+    index: Final[object] = getattr(choice, "index", None)
+    return index if isinstance(index, int) else 0
 
 
 class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
@@ -584,29 +591,44 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     @classmethod
     def _extract_streaming_chunk_scan_text(cls, chunks: Sequence[object]) -> str:
+        streamed_choices: Final = tuple(
+            choice
+            for choice in chain.from_iterable(getattr(chunk, "choices", None) or () for chunk in chunks)
+            if getattr(choice, "delta", None) is not None
+        )
+        choice_indices: Final = sorted(frozenset(map(_streamed_choice_index, streamed_choices)))
+        choice_texts: Final = (
+            cls._extract_streamed_deltas_scan_text(
+                tuple(
+                    getattr(choice, "delta", None)
+                    for choice in streamed_choices
+                    if _streamed_choice_index(choice) == index
+                )
+            )
+            for index in choice_indices
+        )
+        return " ".join(text for text in choice_texts if text)
+
+    @classmethod
+    def _extract_streamed_deltas_scan_text(cls, deltas: Sequence[object]) -> str:
         original_text = ""
         argument_text = ""
-        for chunk in chunks:
-            choices = getattr(chunk, "choices", None) or []
-            for c in choices:
-                delta: object | None = getattr(c, "delta", None)
-                if delta is None:
-                    continue
-                text = getattr(delta, "content", None)
-                if isinstance(text, str):
-                    original_text += text
-                reasoning_text = " ".join(cls._extract_message_reasoning_parts(delta))
-                if reasoning_text:
-                    original_text += reasoning_text
-                for tc in getattr(delta, "tool_calls", None) or []:
-                    args = cls._extract_tool_call_arguments(tc)
-                    if args:
-                        argument_text += args
-                fc: object | None = getattr(delta, "function_call", None)
-                if fc is not None:
-                    args = cls._extract_function_call_arguments(fc)
-                    if args:
-                        argument_text += args
+        for delta in deltas:
+            text = getattr(delta, "content", None)
+            if isinstance(text, str):
+                original_text += text
+            reasoning_text = " ".join(cls._extract_message_reasoning_parts(delta))
+            if reasoning_text:
+                original_text += reasoning_text
+            for tc in getattr(delta, "tool_calls", None) or []:
+                args = cls._extract_tool_call_arguments(tc)
+                if args:
+                    argument_text += args
+            fc: object | None = getattr(delta, "function_call", None)
+            if fc is not None:
+                args = cls._extract_function_call_arguments(fc)
+                if args:
+                    argument_text += args
         return " ".join(part for part in (original_text, argument_text) if part)
 
     # ------------------------------------------------------------------
@@ -1743,7 +1765,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     @staticmethod
     def _extract_masked_entity_count(
-        rules: list[dict[str, Any]],
+        rules: Sequence[Mapping[str, object]],
     ) -> dict[str, int] | None:
         """Count entity-type detections per Cisco rule for the logging payload."""
         if not rules:
@@ -1752,8 +1774,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         for rule in rules:
             if not isinstance(rule, dict):
                 continue
-            entity_types = rule.get("entity_types") or []
-            for entity_type in entity_types:
+            for entity_type in iter_items(rule.get("entity_types") or ()):
                 if not isinstance(entity_type, str):
                     continue
                 counts[entity_type] = counts.get(entity_type, 0) + 1

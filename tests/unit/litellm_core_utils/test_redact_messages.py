@@ -26,15 +26,16 @@ import litellm
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
     _redacted_responses_api_response,
     perform_redaction,
     redacted_model_call_details_for_custom_logger,
+    redacted_response_obj_for_custom_logger,
     redacted_standard_logging_payload,
     should_redact_message_logging,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.responses.main import mock_responses_api_response
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import (
@@ -56,6 +57,9 @@ def _provider_fields() -> dict[str, object]:
         "thinking_blocks": [{"type": "thinking", "thinking": SECRET}],
         "reasoningContentBlocks": [{"reasoningText": {"text": SECRET}}],
         "citations": [{"cited_text": SECRET}],
+        "compaction_blocks": [{"type": "compaction", "content": SECRET, "signature": "compaction-signature"}],
+        "compaction_start": {"type": "compaction", "content": SECRET},
+        "compaction_delta": {"type": "compaction_delta", "content": SECRET},
         "thought_signatures": [SIGNATURE],
     }
 
@@ -163,6 +167,30 @@ def test_streaming_redaction_redacts_delta_provider_fields_without_touching_the_
     assert SECRET not in str(response.choices[0].delta), response
     assert response.choices[0].delta.provider_specific_fields["thought_signatures"] == [SIGNATURE]
     assert fields == _provider_fields()
+
+
+@pytest.mark.parametrize("shape", ["object", "dict"])
+def test_redaction_hides_a_compaction_summary_in_responses_api_output(shape: str) -> None:
+    response: Final = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=1,
+        model="claude-sonnet-5-5",
+        object="response",
+        status="completed",
+        output=[
+            {
+                "type": "compaction",
+                "id": "cmp_1",
+                "encrypted_content": json.dumps({"type": "compaction", "content": SECRET}),
+            }
+        ],
+    )
+    result: Final = response if shape == "object" else response.model_dump()
+
+    redacted: Final = perform_redaction({}, result)
+
+    assert SECRET not in str(redacted), redacted
+    assert SECRET in str(result)
 
 
 @pytest.mark.parametrize("surface", ("typed", "dict", "standard", "callback", "helper"))
@@ -532,6 +560,83 @@ class TestPerformRedaction:
             {"text": "redacted-by-litellm", "finish_reason": "stop", "index": 0},
             {"text": "redacted-by-litellm", "finish_reason": "length", "index": 1},
         ]
+
+    def test_redacts_token_ids_that_decode_to_the_completion(self):
+        details = {
+            "stream": True,
+            "complete_streaming_response": litellm.ModelResponse(
+                choices=[
+                    litellm.Choices(message=litellm.Message(content="secret", role="assistant"), token_ids=[20, 11])
+                ]
+            ),
+            "standard_logging_object": {
+                "response": {
+                    "choices": [
+                        {
+                            "token_ids": [20, 11],
+                            "message": {"content": "secret", "provider_specific_fields": {"token_ids": [20, 11]}},
+                        },
+                        {"text": " Paris.", "token_ids": [20, 11], "index": 1},
+                    ]
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        logged_choices = details["standard_logging_object"]["response"]["choices"]
+        assert [choice["token_ids"] for choice in logged_choices] == [None, None]
+        assert logged_choices[0]["message"]["provider_specific_fields"]["token_ids"] is None
+        assert details["complete_streaming_response"].choices[0].get("token_ids") is None
+
+    def test_redacts_text_completion_stream_text_and_the_token_ids_that_decode_to_it(self):
+        details = {
+            "stream": True,
+            "async_complete_streaming_response": litellm.TextCompletionResponse(
+                choices=[
+                    litellm.utils.TextChoices(
+                        index=0, text=" Paris.", reasoning_content="thinking", token_ids=[20, 11], finish_reason="stop"
+                    )
+                ]
+            ),
+        }
+
+        perform_redaction(details, None)
+
+        logged_choice = details["async_complete_streaming_response"].choices[0]
+        assert (logged_choice.text, logged_choice.reasoning_content) == ("redacted-by-litellm", "redacted-by-litellm")
+        assert logged_choice.get("token_ids") is None
+        assert logged_choice.finish_reason == "stop"
+
+    def test_redacts_token_ids_a_cache_hit_keeps_on_the_choice_provider_specific_fields(self):
+        result = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(content="secret", role="assistant"),
+                    provider_specific_fields={"token_ids": [20, 11], "stop_reason": "END"},
+                )
+            ]
+        )
+        details = {
+            "standard_logging_object": {
+                "response": {
+                    "choices": [
+                        {
+                            "message": {"content": "secret"},
+                            "provider_specific_fields": {"token_ids": [20, 11], "stop_reason": "END"},
+                        }
+                    ]
+                }
+            }
+        }
+
+        redacted = perform_redaction(details, result)
+
+        logged_fields = details["standard_logging_object"]["response"]["choices"][0]["provider_specific_fields"]
+        assert logged_fields == {"token_ids": None, "stop_reason": "END"}
+        assert redacted.choices[0].provider_specific_fields["token_ids"] is None
+        assert redacted.choices[0].provider_specific_fields["stop_reason"] == "END"
+        assert result.choices[0].provider_specific_fields["token_ids"] == [20, 11]
 
     def test_redacts_object_choices_inside_model_response_dict(self):
         result = {
@@ -2019,3 +2124,32 @@ async def test_redaction_with_metadata_completion_api():
     response = standard_logging_payload["response"]
     assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
     assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
+
+
+def test_perform_redaction_strips_the_matched_text_from_the_bedrock_guardrail_traces() -> None:
+    finding = {
+        "guardrail": {
+            "inputAssessment": {
+                "gid": {
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": [{"type": "US_SSN", "match": "123-45-6789", "action": "ANONYMIZED"}]
+                    }
+                }
+            }
+        }
+    }
+    response = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "hi"}}], model="x")
+    setattr(response, "trace", copy.deepcopy(finding))
+    setattr(response, "amazon-bedrock-trace", copy.deepcopy(finding))
+    opted_out: Final = CustomLogger(message_logging=False)
+
+    redacted: Final = redacted_response_obj_for_custom_logger(response, opted_out)
+    redacted_dict: Final = redacted_response_obj_for_custom_logger(
+        {"choices": [], "trace": copy.deepcopy(finding)}, opted_out
+    )
+
+    assert isinstance(redacted, litellm.ModelResponse)
+    assert "123-45-6789" not in redacted.model_dump_json()
+    assert "US_SSN" in redacted.model_dump_json(), "the finding stays, only its matched text goes"
+    assert "123-45-6789" not in str(redacted_dict)
+    assert "123-45-6789" in response.model_dump_json(), "the caller's own response is not redacted"

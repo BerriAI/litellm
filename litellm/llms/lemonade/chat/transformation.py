@@ -3,7 +3,7 @@ Translate from OpenAI's `/v1/chat/completions` to Lemonade's `/v1/chat/completio
 """
 
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 from urllib.parse import quote
 
 import httpx
@@ -12,6 +12,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _STR: Final = TypeAdapter(str)
+_OPAQUE_VALUE: Final = TypeAdapter(object)
 
 
 class _JsonResponse(Protocol):
@@ -105,7 +107,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         # Getting the list of models from lemonade
         try:
             response: Final = litellm.module_level_client.get(
-                url=f"{api_base}/models",
+                url=join_api_base(api_base, "models"),
                 headers=self._get_auth_headers(api_key),
             )
         except Exception as e:
@@ -122,7 +124,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         return ["lemonade/" + _STR.validate_python(model["id"]) for model in model_list]
 
     @staticmethod
-    def _get_positive_int(value: Any) -> int | None:
+    def _get_positive_int(value: object) -> int | None:
         if isinstance(value, bool):
             return None
         if isinstance(value, int) and value > 0:
@@ -162,7 +164,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
             provider_specific_entry.get("context_window"),
             provider_specific_entry.get("max_context_window"),
         ):
-            parsed = self._get_positive_int(value)
+            parsed = self._get_positive_int(_OPAQUE_VALUE.validate_python(value))
             if parsed is not None:
                 return parsed
         return None
@@ -193,7 +195,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
 
         try:
             response: Final = litellm.module_level_client.get(
-                url=f"{api_base}/models/{encoded_model}",
+                url=join_api_base(str(api_base), f"models/{encoded_model}"),
                 headers=self._get_auth_headers(api_key),
             )
             response.raise_for_status()
