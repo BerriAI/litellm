@@ -313,9 +313,9 @@ def _with_text_parts(
     }
 
 
-async def _load_image(url: str, deadline: float, timeout: float) -> _LoadedImage | DescriptionFailed:
-    """Remote fetches of one request share `deadline`, so a slow server cannot hold the request past `timeout`"""
-    remaining: Final = deadline - time.monotonic()
+async def _load_image(url: str, remaining: float, timeout: float) -> _LoadedImage | DescriptionFailed:
+    """`remaining` is the fetch time left to the remote images of the request, so a slow server cannot hold the
+    request past `timeout`"""
     timed_out: Final = DescriptionFailed(f"image fetch timed out after {timeout:g}s")
     if not url.startswith("data:") and remaining <= 0:
         return timed_out
@@ -419,32 +419,35 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
             session_id=_nonempty_str(kwargs.get("litellm_session_id")),
         )
         scope: Final = _tenant_scope(kwargs)
-        fetch_deadline: Final = time.monotonic() + self.timeout
-        loaded: Final = [
-            await _load_image(part.url, fetch_deadline, self.timeout)
-            if part.url is not None
-            else DescriptionFailed("the image part has no url")
-            for part in image_parts
-        ]
-        keys: Final = [self._cache_key(scope, image) if isinstance(image, _LoadedImage) else None for image in loaded]
-        images: Final = {
-            key: image
-            for image, key in zip(loaded, keys, strict=True)
-            if isinstance(image, _LoadedImage) and key is not None
-        }
-        new_keys: Final = [key for key in images if scope is None or await self._needs_description(key)]
-        allowed: Final = frozenset(new_keys[: self.max_descriptions_per_request])
+        fetch_time_left = self.timeout  # rebind-ok: shrinks by the time each remote fetch takes
+        new_descriptions = 0  # rebind-ok: counts the new descriptions this request started
         # One outcome per distinct image: a repeated image is described, or fails, once per request
-        outcomes: Final = {
-            key: await self._describe(
-                key, replace(template, image_data_uri=image.data_uri), key in allowed, shared=scope is not None
-            )
-            for key, image in images.items()
-        }
-        texts: Final = [
-            self._replacement_text(number, image, outcomes[key] if key is not None else None)
-            for number, (image, key) in enumerate(zip(loaded, keys, strict=True), 1)
-        ]
+        outcomes: Final[dict[str, DescriptionResult]] = {}  # mutable-ok: filled as the images are handled
+        texts: Final[list[str]] = []  # mutable-ok: one replacement text per image part, in order
+        # One image at a time: an image is fetched, described and released before the next fetch, so a request holds
+        # at most one image. The remote fetches of the request share `timeout`, and describing does not use it
+        for number, part in enumerate(image_parts, 1):
+            if part.url is None:
+                texts.append(self._replacement_text(number, DescriptionFailed("the image part has no url"), None))
+                continue
+            fetch_started = time.monotonic()
+            image = await _load_image(part.url, fetch_time_left, self.timeout)
+            if not part.url.startswith("data:"):
+                fetch_time_left -= time.monotonic() - fetch_started
+            if not isinstance(image, _LoadedImage):
+                texts.append(self._replacement_text(number, image, None))
+                continue
+            key = self._cache_key(scope, image)
+            if key not in outcomes:
+                may_start = new_descriptions < self.max_descriptions_per_request and (
+                    scope is None or await self._needs_description(key)
+                )
+                if may_start:
+                    new_descriptions += 1
+                outcomes[key] = await self._describe(
+                    key, replace(template, image_data_uri=image.data_uri), may_start, shared=scope is not None
+                )
+            texts.append(self._replacement_text(number, image, outcomes[key]))
         replacements: Final = {
             (part.message_index, part.part_index): text for part, text in zip(image_parts, texts, strict=True)
         }

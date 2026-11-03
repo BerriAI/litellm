@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import tracemalloc
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AbstractContextManager
@@ -11,6 +12,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.image_description_interception.handler import (
@@ -424,6 +426,67 @@ async def test_slow_remote_images_share_one_fetch_deadline_and_inline_images_sti
     # The first download spends the whole shared budget, so the later remote images are never fetched
     assert contacted == [remote_urls[0]]
     assert describer.requests == [("vision-describer", IMAGE_URI)]
+
+
+@pytest.mark.asyncio
+async def test_describing_does_not_use_the_fetch_time_of_later_remote_images(monkeypatch: pytest.MonkeyPatch):
+    def serve(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=IMAGE_BYTES + request.url.path.encode())
+
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.MockTransport(serve)))
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+
+    async def slow_describer(request: DescriptionRequest) -> DescriptionResult:
+        await asyncio.sleep(0.2)
+        return Described("a cat")
+
+    logger: Final = ImageDescriptionInterceptionLogger(
+        image_model="vision-describer", describer=slow_describer, timeout=0.3
+    )
+    remote: Final = [_image_turn("hi", f"https://img.example/{uuid.uuid4()}.png") for _ in range(4)]
+
+    result: Final = await logger.async_pre_call_deployment_hook(_request(remote), CallTypes.acompletion)
+
+    # The four descriptions take 0.8s, past the 0.3s fetch budget, and the fast fetches stay well inside it
+    texts: Final = json.dumps(result["messages"] if result is not None else None)
+    assert (texts.count("described by vision-describer"), texts.count("could not be described")) == (4, 0)
+
+
+async def _peak_bytes_for(image_count: int, size: int, monkeypatch: pytest.MonkeyPatch) -> int:
+    bodies: Final = {f"/{number}.png": bytes([number]) * size for number in range(image_count)}
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=bodies[request.url.path])
+
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.MockTransport(serve)))
+    # The shared fetch helper keeps recent images for every caller; one entry keeps it out of this measurement
+    monkeypatch.setattr(image_handling, "in_memory_cache", InMemoryCache(max_size_in_memory=1))
+    describer: Final = _RecordingDescriber([Described("a cat")])
+    logger: Final = ImageDescriptionInterceptionLogger(
+        image_model="vision-describer", describer=describer, max_descriptions_per_request=1
+    )
+    request: Final = _request([_image_turn("hi", f"https://img.example{path}") for path in bodies])
+    tracemalloc.start()
+    try:
+        before: Final = tracemalloc.get_traced_memory()[0]
+        await logger.async_pre_call_deployment_hook(request, CallTypes.acompletion)
+        return tracemalloc.get_traced_memory()[1] - before
+    finally:
+        tracemalloc.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_request_holds_one_downloaded_image_at_a_time(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    size: Final = 1024 * 1024
+    await _peak_bytes_for(1, size, monkeypatch)  # first use allocates the import and client state
+
+    many: Final = await _peak_bytes_for(12, size, monkeypatch)
+    twice_as_many: Final = await _peak_bytes_for(24, size, monkeypatch)
+
+    # Twelve more images past the description limit must not add to the peak
+    assert twice_as_many - many < size
+
 
 def _child_payload_text(payload: Mapping[str, object]) -> str:
     return json.dumps(payload, sort_keys=True)
