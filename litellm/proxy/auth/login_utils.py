@@ -5,6 +5,7 @@ This module contains the core login logic that can be reused across different
 login endpoints (e.g., /login and /v2/login).
 """
 
+import asyncio
 import os
 import secrets
 from collections.abc import Mapping
@@ -105,6 +106,18 @@ async def screen_login_password_for_breach(
     except Exception as e:  # noqa: BLE001  # a failed stamp must never surface into the login
         verbose_proxy_logger.warning("Login-time breach screening could not update user %s: %s", user_id, e)
     return breached
+
+
+_ONE_FIPS_LOGIN_AT_A_TIME: Final = asyncio.Lock()
+
+
+async def _password_matches(password: str, stored: str, attempt: LoginAttempt) -> bool:
+    """Checks inline, or in FIPS mode one login at a time, refusing a login whose user got blocked while it waited."""
+    if not openssl_enforces_fips():
+        return verify_password(password, stored)
+    async with _ONE_FIPS_LOGIN_AT_A_TIME:
+        await attempt.refuse_if_blocked_while_waiting()
+        return await run_off_loop_if_fips(verify_password, password, stored)
 
 
 async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
@@ -413,10 +426,7 @@ async def _sign_in(
                 code=401,
             )
 
-        password_matches: Final = await run_off_loop_if_fips(verify_password, password, _password)
-        if openssl_enforces_fips():
-            await attempt.refuse_if_blocked_while_waiting()
-        if password_matches:
+        if await _password_matches(password, _password, attempt):
             await _rehash_password_if_needed(_user_row.user_id, password, _password)
             breached_now: Final = prisma_client is not None and await screen_login_password_for_breach(
                 user_id=_user_row.user_id,

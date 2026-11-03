@@ -5,6 +5,7 @@ This module tests the refactored login logic that was moved from proxy_server.py
 to login_utils.py for better reusability.
 """
 
+import asyncio
 import hashlib
 import os
 from collections.abc import Mapping
@@ -2471,7 +2472,7 @@ async def _login_whose_user_gets_blocked_during_the_row_lookup(monkeypatch: pyte
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fips_openssl")
 async def test_fips_login_hides_the_right_password_when_its_user_got_blocked_while_it_waited(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, pbkdf2_on_event_loop: list[bool]
 ) -> None:
     from litellm.proxy._types import ProxyException
 
@@ -2479,6 +2480,40 @@ async def test_fips_login_hides_the_right_password_when_its_user_got_blocked_whi
         await _login_whose_user_gets_blocked_during_the_row_lookup(monkeypatch, _PBKDF2_ROW)
 
     assert blocked.value.code == "429"
+    assert pbkdf2_on_event_loop == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fips_openssl")
+async def test_fips_burst_of_wrong_passwords_stops_deriving_once_its_user_is_blocked(
+    monkeypatch: pytest.MonkeyPatch, pbkdf2_on_event_loop: list[bool]
+) -> None:
+    from litellm.proxy.auth.login_utils import authenticate_user
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
+    repository = _known_user()
+    repository.return_value.table.find_first.return_value.password = _PBKDF2_ROW
+    throttle = _throttle(user_limit=1)
+    with patch(  # test-quality-ok: the user lookup is the database boundary
+        "litellm.proxy.auth.login_utils.UserRepository", repository
+    ):
+        refusals = await asyncio.gather(
+            *(
+                authenticate_user(
+                    username="known@example.com",
+                    password="Wrong-Lamp-4-River",
+                    master_key="sk-master",
+                    prisma_client=MagicMock(),
+                    throttle=throttle,
+                    general_settings=_POLICY_NO_BREACH_CHECK,
+                )
+                for _ in range(6)
+            ),
+            return_exceptions=True,
+        )
+
+    assert [refusal.code for refusal in refusals] == ["401", "401", "429", "429", "429", "429"]
+    assert pbkdf2_on_event_loop == [False, False]
 
 
 @pytest.mark.asyncio
