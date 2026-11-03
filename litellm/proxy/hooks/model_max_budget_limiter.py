@@ -1208,11 +1208,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             )
             return
 
-        job: Final = job_to_charge_once(
-            call_type=kwargs.get("call_type"),
-            response_obj=response_obj,
-            response_cost=response_cost,
-        )
+        job: Final = job_to_charge_once(kwargs=kwargs, response_obj=response_obj, response_cost=response_cost)
         for entity_type, entity_id, resolved in resolved_budgets:
             await self._charge_entity(
                 entity_type=entity_type,

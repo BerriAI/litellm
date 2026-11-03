@@ -58,12 +58,14 @@ def _event(
     team_member_model_max_budget: Mapping[str, object] | None = None,
     user_id: str = USER_ID,
     team_id: str = TEAM_ID,
+    guardrail_information: tuple[Mapping[str, object], ...] = (),
 ) -> dict[str, object]:
     return {
         "call_type": call_type,
         "standard_logging_object": {
             "call_type": call_type,
             "response_cost": response_cost,
+            "guardrail_information": guardrail_information,
             "model": "openai/gpt-5.4-mini",
             "model_group": MODEL_GROUP,
             "metadata": {
@@ -350,6 +352,28 @@ async def test_polls_of_a_finished_video_charge_each_per_model_budget_once():
 
     assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(3 * BATCH_COST)
     assert await _spend(limiter, USER_SPEND_KEY) == pytest.approx(3 * BATCH_COST)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "polled"),
+    (
+        ("avideo_status", lambda status: VideoObject(id="job_first", object="video", status=status)),
+        ("aretrieve_batch", lambda status: _batch("job_first", status)),
+    ),
+)
+async def test_a_guardrail_priced_poll_of_a_running_job_leaves_its_charge_to_the_finished_poll(call_type, polled):
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    guardrail_cost: Final = 0.01
+    priced: Final = ({"guardrail_name": "priced", "guardrail_cost": guardrail_cost},)
+
+    await _log_success(limiter, _event(call_type, guardrail_cost, guardrail_information=priced), polled("in_progress"))
+    for _ in range(3):
+        await _log_success(
+            limiter, _event(call_type, BATCH_COST + guardrail_cost, guardrail_information=priced), polled("completed")
+        )
+
+    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(guardrail_cost + BATCH_COST + guardrail_cost)
 
 OPUS_GROUP: Final = "claude-opus"
 OPUS_GROUP_MEMBERS: Final = MappingProxyType(

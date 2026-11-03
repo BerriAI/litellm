@@ -4787,7 +4787,12 @@ async def test_update_database_charges_a_video_once_from_the_poll_that_sees_it_c
 
 
 async def _update_database_for_video_poll(
-    db_writer: DBSpendUpdateWriter, prisma: MagicMock, litellm_call_id: str, response_cost: float
+    db_writer: DBSpendUpdateWriter,
+    prisma: MagicMock,
+    litellm_call_id: str,
+    response_cost: float,
+    status: str = "completed",
+    polled_video_id: str = "video_abc",
 ) -> bool:
     from litellm.types.videos.main import VideoObject
 
@@ -4810,15 +4815,51 @@ async def _update_database_for_video_poll(
                 "call_type": "avideo_status",
                 "litellm_call_id": litellm_call_id,
                 "response_cost": response_cost,
-                "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+                "litellm_params": {"metadata": {"user_api_key": "test-key"}, "video_id": polled_video_id},
             },
-            completion_response=VideoObject(id="video_abc", object="video", status="completed"),
+            completion_response=VideoObject(id="video_abc", object="video", status=status),
             start_time=datetime.now(timezone.utc),
             end_time=datetime.now(timezone.utc),
             response_cost=response_cost,
         )
         await asyncio.sleep(0)
         return charged
+
+
+@pytest.mark.asyncio
+async def test_update_database_charges_the_completed_polls_cost_and_not_a_running_polls():
+    """A provider that also prices a running video must still have the completed poll's cost billed, once."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    running = await _update_database_for_video_poll(db_writer, prisma, "poll-1", 0.1, status="in_progress")
+    completed = await _update_database_for_video_poll(db_writer, prisma, "poll-2", 0.42)
+    repolled = await _update_database_for_video_poll(db_writer, prisma, "poll-3", 0.42)
+    await _flush_queued_spend_logs(prisma)
+
+    assert (running, completed, repolled) == (True, True, False)
+    assert prisma.db.litellm_spendlogs.rows["video_abc_video_cost"]["spend"] == 0.42
+
+
+@pytest.mark.asyncio
+async def test_update_database_charges_each_deployments_video_though_their_provider_ids_match():
+    """A custom provider's own ids can repeat across deployments, so the cost row keys off the id the client polled."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    charged = [
+        await _update_database_for_video_poll(db_writer, prisma, call_id, 0.42, polled_video_id=polled_id)
+        for call_id, polled_id in (("poll-1", "video_dep_a"), ("poll-2", "video_dep_b"), ("poll-3", "video_dep_a"))
+    ]
+
+    assert charged == [True, True, False]
+    assert {
+        request_id: row["spend"]
+        for request_id, row in prisma.db.litellm_spendlogs.rows.items()
+        if request_id.endswith("_video_cost")
+    } == {"video_dep_a_video_cost": 0.42, "video_dep_b_video_cost": 0.42}
 
 
 @pytest.mark.asyncio

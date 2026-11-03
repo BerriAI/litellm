@@ -7,6 +7,7 @@ the callback raise before any spend was recorded, so those budgets never moved.
 """
 
 from datetime import datetime, timezone
+from functools import partial
 from typing import Final
 
 import litellm
@@ -38,6 +39,7 @@ def _success_kwargs(
     call_type: str = "aresponses",
     response_cost: float = 0.25,
     model_id: str = "deployment-1",
+    guardrail_information: tuple[dict[str, object], ...] = (),
 ) -> dict[str, object]:
     provider_params: Final[dict[str, str]] = (
         {} if provider_in_litellm_params is None else {"custom_llm_provider": provider_in_litellm_params}
@@ -51,6 +53,7 @@ def _success_kwargs(
             "response_cost": response_cost,
             "model_id": model_id,
             "custom_llm_provider": provider_in_payload,
+            "guardrail_information": guardrail_information,
         },
     }
 
@@ -527,6 +530,43 @@ async def test_video_polls_charge_each_router_budget_once(call_type):
         kwargs, VideoObject(id="video-second", object="video", status="completed"), None, None
     )
     assert tuple([await cache.async_get_cache(key) for key in keys]) == (0.5, 0.5)
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_priced_poll_of_a_running_video_leaves_the_router_charge_to_the_finished_poll():
+    from litellm.types.videos.main import VideoObject
+
+    cache: Final = DualCache()
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=cache,
+        provider_budget_config={"openai": {"budget_limit": 100, "time_period": "1d"}},
+        model_list=[
+            {
+                "model_name": "video-budget",
+                "litellm_params": {"model": "openai/sora-2", "max_budget": 100, "budget_duration": "1d"},
+                "model_info": {"id": "deployment-1"},
+            }
+        ],
+    )
+    priced: Final = ({"guardrail_name": "priced", "guardrail_cost": 0.01},)
+    poll: Final = partial(
+        _success_kwargs,
+        provider_in_litellm_params=None,
+        provider_in_payload="openai",
+        call_type="avideo_status",
+        guardrail_information=priced,
+    )
+
+    await limiter.async_log_success_event(
+        poll(response_cost=0.01), VideoObject(id="video-first", object="video", status="in_progress"), None, None
+    )
+    for _ in range(3):
+        await limiter.async_log_success_event(
+            poll(response_cost=0.26), VideoObject(id="video-first", object="video", status="completed"), None, None
+        )
+
+    keys: Final = ("provider_spend:openai:1d", "deployment_spend:deployment-1:1d")
+    assert tuple([await cache.async_get_cache(key) for key in keys]) == pytest.approx((0.27, 0.27))
 
 @pytest.mark.asyncio
 async def test_batch_charge_is_shared_across_workers_and_requires_redis_confirmation():

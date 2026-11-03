@@ -175,6 +175,10 @@ ignored_function_names = [
     "_deployment_field",  # Read by is_batch_capable, tested through the mixed-group tests in test_router.py
     "_deployment_provider",  # Read by without_deployments_that_cannot_batch, tested through the mixed-group tests in test_router.py
     "_cannot_run_batches",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
+    "job_cost_of_poll",  # Read by job_to_charge_once and charged_video_id, tested through the guardrail-priced poll tests in test_batch_utils.py
+    "charged_video_id",  # Read by job_to_charge_once and get_spend_logs_id, tested through both in test_batch_utils.py and test_spend_tracking_utils.py
+    "_requested_video_id",  # Read by charged_video_id, tested through the polled-id video test in test_batch_utils.py
+    "_charged_batch",  # Read by job_to_charge_once, tested through the batch charge identity tests in test_batch_utils.py
     "_responses_continuation",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_responses_continuation_ceilings",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py

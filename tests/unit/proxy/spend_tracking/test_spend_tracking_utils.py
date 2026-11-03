@@ -5093,6 +5093,24 @@ def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(st
     assert status["request_id"] == status_id
 
 
+@pytest.mark.parametrize(
+    ("response_cost", "status_id"),
+    [(0.01, "video_abc"), (0.43, "video_abc_video_cost")],
+    ids=["guardrail_only", "charged_with_guardrail"],
+)
+def test_a_video_poll_that_pays_only_its_guardrail_keeps_the_bare_id(response_cost, status_id):
+    """A guardrail charges every poll, so a running video's poll must not take the row the finished poll charges."""
+    kwargs = {
+        "response_cost": response_cost,
+        "standard_logging_object": {
+            "response_cost": response_cost,
+            "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}],
+        },
+    }
+
+    assert get_spend_logs_id("avideo_status", {"id": "video_abc", "status": "completed"}, kwargs) == status_id
+
+
 def test_get_logging_payload_gives_redacted_batch_and_file_rows_distinct_request_ids():
     """End to end at the payload level: a batch retrieve and a file create whose bodies
     were both flattened to the same redaction placeholder must still produce two

@@ -38,13 +38,13 @@ from litellm.constants import (
 )
 from litellm.integrations.otel.model.metadata import caller_session_id
 from litellm.integrations.otel.model.trace_controls import TraceControls
+from litellm.litellm_core_utils.batch_utils import charged_video_id
 from litellm.litellm_core_utils.classifier_logging import (
     CLASSIFIER_AUDIT_FIELDS,
     classifier_audit_fields,
     without_classifier_audit,
 )
 from litellm.litellm_core_utils.core_helpers import (
-    finite_cost,
     get_litellm_metadata_from_kwargs,
     proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
@@ -100,7 +100,7 @@ from litellm.types.utils import (
     VectorStoreSearchResponse,
     batch_chat_usage,
 )
-from litellm.types.videos.utils import VIDEO_COST_REQUEST_ID_SUFFIX, VIDEO_STATUS_CALL_TYPES
+from litellm.types.videos.utils import VIDEO_COST_REQUEST_ID_SUFFIX
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 if TYPE_CHECKING:
@@ -351,8 +351,6 @@ BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 def _cost_row_request_id_suffix(call_type: str, metadata: Mapping[str, object], kwargs: Mapping[str, object]) -> str:
     if call_type == CallTypes.aretrieve_batch.value:
         return BATCH_COST_REQUEST_ID_SUFFIX
-    if call_type in VIDEO_STATUS_CALL_TYPES and (finite_cost(kwargs.get("response_cost")) or 0.0) > 0:
-        return VIDEO_COST_REQUEST_ID_SUFFIX
     if settles_background_response(call_type, metadata, kwargs):
         return BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
     return ""
@@ -375,6 +373,11 @@ def get_spend_logs_id(
     )
     if resolved_id is None:
         return None
+    charged_video: Final = charged_video_id(
+        call_type, response_obj.get("status"), resolved_id, kwargs, kwargs.get("response_cost")
+    )
+    if charged_video is not None:
+        return f"{charged_video}{VIDEO_COST_REQUEST_ID_SUFFIX}"
     return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, kwargs)}"
 
 

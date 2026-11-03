@@ -177,7 +177,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 return
 
             cache_key: Final = self._make_cache_key(str(session_id))
-            job: Final = job_to_charge_once(callback_fields.get("call_type"), response_obj, response_cost)
+            job: Final = job_to_charge_once(callback_fields, response_obj, response_cost)
             if job is not None and not await self._claim_job_charge(cache_key, job):
                 return
             await self._increment_spend(cache_key, response_cost)
@@ -230,7 +230,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
     async def _claim_job_charge(self, cache_key: str, job: ChargeOnceJob) -> bool:
         polls: Final = await self.internal_usage_cache.dual_cache.async_increment_cache(
-            key=job_charged_once_marker_key(spend_key=cache_key, job=job), value=1, ttl=self.ttl
+            key=job_charged_once_marker_key(spend_key=cache_key, job=job), value=1, ttl=self.ttl, refresh_ttl=True
         )
         return polls == 1
 

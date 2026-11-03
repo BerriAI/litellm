@@ -551,7 +551,7 @@ class RouterBudgetLimiting(CustomLogger):
         model_id: Final[str] = str(standard_logging_payload.get("model_id", ""))
         custom_llm_provider: Final[str | None] = standard_logging_payload.get("custom_llm_provider")
 
-        job: Final = job_to_charge_once(callback_fields.get("call_type"), polled_response, response_cost)
+        job: Final = job_to_charge_once(callback_fields, polled_response, response_cost)
 
         budget_config: Final = (
             self._get_budget_config_for_provider(custom_llm_provider) if custom_llm_provider is not None else None

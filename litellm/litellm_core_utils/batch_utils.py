@@ -11,6 +11,8 @@ from openai.types import Batch
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import finite_cost
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
 from litellm.types.utils import CallTypes, LlmProviders
 from litellm.types.videos.main import VideoObject
@@ -18,6 +20,7 @@ from litellm.types.videos.utils import is_video_status_call_type
 
 _DECODED_JSONL_ROW: Final = TypeAdapter(object)
 _DEPLOYMENT_FIELD: Final = TypeAdapter(Mapping[str, object])
+_PAYLOAD_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _ENDPOINT_PATHS: Final = TypeAdapter(tuple[str, ...])
 
 BATCH_ENDPOINT: Final = "/v1/batch"
@@ -302,12 +305,54 @@ def job_charged_once_marker_key(spend_key: str, job: ChargeOnceJob) -> str:
     return f"{spend_key}:{job.kind}:{job.job_id}"
 
 
-def job_to_charge_once(call_type: object, response_obj: object, response_cost: float) -> ChargeOnceJob | None:
-    """A finished batch or video reports its whole cost on every poll, so its id is charged once per counter."""
-    if response_cost <= 0:
+def job_cost_of_poll(response_cost: object, standard_logging_payload: object) -> float:
+    """What the polled job itself cost, since a guardrail on the poll charges every poll, running or finished."""
+    guardrail_information: Final = (
+        _PAYLOAD_FIELDS.validate_python(standard_logging_payload).get("guardrail_information")
+        if isinstance(standard_logging_payload, Mapping)
+        else None
+    )
+    return (finite_cost(response_cost) or 0.0) - guardrail_information_cost(guardrail_information)
+
+
+def _requested_video_id(kwargs: Mapping[str, object]) -> str | None:
+    litellm_params: Final = kwargs.get("litellm_params")
+    requested: Final = (
+        _PAYLOAD_FIELDS.validate_python(litellm_params).get("video_id") if isinstance(litellm_params, Mapping) else None
+    )
+    return requested if isinstance(requested, str) and requested else None
+
+
+def charged_video_id(
+    call_type: object, status: object, video_id: str, kwargs: Mapping[str, object], response_cost: object
+) -> str | None:
+    """The id a finished video's own cost is charged once under.
+
+    That is the id the client polled, which names the deployment that made the video, since a
+    custom provider's own id can repeat across deployments.
+    """
+    if not is_video_status_call_type(call_type) or status != "completed":
         return None
-    if is_batch_retrieve_call_type(call_type) and isinstance(response_obj, Batch):
-        return ChargeOnceJob(kind="batch", job_id=response_obj.id)
-    if is_video_status_call_type(call_type) and isinstance(response_obj, VideoObject):
-        return ChargeOnceJob(kind="video", job_id=response_obj.id)
-    return None
+    if job_cost_of_poll(response_cost, kwargs.get("standard_logging_object")) <= 0:
+        return None
+    return _requested_video_id(kwargs) or video_id
+
+
+def _charged_batch(kwargs: Mapping[str, object], response_obj: object, response_cost: float) -> ChargeOnceJob | None:
+    if not is_batch_retrieve_call_type(kwargs.get("call_type")) or not isinstance(response_obj, Batch):
+        return None
+    if job_cost_of_poll(response_cost, kwargs.get("standard_logging_object")) <= 0:
+        return None
+    return ChargeOnceJob(kind="batch", job_id=response_obj.id)
+
+
+def job_to_charge_once(
+    kwargs: Mapping[str, object], response_obj: object, response_cost: float
+) -> ChargeOnceJob | None:
+    """A finished batch or video reports its whole cost on every poll, so it is charged once per counter."""
+    if not isinstance(response_obj, VideoObject):
+        return _charged_batch(kwargs, response_obj, response_cost)
+    video_id: Final = charged_video_id(
+        kwargs.get("call_type"), response_obj.status, response_obj.id, kwargs, response_cost
+    )
+    return None if video_id is None else ChargeOnceJob(kind="video", job_id=video_id)

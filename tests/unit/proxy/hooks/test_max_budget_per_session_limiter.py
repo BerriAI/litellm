@@ -8,6 +8,8 @@ Tests that session-scoped budget tracking works correctly:
 - Requests without agent_id pass through
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from unittest.mock import patch
 
 import logging
@@ -177,6 +179,105 @@ async def test_repeated_polls_of_a_finished_job_charge_the_session_once():
 
     spend = await handler._get_current_spend(handler._make_cache_key("session-jobs"))
     assert spend == pytest.approx(0.4 + 0.1 + 3 * 0.01)
+
+
+def _video_poll(cost: float, guardrail_cost: float = 0.0, session_id: str = "session-jobs") -> dict[str, object]:
+    return {
+        "call_type": "avideo_status",
+        "response_cost": cost,
+        "standard_logging_object": {
+            "response_cost": cost,
+            "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": guardrail_cost}],
+        },
+        "litellm_params": {"metadata": {"session_id": session_id, "agent_id": "agent-budget-123"}},
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_priced_poll_of_a_running_video_leaves_the_session_charge_to_the_finished_poll():
+    from litellm.types.videos.main import VideoObject
+
+    handler = PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
+    ) as mock_registry:
+        mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_budget_per_session=5.0)
+        await handler.async_log_success_event(
+            _video_poll(0.01, guardrail_cost=0.01), VideoObject(id="job-1", object="video", status="in_progress"), None, None
+        )
+        for _ in range(3):
+            await handler.async_log_success_event(
+                _video_poll(0.41, guardrail_cost=0.01), VideoObject(id="job-1", object="video", status="completed"), None, None
+            )
+
+    spend = await handler._get_current_spend(handler._make_cache_key("session-jobs"))
+    assert spend == pytest.approx(0.01 + 0.41)
+
+
+class _ClockedRedis:
+    """The Redis calls the session limiter makes, on a clock the test moves."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.entries: Mapping[str, tuple[float, float | None]] = MappingProxyType({})
+
+    def _live(self, key: str) -> tuple[float, float | None] | None:
+        entry = self.entries.get(key)
+        if entry is None or (entry[1] is not None and entry[1] <= self.now):
+            return None
+        return entry
+
+    def _store(self, key: str, value: float, expires_at: float | None) -> float:
+        self.entries = MappingProxyType({**self.entries, key: (value, expires_at)})
+        return value
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> float | None:
+        entry = self._live(key)
+        return None if entry is None else entry[0]
+
+    async def async_increment(
+        self, key: str, value: float, ttl: int | None = None, parent_otel_span: object = None, refresh_ttl: bool = False
+    ) -> float:
+        live = self._live(key)
+        kept_expiry = None if live is None else live[1]
+        expires_at = kept_expiry if ttl is None or (live is not None and not refresh_ttl) else self.now + ttl
+        return self._store(key, value + (0.0 if live is None else live[0]), expires_at)
+
+    def async_register_script(self, script: str):
+        async def increment_expiring_on_first_write(keys: list[str], args: list[object]) -> float:
+            live = self._live(keys[0])
+            expires_at = self.now + float(str(args[1])) if live is None else live[1]
+            return self._store(keys[0], float(str(args[0])) + (0.0 if live is None else live[0]), expires_at)
+
+        return increment_expiring_on_first_write
+
+
+@pytest.mark.asyncio
+async def test_a_finished_video_polled_without_pause_is_not_charged_again_once_the_session_window_rolls_over():
+    from litellm.types.videos.main import VideoObject
+
+    redis = _ClockedRedis()
+    handler = PROXY_MaxBudgetPerSessionHandler(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=redis))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    )
+    video = VideoObject(id="job-1", object="video", status="completed")
+    chat = {
+        "call_type": "acompletion",
+        "response_cost": 0.01,
+        "litellm_params": {"metadata": {"session_id": "session-jobs", "agent_id": "agent-budget-123"}},
+    }
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
+    ) as mock_registry:
+        mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_budget_per_session=5.0)
+        for _ in range(3):
+            await handler.async_log_success_event(_video_poll(0.4), video, None, None)
+            redis.now += 0.6 * handler.ttl
+        await handler.async_log_success_event(chat, None, None, None)
+
+    assert await handler._get_current_spend(handler._make_cache_key("session-jobs")) == pytest.approx(0.01)
 
 
 @pytest.mark.asyncio

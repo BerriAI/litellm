@@ -417,8 +417,43 @@ def test_job_charge_identity_requires_a_cost_bearing_poll(call_type: str, polled
     from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_to_charge_once
 
     expected: Final = None if kind is None else ChargeOnceJob(kind=kind, job_id="job-budget")
-    assert job_to_charge_once(call_type, polled(), cost) == expected
-    assert job_to_charge_once(call_type, {"id": "job-budget"}, cost) is None
+    kwargs: Final = {"call_type": call_type, "standard_logging_object": {"response_cost": cost}}
+    assert job_to_charge_once(kwargs, polled(), cost) == expected
+    assert job_to_charge_once(kwargs, {"id": "job-budget"}, cost) is None
+
+
+@pytest.mark.parametrize(
+    ("call_type", "polled", "kind"),
+    (("aretrieve_batch", _completed_batch, "batch"), ("avideo_status", _completed_video, "video")),
+)
+def test_only_the_jobs_own_cost_claims_its_charge_since_a_guardrail_charges_every_poll(
+    call_type: str, polled, kind
+) -> None:
+    from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_to_charge_once
+
+    kwargs: Final = {
+        "call_type": call_type,
+        "standard_logging_object": {"guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}]},
+    }
+    assert job_to_charge_once(kwargs, polled(), 0.01) is None
+    assert job_to_charge_once(kwargs, polled(), 0.43) == ChargeOnceJob(kind=kind, job_id="job-budget")
+
+
+def test_a_video_is_charged_once_it_completes_under_the_id_the_client_polled() -> None:
+    """A provider may price a running video too, and a custom provider's own id can repeat across deployments."""
+    from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_to_charge_once
+    from litellm.types.videos.main import VideoObject
+
+    def poll(status: str, polled_id: str) -> ChargeOnceJob | None:
+        return job_to_charge_once(
+            {"call_type": "avideo_status", "litellm_params": {"video_id": polled_id}},
+            VideoObject(id="job-1", object="video", status=status),
+            0.42,
+        )
+
+    assert poll("in_progress", "video_deployment_a") is None
+    assert poll("completed", "video_deployment_a") == ChargeOnceJob(kind="video", job_id="video_deployment_a")
+    assert poll("completed", "video_deployment_b") == ChargeOnceJob(kind="video", job_id="video_deployment_b")
 
 
 def test_job_charge_markers_keep_counters_jobs_and_kinds_independent() -> None:
