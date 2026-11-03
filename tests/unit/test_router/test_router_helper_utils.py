@@ -578,11 +578,20 @@ def _realtime_session_logging() -> LiteLLMLogging:
     )
 
 
-async def _relay_upstream(litellm_logging_obj: LiteLLMLogging, *upstream_frames: bytes | Exception) -> None:
+async def _relay_upstream(
+    litellm_logging_obj: LiteLLMLogging,
+    *upstream_frames: bytes | Exception,
+    client_ws: MagicMock | None = None,
+    backend_send_error: Exception | None = None,
+    upstream_stays_open: bool = False,
+) -> None:
     backend_ws: Final = MagicMock()
-    backend_ws.recv = AsyncMock(side_effect=list(upstream_frames))
+    backend_ws.recv = AsyncMock(
+        side_effect=_frames_then_silence(*upstream_frames) if upstream_stays_open else list(upstream_frames)
+    )
+    backend_ws.send = AsyncMock(side_effect=backend_send_error)
     relay: Final = RealTimeStreaming(
-        _realtime_client_ws(),
+        client_ws or _realtime_client_ws(),
         backend_ws,
         litellm_logging_obj,
         model="gpt-realtime-2.1",
@@ -612,6 +621,49 @@ async def _upstream_close_before_any_frame(litellm_logging_obj: LiteLLMLogging) 
     await _relay_upstream(litellm_logging_obj, ConnectionClosed(Close(1008, "model not found"), None))
 
 
+def _frames_then_silence(*frames: bytes | str) -> Callable[[], Awaitable[bytes | str]]:
+    pending: Final = iter(frames)
+
+    async def _next_frame() -> bytes | str:
+        frame: Final = next(pending, None)
+        if frame is None:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+        return frame
+
+    return _next_frame
+
+
+def _client_ws_sending(*client_frames: str) -> MagicMock:
+    client_ws: Final = _realtime_client_ws()
+    client_ws.receive_text = AsyncMock(side_effect=_frames_then_silence(*client_frames))
+    return client_ws
+
+
+_CLIENT_TEXT_ITEM: Final = json.dumps(
+    {
+        "type": "conversation.item.create",
+        "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+    }
+)
+
+
+async def _relay_write_to_upstream_fails(litellm_logging_obj: LiteLLMLogging) -> None:
+    await _relay_upstream(
+        litellm_logging_obj,
+        _REALTIME_SESSION_CREATED,
+        client_ws=_client_ws_sending(_CLIENT_TEXT_ITEM),
+        backend_send_error=OSError("broken pipe"),
+        upstream_stays_open=True,
+    )
+
+
+async def _client_hangs_up_after_a_frame(litellm_logging_obj: LiteLLMLogging) -> None:
+    client_ws: Final = _realtime_client_ws()
+    client_ws.receive_text = AsyncMock(side_effect=ConnectionClosed(Close(1000, ""), None))
+    await _relay_upstream(litellm_logging_obj, _REALTIME_SESSION_CREATED, client_ws=client_ws, upstream_stays_open=True)
+
+
 async def _refused_handshake(litellm_logging_obj: LiteLLMLogging) -> None:
     await close_after_upstream_handshake_refusal(_realtime_client_ws(), 403)
 
@@ -625,6 +677,8 @@ async def _refused_handshake(litellm_logging_obj: LiteLLMLogging) -> None:
         (_refused_handshake, 0),
         (_upstream_internal_error_after_a_frame, 0),
         (_upstream_drop_without_close_frame_after_a_frame, 0),
+        (_relay_write_to_upstream_fails, 0),
+        (_client_hangs_up_after_a_frame, 1),
     ],
     ids=[
         "clean-session",
@@ -632,6 +686,8 @@ async def _refused_handshake(litellm_logging_obj: LiteLLMLogging) -> None:
         "refused-handshake",
         "upstream-1011-after-a-frame",
         "upstream-1006-after-a-frame",
+        "relay-write-to-upstream-fails",
+        "client-hangs-up-after-a-frame",
     ],
 )
 async def test_realtime_session_counts_a_router_success_only_when_it_ended_without_a_failure(

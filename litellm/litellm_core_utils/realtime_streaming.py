@@ -72,6 +72,7 @@ class BackendClose:
 class ClientLoopExit(Enum):
     CLIENT_DISCONNECTED = auto()
     BACKEND_CLOSED = auto()
+    RELAY_FAILED = auto()
 
 
 def backend_close_from(error: "ConnectionClosed") -> BackendClose:
@@ -2021,14 +2022,17 @@ class RealTimeStreaming:
             return ClientLoopExit.BACKEND_CLOSED
         except Exception as e:
             verbose_logger.debug("Error in client ack messages: %s", e)
-            return ClientLoopExit.CLIENT_DISCONNECTED
+            return ClientLoopExit.RELAY_FAILED
 
     async def bidirectional_forward(self) -> None:
         forward_task: Final = asyncio.create_task(self.backend_to_client_send_messages())
         client_task: Final = asyncio.create_task(self.client_ack_messages())
         try:
             await asyncio.wait((forward_task, client_task), return_when=asyncio.FIRST_COMPLETED)
-            if client_task.done() and client_task.result() is ClientLoopExit.CLIENT_DISCONNECTED:
+            client_exit: Final = client_task.result() if client_task.done() else None
+            if client_exit is ClientLoopExit.RELAY_FAILED and self.logging_obj:
+                self.logging_obj.model_call_details[REALTIME_SESSION_ENDED_ABNORMALLY_KEY] = True
+            if client_exit in (ClientLoopExit.CLIENT_DISCONNECTED, ClientLoopExit.RELAY_FAILED):
                 return
             close: Final = await forward_task
             if not close.ended_cleanly and self.logging_obj:
