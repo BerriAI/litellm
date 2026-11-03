@@ -55,6 +55,7 @@ AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPON
 AZURE_OPENAI_AUDIO_PROVIDERS: Final = frozenset({"azure", "azure_ai"})
 ROUTER_MAX_FALLBACKS: Final = get_env_int("ROUTER_MAX_FALLBACKS", 5)
 ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS: Final = 2000
+ROUTER_FALLBACK_GROUP_LISTING_MAX_GROUPS: Final = 5
 RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
     {
         "routing_strategy_args",

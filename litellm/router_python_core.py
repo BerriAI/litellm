@@ -185,12 +185,14 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 from litellm.litellm_core_utils.routing_common_utils import (
     MID_STREAM_CONTINUATION_KWARG,
     as_retry_skipped_deployment_ids,
+    compact_fallback_error_detail,
     deployment_model_id_pin,
     deployments_the_caller_may_use,
     filter_team_based_models,
     filter_web_search_deployments,
     format_content_policy_fallback_hint,
     format_content_policy_no_fallback_note,
+    format_context_window_fallback_hint,
     format_fallback_outcome_message,
     format_no_fallback_group_message,
     get_request_team_id,
@@ -9240,7 +9242,9 @@ class PythonCore(DeprecatedRouterMembers):
                     return response
 
                 else:
-                    error_message = f"model={model_group}. context_window_fallbacks={mask_sensitive_structure(context_window_fallbacks)}. fallbacks={mask_sensitive_structure(fallbacks)}.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks"
+                    error_message = format_context_window_fallback_hint(
+                        model_group, context_window_fallbacks, fallbacks, lookup_groups
+                    )
                     verbose_router_logger.info(
                         msg=f"Got 'ContextWindowExceededError'. No context_window_fallback set. Defaulting \
                         to fallbacks, if available.{error_message}"
@@ -9273,7 +9277,7 @@ class PythonCore(DeprecatedRouterMembers):
                     return response
                 else:
                     error_message = format_content_policy_fallback_hint(
-                        model_group, content_policy_fallbacks, fallbacks
+                        model_group, content_policy_fallbacks, lookup_groups
                     )
                     verbose_router_logger.info(
                         msg=f"Got 'ContentPolicyViolationError'. No content_policy_fallback set. Defaulting \
@@ -9349,7 +9353,7 @@ class PythonCore(DeprecatedRouterMembers):
             original_exception.message += format_fallback_outcome_message(
                 model_group,
                 attempted_fallback_group,
-                fallback_failure_exception_str,
+                compact_fallback_error_detail(fallback_failure_exception_str),
                 skipped=fallback_walk.skipped,
             )
 
@@ -15188,7 +15192,7 @@ class PythonCore(DeprecatedRouterMembers):
                     _model_info.get("base_model") or _litellm_params.get("base_model") or _litellm_params.get("model")
                 )
                 _potential_error_str += (
-                    f"Model={deployment_model}, Max Input Tokens={max_input_tokens}, Got={input_tokens}"
+                    f"\n  {deployment_model}: max_input_tokens={max_input_tokens}, got {input_tokens} input tokens"
                 )
                 continue
 

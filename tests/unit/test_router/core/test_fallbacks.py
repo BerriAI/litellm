@@ -1,6 +1,7 @@
 """Cross-group fallbacks of a router core: where the chain comes from, how it is walked, and what is raised."""
 
 from collections.abc import Callable, Mapping
+from typing import Final
 
 import pytest
 
@@ -687,6 +688,58 @@ async def test_router_debug_on_an_unmatched_context_window_chain_says_no_fallbac
 
 
 @pytest.mark.asyncio
+async def test_router_debug_names_only_the_chain_that_ran_not_the_whole_config(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    unrelated: Final = [{f"unrelated-{index}": ["x"]} for index in range(50)]
+    core = build(make_core, fallbacks=[{"a": ["b"]}, *unrelated])
+    show_router_debug(host)
+    host.answer("openai/a", context_window())
+    host.answer("openai/b", context_window())
+
+    with pytest.raises(litellm.ContextWindowExceededError) as raised:
+        await complete(core)
+
+    message: Final = str(raised.value)
+    assert "fallbacks: 'a' -> ['b']" in message
+    assert "fallbacks: 'b' -> " not in message
+    for entry in unrelated:
+        assert next(iter(entry)) not in message
+
+
+@pytest.mark.asyncio
+async def test_router_debug_states_how_many_groups_the_config_covers_when_the_chain_does_not_match(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core = build(make_core, fallbacks=[{"b": ["c"]}, {"c": ["a"]}])
+    show_router_debug(host)
+    host.answer("openai/a", context_window())
+
+    with pytest.raises(litellm.ContextWindowExceededError) as raised:
+        await complete(core)
+
+    assert "fallbacks has no chain for 'a' (2 other model groups are configured)" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_router_debug_reports_a_failed_hop_as_one_line_without_repeating_its_own_hint(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core = build(make_core, fallbacks=[{"a": ["b"]}, {"b": ["c"]}, {"c": ["a"]}])
+    show_router_debug(host)
+    host.answer("openai/a", context_window())
+    host.answer("openai/b", context_window())
+    host.answer("openai/c", context_window())
+
+    with pytest.raises(litellm.ContextWindowExceededError) as raised:
+        await complete(core)
+
+    message: Final = str(raised.value)
+    assert message.count("LiteLLM: model group") == 1
+    assert message.count("context_window_fallbacks is not set") == 1
+
+
+@pytest.mark.asyncio
 async def test_router_debug_on_content_policy_without_any_chain_hints_at_content_policy_fallbacks(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
@@ -698,7 +751,7 @@ async def test_router_debug_on_content_policy_without_any_chain_hints_at_content
         await complete(core)
 
     message = str(raised.value)
-    assert "model=a. content_policy_fallback=None. fallbacks=None." in message
+    assert "model=a. content_policy_fallbacks is not set." in message
     assert message.endswith("LiteLLM: model group 'a' failed with the error above. No fallback was attempted.")
 
 

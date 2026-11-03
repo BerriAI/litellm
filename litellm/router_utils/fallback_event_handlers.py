@@ -585,6 +585,28 @@ def _resolved_a_specific_chain(
     return generic_idx is None or resolved is not fallbacks[generic_idx]["*"]
 
 
+def get_fallback_chain_for_lookup_groups(
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
+    lookup_groups: tuple[str, ...],
+) -> tuple[str, list[str]] | None:  # mutable-ok: mirrors get_fallback_model_group's contract
+    """The chain a request follows, with the lookup group that owns it.
+
+    The owner is "*" when the chain comes from the generic entry, which applies to every
+    model group rather than to one of the lookup groups. A pre-routing hook makes the tier
+    the first lookup group, so the owner is not always the group the caller requested.
+    """
+    results: Final = tuple(
+        (group, get_fallback_model_group(fallbacks=fallbacks, model_group=group)) for group in lookup_groups
+    )
+    specific: Final = next((entry for entry in results if _resolved_a_specific_chain(fallbacks, entry[1])), None)
+    if specific is not None and specific[1][0] is not None:
+        return specific[0], specific[1][0]
+    generic: Final = next((entry for entry in results if entry[1][0] is not None), None)
+    if generic is None or generic[1][0] is None:
+        return None
+    return "*", generic[1][0]
+
+
 def get_fallback_model_group_for_lookup_groups(
     fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
     lookup_groups: tuple[str, ...],
