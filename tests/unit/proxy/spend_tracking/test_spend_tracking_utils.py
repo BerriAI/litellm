@@ -7334,7 +7334,10 @@ def test_latest_turn_mode_keeps_the_classifier_audit_with_its_originating_reques
 ) -> None:
     from litellm.proxy import proxy_server
 
-    originating: Final = {"model": "gpt-4o-mini", "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "route me"}]}
+    originating: Final = {
+        "model": "gpt-4o-mini",
+        "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "route me"}],
+    }
     classifier_input: Final = {"model": "classifier", "messages": [{"role": "user", "content": "route me"}]}
     standard_payload: Final = {
         "call_type": "acompletion",
