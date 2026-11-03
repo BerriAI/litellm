@@ -472,7 +472,7 @@ def test_the_proxy_has_no_video_delete_route_so_a_dashscope_task_is_never_touche
 
 @pytest.mark.parametrize(
     ("operation", "message"),
-    [("remix", "Video remix is not supported by DashScope"), ("list", "DashScope API key is required")],
+    [("remix", "Video remix is not supported by DashScope"), ("list", "Video list is not supported by DashScope")],
 )
 def test_operations_dashscope_has_no_api_for_answer_an_error_and_send_nothing_upstream(
     gateway: Gateway, operation: str, message: str

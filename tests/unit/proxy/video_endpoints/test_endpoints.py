@@ -753,6 +753,41 @@ def test_list__provider_only_never_borrows_a_deployment_the_key_cannot_use(
     assert upstream.calls.last.request.url.host != _DEPLOYMENT_ARK_HOST
 
 
+def test_list__provider_only_skips_a_deployment_the_router_sends_to_another_provider(
+    proxy_client_for_key_models: Callable[[list[str]], TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "haiku",
+                    "litellm_params": {"model": "claude-haiku-4-5", "api_key": "deployment-anthropic-key"},
+                    "model_info": {"team_id": "team-video"},
+                },
+                {
+                    "model_name": "sora",
+                    "litellm_params": {"model": "openai/sora-2", "api_key": "deployment-openai-key"},
+                },
+            ]
+        ),
+    )
+    team_key: Final = UserAPIKeyAuth(api_key="sk-video-list", team_id="team-video")
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth, lambda: team_key)
+    client: Final = TestClient(proxy_server.app)
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.get("https://api.openai.com/v1/videos").mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": []})
+        )
+        response: Final = client.get("/v1/videos", params={"custom_llm_provider": "openai"})
+
+    assert response.status_code == 200, response.text
+    assert upstream.call_count == 1
+    assert upstream.calls.last.request.headers["authorization"] == "Bearer deployment-openai-key"
+
+
 def test_list__provider_only_on_a_proxy_without_a_router_is_a_clean_client_error(
     proxy_client_for_key_models: Callable[[list[str]], TestClient], monkeypatch: pytest.MonkeyPatch
 ) -> None:

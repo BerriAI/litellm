@@ -23,6 +23,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import MAX_FILE_LIST_LIMIT
+from litellm.litellm_core_utils.routing_common_utils import provider_for_generic_call
 from litellm.proxy._types import ProxyException
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
@@ -575,15 +576,22 @@ def get_team_provider_deployment_id(
 ) -> str | None:
     if llm_router is None:
         return None
-    match: Final = next(
-        _authorized_provider_credentials(llm_router, user_api_key_dict, custom_llm_provider, True), None
+    registry: Final = llm_router.registry()
+    authorized_deployments: Final = (
+        registry.credentials(model_id, form="deployment", team_id=user_api_key_dict.team_id)
+        for model_id, _ in _authorized_provider_credentials(llm_router, user_api_key_dict, custom_llm_provider, True)
     )
-    deployment: Final = (
-        None
-        if match is None
-        else llm_router.registry().credentials(match[0], form="deployment", team_id=user_api_key_dict.team_id)
+    routed_deployment: Final = next(
+        (
+            deployment
+            for deployment in authorized_deployments
+            if deployment is not None
+            and provider_for_generic_call(deployment.litellm_params.model_dump(exclude_none=True))
+            == custom_llm_provider
+        ),
+        None,
     )
-    return None if deployment is None else deployment.model_info.id
+    return None if routed_deployment is None else routed_deployment.model_info.id
 
 
 def _authorized_provider_credentials(
