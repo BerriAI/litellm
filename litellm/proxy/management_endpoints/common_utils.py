@@ -1,6 +1,6 @@
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
@@ -44,6 +44,8 @@ def validate_budget_duration(budget_duration: str | None, status_code: int = 400
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.models.team import TeamMemberBudgetWindow
+from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.proxy._types import (  # re-exported
     CommonProxyErrors,
     KeyRequestBase,
@@ -69,8 +71,11 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
     from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+    from litellm.repositories.prisma_protocols import TableActions
 
 _user_has_admin_view: Final = user_api_key_has_admin_view
 
@@ -623,6 +628,24 @@ def _has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
     """A budget is meaningful if at least one limit is actually set; an empty
     list (no model restriction) and None both count as unset."""
     return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
+
+
+async def upsert_team_member_budget_windows(
+    table: "TableActions[prisma_models.LiteLLM_TeamMembership]",
+    team_id: str,
+    user_id: str,
+    windows: Sequence[TeamMemberBudgetWindow],
+) -> LiteLLM_TeamMembership:
+    payload: Final = "[" + ",".join(window.model_dump_json() for window in windows) + "]"
+    membership: Final = await table.upsert(
+        where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
+        data={
+            "create": {"user_id": user_id, "team_id": team_id, "budget_limits": payload},
+            "update": {"budget_limits": payload},
+        },
+        include={"litellm_budget_table": True},
+    )
+    return LiteLLM_TeamMembership.model_validate(membership.model_dump())
 
 
 async def upsert_budget_and_membership(

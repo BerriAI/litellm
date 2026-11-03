@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "../../tests/test-utils";
@@ -47,6 +47,35 @@ afterEach(() => {
 });
 
 describe("Teams creation integration", () => {
+  it("should preserve default member budget windows when additional settings are collapsed", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderWithProviders(<Teams accessToken="sk-session-test" userID="test-admin" userRole="Admin" premiumUser />);
+    await user.click(screen.getAllByRole("button", { name: /create team/i })[0]);
+    await screen.findByLabelText(/team name/i);
+    await user.click(screen.getByText("Additional Settings"));
+    await user.click(screen.getByRole("switch", { name: "Enable budget windows" }));
+    await act(async () => {
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Window 1 budget (USD)" }), { target: { value: "20" } });
+    });
+    await user.click(screen.getByRole("button", { name: /Add Budget Window/i }));
+    await user.click(screen.getByRole("combobox", { name: "Window 2 duration" }));
+    await user.click(await screen.findByRole("option", { name: "Monthly" }));
+    await act(async () => {
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Window 2 budget (USD)" }), { target: { value: "200" } });
+      fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Budget Team" } });
+    });
+    await user.click(screen.getByText("Additional Settings"));
+    await user.click(screen.getAllByRole("button", { name: /create team/i }).at(-1)!);
+    await waitFor(() =>
+      expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/team/new"))).toBe(true),
+    );
+    const request = vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes("/team/new"));
+    expect(JSON.parse(String(request?.[1]?.body)).team_member_budget_limits).toEqual([
+      { budget_duration: "24h", max_budget: 20 },
+      { budget_duration: "30d", max_budget: 200 },
+    ]);
+  });
+
   it("sends a configured default member per-model budget", async () => {
     const user = userEvent.setup({ delay: null });
     renderWithProviders(<Teams accessToken="sk-session-test" userID="test-admin" userRole="Admin" premiumUser />);

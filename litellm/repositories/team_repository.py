@@ -82,6 +82,7 @@ _JSON_ENCODED_TEAM_FIELDS: Final = (
     "model_max_budget",
     "router_settings",
     "budget_limits",
+    "team_member_budget_limits",
     "members_with_roles",
 )
 

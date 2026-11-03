@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 
-import { chooseSelectOption, fireEvent, renderWithProviders, screen, waitFor } from "@/../tests/test-utils";
+import { act, chooseSelectOption, fireEvent, renderWithProviders, screen, waitFor } from "@/../tests/test-utils";
 
 import TeamAdminSettingsForm, { type TeamAdminMetadataSettings } from "./TeamAdminSettingsForm";
 
@@ -299,5 +299,26 @@ describe("TeamAdminSettingsForm", () => {
       expect(screen.queryByLabelText("Cost Center")).not.toBeInTheDocument();
       expect(screen.getByLabelText("Tokens per minute Limit (TPM)")).toBeInTheDocument();
     });
+  });
+});
+
+describe("team admin budget windows form", () => {
+  it("should configure windows with the same optional editor when permitted", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm(new Set(["team_member_budget_limits"]));
+    const toggle = screen.getByRole("switch", { name: "Enable budget windows" });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+    act(() =>
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Window 1 budget (USD)" }), { target: { value: "20" } }),
+    );
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith({ team_member_budget_limits: [{ budget_duration: "24h", max_budget: 20 }] }),
+    );
+  });
+  it("should hide windows when the proxy has not granted permission", () => {
+    renderForm(new Set(["tpm_limit"]));
+    expect(screen.queryByRole("switch", { name: "Enable budget windows" })).not.toBeInTheDocument();
   });
 });

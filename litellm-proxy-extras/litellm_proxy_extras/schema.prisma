@@ -179,6 +179,7 @@ model LiteLLM_ModelTable {
 
 // Assign prod keys to groups, not individuals 
 model LiteLLM_TeamTable {
+    team_member_budget_limits Json?
 		team_id    String @id @default(uuid())
     team_alias  String? 
     organization_id String?
@@ -799,6 +800,7 @@ model LiteLLM_UserNotifications {
 }
 
 model LiteLLM_TeamMembership {
+  budget_limits Json?
   // Use this table to track the Internal User's Spend within a Team + Set Budgets, rpm limits for the user within the team
   user_id    String
   team_id    String

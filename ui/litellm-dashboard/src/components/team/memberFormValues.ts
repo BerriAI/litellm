@@ -3,8 +3,10 @@ import {
   modelMaxBudgetToEntries,
   type ModelMaxBudget,
 } from "../key_team_helpers/ModelMaxBudgetEditor";
+import type { BudgetWindowEntry } from "../key_team_helpers/BudgetWindowsEditor";
+import { isMemberBudgetWindows } from "./memberBudgetWindowSchema";
 
-export type MemberFieldValue = string | number | null | undefined | string[] | ModelMaxBudget;
+export type MemberFieldValue = string | number | null | undefined | string[] | ModelMaxBudget | BudgetWindowEntry[];
 
 export type MemberFormValues = Record<string, MemberFieldValue>;
 
@@ -30,6 +32,8 @@ export interface MemberAdditionalField {
 }
 
 export interface MemberFieldsConfig {
+  showBudgetWindows?: boolean;
+  defaultBudgetWindows?: BudgetWindowEntry[];
   roleOptions: Array<{ label: string; value: string }>;
   defaultRole?: string;
   showEmail?: boolean;
@@ -62,6 +66,7 @@ export const memberFieldNames = (config: MemberFieldsConfig): string[] => [
   ...(config.showEmail ? ["user_email"] : []),
   ...(config.showUserId ? ["user_id"] : []),
   "role",
+  ...(config.showBudgetWindows ? ["budget_limits"] : []),
   ...(config.additionalFields ?? []).map((field) => field.name),
 ];
 
@@ -76,6 +81,7 @@ export const buildMemberFormValues = (
   if (mode === "edit" && initialData) {
     const seeded: MemberFormValues = {
       ...initialData,
+      budget_limits: isMemberBudgetWindows(initialData.budget_limits) ? initialData.budget_limits : [],
       role: (initialData.role as string) || config.defaultRole,
       max_budget_in_team: initialData.max_budget_in_team ?? null,
       tpm_limit: initialData.tpm_limit ?? null,
@@ -92,7 +98,7 @@ export const buildMemberFormValues = (
     return pickFieldNames(config, seeded);
   }
 
-  return pickFieldNames(config, { role: config.defaultRole || config.roleOptions[0]?.value });
+  return pickFieldNames(config, { role: config.defaultRole || config.roleOptions[0]?.value, budget_limits: [] });
 };
 
 const emptyValueForType = (type: MemberFieldType | undefined): MemberFieldValue => {
@@ -112,7 +118,12 @@ const emptyValueForType = (type: MemberFieldType | undefined): MemberFieldValue 
 
 export const emptyMemberFormValues = (config: MemberFieldsConfig): MemberFormValues => {
   const typeByName = new Map((config.additionalFields ?? []).map((field) => [field.name, field.type]));
-  return Object.fromEntries(memberFieldNames(config).map((name) => [name, emptyValueForType(typeByName.get(name))]));
+  return Object.fromEntries(
+    memberFieldNames(config).map((name) => [
+      name,
+      name === "budget_limits" ? [] : emptyValueForType(typeByName.get(name)),
+    ]),
+  );
 };
 
 export const buildMemberFormData = (values: MemberFormValues): MemberFormValues =>

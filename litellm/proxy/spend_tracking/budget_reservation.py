@@ -582,6 +582,24 @@ async def _get_budget_counters(
     )
     if team_member_counter is not None:
         counters.append(team_member_counter)
+    if team_object is not None and valid_token.user_id is not None:
+        from litellm.proxy.common_utils.team_member_budget import MemberBudgetCounter, get_team_member_budget_windows
+
+        membership: Final = await _cached_team_membership(valid_token.user_id, team_object.team_id, user_api_key_cache)
+        for window in get_team_member_budget_windows(team_object, membership):
+            counter = MemberBudgetCounter.for_member(valid_token.user_id, team_object.team_id, window.budget_duration)
+            counters.append(
+                _BudgetCounter(
+                    counter_key=counter.key,
+                    max_budget=window.max_budget,
+                    fallback_spend=0.0,
+                    entity_type="TeamMember",
+                    entity_id=counter.entity_id,
+                    spend_log_entity_id=counter.entity_id,
+                    window_duration=counter.duration.value,
+                    window_start=counter.start,
+                )
+            )
 
     org_counter: Final = await _get_org_budget_counter(
         valid_token=valid_token,
@@ -726,6 +744,21 @@ def _dedupe_tags(tags: list[str]) -> list[str]:
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
+async def _cached_team_membership(
+    user_id: str, team_id: str, user_api_key_cache: UserApiKeyCache
+) -> LiteLLM_TeamMembership | None:
+    cached: Final = _CACHED_VALUE.validate_python(
+        await user_api_key_cache.async_get_cache(
+            key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
+        )
+    )
+    if isinstance(cached, LiteLLM_TeamMembership):
+        return cached
+    if isinstance(cached, dict):
+        return LiteLLM_TeamMembership.model_validate(cached)
+    return None
+
+
 async def _get_team_member_budget_counter(
     valid_token: UserAPIKeyAuth,
     team_object: LiteLLM_TeamTable | None,
@@ -738,14 +771,7 @@ async def _get_team_member_budget_counter(
     membership_cache_key: Final = team_membership_reservation_cache_key(
         user_id=valid_token.user_id, team_id=team_object.team_id
     )
-    cached_team_membership: Final = _CACHED_VALUE.validate_python(
-        await user_api_key_cache.async_get_cache(key=membership_cache_key)
-    )
-    team_membership: LiteLLM_TeamMembership | None = None
-    if isinstance(cached_team_membership, LiteLLM_TeamMembership):
-        team_membership = cached_team_membership
-    elif isinstance(cached_team_membership, dict):
-        team_membership = LiteLLM_TeamMembership(**cached_team_membership)
+    team_membership: Final = await _cached_team_membership(valid_token.user_id, team_object.team_id, user_api_key_cache)
 
     member_budget_row: Final = team_membership.litellm_budget_table if team_membership is not None else None
     now: Final = datetime.now(timezone.utc)

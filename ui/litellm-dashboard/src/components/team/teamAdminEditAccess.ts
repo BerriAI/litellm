@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { MemberBudgetWindow } from "./memberBudgetWindowSchema";
 import { numberOrNull } from "@/lib/forms/numberOrNull";
 
 import {
@@ -93,6 +94,7 @@ const TEAM_ADMIN_FIELD_LABELS: ReadonlyMap<string, string> = new Map([
   ["soft_budget", "Soft Budget (USD)"],
   ["team_member_budget", "Member Default Budget (USD)"],
   ["team_member_budget_duration", "Member Default Budget Duration"],
+  ["team_member_budget_limits", "Default member budget windows"],
   ["team_member_tpm_limit", "Member Default TPM Limit"],
   ["team_member_rpm_limit", "Member Default RPM Limit"],
   [TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION, "Raise the team's max budget"],
@@ -105,11 +107,11 @@ export const teamAdminFieldLabel = (field: string): string => TEAM_ADMIN_FIELD_L
 
 export type TeamAdminSettingsValues = { readonly [F in TeamAdminNumericSettingsField]?: string | number | null } & {
   readonly [F in TeamAdminDurationSettingsField]?: string | null;
-};
+} & { readonly team_member_budget_limits?: MemberBudgetWindow[] };
 
 export type TeamAdminSettingsChanges = { readonly [F in TeamAdminNumericSettingsField]?: number | null } & {
   readonly [F in TeamAdminDurationSettingsField]?: string | null;
-} & { readonly metadata?: Record<string, unknown> };
+} & { readonly metadata?: Record<string, unknown>; readonly team_member_budget_limits?: MemberBudgetWindow[] };
 
 const durationOrNull = (value: string | number | null | undefined): string | null =>
   typeof value === "string" && value !== "" ? value : null;
@@ -132,13 +134,19 @@ export const teamAdminSettingsChanges = (
   values: TeamAdminSettingsValues,
   initialValues: TeamAdminSettingsValues,
   editableFields: ReadonlySet<string>,
-): TeamAdminSettingsChanges =>
-  Object.fromEntries(
+): TeamAdminSettingsChanges => {
+  const changes = Object.fromEntries(
     TEAM_ADMIN_SETTINGS_FIELDS.flatMap((field) => {
       const change = editableFields.has(field) ? changedValue(field, values[field], initialValues[field]) : null;
       return change === null ? [] : [change];
     }),
   );
+  if (!editableFields.has("team_member_budget_limits")) return changes;
+  const windows = values.team_member_budget_limits;
+  if (windows === undefined) return changes;
+  if (JSON.stringify(windows) === JSON.stringify(initialValues.team_member_budget_limits ?? [])) return changes;
+  return { ...changes, team_member_budget_limits: windows };
+};
 
 export const parseTeamEditAccess = (callerEditAccess: unknown): TeamEditAccess => {
   const parsed = callerEditAccessSchema.safeParse(callerEditAccess);

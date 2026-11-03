@@ -18,6 +18,8 @@ import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { CircleHelp } from "lucide-react";
 import { useMemo, useState, type ComponentProps } from "react";
 import { TeamData, TeamMemberBudgetSource, TeamMembership } from "./TeamInfo";
+import { effectiveMemberBudgetWindows } from "./memberBudgetWindowSchema";
+import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
 
 const BUDGET_SOURCE_LABELS: Record<Exclude<TeamMemberBudgetSource, "none">, string> = {
   team_default: "Team default",
@@ -167,7 +169,37 @@ export default function TeamMemberTab({
     );
   };
 
+  const showBudgetWindows =
+    Boolean(teamData.team_info.team_member_budget_limits?.length) ||
+    teamData.team_memberships.some((membership) => Boolean(membership.budget_limits?.length));
+
   const extraColumns: NonNullable<ComponentProps<typeof MemberTable>["extraColumns"]> = [
+    ...(showBudgetWindows
+      ? [
+          {
+            title: "Budget windows",
+            key: "budget_windows",
+            render: (record: Member) => {
+              const override = findMembership(record.user_id)?.budget_limits;
+              const windows = effectiveMemberBudgetWindows(teamData.team_info.team_member_budget_limits, override);
+              if (!windows.length) return <span className="text-muted-foreground">Not set</span>;
+              return (
+                <div className="space-y-1">
+                  {windows.map((window) => (
+                    <div key={window.budget_duration}>
+                      ${formatNumberWithCommas(window.max_budget ?? 0, 2)}{" "}
+                      {getBudgetDurationLabel(window.budget_duration)}
+                    </div>
+                  ))}
+                  <div className="text-xs text-muted-foreground">
+                    {override?.length ? "Member override" : "Team default"}
+                  </div>
+                </div>
+              );
+            },
+          },
+        ]
+      : []),
     {
       title: (
         <span className="flex items-center gap-1">
@@ -334,7 +366,7 @@ export default function TeamMemberTab({
           const membership = findMembership(record.user_id);
           setSelectedEditMember(
             seedMemberBudgetFields(
-              record,
+              { ...record, budget_limits: membership?.budget_limits ?? [] },
               membership?.litellm_budget_table,
               teamData.team_info.team_member_budget_table?.model_max_budget,
             ),

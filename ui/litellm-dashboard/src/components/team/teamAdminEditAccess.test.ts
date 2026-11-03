@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { MemberBudgetWindow } from "./memberBudgetWindowSchema";
 
 import {
   type TeamAdminMetadataContext,
@@ -363,5 +364,23 @@ describe("teamAdminDeclaredFields", () => {
     expect(teamAdminDeclaredFields(fields, new Set(["priority"]))).toStrictEqual([
       { key: "cost_center", label: "Cost Center" },
     ]);
+  });
+});
+
+describe("team admin budget windows", () => {
+  const windows: MemberBudgetWindow[] = [{ budget_duration: "24h", max_budget: 20 }];
+  it("should send configured windows only when the proxy permits editing them", () => {
+    const values = { team_member_budget_limits: windows };
+    const initial = { team_member_budget_limits: [] };
+    expect(teamAdminSettingsChanges(values, initial, new Set(["team_member_budget_limits"]))).toEqual(values);
+    expect(teamAdminSettingsChanges(values, initial, new Set())).toEqual({});
+  });
+  it("should clear configured defaults without resending unchanged windows", () => {
+    const initial = { team_member_budget_limits: windows };
+    const permitted = new Set(["team_member_budget_limits"]);
+    expect(teamAdminSettingsChanges({ team_member_budget_limits: [] }, initial, permitted)).toEqual({
+      team_member_budget_limits: [],
+    });
+    expect(teamAdminSettingsChanges(initial, initial, permitted)).toEqual({});
   });
 });
