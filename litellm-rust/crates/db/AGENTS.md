@@ -41,7 +41,7 @@ Python and SQLx run side by side until every repository operation is native, so 
 | Startup connection budget | `postgres_connection_budget_message` | Counts the native writer and reader pools |
 | Read replica routing | `routing_prisma_wrapper.py`, `DATABASE_URL_READ_REPLICA` | `Pools`: callers pick `writer()` or `read()`; a failed reader acquire falls back to the writer and skips the reader for 30s |
 | Error classification, `lock_timeout` on rollups | `exception_handler.py`, `rollup_lock_timeout.py` | Planned |
-| `ServiceTypes.DB` events per round trip | `db_span.py`, `log_db_metrics.py` | Planned |
+| `ServiceTypes.DB` events per round trip | `db_span.py`, `log_db_metrics.py` | Wrap each native operation in `observe` with the call type and table its Prisma version uses; the bridge forwards events to `ServiceLoggingEvents`. Nesting under an outer Python `db_span` is not detected |
 | Auth lookup gate, fail open on DB outage, reader choice per query | `db_lookup_gate.py`, `allow_requests_on_db_unavailable` | With each ported auth read |
 | Health watchdog, engine reaper, drain tracker, engine recreation | `utils.py`, `query_engine_reaper.py`, `prisma_client.py` | Not needed: SQLx pools reconnect per connection and `close` waits for checked-out connections |
 | Migrations, `check_migration`, views | `prisma_client.py`, `create_views.py` | Prisma keeps them until the SQLx cutover |

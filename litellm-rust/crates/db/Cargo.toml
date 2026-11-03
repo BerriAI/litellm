@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 chrono.workspace = true
 litellm-circuit-breaker.workspace = true
+litellm-error.workspace = true
 litellm-secret-value.workspace = true
 macro_rules_attribute.workspace = true
 serde.workspace = true
