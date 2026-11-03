@@ -1596,7 +1596,7 @@ def test_router_call_with_request_prices_bills_them_over_the_deployment_rates():
     )
 
 
-def test_direct_call_flat_rates_beat_the_catalogs_tiered_pricing():
+def test_direct_call_flat_rates_override_the_catalogs_tiers_per_direction():
     model_key: Final = "openai/lit-tiered-catalog-model"
     litellm.register_model(
         {
@@ -1623,7 +1623,47 @@ def test_direct_call_flat_rates_beat_the_catalogs_tiered_pricing():
         assert response._hidden_params["response_cost"] == pytest.approx(
             response.usage.prompt_tokens * 1e-05 + response.usage.completion_tokens * 2e-05
         )
+        input_only: Final = litellm.completion(
+            model=model_key,
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            mock_response="ok",
+            input_cost_per_token=1e-05,
+        )
+        assert input_only._hidden_params["response_cost"] == pytest.approx(
+            input_only.usage.prompt_tokens * 1e-05 + input_only.usage.completion_tokens * 6e-07
+        )
         assert "input_cost_per_token" not in litellm.model_cost[model_key]
+    finally:
+        litellm.model_cost.pop(model_key, None)
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_direct_call_with_only_a_per_second_rate_on_a_mapped_model_is_billed_per_second():
+    model_key: Final = "openai/lit-mapped-token-rates-model"
+    litellm.register_model(
+        {
+            model_key: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    try:
+        response: Final = litellm.completion(
+            model=model_key,
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            mock_response="ok",
+            cost_per_second=0.02,
+        )
+        token_rate_cost: Final = response.usage.prompt_tokens * 1e-06 + response.usage.completion_tokens * 2e-06
+        assert response._hidden_params["response_cost"] != pytest.approx(token_rate_cost)
+        assert response._hidden_params["response_cost"] == pytest.approx(0.02 * response._response_ms / 1000, rel=0.25)
+        assert litellm.model_cost[model_key]["input_cost_per_token"] == 1e-06
     finally:
         litellm.model_cost.pop(model_key, None)
         _invalidate_model_cost_lowercase_map()

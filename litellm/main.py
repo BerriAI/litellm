@@ -1447,8 +1447,7 @@ def _per_call_model_info(
     already prices it. The cost map row for the model is overlaid with the registered deployment entry and then with
     the custom pricing fields the request itself set, so a Router call pays request overrides over deployment prices.
     The entry travels on the logging object and is never written into ``litellm.model_cost``, so the next call for the
-    same model name is priced from the cost map again. Flat token rates on the call replace an inherited
-    ``tiered_pricing`` table, which would otherwise win in the cost calculator."""
+    same model name is priced from the cost map again."""
     deployment: Final = _router_deployment_model_info(kwargs)
     registered: Final = litellm.model_cost.get(str(deployment["id"])) if deployment is not None else None
     custom: Final = {
@@ -1473,12 +1472,42 @@ def _per_call_model_info(
     catalog: Final = (
         {**row, **{key: value for key, value in registered.items() if value is not None}} if registered else row
     )
-    flat_rates_changed: Final = any(
-        key in custom and custom[key] != catalog.get(key) for key in ("input_cost_per_token", "output_cost_per_token")
-    )
-    base: Final = {key: value for key, value in catalog.items() if not (flat_rates_changed and key == "tiered_pricing")}
     zeroed: Final = zeroed_ptu_pricing(deployment, custom) if deployment is not None else None
-    return _MODEL_INFO.validate_python({**base, **custom, **(zeroed or {}), "mode": catalog.get("mode") or mode})
+    return _MODEL_INFO.validate_python(
+        {
+            **catalog,
+            **_token_rates_cleared_for_per_second_overrides(custom),
+            **custom,
+            **_tiers_with_flat_overrides(catalog, custom),
+            **(zeroed or {}),
+            "mode": catalog.get("mode") or mode,
+        }
+    )
+
+
+_FLAT_TOKEN_RATE_FIELDS: Final = ("input_cost_per_token", "output_cost_per_token")
+_PER_SECOND_RATE_FIELDS: Final = ("cost_per_second", "input_cost_per_second", "output_cost_per_second")
+_TIERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _token_rates_cleared_for_per_second_overrides(custom: Mapping[str, object]) -> Mapping[str, object]:
+    """Token rates in the entry make the cost calculator skip per-second pricing, so a caller who sets only a
+    per-second rate gets the catalog's token rates and tier table cleared for this call."""
+    if not any(key in custom for key in _PER_SECOND_RATE_FIELDS) or any(
+        key in custom for key in _FLAT_TOKEN_RATE_FIELDS
+    ):
+        return {}
+    return {"input_cost_per_token": None, "output_cost_per_token": None, "tiered_pricing": None}
+
+
+def _tiers_with_flat_overrides(catalog: Mapping[str, object], custom: Mapping[str, object]) -> Mapping[str, object]:
+    """A ``tiered_pricing`` table wins over flat rates in the cost calculator, so a flat rate the caller set is written
+    into every tier for that direction, and the other direction keeps each tier's own rate."""
+    overrides: Final = {key: custom[key] for key in _FLAT_TOKEN_RATE_FIELDS if key in custom}
+    tiers: Final = catalog.get("tiered_pricing")
+    if not overrides or not isinstance(tiers, (list, tuple)) or not tiers:
+        return {}
+    return {"tiered_pricing": [{**tier, **overrides} for tier in _TIERS.validate_python(tiers)]}
 
 
 def _catalog_row(model: str, custom_llm_provider: str) -> ModelInfo | None:
