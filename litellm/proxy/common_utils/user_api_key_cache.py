@@ -12,7 +12,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
-from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec, CacheValue
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -207,14 +207,14 @@ class UserApiKeyCache(DualCache):
             return None
         return decoded
 
-    def set_cache(self, key: str | None, value: object, local_only: bool = False, **kwargs: object):
+    def set_cache(self, key: str | None, value: CacheValue, local_only: bool = False, **kwargs: object):
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
         if key is not None and is_user_key_cache_key(key):
             return self.key_object_cache.set_cache(key=key, value=payload, local_only=local_only, **kwargs)
         return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
-    async def async_set_cache(self, key: str | None, value: object, local_only: bool = False, **kwargs: object):
+    async def async_set_cache(self, key: str | None, value: CacheValue, local_only: bool = False, **kwargs: object):
         """Inside a request the Redis SET rides the request's pipeline (memory is written at once); anywhere
         else, or with options the pipeline does not carry, it goes to Redis directly as before."""
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
@@ -274,7 +274,7 @@ class UserApiKeyCache(DualCache):
         self.key_object_cache.in_memory_cache.flush_cache()
 
     async def async_set_cache_pipeline(
-        self, cache_list: Sequence[tuple[str, object]], local_only: bool = False, **kwargs: object
+        self, cache_list: Sequence[tuple[str, CacheValue]], local_only: bool = False, **kwargs: object
     ) -> None:
         """
         Batch writes with the same Codec boundary as ``async_set_cache`` without

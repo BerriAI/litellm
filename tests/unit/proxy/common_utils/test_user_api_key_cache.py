@@ -1,3 +1,4 @@
+import datetime
 import hashlib
 import json
 from typing import Any
@@ -238,6 +239,20 @@ class TestUserApiKeyCache:
 
         with pytest.raises(TypeError):
             fake.set_cache("k2", {"ok": NotSerializable()})
+
+    @pytest.mark.asyncio
+    async def test_a_model_holding_a_datetime_is_cached_as_its_json_dump(self):
+        cache = UserApiKeyCache()
+        key_obj = UserAPIKeyAuth(token="abc", expires=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc))
+
+        await cache.async_set_cache("k", key_obj, model_type=UserAPIKeyAuth)
+
+        stored = cache.get_cache("k", local_only=True)
+        assert stored == key_obj.model_dump(mode="json")
+        assert json.loads(json.dumps(stored)) == stored
+        cached = await cache.async_get_cache("k", model_type=UserAPIKeyAuth)
+        assert cached is not None
+        assert cached.model_dump(mode="json") == key_obj.model_dump(mode="json")
 
 
 class TestUserKeyObjectPartition:
