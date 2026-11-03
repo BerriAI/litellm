@@ -12,7 +12,7 @@ import os
 import sys
 import threading
 import warnings
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import CodeType, FrameType, MappingProxyType, SimpleNamespace
@@ -3894,21 +3894,29 @@ class _ScriptedAgenticFollowUps(CustomLogger):
         self.shared_call_succeeded: Final = asyncio.Event()
 
     async def async_should_run_agentic_loop(
-        self, response, model, messages, tools, stream, custom_llm_provider, kwargs
+        self,
+        response: object,
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Mapping[str, object],
     ) -> tuple[bool, dict[str, object]]:
+        assert isinstance(response, litellm.ModelResponse)
         return bool(response.choices[0].message.tool_calls), {"tool_calls": [{"id": "call_abc"}]}
 
     async def async_build_agentic_loop_plan(
         self,
-        tools,
-        model,
-        messages,
-        response,
-        anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params,
-        logging_obj,
-        stream,
-        kwargs,
+        tools: Mapping[str, object],
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: Mapping[str, object],
+        logging_obj: object,
+        stream: bool,
+        kwargs: Mapping[str, object],
     ) -> AgenticLoopPlan:
         follow_up: Final = self._follow_ups[min(self.plans_built, len(self._follow_ups) - 1)]
         self.plans_built += 1
@@ -3922,7 +3930,9 @@ class _ScriptedAgenticFollowUps(CustomLogger):
             ),
         )
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         if kwargs.get("litellm_call_id") == "shared-agentic-call":
             self.shared_call_succeeded.set()
 

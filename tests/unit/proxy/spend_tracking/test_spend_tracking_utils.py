@@ -4418,7 +4418,8 @@ def test_get_logging_payload_uses_recovered_combined_usage_on_failure():
     assert payload["total_tokens"] == 31
 
 
-def test_success_row_that_bills_a_failed_follow_up_counts_its_tokens_too():
+@pytest.mark.parametrize(("cache_hit", "own_cost"), [(False, 0.1), (True, 0.0)], ids=["fresh", "cached"])
+def test_success_row_bills_a_failed_follow_ups_cost_and_tokens(cache_hit: bool, own_cost: float):
     from litellm.litellm_core_utils.hidden_params import set_hidden_param
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.utils import ModelResponse, Usage
@@ -4443,13 +4444,14 @@ def test_success_row_that_bills_a_failed_follow_up_counts_its_tokens_too():
     set_hidden_param(fallback, "response_cost", 0.1)
     logger.record_served_rounds_for_failure(((Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7), 0.4),))
     logger.carry_failed_attempt_usage()
+    logger.model_call_details["cache_hit"] = cache_hit
     logger.prepare_response_cost(fallback, now)
 
     payload: Final = get_logging_payload(
         kwargs=logger.model_call_details, response_obj=fallback, start_time=now, end_time=now
     )
 
-    assert payload["spend"] == pytest.approx(0.1 + 0.4)
+    assert payload["spend"] == pytest.approx(own_cost + 0.4)
     assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (3 + 5, 1 + 2, 4 + 7)
 
 
