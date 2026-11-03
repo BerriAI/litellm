@@ -7644,6 +7644,7 @@ class TestMCPServerManager:
             host_progress_callback=None,
             allow_input_required=False,
             persistent_session: PersistentMCPSession | None = None,
+            on_dispatch=None,
         ):
             # Return a mock CallToolResult
             result = MagicMock(spec=CallToolResult)
@@ -7681,6 +7682,30 @@ class TestMCPServerManager:
 
         # Verify the MCP client call was awaited exactly once
         assert mock_client.call_tool.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_call_tool_hands_on_dispatch_to_the_mcp_client(self):
+        """The MCP client fires on_dispatch when it sends the call, so call_tool must hand it down."""
+        from mcp.types import CallToolResult
+
+        auth = self._unrestricted_auth()
+        manager, proxy_logging_obj = self._manager_ready_for_call_tool(
+            [MCPTool(name="test_tool", inputSchema={"type": "object"})],
+            caller=ListedToolsCaller(user_api_key_auth=auth),
+        )
+        manager.create_mcp_client = AsyncMock(return_value=_RetryFakeClient(result=CallToolResult(content=[])))
+        dispatched = MagicMock()
+
+        await manager.call_tool(
+            server_name="test-server",
+            name="test_tool",
+            arguments={},
+            user_api_key_auth=auth,
+            proxy_logging_obj=proxy_logging_obj,
+            on_dispatch=dispatched,
+        )
+
+        dispatched.assert_called_once_with()
 
     @staticmethod
     def _manager_ready_for_call_tool(
@@ -12179,9 +12204,12 @@ class _RetryFakeClient:
         raise_on_error=False,
         allow_input_required=False,
         persistent_session: PersistentMCPSession | None = None,
+        on_dispatch=None,
     ):
         self.attempts += 1
         self.persistent_sessions.append(persistent_session)
+        if on_dispatch is not None:
+            on_dispatch()
         if self._raises is not None:
             if raise_on_error:
                 raise self._raises
@@ -12318,6 +12346,56 @@ class TestOBOCallToolRetry:
         assert result is success
         manager._cred_provider.invalidate_credentials.assert_awaited_once()
         assert first.attempts == 1 and retry.attempts == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["plain", "relay", "obo_retry"])
+    async def test_call_regular_reports_every_sent_attempt_through_on_dispatch(self, path):
+        """on_dispatch tells the caller a tool may have run, so every attempt that is sent must reach
+        it: once on the plain and relay paths, twice when the OBO path retries after an upstream 401."""
+        manager = self._manager()
+        success = CallToolResult(content=[], isError=False)
+        clients = [_RetryFakeClient(raises=_UpstreamAuthError(401)), _RetryFakeClient(result=success)]
+        manager.create_mcp_client = AsyncMock(side_effect=clients if path == "obo_retry" else clients[1:])
+        servers = {
+            "plain": MCPServer(
+                server_id="plain-srv", name="plain", url="https://upstream.example/mcp", transport=MCPTransport.sse
+            ),
+            "relay": MCPServer(
+                server_id="relay-srv",
+                name="relay",
+                url="https://upstream.example/mcp",
+                transport=MCPTransport.sse,
+                auth_type=MCPAuth.true_passthrough,
+            ),
+            "obo_retry": MCPServer(
+                server_id="id-jag-srv",
+                name="id-jag",
+                url="https://upstream.example/mcp",
+                transport=MCPTransport.sse,
+                auth_type=MCPAuth.oauth2_id_jag,
+                client_id="gateway-client",
+                client_secret="gateway-secret",
+                token_exchange_endpoint="https://org-idp.example/oauth2/token",
+                id_jag_resource_token_endpoint="https://resource-as.example/oauth2/token",
+            ),
+        }
+        dispatched = MagicMock()
+
+        result = await manager._call_regular_mcp_tool(
+            mcp_server=servers[path],
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers={"Authorization": "Bearer caller-id-token"} if path == "obo_retry" else None,
+            raw_headers={"authorization": "Bearer caller-token"} if path == "relay" else None,
+            proxy_logging_obj=None,
+            on_dispatch=dispatched,
+        )
+
+        assert result is success
+        assert dispatched.call_count == (2 if path == "obo_retry" else 1)
 
     @pytest.mark.asyncio
     async def test_non_auth_error_does_not_retry(self):
@@ -12464,6 +12542,7 @@ class TestOBOConcurrencyLimit:
                 raise_on_error=False,
                 allow_input_required=False,
                 persistent_session: PersistentMCPSession | None = None,
+                on_dispatch=None,
             ):
                 inflight["current"] += 1
                 inflight["peak"] = max(inflight["peak"], inflight["current"])
@@ -12548,6 +12627,7 @@ class TestOBOConcurrencyLimit:
                 raise_on_error: bool = False,
                 allow_input_required: bool = False,
                 persistent_session: PersistentMCPSession | None = None,
+                on_dispatch: Callable[[], None] | None = None,
             ) -> CallToolResult:
                 sessions_seen.append(persistent_session)
                 return CallToolResult(content=[], isError=False)

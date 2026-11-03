@@ -157,6 +157,7 @@ from litellm.litellm_core_utils.hidden_params import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
+from litellm.litellm_core_utils.mcp_tool_replay import mcp_tools_executed
 from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
@@ -9168,6 +9169,7 @@ class PythonCore(DeprecatedRouterMembers):
             or original_model_group is None
             or is_guardrail_intervention(e)
             or unsupported_params_without_fallback
+            or mcp_tools_executed(e)
         ):
             raise e
 
@@ -9598,7 +9600,7 @@ class PythonCore(DeprecatedRouterMembers):
             response = add_retry_headers_to_response(response=response, attempted_retries=0, max_retries=None)
             return response
         except Exception as e:
-            if is_guardrail_intervention(e):
+            if is_guardrail_intervention(e) or mcp_tools_executed(e):
                 raise
             current_attempt = None
             original_exception = e
@@ -9709,6 +9711,8 @@ class PythonCore(DeprecatedRouterMembers):
                     # Always track the latest error so we raise the most
                     # recent exception instead of the first one.
                     original_exception = e
+                    if mcp_tools_executed(e):
+                        raise
 
                     ## LOGGING
                     kwargs = self._core_log_retry(kwargs=kwargs, e=e)

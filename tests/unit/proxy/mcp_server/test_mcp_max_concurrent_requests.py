@@ -67,8 +67,9 @@ class _AdmissionProbeClient(MCPClient):
         raise_on_error: bool = False,
         allow_input_required: bool = False,
         persistent_session: PersistentMCPSession | None = None,
+        on_dispatch: Callable[[], None] | None = None,
     ) -> CallToolResult:
-        del call_tool_request_params, host_progress_callback, raise_on_error, allow_input_required
+        del call_tool_request_params, host_progress_callback, raise_on_error, allow_input_required, on_dispatch
         if self._submitted is not None:
             self._submitted.set()
         if persistent_session is None:
@@ -121,6 +122,7 @@ def _patch_client_with_tracker(manager: MCPServerManager, tracker: _ConcurrencyT
                 host_progress_callback=None,
                 allow_input_required=False,
                 persistent_session: PersistentMCPSession | None = None,
+                on_dispatch=None,
             ):
                 tracker.enter(server.server_id)
                 try:

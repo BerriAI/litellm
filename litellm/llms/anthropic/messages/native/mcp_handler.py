@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import Any, Final, NamedTuple
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.mcp_tool_replay import MCPToolReplayGuard
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.types.llms.anthropic import (
     AnthropicMessagesTool,
@@ -149,6 +150,7 @@ async def anthropic_messages_with_mcp(
         messages=list(working_messages), stream=False, **loop_call_args
     )
 
+    replay_guard: Final = MCPToolReplayGuard()
     for _ in range(MAX_MCP_TOOL_USE_ITERATIONS):
         if _get_stop_reason(response) != "tool_use":
             break
@@ -170,6 +172,7 @@ async def anthropic_messages_with_mcp(
             litellm_trace_id=context.litellm_trace_id,
             request_tags=list(context.request_tags) if context.request_tags else None,
             guardrail_context=context.guardrail_context,
+            on_tool_dispatched=replay_guard.record_tool_dispatch,
         )
 
         # Every tool call was skipped, so there is nothing to feed back; a
@@ -182,9 +185,10 @@ async def anthropic_messages_with_mcp(
             {"role": "assistant", "content": list(_get_response_content(response))},
             _build_tool_result_message(tool_results),
         )
-        response = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
-            messages=list(working_messages), stream=False, **loop_call_args
-        )
+        with replay_guard:
+            response = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
+                messages=list(working_messages), stream=False, **loop_call_args
+            )
     else:
         verbose_logger.warning(
             "MCP tool loop hit its %s iteration cap for model %s; returning the last response",
@@ -192,11 +196,12 @@ async def anthropic_messages_with_mcp(
             model,
         )
 
-    client_response: Final = (
-        await with_safeguard_results(response, request_safeguards_evaluator(kwargs, working_messages))
-        if classified_here
-        else response
-    )
+    with replay_guard:
+        client_response: Final = (
+            await with_safeguard_results(response, request_safeguards_evaluator(kwargs, working_messages))
+            if classified_here
+            else response
+        )
     if stream:
         from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
             FakeAnthropicMessagesStreamIterator,

@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.mcp_tool_replay import MCPToolReplayGuard
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
     update_responses_tools_with_model_file_ids,
@@ -473,6 +474,7 @@ async def aresponses_api_with_mcp(
                 )
 
                 tool_trace_id: Final = _request_trace_id(request_kwargs)
+                replay_guard: Final = MCPToolReplayGuard()
                 tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
                     tool_server_map=tool_server_map,
                     served_tools=original_mcp_tools,
@@ -489,6 +491,7 @@ async def aresponses_api_with_mcp(
                         MappingProxyType({**kwargs, "metadata": metadata, "model": model})
                     ),
                     request_trace_id=_langfuse_request_trace_id(request_kwargs, tool_trace_id),
+                    on_tool_dispatched=replay_guard.record_tool_dispatch,
                 )
 
                 if tool_results:
@@ -515,8 +518,11 @@ async def aresponses_api_with_mcp(
                             tool_calls=tool_calls, tool_results=tool_results
                         )
 
-                    with internal_sub_call(
-                        logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None
+                    with (
+                        internal_sub_call(
+                            logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None
+                        ),
+                        replay_guard,
                     ):
                         final_response = await LiteLLM_Proxy_MCP_Handler.make_follow_up_call(
                             follow_up_input=follow_up_input,
