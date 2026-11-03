@@ -9069,6 +9069,9 @@ def bundled_provider_models(provider: str) -> tuple[str, ...]:
     return tuple(model for model in bundled if not is_hidden_as_retired(cost_map.get(model, {})))
 
 
+AZURE_MODEL_PLACEHOLDER: Final = "Azure-LLM"
+
+
 def get_valid_models(
     check_provider_endpoint: bool | None = None,
     custom_llm_provider: str | None = None,
@@ -9124,7 +9127,7 @@ def get_valid_models(
                 continue
 
             if provider == "azure":
-                valid_models.append("Azure-LLM")
+                valid_models.append(AZURE_MODEL_PLACEHOLDER)
             elif provider_config is not None and check_provider_endpoint and provider is not None:
                 valid_models.extend(
                     _get_valid_models_from_provider_api(
