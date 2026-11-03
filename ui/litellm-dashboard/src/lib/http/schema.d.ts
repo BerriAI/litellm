@@ -35920,6 +35920,8 @@ export interface components {
             drop_params?: boolean | string | null;
             /** Explicit Cache Read Input Token Cost */
             explicit_cache_read_input_token_cost?: number | null;
+            /** Fedramp Uplift Multiplier */
+            fedramp_uplift_multiplier?: number | null;
             /**
              * Fireworks Forward User Id
              * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
@@ -36158,8 +36160,6 @@ export interface components {
             regional_endpoint_uplift_multiplier?: number | null;
             /** Regional Processing Uplift Multiplier Eu */
             regional_processing_uplift_multiplier_eu?: number | null;
-            /** Fedramp Uplift Multiplier */
-            fedramp_uplift_multiplier?: number | null;
             /** Regional Processing Uplift Multiplier Us */
             regional_processing_uplift_multiplier_us?: number | null;
             /** Responses Api Version */
@@ -51561,6 +51561,8 @@ export interface components {
             drop_params?: boolean | string | null;
             /** Explicit Cache Read Input Token Cost */
             explicit_cache_read_input_token_cost?: number | null;
+            /** Fedramp Uplift Multiplier */
+            fedramp_uplift_multiplier?: number | null;
             /**
              * Fireworks Forward User Id
              * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
@@ -51799,8 +51801,6 @@ export interface components {
             regional_endpoint_uplift_multiplier?: number | null;
             /** Regional Processing Uplift Multiplier Eu */
             regional_processing_uplift_multiplier_eu?: number | null;
-            /** Fedramp Uplift Multiplier */
-            fedramp_uplift_multiplier?: number | null;
             /** Regional Processing Uplift Multiplier Us */
             regional_processing_uplift_multiplier_us?: number | null;
             /** Responses Api Version */
