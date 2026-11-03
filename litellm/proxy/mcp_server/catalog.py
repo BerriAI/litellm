@@ -126,7 +126,7 @@ def validate_provider_registration_conflicts(
 def _snapshot(
     manager: MCPServerManager,
     database_identity: str,
-    registration_only_servers: Mapping[str, LiteLLM_MCPServerTable],
+    provider_native_servers: Mapping[str, LiteLLM_MCPServerTable],
 ) -> CatalogSnapshot:
     from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
 
@@ -150,7 +150,7 @@ def _snapshot(
             {
                 **{key: value.model_copy(deep=True) for key, value in manager.catalog.config_registrations.items()},
                 **{key: manager.build_mcp_server_table(value) for key, value in servers.items()},
-                **{key: value.model_copy(deep=True) for key, value in registration_only_servers.items()},
+                **{key: value.model_copy(deep=True) for key, value in provider_native_servers.items()},
             }
         ),
     )
@@ -161,7 +161,7 @@ class CatalogSnapshots:
         self.manager = manager
         self._refresh_lock = asyncio.Lock()
         self._database_identity = ""
-        self._registration_only_servers: Mapping[str, LiteLLM_MCPServerTable] = MappingProxyType({})
+        self._provider_native_servers: Mapping[str, LiteLLM_MCPServerTable] = MappingProxyType({})
         self.config_registrations: Mapping[str, LiteLLM_MCPServerTable] = MappingProxyType({})
         self._arrival_ticket = 0
         self._completed_ticket = 0
@@ -179,7 +179,7 @@ class CatalogSnapshots:
     def validate_config_inventory(self, servers: Sequence[LiteLLM_MCPServerTable]) -> None:
         database_servers: Final = (
             *(self.manager.build_mcp_server_table(server) for server in self.manager.registry.values()),
-            *self._registration_only_servers.values(),
+            *self._provider_native_servers.values(),
         )
         validate_provider_registration_conflicts(servers, database_servers)
 
@@ -215,11 +215,11 @@ class CatalogSnapshots:
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            return _snapshot(self.manager, self._database_identity, self._registration_only_servers)
+            return _snapshot(self.manager, self._database_identity, self._provider_native_servers)
         from litellm.proxy.proxy_server import should_load_db_object
 
         if not should_load_db_object("mcp"):
-            return _snapshot(self.manager, self._database_identity, self._registration_only_servers)
+            return _snapshot(self.manager, self._database_identity, self._provider_native_servers)
         from litellm.proxy.mcp_server.db import get_mcp_catalog_revision
 
         try:
@@ -360,7 +360,7 @@ class CatalogSnapshots:
             self._completed_ticket = covered
             raise
         else:
-            self._shared_snapshot = _snapshot(self.manager, self._database_identity, self._registration_only_servers)
+            self._shared_snapshot = _snapshot(self.manager, self._database_identity, self._provider_native_servers)
             self._applied_revision = revision
             self._completed_ticket = covered
         finally:
@@ -562,7 +562,7 @@ class CatalogSnapshots:
         ).hexdigest()
         verbose_logger.info("Found %s MCP servers in database", len(raw_rows))
 
-        registration_only_servers: Final = MappingProxyType(
+        provider_native_servers: Final = MappingProxyType(
             {
                 server.server_id: server
                 for server in (
@@ -576,7 +576,7 @@ class CatalogSnapshots:
             *self.config_registrations.values(),
             *(self.manager.build_mcp_server_table(value) for value in self.manager.config_mcp_servers.values()),
         )
-        if self.config_registrations or registration_only_servers:
+        if self.config_registrations or provider_native_servers:
             validate_provider_registration_conflicts(
                 config_servers, tuple(LiteLLM_MCPServerTable.model_validate(row.model_dump()) for row in raw_rows)
             )
@@ -659,7 +659,7 @@ class CatalogSnapshots:
                 ", ".join(sorted(capturing_config_server_ids)),
             )
         self._warned_capturing_config_server_ids = capturing_config_server_ids
-        self._registration_only_servers = registration_only_servers
+        self._provider_native_servers = provider_native_servers
 
 
 def catalog_operation(
