@@ -31,6 +31,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     DailyTagSpendRepository,
@@ -198,16 +199,17 @@ async def get_tag_daily_activity_api_key_filter(
     user_api_key_dict: UserAPIKeyAuth,
     requested_api_key: str | None,
 ) -> str | list[str] | None:
+    selected_key: Final = api_key_from_bucket(requested_api_key) if requested_api_key else None
     user_role: Final = user_api_key_dict.user_role
     if user_api_key_has_admin_view(user_api_key_dict) or (user_role is None or not user_role.is_internal_user_role):
-        return requested_api_key
+        return [selected_key] if selected_key is not None else None
 
     scoped_api_keys: Final = await _get_internal_user_api_keys(
         prisma_client=prisma_client,
         user_api_key_dict=user_api_key_dict,
     )
-    if requested_api_key is not None:
-        return requested_api_key if requested_api_key in scoped_api_keys else []
+    if selected_key is not None:
+        return [selected_key] if selected_key in scoped_api_keys else []
     return scoped_api_keys
 
 
@@ -228,12 +230,12 @@ async def get_deployments_by_model(model: str, llm_router: "Router") -> list["De
     from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
     # Check if model id
-    deployment: Final = llm_router.get_deployment(model_id=model)
+    deployment: Final = llm_router.registry().deployment(model)
     if deployment is not None:
         return [deployment]
 
     # Check if model name
-    deployments: Final = llm_router.get_model_list(model_name=model)
+    deployments: Final = llm_router.registry().deployments(model)
     if deployments is None:
         return []
     return [

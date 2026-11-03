@@ -3,6 +3,7 @@
 import { useTerminology } from "@/contexts/TerminologyContext";
 import { ChevronDown } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { getAvailablePages } from "@/components/page_utils";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +24,7 @@ export default function PageVisibilitySettings({
   isUpdating,
   onUpdate,
 }: PageVisibilitySettingsProps) {
+  const { t } = useTranslation();
   const term = useTerminology();
   const isPageVisibilitySet = enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined;
   const availablePages = useMemo(() => getAvailablePages(), []);
@@ -59,28 +61,23 @@ export default function PageVisibilitySettings({
     <div className="space-y-4">
       <div className="space-y-1">
         <div className="flex items-center gap-2">
-          <p className="text-sm font-medium text-foreground">Internal User Page Visibility</p>
+          <p className="text-sm font-medium text-foreground">{t("adminPanel.pageVisibility.title")}</p>
           <Badge variant={isPageVisibilitySet ? "secondary" : "outline"}>
             {isPageVisibilitySet
-              ? `${selectedPages.length} page${selectedPages.length !== 1 ? "s" : ""} selected`
-              : "Not set (all pages visible)"}
+              ? t("adminPanel.pageVisibility.selectedCount", { count: selectedPages.length })
+              : t("adminPanel.pageVisibility.notSet")}
           </Badge>
         </div>
         {enabledPagesPropertyDescription && (
           <p className="text-sm text-muted-foreground">{enabledPagesPropertyDescription}</p>
         )}
-        <p className="text-xs italic text-muted-foreground">
-          By default, all pages are visible to internal users. Select specific pages to restrict visibility.
-        </p>
-        <p className="text-xs text-primary">
-          Note: Only pages accessible to internal user roles are shown here. Admin-only pages are excluded as they
-          cannot be made visible to internal users regardless of this setting.
-        </p>
+        <p className="text-xs italic text-muted-foreground">{t("adminPanel.pageVisibility.defaultHint")}</p>
+        <p className="text-xs text-primary">{t("adminPanel.pageVisibility.adminOnlyNote")}</p>
       </div>
 
       <Collapsible className="rounded-lg border border-border">
         <CollapsibleTrigger className="group flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm font-medium hover:bg-muted">
-          Configure Page Visibility
+          {t("adminPanel.pageVisibility.configure")}
           <ChevronDown className="size-4 transition-transform group-data-[panel-open]:rotate-180" />
         </CollapsibleTrigger>
         <CollapsibleContent className="border-t border-border p-4">
@@ -113,11 +110,11 @@ export default function PageVisibilitySettings({
 
             <div className="flex flex-wrap gap-2">
               <Button type="button" onClick={handleSavePageVisibility} disabled={isUpdating}>
-                Save Page Visibility Settings
+                {t("adminPanel.pageVisibility.save")}
               </Button>
               {isPageVisibilitySet && (
                 <Button type="button" variant="outline" onClick={handleResetToDefault} disabled={isUpdating}>
-                  Reset to Default (All Pages)
+                  {t("adminPanel.pageVisibility.reset")}
                 </Button>
               )}
             </div>

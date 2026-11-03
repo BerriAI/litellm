@@ -545,3 +545,31 @@ def test_provider_refusal_string_is_preserved_on_message() -> None:
         "object": "chat.completion",
     }
     assert model_response.choices[0].message.refusal == "I can't help with that."
+
+
+def test_vllm_null_stop_reason_is_kept_only_on_the_choice_that_carries_it() -> None:
+    model_response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-vllm-natural-stop",
+            "created": 4,
+            "model": "Qwen/Qwen3-0.6B",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "1, 2"},
+                    "stop_reason": None,
+                },
+                {"finish_reason": "stop", "index": 1, "message": {"role": "assistant", "content": "1, 2"}},
+            ],
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    dumped_choices: Final = model_dump_with_preserved_fields(model_response, exclude_unset=True)["choices"]
+
+    assert [(choice["index"], "stop_reason" in choice, choice.get("stop_reason")) for choice in dumped_choices] == [
+        (0, True, None),
+        (1, False, None),
+    ]

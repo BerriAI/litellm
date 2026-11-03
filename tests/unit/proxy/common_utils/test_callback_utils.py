@@ -49,6 +49,19 @@ def test_get_remaining_tokens_and_requests_from_request_data():
     }
 
 
+@pytest.mark.parametrize("client_model_group", [7, ["embed-only"], {"name": "embed-only"}])
+def test_remaining_limit_headers_ignore_a_model_group_that_is_not_a_string(client_model_group: object):
+    casedata: Final = {
+        "metadata": {
+            "model_group": client_model_group,
+            f"litellm-key-remaining-requests-{client_model_group}": 100,
+            f"litellm-key-remaining-tokens-{client_model_group}": 200,
+        }
+    }
+
+    assert get_remaining_tokens_and_requests_from_request_data(casedata) == {}
+
+
 @patch(
     "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
     return_value=["API_KEY", "MISSING_VAR"],
