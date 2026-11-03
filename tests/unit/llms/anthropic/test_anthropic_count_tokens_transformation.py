@@ -50,20 +50,30 @@ COMPACTED_HISTORY = [
     "config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig)
 )
 @pytest.mark.parametrize(
-    ("image_url", "source"),
+    ("image_url", "block"),
     (
-        ("data:image/png;base64,aW1hZ2U=", {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}),
-        ({"url": "data:image/png;base64,aW1hZ2U="}, {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}),
+        (
+            "data:image/png;base64,aW1hZ2U=",
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}},
+        ),
+        (
+            {"url": "data:image/png;base64,aW1hZ2U="},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}},
+        ),
         (
             {"url": "data:image/png;base64,aW1hZ2U=", "format": "image/jpeg", "detail": "high"},
-            {"type": "base64", "media_type": "image/jpeg", "data": "aW1hZ2U="},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "aW1hZ2U="}},
+        ),
+        (
+            "data:application/pdf;base64,JVBERi0=",
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="}},
         ),
     ),
 )
 def test_count_translates_openai_images_without_mutating_input(
     config_type: type[AnthropicCountTokensConfig],
     image_url: str | dict[str, JsonValue],
-    source: dict[str, JsonValue],
+    block: dict[str, JsonValue],
 ) -> None:
     cache_control: Final[dict[str, JsonValue]] = {"type": "ephemeral"}
     messages: Final[list[dict[str, JsonValue]]] = [{
@@ -81,7 +91,7 @@ def test_count_translates_openai_images_without_mutating_input(
         "model": "claude-opus-5-5", "messages": [{
             "role": "user", "content": [
                 {"type": "text", "text": "Count this image"},
-                {"type": "image", "source": source, "cache_control": cache_control},
+                {**block, "cache_control": cache_control},
             ],
         }],
     }

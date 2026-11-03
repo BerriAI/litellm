@@ -21,7 +21,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.requests import Request as StarletteRequest
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.types import Message, Receive, Scope, Send
 
@@ -520,6 +520,7 @@ if MCP_AVAILABLE:
         "mcp_get_prompt",
         "mcp_read_resource",
         "raise_denied_scoped_mcp_access",
+        "raise_generic_mcp_access_denial",
         "redact_mcp_resource_url",
     )
     from mcp.server import Server
@@ -1197,6 +1198,7 @@ if MCP_AVAILABLE:
         apply_display_name_overrides,
         filter_tools_by_allowed_tools,
         raise_denied_scoped_mcp_access,
+        raise_generic_mcp_access_denial,
     )
 
     @contextlib.asynccontextmanager
@@ -1824,10 +1826,10 @@ if MCP_AVAILABLE:
         row capping it.
 
         Raises HTTPException(403) unless the principal holds toolset_id through one
-        of its grant sources. Admins always pass.
+        of its grant sources. Admins pass unless the key is bound to a real team.
         """
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
-        from litellm.proxy.management_endpoints.common_utils import user_api_key_has_admin_view
+        from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import has_team_unbound_mcp_admin_view
 
         # A key scoped to no MCP servers opts out of every MCP path. Enforce it
         # here too, since toolset scoping replaces mcp_servers and would otherwise
@@ -1841,7 +1843,7 @@ if MCP_AVAILABLE:
             )
 
         acting: Final = await acting_user(user_api_key_auth)
-        is_admin: Final = user_api_key_has_admin_view(acting)
+        is_admin: Final = has_team_unbound_mcp_admin_view(acting)
         if not is_admin and toolset_id not in await granted(acting):
             raise HTTPException(
                 status_code=403,
@@ -2486,6 +2488,9 @@ if MCP_AVAILABLE:
                         },
                     },
                 )(scope, receive, send)
+                return
+            if scope.get("method") == "OPTIONS":
+                await Response(status_code=204, headers={"Allow": "GET, POST, DELETE, OPTIONS"})(scope, receive, send)
                 return
             path: Final = _scope_path(scope)
             peek: Final = _LazyPeekedBody(receive) if scope.get("method") == "POST" else None

@@ -80,7 +80,6 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     get_team_object,
     get_user_object,
     get_user_role,
-    is_mcp_discovery_request,
     is_model_cost_zero,
     is_user_proxy_admin,
     is_valid_fallback_model,
@@ -88,6 +87,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     key_access_group_grants_model,
     key_model_aliases_for_auth_check,
     model_max_budget_of,
+    request_skips_budget_checks,
     resolve_and_validate_end_user_id,
     resolve_default_end_user_budget,
     route_skips_budget_checks,
@@ -148,6 +148,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     populate_request_with_path_params,
     read_raw_json_body,
     read_request_body,
+    resolve_realtime_route_model,
     rewrite_request_model,
     safe_get_request_headers,
     safe_get_request_query_params,
@@ -1246,11 +1247,21 @@ def _apply_budget_limits_to_end_user_params(
 
 
 async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
-    return await user_api_key_auth_websocket_for_model(websocket, model=websocket.query_params.get("model"))
+    return await user_api_key_auth_websocket_for_model(websocket, model=websocket.query_params.get("model", ""))
+
+
+async def user_api_key_auth_realtime_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
+    route_path: Final[object] = websocket.scope.get("path")
+    model: Final = resolve_realtime_route_model(
+        model=websocket.query_params.get("model"),
+        intent=websocket.query_params.get("intent"),
+        is_translation=isinstance(route_path, str) and route_path.endswith("/realtime/translations"),
+    )
+    return await user_api_key_auth_websocket_for_model(websocket, model=model or "")
 
 
 async def user_api_key_auth_live_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
-    return await user_api_key_auth_websocket_for_model(websocket, model=None)
+    return await user_api_key_auth_websocket_for_model(websocket, model="")
 
 
 def _has_required_baggage_tag_mapping() -> bool:
@@ -1266,7 +1277,7 @@ def _has_required_baggage_tag_mapping() -> bool:
 
 
 async def user_api_key_auth_websocket_for_model(
-    websocket: WebSocket, model: str | None, *, close_on_auth_error: bool = True
+    websocket: WebSocket, model: str, *, close_on_auth_error: bool = True
 ) -> UserAPIKeyAuth:
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
@@ -2497,15 +2508,9 @@ async def user_api_key_auth_builder(
                             llm_router=llm_router,
                             team_id=valid_token.team_id,
                         )
-                        skip_budget_checks = is_mcp_discovery_request(route=route, request_body=request_data)
-                        if not skip_budget_checks and model is not None and llm_router is not None:
-                            from litellm.proxy.auth.auth_checks import is_model_cost_zero
-
-                            skip_budget_checks = (  # rebind-ok: pre-existing rebinding on a rename-only line
-                                is_model_cost_zero(model=model, llm_router=llm_router)
-                            )
-                            if skip_budget_checks:
-                                verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
+                        skip_budget_checks = request_skips_budget_checks(
+                            route=route, model=model, llm_router=llm_router, request_body=request_data
+                        )
 
                         # Fetch project object for JWT path if project_id is set
                         _jwt_project_obj = None
@@ -3019,15 +3024,9 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             llm_router=llm_router,
             team_id=valid_token.team_id,
         )
-        skip_budget_checks = is_mcp_discovery_request(route=route, request_body=request_data)
-        if not skip_budget_checks and model is not None and llm_router is not None:
-            from litellm.proxy.auth.auth_checks import is_model_cost_zero
-
-            skip_budget_checks = is_model_cost_zero(  # rebind-ok: pre-existing rebinding on a rename-only line
-                model=model, llm_router=llm_router
-            )
-            if skip_budget_checks:
-                verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
+        skip_budget_checks: Final = request_skips_budget_checks(
+            route=route, model=model, llm_router=llm_router, request_body=request_data
+        )
 
         # Check 3. Check if user is in their team budget
         if not skip_budget_checks and valid_token.team_member_spend is not None:
@@ -4088,11 +4087,7 @@ def _should_skip_budget_checks(
         llm_router=llm_router,
         team_id=team_id,
     )
-    if is_mcp_discovery_request(route=route, request_body=request_data):
-        return True
-    if model is not None and llm_router is not None:
-        return is_model_cost_zero(model=model, llm_router=llm_router)
-    return False
+    return request_skips_budget_checks(route=route, model=model, llm_router=llm_router, request_body=request_data)
 
 
 def _resolve_request_principal(request: Request, valid_token: UserAPIKeyAuth) -> Principal:

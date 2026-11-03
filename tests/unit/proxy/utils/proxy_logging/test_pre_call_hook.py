@@ -996,3 +996,21 @@ async def test_guardrails_only_and_skip_guardrails_are_mutually_exclusive(
             guardrails_only=True,
             skip_guardrails=True,
         )
+
+
+@pytest.mark.parametrize(
+    "request_data, expected",
+    [
+        ({"metadata": {"_guardrail_pipelines": ["p1"]}}, True),
+        ({"metadata": {"user_id": "u"}, "litellm_metadata": {"_guardrail_pipelines": ["p1"]}}, True),
+        ({"metadata": {"_guardrail_pipelines": 5}}, True),
+        ({"metadata": {"user_id": "u"}}, False),
+    ],
+    ids=["pipeline-in-metadata", "pipeline-in-litellm-metadata", "non-list-pipeline-value", "no-pipeline"],
+)
+def test_request_has_pre_call_guardrails_reads_pipelines_from_both_metadata_buckets(
+    proxy_logging, monkeypatch, request_data, expected
+):
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    assert proxy_logging.request_has_pre_call_guardrails(request_data) is expected
