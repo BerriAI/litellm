@@ -1310,7 +1310,7 @@ if MCP_AVAILABLE:
             check_db_only=True,
         )
 
-        team_server_ids: Final = await get_team_allowed_mcp_servers(team_obj)
+        team_server_ids: Final = await get_team_allowed_mcp_servers(team_obj, prisma_client=prisma_client)
         allow_all_server_ids: Final = get_allow_all_keys_server_ids()
         all_allowed_ids: Final = team_server_ids | allow_all_server_ids
 
