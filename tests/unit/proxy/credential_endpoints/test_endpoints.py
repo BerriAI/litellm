@@ -3175,7 +3175,7 @@ class TestCredentialDisplayName:
         ],
     )
     def test_patch_accepts_the_same_credential_name_echoed_back(
-        self, restore_credential_list, monkeypatch, patch_info, expected_info
+        self, restore_credential_list, monkeypatch, patch_info: dict[str, str], expected_info: dict[str, str]
     ):
         monkeypatch.setattr(litellm, "credential_list", [_labeled_credential()])
         with _repository_holding(_labeled_credential()) as repository:
