@@ -17,13 +17,13 @@ def test_umans_ai_provider_resolution(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("UMANS_AI_API_KEY", "umans-test-key")
 
     model, provider, api_key, api_base = get_llm_provider(
-        model="umans-ai/umans-deepseek-v4-flash-0731",
+        model="umans-ai/umans-deepseek-v4.1-flash",
         custom_llm_provider=None,
         api_base=None,
         api_key=None,
     )
 
-    assert model == "umans-deepseek-v4-flash-0731"
+    assert model == "umans-deepseek-v4.1-flash"
     assert provider == "umans-ai"
     assert api_key == "umans-test-key"
     assert api_base == "https://api.code.umans.ai/v1"
@@ -35,7 +35,7 @@ def test_umans_ai_provider_keeps_explicit_credentials(monkeypatch: pytest.Monkey
     monkeypatch.setenv("UMANS_AI_API_KEY", "umans-env-key")
 
     _, provider, api_key, api_base = get_llm_provider(
-        model="umans-ai/umans-deepseek-v4-flash-0731",
+        model="umans-ai/umans-deepseek-v4.1-flash",
         custom_llm_provider=None,
         api_base="https://umans.internal.example/v1",
         api_key="umans-explicit-key",
@@ -53,7 +53,7 @@ def test_umans_ai_is_available_in_add_model_form():
 
     assert umans["provider"] == "UMANS_AI"
     assert umans["provider_display_name"] == "Umans AI"
-    assert umans["default_model_placeholder"] == "umans-ai/umans-deepseek-v4-flash-0731"
+    assert umans["default_model_placeholder"] == "umans-ai/umans-deepseek-v4.1-flash"
     assert {field["key"]: field["required"] for field in umans["credential_fields"]} == {
         "api_base": False,
         "api_key": True,
@@ -88,7 +88,7 @@ def test_umans_ai_chat_completion_request():
                 "id": "chatcmpl_umans",
                 "object": "chat.completion",
                 "created": 1_789_550_000,
-                "model": "umans-deepseek-v4-flash-0731",
+                "model": "umans-deepseek-v4.1-flash",
                 "choices": [
                     {
                         "index": 0,
@@ -100,7 +100,7 @@ def test_umans_ai_chat_completion_request():
             },
         )
         response: Final = litellm.completion(
-            model="umans-ai/umans-deepseek-v4-flash-0731",
+            model="umans-ai/umans-deepseek-v4.1-flash",
             messages=[{"role": "user", "content": "Say hello"}],
             api_key="umans-test-key",
         )
@@ -110,7 +110,7 @@ def test_umans_ai_chat_completion_request():
     assert route.call_count == 1
     assert str(request.url) == "https://api.code.umans.ai/v1/chat/completions"
     assert request.headers["authorization"] == "Bearer umans-test-key"
-    assert body["model"] == "umans-deepseek-v4-flash-0731"
+    assert body["model"] == "umans-deepseek-v4.1-flash"
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert response.choices[0].message.content == "Hello from Umans AI"
 
@@ -123,7 +123,7 @@ def test_umans_ai_responses_request():
                 "id": "resp_umans",
                 "object": "response",
                 "created_at": 1_789_550_000,
-                "model": "umans-deepseek-v4-flash-0731",
+                "model": "umans-deepseek-v4.1-flash",
                 "status": "completed",
                 "output": [
                     {
@@ -138,7 +138,7 @@ def test_umans_ai_responses_request():
             },
         )
         response: Final = litellm.responses(
-            model="umans-ai/umans-deepseek-v4-flash-0731",
+            model="umans-ai/umans-deepseek-v4.1-flash",
             input="Say hello",
             api_key="umans-test-key",
         )
@@ -148,7 +148,7 @@ def test_umans_ai_responses_request():
     assert route.call_count == 1
     assert str(request.url) == "https://api.code.umans.ai/v1/responses"
     assert request.headers["authorization"] == "Bearer umans-test-key"
-    assert body["model"] == "umans-deepseek-v4-flash-0731"
+    assert body["model"] == "umans-deepseek-v4.1-flash"
     assert body["input"] == "Say hello"
     assert response.output[0].content[0].text == "Hello from Umans AI"
 
@@ -164,7 +164,7 @@ async def test_umans_ai_anthropic_messages_request(monkeypatch: pytest.MonkeyPat
                 "id": "msg_umans",
                 "type": "message",
                 "role": "assistant",
-                "model": "umans-deepseek-v4-flash-0731",
+                "model": "umans-deepseek-v4.1-flash",
                 "content": [{"type": "text", "text": "Hello from Umans AI"}],
                 "stop_reason": "end_turn",
                 "stop_sequence": None,
@@ -172,7 +172,7 @@ async def test_umans_ai_anthropic_messages_request(monkeypatch: pytest.MonkeyPat
             },
         )
         response: Final = await litellm.anthropic.messages.acreate(
-            model="umans-ai/umans-deepseek-v4-flash-0731",
+            model="umans-ai/umans-deepseek-v4.1-flash",
             messages=[{"role": "user", "content": "Say hello"}],
             max_tokens=32,
             api_key="umans-test-key",
@@ -184,7 +184,7 @@ async def test_umans_ai_anthropic_messages_request(monkeypatch: pytest.MonkeyPat
     assert str(request.url) == "https://api.code.umans.ai/v1/messages"
     assert request.headers["authorization"] == "Bearer umans-test-key"
     assert request.headers["anthropic-version"] == "2023-06-01"
-    assert body["model"] == "umans-deepseek-v4-flash-0731"
+    assert body["model"] == "umans-deepseek-v4.1-flash"
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert response["content"][0]["text"] == "Hello from Umans AI"
 
@@ -219,7 +219,7 @@ def test_umans_ai_default_model_is_priced():
 
 
 def test_umans_ai_usage_is_billed_at_cost_map_rates():
-    model: Final = "umans-ai/umans-deepseek-v4-flash-0731"
+    model: Final = "umans-ai/umans-deepseek-v4.1-flash"
     entry: Final = _umans_cost_entries()[model]
     input_cost: Final = entry["input_cost_per_token"]
     output_cost: Final = entry["output_cost_per_token"]
@@ -249,7 +249,7 @@ def test_umans_ai_chat_completion_streaming_request():
         "id": "chatcmpl_umans",
         "object": "chat.completion.chunk",
         "created": 1_789_550_000,
-        "model": "umans-deepseek-v4-flash-0731",
+        "model": "umans-deepseek-v4.1-flash",
     }
     stream_body: Final = _sse(
         {
@@ -265,7 +265,7 @@ def test_umans_ai_chat_completion_streaming_request():
         )
         chunks: Final = list(
             litellm.completion(
-                model="umans-ai/umans-deepseek-v4-flash-0731",
+                model="umans-ai/umans-deepseek-v4.1-flash",
                 messages=[{"role": "user", "content": "Say hello"}],
                 api_key="umans-test-key",
                 stream=True,
@@ -284,7 +284,7 @@ def test_umans_ai_responses_streaming_request():
         "id": "resp_umans",
         "object": "response",
         "created_at": 1_789_550_000,
-        "model": "umans-deepseek-v4-flash-0731",
+        "model": "umans-deepseek-v4.1-flash",
         "status": "in_progress",
         "output": [],
     }
@@ -322,7 +322,7 @@ def test_umans_ai_responses_streaming_request():
         )
         events: Final = list(
             litellm.responses(
-                model="umans-ai/umans-deepseek-v4-flash-0731",
+                model="umans-ai/umans-deepseek-v4.1-flash",
                 input="Say hello",
                 api_key="umans-test-key",
                 stream=True,
@@ -350,7 +350,7 @@ async def test_umans_ai_anthropic_messages_streaming_request(monkeypatch: pytest
                 "id": "msg_umans",
                 "type": "message",
                 "role": "assistant",
-                "model": "umans-deepseek-v4-flash-0731",
+                "model": "umans-deepseek-v4.1-flash",
                 "content": [],
                 "stop_reason": None,
                 "stop_sequence": None,
@@ -372,7 +372,7 @@ async def test_umans_ai_anthropic_messages_streaming_request(monkeypatch: pytest
             200, content=stream_body, headers={"content-type": "text/event-stream"}
         )
         stream: Final = await litellm.anthropic.messages.acreate(
-            model="umans-ai/umans-deepseek-v4-flash-0731",
+            model="umans-ai/umans-deepseek-v4.1-flash",
             messages=[{"role": "user", "content": "Say hello"}],
             max_tokens=32,
             api_key="umans-test-key",
