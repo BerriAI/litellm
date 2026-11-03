@@ -11,7 +11,7 @@ import zlib
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Final, Optional, cast
@@ -13801,6 +13801,23 @@ class TestGuardrailResponseHeaders:
                 {"metadata": {"applied_guardrails": ["pre-call-guard"]}},
                 post_call_data={"metadata": {"applied_guardrails": 7}},
             )
+            == {}
+        )
+
+    @pytest.mark.parametrize(
+        "entry",
+        [{"s1"}, {"at": datetime(2026, 1, 1, tzinfo=timezone.utc)}, object()],
+        ids=["set", "datetime", "object"],
+    )
+    def test_scan_metadata_json_cannot_encode_costs_the_headers_not_the_response(self, entry):
+        assert _guardrail_response_headers(post_call_data={"metadata": {"guardrail_scan_metadata": [entry]}}) == {}
+
+    @pytest.mark.parametrize("field", ["applied_guardrails", "guardrail_scan_ids", "guardrail_scan_metadata"])
+    def test_mixed_key_entry_recorded_before_and_after_the_call_costs_the_headers_not_the_response(self, field):
+        entries: Final = [{1: "a", "b": 2}]
+
+        assert (
+            _guardrail_response_headers({"metadata": {field: entries}}, post_call_data={"metadata": {field: entries}})
             == {}
         )
 

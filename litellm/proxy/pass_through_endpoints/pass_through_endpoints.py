@@ -290,7 +290,7 @@ def _with_header_in_budget(kept: Mapping[str, str], header: tuple[str, str]) -> 
     return MappingProxyType({**kept, header[0]: header[1]}) if size <= _GUARDRAIL_HEADERS_MAX_BYTES else kept
 
 
-def _guardrail_response_headers(
+def _recorded_guardrail_headers(
     parsed_body: object = None, kwargs: object = None, post_call_data: object = None
 ) -> Mapping[str, str]:
     """The ``x-litellm-applied-guardrails`` family of response headers for what guardrails recorded on this request.
@@ -327,6 +327,19 @@ def _guardrail_response_headers(
     )
     no_headers: Final[Mapping[str, str]] = MappingProxyType({})
     return reduce(_with_header_in_budget, sendable, no_headers)
+
+
+def _guardrail_response_headers(
+    parsed_body: object = None, kwargs: object = None, post_call_data: object = None
+) -> Mapping[str, str]:
+    """``_recorded_guardrail_headers``, or none of them when a recorded value can't be merged or JSON-encoded."""
+    try:
+        return _recorded_guardrail_headers(parsed_body, kwargs, post_call_data)
+    except (TypeError, ValueError, RecursionError) as error:
+        verbose_proxy_logger.warning(
+            "Leaving out guardrail response headers: a recorded value can't be encoded (%s)", type(error).__name__
+        )
+        return MappingProxyType({})
 
 
 class _RegisteredPassThroughRoute(TypedDict):
