@@ -4,6 +4,7 @@ from typing import Final
 
 import httpx
 import pytest
+import respx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
@@ -12,6 +13,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
     DecisionsInputLimits,
+    catalog_mode,
     ir_to_systemone_request,
     ir_to_systemone_response,
     parse_systemone_response,
@@ -51,6 +53,52 @@ _SYSTEMONE_REQUEST: Final[Mapping[str, object]] = {
         "severity": {"type": "score", "criteria": ["minor", {"label": "major"}]},
     },
 }
+
+
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+def test_decision_capability_checks_do_not_contact_an_ambient_ollama_server(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, provider: str
+) -> None:
+    monkeypatch.setenv("OLLAMA_API_BASE", "https://ambient.example")
+    monkeypatch.setenv("OLLAMA_API_KEY", "ambient-test-key")
+    metadata: Final = respx_mock.post("https://ambient.example/api/show").respond(
+        json={"model_info": {"test.context_length": 32768}}
+    )
+    config: Final = BaseDecisionsConfig()
+
+    assert catalog_mode("unmapped-decisions-test", provider) is None
+    assert (
+        config.supports_box_questions("unmapped-decisions-test", provider, {}, None),
+        config.supports_audio_input("unmapped-decisions-test", provider, None),
+        config.supports_video_input("unmapped-decisions-test", provider, None),
+    ) == (False, False, False)
+    assert not metadata.called
+
+
+@pytest.mark.parametrize("mode", ("evaluation", "decisions", "chat"))
+@pytest.mark.parametrize("supported", (False, True))
+def test_decision_capabilities_preserve_registered_modes_and_flags(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, mode: str, supported: bool
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bespoke/test-decision-capabilities",
+        {
+            "litellm_provider": "bespoke",
+            "mode": mode,
+            "supports_box_questions": supported,
+            "supports_audio_input": supported,
+            "supports_video_input": supported,
+        },
+    )
+    config: Final = BaseDecisionsConfig()
+    expected: Final = supported and mode in ("evaluation", "decisions")
+
+    assert (
+        config.supports_box_questions("test-decision-capabilities", "bespoke", {}, None),
+        config.supports_audio_input("test-decision-capabilities", "bespoke", None),
+        config.supports_video_input("test-decision-capabilities", "bespoke", None),
+    ) == (expected, expected, expected)
 
 
 @pytest.mark.parametrize("declared", (4096, 0, -1, True, None))

@@ -255,6 +255,7 @@ elif [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
 fi
 
 env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
+  UV_OFFLINE=true UV_CACHE_DIR="$(uv cache dir)" \
   INTEGRATION_RUN_ID="$integration_identity" \
   DATABASE_URL="$DATABASE_URL" \
   "${shared_services[@]}" "${worker_coverage[@]}" \
