@@ -255,7 +255,9 @@ class PricedQuantity(BaseModel):
 
 
 class Multiplier(BaseModel):
-    """A regional or tier factor applied on top of the priced key, e.g. data_residency=eu or vertex_location=us-east5."""
+    """A regional or tier factor applied on top of the priced key, e.g.
+    data_residency=eu, data_residency=fedramp or vertex_location=us-east5.
+    """
 
     model_config = _CONFIG
 

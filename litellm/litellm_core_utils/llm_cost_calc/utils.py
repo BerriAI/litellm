@@ -1374,8 +1374,8 @@ def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | 
     data-residency region.
 
     OpenAI applies a flat percentage uplift (e.g. +10%) on all token costs for
-    requests served from a regionalized hostname (eu./us.api.openai.com). The
-    multiplier is stored on the model entry as
+    requests served from eu.api.openai.com or us.api.openai.com, and on
+    FedRAMP requests served from gov.api.openai.com. The multiplier is stored on the model entry as
     ``regional_processing_uplift_multiplier_<region>`` (e.g. 1.10).
 
     Returns 1.0 (no uplift) when ``data_residency`` is ``None`` or when the
@@ -1511,7 +1511,7 @@ def generic_cost_per_token(
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing anthropic caching information
-        - data_residency: optional OpenAI data-residency region (e.g. "eu", "us"),
+        - data_residency: optional OpenAI data-residency region (e.g. "eu", "us", "fedramp"),
           used to apply the per-model regional-processing uplift multiplier.
         - vertex_location: optional Vertex AI location the request was served from
           (e.g. "us-east5", "global"), used to apply the per-model
@@ -1691,7 +1691,8 @@ def generic_cost_per_token(
 
     ## REGIONAL DATA-RESIDENCY UPLIFT
     # Applied as a flat multiplier across all token costs for the request
-    # when the upstream is a regionalized OpenAI host (eu./us.api.openai.com).
+    # when the upstream is an OpenAI regional or FedRAMP host (eu.api.openai.com,
+    # us.api.openai.com, or gov.api.openai.com).
     uplift: Final = get_regional_uplift_multiplier(resolved_model_info, data_residency)
     if uplift != 1.0:
         prompt_cost *= uplift

@@ -36158,6 +36158,8 @@ export interface components {
             regional_endpoint_uplift_multiplier?: number | null;
             /** Regional Processing Uplift Multiplier Eu */
             regional_processing_uplift_multiplier_eu?: number | null;
+            /** Regional Processing Uplift Multiplier Fedramp */
+            regional_processing_uplift_multiplier_fedramp?: number | null;
             /** Regional Processing Uplift Multiplier Us */
             regional_processing_uplift_multiplier_us?: number | null;
             /** Responses Api Version */
@@ -51797,6 +51799,8 @@ export interface components {
             regional_endpoint_uplift_multiplier?: number | null;
             /** Regional Processing Uplift Multiplier Eu */
             regional_processing_uplift_multiplier_eu?: number | null;
+            /** Regional Processing Uplift Multiplier Fedramp */
+            regional_processing_uplift_multiplier_fedramp?: number | null;
             /** Regional Processing Uplift Multiplier Us */
             regional_processing_uplift_multiplier_us?: number | null;
             /** Responses Api Version */

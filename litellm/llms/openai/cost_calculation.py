@@ -31,9 +31,9 @@ def cost_per_token(
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing anthropic caching information
-        - data_residency: optional OpenAI data-residency region (e.g. "eu", "us"),
-          inferred from api_base. Applies the model's regional-processing
-          uplift multiplier when set.
+        - data_residency: optional OpenAI data-residency mode (e.g. "eu", "us", "fedramp"),
+          inferred from api_base, including gov.api.openai.com. Applies the
+          model's regional-processing uplift multiplier when set.
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd

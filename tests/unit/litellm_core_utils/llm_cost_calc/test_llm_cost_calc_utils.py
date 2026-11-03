@@ -33,6 +33,7 @@ from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
+    DataResidency,
     ImageObject,
     ImageResponse,
     ImageUsage,
@@ -2577,6 +2578,40 @@ def test_data_residency_applies_uplift(data_residency, model, _local_model_cost_
     assert regional_total == pytest.approx(base_total * 1.10, rel=1e-9)
     assert regional[0] == pytest.approx(base[0] * 1.10, rel=1e-9)
     assert regional[1] == pytest.approx(base[1] * 1.10, rel=1e-9)
+
+
+def test_fedramp_data_residency_applies_configured_uplift() -> None:
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    model_info: Final[ModelInfo] = {
+        "key": "fedramp-fixture",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supported_openai_params": None,
+        "regional_processing_uplift_multiplier_fedramp": 1.1,
+    }
+
+    base: Final = generic_cost_per_token(
+        model="fedramp-fixture",
+        usage=usage,
+        custom_llm_provider="openai",
+        model_info=model_info,
+    )
+    fedramp: Final = generic_cost_per_token(
+        model="fedramp-fixture",
+        usage=usage,
+        custom_llm_provider="openai",
+        data_residency=DataResidency.FEDRAMP.value,
+        model_info=model_info,
+    )
+
+    assert sum(base) > 0
+    assert fedramp[0] == pytest.approx(base[0] * 1.1)
+    assert fedramp[1] == pytest.approx(base[1] * 1.1)
 
 
 @pytest.mark.parametrize("model", ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-pro", "gpt-4o", "gpt-4.1"])

@@ -27,7 +27,7 @@ vi.mock("../networking", async () => {
             field_type: "text",
             placeholder: "https://api.openai.com/v1",
             tooltip:
-              "Common endpoints: https://api.openai.com/v1, https://eu.api.openai.com, https://us.api.openai.com",
+              "Common endpoints: https://api.openai.com/v1, https://eu.api.openai.com, https://us.api.openai.com, https://gov.api.openai.com/v1",
             default_value: "https://api.openai.com/v1",
           },
           {

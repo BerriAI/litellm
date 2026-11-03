@@ -3,6 +3,7 @@
 import pytest
 
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.types.utils import DataResidency
 
 
 @pytest.mark.parametrize(
@@ -13,6 +14,8 @@ from litellm.llms.openai.data_residency import infer_openai_data_residency
         ("https://us.api.openai.com/v1", "us"),
         ("https://us.api.openai.com", "us"),
         ("https://EU.api.openai.com/v1", "eu"),
+        ("https://gov.api.openai.com/v1", DataResidency.FEDRAMP.value),
+        ("https://GOV.api.openai.com/v1", DataResidency.FEDRAMP.value),
         ("https://api.openai.com/v1", None),
         ("https://api.openai.com", None),
         ("https://example.com/v1", None),
