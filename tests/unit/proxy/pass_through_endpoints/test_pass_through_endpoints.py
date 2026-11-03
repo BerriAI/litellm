@@ -13790,6 +13790,20 @@ class TestGuardrailResponseHeaders:
 
         assert _guardrail_response_headers({"metadata": {"applied_guardrails": names}}) == {}
 
+    @pytest.mark.parametrize("value", [7, "name", {"a": 1}, ["ok", 7], [None]])
+    @pytest.mark.parametrize("field", ["applied_guardrails", "applied_policies", "guardrail_scan_ids"])
+    def test_recorded_value_that_is_not_a_list_of_names_costs_the_header(self, field, value):
+        assert _guardrail_response_headers(post_call_data={"metadata": {field: value}}) == {}
+
+    def test_bad_post_call_value_costs_the_header_of_the_names_recorded_before_it(self):
+        assert (
+            _guardrail_response_headers(
+                {"metadata": {"applied_guardrails": ["pre-call-guard"]}},
+                post_call_data={"metadata": {"applied_guardrails": 7}},
+            )
+            == {}
+        )
+
     @pytest.mark.parametrize("control", ["\x01", "\x1f", "\x7f", "\x00", "\n"])
     def test_guardrail_name_with_a_control_character_stays_out_of_the_header(self, control):
         assert _guardrail_response_headers({"metadata": {"applied_guardrails": [f"a{control}b"]}}) == {}

@@ -222,6 +222,9 @@ _GUARDRAIL_HEADER_METADATA_FIELDS: Final = frozenset(
         GUARDRAIL_SCAN_METADATA_METADATA_KEY,
     )
 )
+_JOINED_HEADER_METADATA_FIELDS: Final = frozenset(
+    ("applied_guardrails", "applied_policies", GUARDRAIL_SCAN_IDS_METADATA_KEY)
+)
 # RFC 9110's field-value, the one both h11 and Node's HTTP parser accept: no control characters, and only spaces and
 # tabs between visible characters.
 _SENDABLE_HEADER_VALUE: Final = re.compile(rb"(?:[\x21-\x7e\x80-\xff]+(?:[ \t]+[\x21-\x7e\x80-\xff]+)*)?")
@@ -243,6 +246,22 @@ def _strip_client_guardrail_fields(
         if isinstance(metadata, dict):
             for field in _GUARDRAIL_HEADER_METADATA_FIELDS & metadata.keys():
                 metadata.pop(field)
+
+
+def _is_name_list(value: object) -> bool:
+    return isinstance(value, list | tuple) and all(
+        isinstance(entry, str) for entry in _GUARDRAIL_ENTRIES.validate_python(value)
+    )
+
+
+def _joinable_header_metadata(recorded: Mapping[str, object]) -> Mapping[str, object]:
+    """``recorded`` without a value ``get_logging_caching_headers`` can't join into a header, which a custom guardrail
+    can record in the name lists."""
+    return {
+        field: value
+        for field, value in recorded.items()
+        if field not in _JOINED_HEADER_METADATA_FIELDS or _is_name_list(value)
+    }
 
 
 def _merged_metadata_entry(prior: object, value: object) -> object:
@@ -279,7 +298,8 @@ def _guardrail_response_headers(
     Pre-call guardrails record on the request body's metadata, which ``init_kwargs_for_pass_through_endpoint`` moves to
     ``kwargs["litellm_params"]``, and post-call guardrails record on ``post_call_data``, so list entries such as the
     applied guardrail names are combined. A ``litellm_params`` object sent in the request body is never read. A header
-    that would take these headers past ``_GUARDRAIL_HEADERS_MAX_BYTES`` is left out.
+    that would take these headers past ``_GUARDRAIL_HEADERS_MAX_BYTES``, or whose recorded value can't be joined, is
+    left out.
     """
     scopes: Final = (
         as_str_mapping(parsed_body) or {},
@@ -297,7 +317,9 @@ def _guardrail_response_headers(
         field: reduce(_merged_metadata_entry, (value for _, value in entries))
         for field, entries in groupby(sorted(recorded, key=lambda entry: entry[0]), key=lambda entry: entry[0])
     }
-    headers: Final = _RESPONSE_HEADERS.validate_python(get_logging_caching_headers({"metadata": merged}) or {})
+    headers: Final = _RESPONSE_HEADERS.validate_python(
+        get_logging_caching_headers({"metadata": _joinable_header_metadata(merged)}) or {}
+    )
     sendable: Final = (
         (name, value)
         for name, value in headers.items()
