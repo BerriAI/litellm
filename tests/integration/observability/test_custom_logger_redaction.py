@@ -28,7 +28,7 @@ INSTRUCTIONS: Final = "Reply in French. redaction-instructions-canary"
 BRIDGED: Final = "bridged-redaction-canary"
 USAGE_DEPLOYMENT: Final = f"redaction-usage-{uuid.uuid4().hex}"
 REDACT: Final = {"x-litellm-enable-message-redaction": "true"}
-pytestmark = pytest.mark.timeout(240)
+pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]
 
 
 def _provider(request: Request) -> Reply:
@@ -370,7 +370,7 @@ def _drained(wire: Wire, count: int) -> tuple[Request, ...]:
     return eventually(observed, lambda values: len(values) >= count, seconds=30)
 
 
-def test_redacted_responses_follow_up_replays_original_instructions(
+def test_redacted_responses_follow_up_replays_neither_instructions_nor_the_sentinel(
     redaction_proxy: tuple[Gateway, Wire, Wire],
 ) -> None:
     proxy, provider, sink = redaction_proxy
@@ -412,7 +412,7 @@ def test_redacted_responses_follow_up_replays_original_instructions(
     assert len(sent) == 1, sent
     assert len(sent[0]["messages"]) == 3, sent[0]
     system: Final = json.dumps(sent[0].get("system"))
-    assert INSTRUCTIONS in system and REDACTED_BY_LITELLM not in system, sent[0]
+    assert INSTRUCTIONS not in system and REDACTED_BY_LITELLM not in system, sent[0]
 
 
 def test_redacted_router_usage_is_counted_once(redaction_proxy: tuple[Gateway, Wire, Wire]) -> None:

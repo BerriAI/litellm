@@ -125,7 +125,7 @@ impl<C: CacheCodec> S3Cache<C> {
             }
             None => request.cache_control("immutable, max-age=31536000, s-maxage=31536000"),
         };
-        request.send().await.map_err(|_| Error::Unavailable)?;
+        request.send().await.map_err(Error::unavailable)?;
         Ok(())
     }
 
@@ -152,7 +152,7 @@ impl<C: CacheCodec> S3Cache<C> {
                         return Ok(None);
                     }
                 }
-                return Err(Error::Unavailable);
+                return Err(Error::unavailable(error));
             }
         };
         if let Some(expires) = output.expires_string()
@@ -165,7 +165,7 @@ impl<C: CacheCodec> S3Cache<C> {
             .body
             .collect()
             .await
-            .map_err(|_| Error::Unavailable)?
+            .map_err(Error::unavailable)?
             .into_bytes();
         self.codec.decode(&bytes).map(Some)
     }

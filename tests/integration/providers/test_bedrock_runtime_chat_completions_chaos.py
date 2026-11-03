@@ -172,7 +172,11 @@ def _upstream_id_inside(row_id: str) -> str | None:
 def _row_belongs_to(row_id: str, served: _Served) -> bool:
     if row_id == _response_id(served):
         return True
-    return served.call.endpoint == "responses" and _upstream_id_inside(row_id) == f"resp_upstream_{served.call.marker}"
+    return (
+        served.call.endpoint == "responses"
+        and not served.call.stream
+        and _upstream_id_inside(row_id) == f"resp_upstream_{served.call.marker}"
+    )
 
 
 def _assert_each_success_landed_once(rows: list[dict[str, JsonValue]], served: tuple[_Served, ...]) -> None:

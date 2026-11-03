@@ -1,5 +1,5 @@
-from collections.abc import Sequence
-from typing import Any, Literal, TypeAlias
+from collections.abc import Mapping, Sequence
+from typing import Literal, TypeAlias
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -20,7 +20,7 @@ class AnthropicResponseTextBlock(TypedDict, total=False):
     Anthropic Response Text Block: https://docs.anthropic.com/en/api/messages
     """
 
-    citations: list[dict[str, Any]] | None
+    citations: list[dict[str, object]] | None
     text: str
     type: Literal["text"]
 
@@ -98,7 +98,7 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     model: str | None  # This represents the Model type from Anthropic
     role: Literal["assistant"] | None
     stop_reason: ReadOnly[
-        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal", "compaction"] | None
+        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal", "compaction", "pause_turn"] | None
     ]
     stop_details: NotRequired[ReadOnly[AnthropicStopDetails | None]]
     stop_sequence: str | None
@@ -106,3 +106,4 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     usage: AnthropicUsage | None
     context_management: NotRequired[ContextManagementResponse]
     safeguard_results: NotRequired[ReadOnly[Sequence[SafeguardResult]]]
+    input_transformations: NotRequired[ReadOnly[Sequence[Mapping[str, object]]]]

@@ -14,6 +14,7 @@ mock_provider "google-beta" {}
 mock_provider "random" {}
 
 variables {
+  image_tag          = "v9.9.9"
   project_id         = "test-project"
   tenant             = "tenant"
   env                = "test"
@@ -109,6 +110,20 @@ run "deps_only_creates_no_runtime" {
   assert {
     condition     = output.lb_url == null && output.migration_run_command == null
     error_message = "Runtime outputs must be null while dependency outputs remain available."
+  }
+}
+
+run "deps_only_needs_no_image_tag" {
+  command = plan
+
+  variables {
+    create_runtime = false
+    image_tag      = ""
+  }
+
+  assert {
+    condition     = length(google_cloud_run_v2_service.gateway) == 0
+    error_message = "deps-only mode must plan without an image tag since it deploys no images"
   }
 }
 

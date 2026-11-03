@@ -459,7 +459,6 @@ async def test_openai_clients_parse_text_completion_streams_and_choices(gateway:
 
 
 def test_text_completion_usage_chunk_has_empty_choices(gateway: Gateway) -> None:
-    pytest.skip("BUG: the /v1/completions include_usage chunk carries choices [{index: 0}] instead of []")
     identity: Final = f"cmpl-usage-{uuid.uuid4().hex}"
     prompt: Final = f"raw-stream {identity}"
     with wire_server(_text_provider(identity, {prompt})) as wire, gateway.scenario() as scenario:

@@ -19,6 +19,7 @@ class Request:
     target: str
     headers: Mapping[str, str]
     body: bytes
+    header_lines: tuple[tuple[str, str], ...] = ()
 
 
 class AbortedBody(Exception):
@@ -59,6 +60,7 @@ class Reply:
     content_type: str = "application/json"
     chunks: tuple[bytes, ...] | None = None
     abort_after: int | None = None
+    gate_before_first: threading.Event | None = None
     gate_after_first: threading.Event | None = None
     pause_between_chunks: float = 0
     heartbeat: bytes | None = None
@@ -135,7 +137,7 @@ def wire_server(
                 self.close_connection = True
                 disconnected.put(self.path)
                 return
-            request: Final = Request(self.command, self.path, headers, body)
+            request: Final = Request(self.command, self.path, headers, body, tuple(self.headers.items()))
             received.put(request)
             try:
                 reply = respond(request)
@@ -165,6 +167,12 @@ def wire_server(
                 else:
                     for index, chunk in enumerate(reply.chunks):
                         if reply.abort_after == index:
+                            break
+                        if (
+                            index == 0
+                            and reply.gate_before_first is not None
+                            and not _await_release(reply.gate_before_first, closing)
+                        ):
                             break
                         self.write_chunk(chunk)
                         if (

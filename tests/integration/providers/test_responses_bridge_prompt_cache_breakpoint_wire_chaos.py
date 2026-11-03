@@ -21,7 +21,7 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 _GLOBAL_UNSET: Final = "bridge-breakpoint-global-unset"
 _GLOBAL_FALSE: Final = "bridge-breakpoint-global-false"

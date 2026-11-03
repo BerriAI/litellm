@@ -19,7 +19,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
+from litellm.litellm_core_utils.url_utils import async_safe_get, join_api_base, safe_get
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -51,6 +51,7 @@ class _BflPolledResult(TypedDict):
 
 
 _BFL_POLLED_RESULT_ADAPTER: Final = TypeAdapter(_BflPolledResult)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 _BFL_REQUEST_PARAMS: Final = (
@@ -189,11 +190,10 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         """
         Get the complete URL for the Black Forest Labs API request.
         """
-        base_url: str = api_base or get_secret_str("BFL_API_BASE") or DEFAULT_API_BASE
-        base_url = base_url.rstrip("/")
+        base_url: Final = api_base or get_secret_str("BFL_API_BASE") or DEFAULT_API_BASE
 
         endpoint: Final = self._get_model_endpoint(model)
-        return f"{base_url}{endpoint}"
+        return join_api_base(base_url, endpoint)
 
     def _read_image_bytes(
         self,
@@ -317,7 +317,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         The response contains: {"status": "Ready", "result": {"sample": "https://..."}}
         """
         try:
-            raw_response_data: Final[object] = raw_response.json()
+            raw_response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=raw_response.status_code,

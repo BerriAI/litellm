@@ -12,12 +12,16 @@ from typing import Final, Literal
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict
 
+from pydantic import TypeAdapter
+
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
 from .exceptions import AnthropicErrorDetail, AnthropicErrorResponse, AnthropicErrorType
 
+_PARSED_ERROR_BODY: Final = TypeAdapter(object)
+
 # HTTP status code -> Anthropic error type
-# Source: https://docs.anthropic.com/en/api/errors
+# Source: https://platform.claude.com/docs/en/api/errors
 ANTHROPIC_ERROR_TYPE_MAP: Final[dict[int, AnthropicErrorType]] = {
     400: "invalid_request_error",
     401: "authentication_error",
@@ -64,6 +68,7 @@ class AnthropicExceptionMapping:
         status_code: int,
         message: str,
         request_id: str | None = None,
+        error_type: AnthropicErrorType | None = None,
     ) -> AnthropicErrorResponse:
         """
         Create an Anthropic-formatted error response dict.
@@ -75,12 +80,10 @@ class AnthropicExceptionMapping:
             "request_id": "req_..."
         }
         """
-        error_type: Final = AnthropicExceptionMapping.get_error_type(status_code)
-
         response: Final[AnthropicErrorResponse] = {
             "type": "error",
             "error": {
-                "type": error_type,
+                "type": error_type or AnthropicExceptionMapping.get_error_type(status_code),
                 "message": message,
             },
         }
@@ -101,7 +104,7 @@ class AnthropicExceptionMapping:
         - Generic: {"message": "..."}
         - Plain strings
         """
-        parsed: Final = safe_json_loads(raw_message)
+        parsed: Final = _PARSED_ERROR_BODY.validate_python(safe_json_loads(raw_message))
         if isinstance(parsed, dict):
             # Bedrock format
             if "detail" in parsed and isinstance(parsed["detail"], dict):
@@ -155,6 +158,7 @@ class AnthropicExceptionMapping:
         status_code: int,
         raw_message: str,
         request_id: str | None = None,
+        error_type: AnthropicErrorType | None = None,
     ) -> AnthropicErrorResponse:
         """
         Transform an error message to Anthropic format.
@@ -169,14 +173,14 @@ class AnthropicExceptionMapping:
             status_code: HTTP status code
             raw_message: Raw error message (may be JSON string or plain text)
             request_id: Optional request ID to include
+            error_type: Anthropic error type to use instead of the one the status maps to
 
         Returns:
             AnthropicErrorResponse dict
         """
         # Try to parse as JSON once
-        parsed: dict | None = safe_json_loads(raw_message)
-        if not isinstance(parsed, dict):
-            parsed = None
+        decoded: Final = _PARSED_ERROR_BODY.validate_python(safe_json_loads(raw_message))
+        parsed: Final[dict[str, object] | None] = decoded if isinstance(decoded, dict) else None
 
         # If parsed and already in Anthropic format - passthrough
         envelope: Final = AnthropicExceptionMapping._anthropic_error_envelope(parsed)
@@ -193,6 +197,7 @@ class AnthropicExceptionMapping:
             status_code=status_code,
             message=message,
             request_id=request_id,
+            error_type=error_type,
         )
 
 

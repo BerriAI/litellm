@@ -11,7 +11,6 @@ import zlib
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
-from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final, cast
 
@@ -184,9 +183,23 @@ class ScenarioStore:
         return self._scenarios.get(scenario_id)
 
 
+class ObservationLog:
+    def __init__(self) -> None:
+        self._entries: list[Observation] = []
+
+    def put(self, observation: Observation) -> None:
+        self._entries.append(observation)
+
+    def snapshot(self) -> tuple[Observation, ...]:
+        return tuple(self._entries)
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+
 @dataclass(frozen=True, slots=True)
 class Provider:
-    observations: SimpleQueue[Observation] = field(default_factory=SimpleQueue)
+    observations: ObservationLog = field(default_factory=ObservationLog)
     scripts: dict[str, deque[int]] = field(default_factory=dict)
     scenario_store: ScenarioStore = field(default_factory=ScenarioStore)
     interactions: dict[str, InteractionState] = field(default_factory=dict)
@@ -271,7 +284,10 @@ class Provider:
         return JSONResponse({"configured": len(statuses)})
 
     async def observed(self, request: Request) -> Response:
-        values: Final = tuple(self.observations.get() for _ in range(self.observations.qsize()))
+        if request.method == "DELETE":
+            self.observations.clear()
+            return Response(status_code=204)
+        values: Final = self.observations.snapshot()
         return JSONResponse(
             {
                 "requests": [
@@ -622,7 +638,7 @@ class Provider:
         return Starlette(
             routes=[
                 Route("/health", health),
-                Route("/__observations", self.observed),
+                Route("/__observations", self.observed, methods=["GET", "DELETE"]),
                 Route("/__scripts/{model}", self.script, methods=["POST", "DELETE", "GET"]),
                 Route("/__scenarios", self.register_scenario, methods=["POST"]),
                 Route("/__scenarios/{scenario_id}", self.delete_scenario, methods=["DELETE"]),

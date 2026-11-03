@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { getSSOSettings, updateSSOSettings } from "./networking";
+import { CLEARED_SSO_SETTINGS, diffSSOSettingsPayload } from "./Settings/AdminSettings/SSOSettings/utils";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "./shared/errorUtils";
 import { Button } from "@/components/ui/button";
@@ -32,6 +34,60 @@ interface SSOModalsProps {
   ssoConfigured?: boolean; // Add optional prop to indicate if SSO is configured
 }
 
+const buildLegacySSOPayload = (formValues: SSOSettingsFormValues): Record<string, unknown> => {
+  const {
+    proxy_admin_teams,
+    admin_viewer_teams,
+    internal_user_teams,
+    internal_viewer_teams,
+    default_role,
+    group_claim,
+    use_role_mappings,
+    ...rest
+  } = formValues;
+
+  const payload: Record<string, unknown> = {
+    ...rest,
+  };
+
+  if (typeof payload.saml_allow_unsolicited === "boolean") {
+    payload.saml_allow_unsolicited = payload.saml_allow_unsolicited ? "true" : "false";
+  }
+
+  // Add role mappings if use_role_mappings is checked
+  if (use_role_mappings) {
+    // Helper function to split comma-separated string into array
+    const splitTeams = (teams: string | undefined): string[] => {
+      if (!teams || teams.trim() === "") return [];
+      return teams
+        .split(",")
+        .map((team) => team.trim())
+        .filter((team) => team.length > 0);
+    };
+
+    // Map default role display values to backend values
+    const defaultRoleMapping: Record<string, string> = {
+      internal_user_viewer: "internal_user_viewer",
+      internal_user: "internal_user",
+      proxy_admin_viewer: "proxy_admin_viewer",
+      proxy_admin: "proxy_admin",
+    };
+
+    payload.role_mappings = {
+      provider: "generic",
+      group_claim,
+      default_role: (default_role ? defaultRoleMapping[default_role] : undefined) || "internal_user",
+      roles: {
+        proxy_admin: splitTeams(proxy_admin_teams),
+        proxy_admin_viewer: splitTeams(admin_viewer_teams),
+        internal_user: splitTeams(internal_user_teams),
+        internal_user_viewer: splitTeams(internal_viewer_teams),
+      },
+    };
+  }
+  return payload;
+};
+
 const detectSSOProvider = (values: Record<string, unknown>): string | null => {
   if (values.google_client_id) return "google";
   if (values.microsoft_client_id) return "microsoft";
@@ -55,6 +111,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   accessToken,
   ssoConfigured = false, // Default to false if not provided
 }) => {
+  const { t } = useTranslation();
   const [isClearConfirmModalVisible, setIsClearConfirmModalVisible] = useState(false);
   const provider = useWatch({ control: form.control, name: "sso_provider" });
   const useRoleMappings = useWatch({ control: form.control, name: "use_role_mappings" });
@@ -129,61 +186,15 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   // Enhanced form submission handler
   const handleFormSubmit = async (formValues: SSOSettingsFormValues) => {
     if (!accessToken) {
-      toast.fromError("No access token available");
+      toast.fromError(t("adminPanel.ssoModals.toasts.noAccessToken"));
       return;
     }
 
     try {
-      const {
-        proxy_admin_teams,
-        admin_viewer_teams,
-        internal_user_teams,
-        internal_viewer_teams,
-        default_role,
-        group_claim,
-        use_role_mappings,
-        ...rest
-      } = formValues;
-
-      const payload: Record<string, unknown> = {
-        ...rest,
-      };
-
-      if (typeof payload.saml_allow_unsolicited === "boolean") {
-        payload.saml_allow_unsolicited = payload.saml_allow_unsolicited ? "true" : "false";
-      }
-
-      // Add role mappings if use_role_mappings is checked
-      if (use_role_mappings) {
-        // Helper function to split comma-separated string into array
-        const splitTeams = (teams: string | undefined): string[] => {
-          if (!teams || teams.trim() === "") return [];
-          return teams
-            .split(",")
-            .map((team) => team.trim())
-            .filter((team) => team.length > 0);
-        };
-
-        // Map default role display values to backend values
-        const defaultRoleMapping: Record<string, string> = {
-          internal_user_viewer: "internal_user_viewer",
-          internal_user: "internal_user",
-          proxy_admin_viewer: "proxy_admin_viewer",
-          proxy_admin: "proxy_admin",
-        };
-
-        payload.role_mappings = {
-          provider: "generic",
-          group_claim,
-          default_role: (default_role ? defaultRoleMapping[default_role] : undefined) || "internal_user",
-          roles: {
-            proxy_admin: splitTeams(proxy_admin_teams),
-            proxy_admin_viewer: splitTeams(admin_viewer_teams),
-            internal_user: splitTeams(internal_user_teams),
-            internal_user_viewer: splitTeams(internal_viewer_teams),
-          },
-        };
-      }
+      const payload = diffSSOSettingsPayload(
+        buildLegacySSOPayload({ ...emptySSOSettingsFormValues, ...form.formState.defaultValues }),
+        buildLegacySSOPayload(formValues),
+      );
 
       // Save SSO settings using the new API
       await updateSSOSettings(accessToken, payload);
@@ -191,42 +202,19 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       // Continue with the original flow (show instructions)
       handleShowInstructions(formValues);
     } catch (error: unknown) {
-      toast.fromError("Failed to save SSO settings: " + parseErrorMessage(error));
+      toast.fromError(t("adminPanel.ssoModals.toasts.saveFailed", { error: parseErrorMessage(error) }));
     }
   };
 
   // Handle clearing SSO settings
   const handleClearSSO = async () => {
     if (!accessToken) {
-      toast.fromError("No access token available");
+      toast.fromError(t("adminPanel.ssoModals.toasts.noAccessToken"));
       return;
     }
 
     try {
-      // Clear all SSO settings
-      const clearSettings = {
-        google_client_id: null,
-        google_client_secret: null,
-        microsoft_client_id: null,
-        microsoft_client_secret: null,
-        microsoft_tenant: null,
-        generic_client_id: null,
-        generic_client_secret: null,
-        generic_authorization_endpoint: null,
-        generic_token_endpoint: null,
-        generic_userinfo_endpoint: null,
-        saml_idp_metadata_url: null,
-        saml_idp_metadata_xml: null,
-        saml_sp_entity_id: null,
-        saml_allow_unsolicited: null,
-        generic_scope: null,
-        proxy_base_url: null,
-        user_email: null,
-        sso_provider: null,
-        role_mappings: null,
-      };
-
-      await updateSSOSettings(accessToken, clearSettings);
+      await updateSSOSettings(accessToken, CLEARED_SSO_SETTINGS);
 
       // Clear the form
       form.reset(emptySSOSettingsFormValues);
@@ -237,10 +225,10 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       // Close the main SSO modal and trigger refresh
       handleAddSSOOk();
 
-      toast.success("SSO settings cleared successfully");
+      toast.success(t("adminPanel.ssoModals.toasts.clearSuccess"));
     } catch (error) {
       console.error("Failed to clear SSO settings:", error);
-      toast.fromError("Failed to clear SSO settings");
+      toast.fromError(t("adminPanel.ssoModals.toasts.clearFailed"));
     }
   };
 
@@ -250,7 +238,9 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       <Dialog open={isAddSSOModalVisible} onOpenChange={(open) => !open && handleAddSSOCancel()}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
           <DialogHeader>
-            <DialogTitle>{ssoConfigured ? "Edit SSO Settings" : "Add SSO"}</DialogTitle>
+            <DialogTitle>
+              {ssoConfigured ? t("adminPanel.ssoModals.titleEdit") : t("adminPanel.ssoModals.titleAdd")}
+            </DialogTitle>
           </DialogHeader>
           <FormProvider {...form}>
             <form
@@ -264,7 +254,9 @@ const SSOModals: React.FC<SSOModalsProps> = ({
                 {provider ? renderProviderFields(provider) : null}
                 <ProxyAdminEmailField />
                 <ProxyBaseUrlField />
-                {showRoleMappingToggle && <MappingToggleField name="use_role_mappings" label="Use Role Mappings" />}
+                {showRoleMappingToggle && (
+                  <MappingToggleField name="use_role_mappings" label={t("adminPanel.ssoModals.useRoleMappings")} />
+                )}
                 {useRoleMappings && (
                   <>
                     <GroupClaimField />
@@ -275,10 +267,10 @@ const SSOModals: React.FC<SSOModalsProps> = ({
               <div className="mt-4 flex items-center justify-end gap-2">
                 {ssoConfigured && (
                   <Button type="button" variant="secondary" onClick={() => setIsClearConfirmModalVisible(true)}>
-                    Clear
+                    {t("adminPanel.ssoModals.clear")}
                   </Button>
                 )}
-                <Button type="submit">Save</Button>
+                <Button type="submit">{t("adminPanel.ssoModals.save")}</Button>
               </div>
             </form>
           </FormProvider>
@@ -289,16 +281,16 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       <Dialog open={isClearConfirmModalVisible} onOpenChange={(open) => !open && setIsClearConfirmModalVisible(false)}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Confirm Clear SSO Settings</DialogTitle>
+            <DialogTitle>{t("adminPanel.ssoModals.clearConfirm.title")}</DialogTitle>
           </DialogHeader>
-          <p>Are you sure you want to clear all SSO settings? This action cannot be undone.</p>
-          <p>Users will no longer be able to login using SSO after this change.</p>
+          <p>{t("adminPanel.ssoModals.clearConfirm.message")}</p>
+          <p>{t("adminPanel.ssoModals.clearConfirm.warning")}</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsClearConfirmModalVisible(false)}>
-              Cancel
+              {t("adminPanel.ssoModals.clearConfirm.cancel")}
             </Button>
             <Button onClick={handleClearSSO} variant="destructive">
-              Yes, Clear
+              {t("adminPanel.ssoModals.clearConfirm.confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -307,16 +299,16 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       <Dialog open={isInstructionsModalVisible} onOpenChange={(open) => !open && handleInstructionsCancel()}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
           <DialogHeader>
-            <DialogTitle>SSO Setup Instructions</DialogTitle>
+            <DialogTitle>{t("adminPanel.ssoModals.instructions.title")}</DialogTitle>
           </DialogHeader>
-          <p>Follow these steps to complete the SSO setup:</p>
-          <p className="text-sm mt-2">1. DO NOT Exit this TAB</p>
-          <p className="text-sm mt-2">2. Open a new tab, visit your proxy base url</p>
-          <p className="text-sm mt-2">3. Confirm your SSO is configured correctly and you can login on the new Tab</p>
-          <p className="text-sm mt-2">4. If Step 3 is successful, you can close this tab</p>
+          <p>{t("adminPanel.ssoModals.instructions.intro")}</p>
+          <p className="text-sm mt-2">{t("adminPanel.ssoModals.instructions.step1")}</p>
+          <p className="text-sm mt-2">{t("adminPanel.ssoModals.instructions.step2")}</p>
+          <p className="text-sm mt-2">{t("adminPanel.ssoModals.instructions.step3")}</p>
+          <p className="text-sm mt-2">{t("adminPanel.ssoModals.instructions.step4")}</p>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button type="button" onClick={handleInstructionsOk}>
-              Done
+              {t("adminPanel.ssoModals.instructions.done")}
             </Button>
           </div>
         </DialogContent>

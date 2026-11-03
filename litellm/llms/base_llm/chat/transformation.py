@@ -4,11 +4,11 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_TOKENS, RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -36,6 +36,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+REQUEST_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class BaseLLMException(Exception):
@@ -91,9 +94,10 @@ class BaseConfig(ABC):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("_")
             and not isinstance(
                 v,
@@ -125,6 +129,17 @@ class BaseConfig(ABC):
         thinking: Final = non_default_params.get("thinking")
         thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
         return thinking is True or thinking_type == "enabled" or non_default_params.get("reasoning_effort") is not None
+
+    def is_thinking_requested(self, non_default_params: Mapping[str, object]) -> bool:
+        match non_default_params:
+            case {"thinking": True | {"type": "enabled" | "adaptive"}}:
+                return True
+            case {"reasoning_effort": None | "none"}:
+                return False
+            case {"reasoning_effort": object()}:
+                return True
+            case _:
+                return False
 
     def is_max_tokens_in_request(self, non_default_params: dict) -> bool:
         """
@@ -184,12 +199,19 @@ class BaseConfig(ABC):
 
     def translate_developer_role_to_system_role(
         self,
-        messages: list[AllMessageValues],
-    ) -> list[AllMessageValues]:
+        messages: Sequence[AllMessageValues],
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+        model_info: object,
+    ) -> Sequence[AllMessageValues]:
         """
         Translate `developer` role to `system` role for non-OpenAI providers.
 
-        Overriden by OpenAI/Azure
+        Overridden by OpenAI, which also places the instructions in one leading system
+        message for an OpenAI-compatible model declared to reject a later system
+        message, and by the o-series and Azure configs.
         """
         return map_developer_role_to_system_role(messages=messages)
 
@@ -414,7 +436,7 @@ class BaseConfig(ABC):
         streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse"],
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> object:
         pass
 
     def get_model_response_iterator_for_request(
@@ -423,6 +445,7 @@ class BaseConfig(ABC):
         sync_stream: bool,
         json_mode: bool | None,
         optional_params: Mapping[str, object],
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> object:
         if sync_stream:
             return self.get_model_response_iterator(
@@ -499,7 +522,7 @@ class BaseConfig(ABC):
     def apply_assembled_streaming_response_metadata(
         self,
         response: "ModelResponse",
-        chunks: list[Any],
+        chunks: list[object],
     ) -> None:
         """Hook for providers to merge chunk metadata into assembled streaming responses."""
         return

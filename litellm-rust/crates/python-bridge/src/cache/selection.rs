@@ -39,7 +39,7 @@ impl Selection {
         services: HostServices<P>,
     ) -> (Option<ScopedCache>, CacheOptions)
     where
-        P::Error: From<MachineFault>,
+        P::Error: From<MachineFault> + std::error::Error,
     {
         let service = match self.backend {
             Backend::Disabled => None,
@@ -74,21 +74,6 @@ fn selected_cache<'py>(
         return Ok(None);
     }
     Ok(Some(configured))
-}
-
-pub(crate) fn admit_native(
-    py: Python<'_>,
-    kwargs: &Bound<'_, PyDict>,
-    call_type: &str,
-) -> PyResult<()> {
-    if let Some(configured) = selected_cache(py, kwargs, call_type)?
-        && native::v2::native_handle(&configured)?.is_none()
-    {
-        return Err(crate::errors::RustBridgeDeclined::new_err(
-            "the configured cache requires Python inference",
-        ));
-    }
-    Ok(())
 }
 
 pub(crate) fn configured_native(

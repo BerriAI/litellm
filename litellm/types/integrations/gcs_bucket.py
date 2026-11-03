@@ -31,5 +31,5 @@ class GCSLogQueueItem(TypedDict):
     """
 
     payload: StandardLoggingPayload
-    kwargs: dict[str, Any]
-    response_obj: Any | None
+    kwargs: dict[str, object]
+    response_obj: object | None

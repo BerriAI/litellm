@@ -36,7 +36,10 @@ const snoozedBy = (user: string, until: string): DeploymentWarning["ignore"] => 
   ignored_until: until,
 });
 
+let signedInRole = "proxy_admin";
+
 const signIn = (userRole: string) => {
+  signedInRole = userRole;
   const claims = { key: "sk-health-test", user_id: "admin-1", user_role: userRole, exp: NOW.getTime() / 1000 + 3600 };
   const token = `${btoa(JSON.stringify({ alg: "none" }))}.${btoa(JSON.stringify(claims))}.test`;
   document.cookie = `token=${token}; Path=/`;
@@ -46,6 +49,9 @@ const handleRequest = async (request: Request): Promise<Response> => {
   const { pathname } = new URL(request.url);
   if (pathname === "/litellm/.well-known/litellm-ui-config") {
     return Response.json({ server_root_path: "", proxy_base_url: "", admin_ui_disabled: false });
+  }
+  if (pathname === "/management/v1/users/me") {
+    return Response.json({ user_id: "admin-1", user_role: signedInRole, user_email: null });
   }
   if (pathname === "/health/deployment_warnings" && request.method === "GET") {
     proxy.gets += 1;
