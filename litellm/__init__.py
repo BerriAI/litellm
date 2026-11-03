@@ -683,6 +683,7 @@ dashscope_models: Set = set()
 qwencloud_models: Set = set()
 qwen_ai_platform_models: Set = set()
 moonshot_models: Set = set()
+qianfan_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
 openinfer_models: Final[Set[str]] = set()
@@ -974,6 +975,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             modelscope_models.add(key)
         elif value.get("litellm_provider") == "moonshot":
             moonshot_models.add(key)
+        elif value.get("litellm_provider") == "qianfan":
+            qianfan_models.add(key)
         elif value.get("litellm_provider") == "publicai":
             publicai_models.add(key)
         elif value.get("litellm_provider") == "darkbloom":
@@ -1161,6 +1164,7 @@ model_list = list(
     | qwencloud_models
     | qwen_ai_platform_models
     | moonshot_models
+    | qianfan_models
     | publicai_models
     | darkbloom_models
     | openinfer_models
@@ -1294,6 +1298,7 @@ def _build_models_by_provider() -> dict:
         "qwen_ai_platform": qwen_ai_platform_models,
         "modelscope": modelscope_models,
         "moonshot": moonshot_models,
+        "qianfan": qianfan_models,
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
         "openinfer": openinfer_models,
@@ -2275,6 +2280,9 @@ if TYPE_CHECKING:
     )
     from .llms.moonshot.chat.transformation import (
         MoonshotChatConfig as MoonshotChatConfig,
+    )
+    from .llms.qianfan.chat.transformation import (
+        QianfanChatConfig as QianfanChatConfig,
     )
     from .llms.docker_model_runner.chat.transformation import (
         DockerModelRunnerChatConfig as DockerModelRunnerChatConfig,

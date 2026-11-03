@@ -349,6 +349,7 @@ LLM_CONFIG_NAMES: Final = (
     "QwenAIPlatformChatConfig",
     "ModelScopeChatConfig",
     "MoonshotChatConfig",
+    "QianfanChatConfig",
     "DockerModelRunnerChatConfig",
     "V0ChatConfig",
     "OCIChatConfig",
@@ -1304,6 +1305,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "ModelScopeChatConfig",
     ),
     "MoonshotChatConfig": (".llms.moonshot.chat.transformation", "MoonshotChatConfig"),
+    "QianfanChatConfig": (".llms.qianfan.chat.transformation", "QianfanChatConfig"),
     "DockerModelRunnerChatConfig": (
         ".llms.docker_model_runner.chat.transformation",
         "DockerModelRunnerChatConfig",

@@ -8072,6 +8072,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("MOONSHOT_API_KEY")
+        elif custom_llm_provider == "qianfan":
+            if "QIANFAN_API_KEY" in os.environ:
+                keys_in_environment = True  # rebind-ok: env probe flips the flag, like every branch
+            else:
+                missing_keys.append("QIANFAN_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
@@ -9713,6 +9718,7 @@ class ProviderConfigManager:
             ),
             LlmProviders.MODELSCOPE: (lambda: litellm.ModelScopeChatConfig(), False),
             LlmProviders.MOONSHOT: (lambda: litellm.MoonshotChatConfig(), False),
+            LlmProviders.QIANFAN: (lambda: litellm.QianfanChatConfig(), False),
             LlmProviders.DOCKER_MODEL_RUNNER: (
                 lambda: litellm.DockerModelRunnerChatConfig(),
                 False,

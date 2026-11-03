@@ -373,6 +373,9 @@ def get_llm_provider(
                     elif endpoint == "api.moonshot.ai/v1":
                         custom_llm_provider = "moonshot"
                         dynamic_api_key = get_secret_str("MOONSHOT_API_KEY")
+                    elif endpoint == "https://qianfan.baidubce.com/v2":
+                        custom_llm_provider = "qianfan"  # rebind-ok: endpoint inference, like every branch
+                        dynamic_api_key = get_secret_str("QIANFAN_API_KEY")
                     elif (
                         endpoint == "api.minimax.io/anthropic"
                         or endpoint == "api.minimaxi.com/anthropic"
@@ -915,6 +918,11 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.MoonshotChatConfig().get_openai_compatible_provider_info(api_base, api_key)
+    elif custom_llm_provider == "qianfan":
+        (
+            api_base,  # rebind-ok: resolved base/key are what this function returns, like every branch
+            dynamic_api_key,  # rebind-ok: see above
+        ) = litellm.QianfanChatConfig().get_openai_compatible_provider_info(api_base, api_key)
     # publicai is now handled by JSON config (see litellm/llms/openai_like/providers.json)
     elif custom_llm_provider == "docker_model_runner":
         (
