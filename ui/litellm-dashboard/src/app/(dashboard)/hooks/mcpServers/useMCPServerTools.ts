@@ -2,6 +2,8 @@ import { useQueries, type QueryObserverResult } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { listMCPTools } from "@/components/networking";
 import useAuthorized from "../useAuthorized";
+import type { MCPServer } from "@/components/mcp_tools/types";
+import { providerToolChoices } from "@/components/mcp_tools/providerTools";
 
 export const mcpServerToolKeys = createQueryKeys("mcpServerTools");
 
@@ -48,23 +50,33 @@ const toStatus = ({
 export const useMCPServerTools = (
   serverIds: readonly string[],
   enabledServerIds: ReadonlySet<string>,
+  servers: readonly MCPServer[] = [],
 ): ReadonlyMap<string, MCPServerToolsState> => {
   const { accessToken } = useAuthorized();
+  const providers = new Map(
+    servers.filter((server) => server.execution_mode === "provider").map((server) => [server.server_id, server]),
+  );
   return useQueries({
     queries: serverIds.map((serverId) => ({
       queryKey: mcpServerToolKeys.detail(serverId),
       queryFn: () => fetchServerTools(accessToken!, serverId),
-      enabled: !!accessToken && enabledServerIds.has(serverId),
+      enabled: !!accessToken && enabledServerIds.has(serverId) && !providers.has(serverId),
       staleTime: 5 * 60 * 1000,
       retry: false,
       refetchOnWindowFocus: false,
     })),
     combine: (results) =>
       new Map(
-        results.map((result, idx): [string, MCPServerToolsState] => [
-          serverIds[idx],
-          { tools: result.data ?? [], status: toStatus(result) },
-        ]),
+        results.map((result, idx): [string, MCPServerToolsState] => {
+          const serverId = serverIds[idx];
+          const provider = providers.get(serverId);
+          return [
+            serverId,
+            provider
+              ? { tools: providerToolChoices(provider), status: "success" }
+              : { tools: result.data ?? [], status: toStatus(result) },
+          ];
+        }),
       ),
   });
 };

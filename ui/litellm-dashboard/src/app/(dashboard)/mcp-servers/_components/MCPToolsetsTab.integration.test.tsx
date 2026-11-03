@@ -11,6 +11,8 @@ import { mcpServerToolKeys } from "@/app/(dashboard)/hooks/mcpServers/useMCPServ
 import { MCPToolset } from "@/components/mcp_tools/types";
 
 vi.mock("@/components/networking", () => ({
+  fetchMCPServers: vi.fn(),
+  fetchMCPToolsets: vi.fn(),
   createMCPToolset: vi.fn(),
   updateMCPToolset: vi.fn(),
   deleteMCPToolset: vi.fn(),
@@ -420,4 +422,50 @@ describe("MCPToolsetsTab usage guide", () => {
 
     expect(screen.getByText(/https:\/\/gateway\.example\.com\/toolset\/<toolset-name>\/mcp/)).toBeInTheDocument();
   });
+});
+
+it("creates a provider toolset from registration choices without MCP discovery", async () => {
+  vi.clearAllMocks();
+  const serverHooks = await vi.importActual<typeof import("@/app/(dashboard)/hooks/mcpServers/useMCPServers")>(
+    "@/app/(dashboard)/hooks/mcpServers/useMCPServers",
+  );
+  const toolsetHooks = await vi.importActual<typeof import("@/app/(dashboard)/hooks/mcpServers/useMCPToolsets")>(
+    "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets",
+  );
+  vi.mocked(useMCPServers).mockImplementation(serverHooks.useMCPServers);
+  vi.mocked(useMCPToolsets).mockImplementation(toolsetHooks.useMCPToolsets);
+  vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+  vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+    {
+      server_id: "native",
+      server_name: "native_docs",
+      execution_mode: "provider",
+      allowed_tools: ["search", "fetch"],
+      tool_name_to_description: { search: "Search docs" },
+      created_at: "",
+      created_by: "",
+      updated_at: "",
+      updated_by: "",
+    },
+  ]);
+  vi.mocked(networking.createMCPToolset).mockResolvedValue({} as MCPToolset);
+  const user = setup();
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
+      <MCPToolsetsTab accessToken="sk-test" userRole="Admin" />
+    </QueryClientProvider>,
+  );
+  await openCreate(user);
+  fireEvent.change(screen.getByPlaceholderText("e.g. github-linear-tools"), { target: { value: "native_research" } });
+  await user.click(await screen.findByText("native_docs"));
+  await user.click(await screen.findByRole("checkbox", { name: /^search/ }));
+  await user.click(screen.getByRole("button", { name: "Create Toolset" }));
+  await waitFor(() =>
+    expect(networking.createMCPToolset).toHaveBeenCalledWith("sk-test", {
+      toolset_name: "native_research",
+      description: "",
+      tools: [{ server_id: "native", tool_name: "search" }],
+    }),
+  );
+  expect(networking.listMCPTools).not.toHaveBeenCalled();
 });

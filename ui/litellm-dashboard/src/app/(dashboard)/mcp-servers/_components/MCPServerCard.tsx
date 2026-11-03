@@ -58,6 +58,8 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   stdioEnabled = true,
 }) => {
   const { t } = useTranslation();
+  const isProvider = server.execution_mode === "provider";
+  const recheckHealth = isProvider ? undefined : onRecheckHealth;
   const alias = server.alias || server.server_name || "";
   const name = server.server_name || alias || server.server_id;
   // Logo is sourced exclusively from the admin-set `mcp_info.logo_url`.
@@ -115,7 +117,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
     }
   };
 
-  const hasMenu = !!onRecheckHealth || !!onDelete;
+  const hasMenu = !!recheckHealth || !!onDelete;
 
   // Card uses role="button" + nested <button> children (Set, BYOK Connect, the
   // recheck-health Badge), so a real <button> wrapper would produce invalid
@@ -172,19 +174,19 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
                 }
               />
               <DropdownMenuContent align="end">
-                {onRecheckHealth && (
+                {recheckHealth && (
                   <DropdownMenuItem
                     disabled={isRechecking}
                     onClick={(e) => {
                       stop(e);
-                      onRecheckHealth();
+                      recheckHealth();
                     }}
                   >
                     <Zap />
                     {t("mcpServers.serverCard.actionsMenu.testConnection")}
                   </DropdownMenuItem>
                 )}
-                {onRecheckHealth && onDelete && <DropdownMenuSeparator />}
+                {recheckHealth && onDelete && <DropdownMenuSeparator />}
                 {onDelete && (
                   <DropdownMenuItem
                     variant="destructive"
@@ -214,17 +216,26 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
         )}
 
         <div className="flex flex-wrap items-center gap-1.5">
-          <HealthChip
-            status={status}
-            isLoadingHealth={isLoadingHealth}
-            isRechecking={isRechecking}
-            onRecheck={onRecheckHealth}
-            lastCheck={server.last_health_check}
-            error={server.health_check_error}
-            dotClass={healthTone.dot}
-          />
-          <Badge variant="outline">{displayTransport.toUpperCase()}</Badge>
-          <Badge variant="outline">{authType}</Badge>
+          {isProvider ? (
+            <>
+              <Badge variant="outline">Provider-executed</Badge>
+              <Badge variant="outline">{server.allowed_tools?.length ?? 0} allowed tools</Badge>
+            </>
+          ) : (
+            <>
+              <HealthChip
+                status={status}
+                isLoadingHealth={isLoadingHealth}
+                isRechecking={isRechecking}
+                onRecheck={recheckHealth}
+                lastCheck={server.last_health_check}
+                error={server.health_check_error}
+                dotClass={healthTone.dot}
+              />
+              <Badge variant="outline">{displayTransport.toUpperCase()}</Badge>
+              <Badge variant="outline">{authType}</Badge>
+            </>
+          )}
           {transport === "stdio" && !stdioEnabled && (
             <Tooltip>
               <TooltipTrigger
@@ -238,7 +249,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
               <TooltipContent>{t(STDIO_DISABLED_MESSAGE_KEY)}</TooltipContent>
             </Tooltip>
           )}
-          {oauthFlowUnset && (
+          {!isProvider && oauthFlowUnset && (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -251,17 +262,19 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
               <TooltipContent>{t("mcpServers.serverCard.oauthFlowUnset.tooltip")}</TooltipContent>
             </Tooltip>
           )}
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Badge variant="outline">
-                  <span className={cn("h-1.5 w-1.5 rounded-full", networkAccess.dotClassName)} />
-                  {networkAccess.label}
-                </Badge>
-              }
-            />
-            <TooltipContent>{networkAccess.description}</TooltipContent>
-          </Tooltip>
+          {!isProvider && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Badge variant="outline">
+                    <span className={cn("h-1.5 w-1.5 rounded-full", networkAccess.dotClassName)} />
+                    {networkAccess.label}
+                  </Badge>
+                }
+              />
+              <TooltipContent>{networkAccess.description}</TooltipContent>
+            </Tooltip>
+          )}
           {accessGroups.slice(0, 2).map((g) => (
             <Tooltip key={g}>
               <TooltipTrigger
