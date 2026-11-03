@@ -27,8 +27,11 @@ tests. A product bug the test exposes is `pytest.skip("BUG: <symptom>")` at the 
 fix in the test and not a deletion. Needs no network, proxy, DB or Redis: `tests/unit`
 
 CircleCI's integration groups run every file here except the OCI and sandbox tests, which no CI runs, and
-the files in `GITHUB_FILES` in `run.py`. CircleCI runs on main, not on pull requests, so a new file here
-first runs after its PR merges. Wanting a file to run before merge is no reason to change CI, and a new
+the files in `GITHUB_FILES` in `run.py`. `test-integration.yml` runs the same groups through the same
+`run_integration.sh` on GitHub Actions, on main every three hours from 8am to 8pm Pacific Monday to Saturday,
+and on a pull request when someone adds the `run-ci` label. Neither runs every pull request, so a new file here
+first runs on main after its PR merges, or earlier if the PR gets `run-ci`. Wanting a file to run before merge
+is no reason to change CI, and a new
 dedicated workflow for it is the same mistake as a shared shard. Write the file, leave `GITHUB_FILES` and
 every workflow alone, and tell the user it first runs on main. `GITHUB_FILES` is only for a file that
 needs what CircleCI's groups cannot give it, like the images `image-scan.yml` builds or the plain pytest

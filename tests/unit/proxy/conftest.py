@@ -8,17 +8,23 @@ import os
 import tempfile
 import warnings
 from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError
 
 import litellm
 import litellm.proxy.proxy_server
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    InitPassThroughEndpointHelpers,
+    _registered_pass_through_routes,
+)
 from litellm._service_logger import ServiceTypes
 from litellm.integrations.otel.model.payloads import ServiceSpanData
 from litellm.integrations.otel.model.spans import service_span_name
@@ -237,6 +243,40 @@ def pytest_runtest_teardown(item, nextitem):
 @pytest.fixture
 def secret_vault_factory() -> type[FakeSecretVault]:
     return FakeSecretVault
+
+
+@contextmanager
+def _eu_jev_route_configured_at(path: str) -> Iterator[None]:
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    InitPassThroughEndpointHelpers.add_exact_path_route(
+        app=FastAPI(),
+        path=path,
+        target="https://operator.example/decide",
+        custom_headers=None,
+        forward_headers=None,
+        merge_query_params=None,
+        dependencies=None,
+        cost_per_request=None,
+        endpoint_id="operator-eu-jev",
+        methods=["POST"],
+    )
+    try:
+        yield
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+
+
+@pytest.fixture
+def configured_eu_jev_route() -> Iterator[None]:
+    with _eu_jev_route_configured_at("/eu_jev/v1/systemone"):
+        yield
+
+
+@pytest.fixture
+def configured_eu_jev_route_with_trailing_slash() -> Iterator[None]:
+    with _eu_jev_route_configured_at("/eu_jev/v1/systemone/"):
+        yield
 
 
 @pytest.fixture

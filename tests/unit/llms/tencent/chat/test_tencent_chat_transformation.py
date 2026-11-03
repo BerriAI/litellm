@@ -1,5 +1,10 @@
+import logging
+from typing import Final
 from unittest.mock import patch
 
+import pytest
+
+from litellm._logging import verbose_logger
 from litellm.llms.tencent.chat.transformation import TencentChatConfig
 
 
@@ -207,6 +212,27 @@ class TestAdaptiveThinkingCoercion:
         )
 
         assert result["extra_body"]["thinking"] == {"type": "adaptive", "budget_tokens": 4096}
+
+    @pytest.mark.parametrize("budget, warned", (("high", 1), (4096, 0)), ids=("non-integer", "integer"))
+    def test_enabled_thinking_on_adaptive_only_model_warns_only_when_the_budget_is_dropped(
+        self, local_model_cost_map, budget: object, warned: int, caplog: pytest.LogCaptureFixture
+    ):
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            result: Final = TencentChatConfig().map_openai_params(
+                non_default_params={"thinking": {"type": "enabled", "budget_tokens": budget}},
+                optional_params={},
+                model="tencent/minimax-m3",
+                drop_params=False,
+            )
+
+        warnings: Final = tuple(
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.WARNING and f"Dropping thinking.budget_tokens={budget!r}" in r.getMessage()
+        )
+        assert result["extra_body"]["thinking"]["type"] == "adaptive"
+        assert result["extra_body"]["thinking"].get("budget_tokens") == (None if warned else budget)
+        assert len(warnings) == warned
 
     def test_disabled_thinking_kept_for_adaptive_only_model(self, local_model_cost_map):
         config = TencentChatConfig()
