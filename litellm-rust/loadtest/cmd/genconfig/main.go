@@ -15,6 +15,9 @@
 // custom_callbacks.py. headers.txt (headers-<set>.txt) holds the request headers those hooks act
 // on. S3 settings come from LOADTEST_S3_* environment variables.
 //
+// -key-sets ,portkey adds Portkey gateway routing (portkey.go): one x-portkey-config header per
+// model group, in portkey-headers.json, for loadgen -model-headers. Basic features only.
+//
 // -key-sets python,rust writes one key set, with its own users and teams, per name, so each
 // gateway's spend can be told apart in a shared database.
 package main
@@ -45,7 +48,7 @@ func main() {
 	masterKey := flag.String("master-key", "sk-loadtest-master", "gateway master key")
 	outDir := flag.String("out", ".", "output directory")
 	features := flag.String("features", "basic", "basic (virtual keys only) or full (limits, budgets, callbacks and hooks)")
-	keySets := flag.String("key-sets", "", "comma-separated key set names, each written to keys-<name>.txt with its own users and teams (default: one set in keys.txt); the set named bifrost becomes bifrost-config.json")
+	keySets := flag.String("key-sets", "", "comma-separated key set names, each written to keys-<name>.txt with its own users and teams (default: one set in keys.txt); the set named bifrost becomes bifrost-config.json, the set named portkey portkey-headers.json")
 	bifrostConcurrency := flag.Int("bifrost-concurrency", 500, "Bifrost workers per deployment (each deployment is a provider with its own worker pool)")
 	bifrostBuffer := flag.Int("bifrost-buffer", 5000, "Bifrost queue length per deployment, and its client pool size")
 	bifrostBedrock := flag.String("bifrost-bedrock-tls", "127.0.0.1:9443", "host:port of mockllm -tls-addr, where Bifrost's Bedrock deployments go")
@@ -138,6 +141,13 @@ general_settings:
 	sw := bufio.NewWriter(sf)
 	sw.WriteString("-- Load-test virtual keys. Hash = sha256 hex of the key, as the proxy stores it.\n")
 	for _, set := range sets {
+		if set == portkeySet {
+			if full {
+				log.Fatal("the portkey key set needs -features basic: the open-source Portkey gateway has no keys, limits, budgets or logs to turn on")
+			}
+			writePortkey(bifrostDeps, portkeyKeys(*keys, *keySeed), *outDir)
+			continue
+		}
 		if set == bifrostSet {
 			writeBifrost(bifrostDeps, bifrostOptions{full: full, keys: *keys, keySeed: *keySeed,
 				concurrency: *bifrostConcurrency, bufferSize: *bifrostBuffer, pricingFile: *bifrostPricing, bedrockTLS: *bifrostBedrock, outDir: *outDir})

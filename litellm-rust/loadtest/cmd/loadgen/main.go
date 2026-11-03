@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -78,11 +79,31 @@ func main() {
 	messagesPath := flag.String("messages-path", "/v1/messages", "path of the messages endpoint under -target (Bifrost serves it at /anthropic/v1/messages)")
 	var headers headerFlags
 	flag.Var(&headers, "header", "extra request header as 'Name: value' (repeatable)")
+	modelHeadersFile := flag.String("model-headers", "", "JSON file of {model: {header: value}} sent with each request for that model, on top of -header (Portkey's per-group x-portkey-config, from genconfig's portkey key set)")
 	flag.Parse()
+	modelHeaders := map[string]headerFlags{}
+	if *modelHeadersFile != "" {
+		mh, err := readModelHeaders(*modelHeadersFile)
+		modelHeaders = mh
+		if err != nil {
+			log.Fatalf("model headers: %v", err)
+		}
+	}
 
 	w, err := loadWorkload(*workloadPath)
 	if err != nil {
 		log.Fatal(err)
+	}
+	// With -model-headers, every model the workload can pick needs its headers (a Portkey request
+	// without its config is refused, which would read as a gateway failure).
+	if *modelHeadersFile != "" {
+		for _, m := range w.Models {
+			for i := range m.Count {
+				if model := fmt.Sprintf("%s%d", m.Prefix, i); len(modelHeaders[model]) == 0 {
+					log.Fatalf("model headers: %s has no entry for model %s", *modelHeadersFile, model)
+				}
+			}
+		}
 	}
 	keys := []string{*key}
 	if *key == "" {
@@ -241,7 +262,7 @@ schedule:
 		go func() {
 			defer wg.Done()
 			defer c.inflight.Add(-1)
-			do(reqCtx, transport, *target, paths{*chatPath, *messagesPath}, keys[keyIdx], *messagesAuth, headers, body, &res)
+			do(reqCtx, transport, *target, paths{*chatPath, *messagesPath}, keys[keyIdx], *messagesAuth, append(headers[:len(headers):len(headers)], modelHeaders[res.Model]...), body, &res)
 			if res.OK {
 				c.ok.Add(1)
 			} else {
@@ -284,6 +305,31 @@ func (h *headerFlags) Set(value string) error {
 	}
 	*h = append(*h, [2]string{strings.TrimSpace(name), strings.TrimSpace(v)})
 	return nil
+}
+
+// readModelHeaders reads a {model: {header: value}} file into each model's extra headers, in a
+// stable order.
+func readModelHeaders(path string) (map[string]headerFlags, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]map[string]string
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil, err
+	}
+	out := make(map[string]headerFlags, len(raw))
+	for model, hs := range raw {
+		names := make([]string, 0, len(hs))
+		for name := range hs {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			out[model] = append(out[model], [2]string{name, hs[name]})
+		}
+	}
+	return out, nil
 }
 
 // paths are the chat and messages endpoints under the target.

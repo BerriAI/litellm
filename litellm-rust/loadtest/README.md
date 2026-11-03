@@ -7,8 +7,8 @@ machines.
 | Tool | What it does |
 | --- | --- |
 | `mockllm` | Fake OpenAI chat completions, Anthropic messages and Bedrock invoke upstream. Streams or not, and takes its timing from a directive in the prompt (`[[mock ttft_ms=800 dur_ms=300000 out=2000]]`). Counts hits per deployment (`/d/<id>/` path prefix) at `GET /stats`; `-faults "chat-0-3=429:1.0"` makes chosen deployments fail. |
-| `loadgen` | Open-loop arrivals from a workload file, Poisson or evenly spaced (`"arrivals": "constant"`): weighted request classes with their own endpoint, stream share, context size (10k to 1M tokens), time to first token and total time. Writes one JSON line per request, with `lag_ms`, how late it left against its planned arrival (when that grows, the generator is the limit). Shard across machines with `-shard i -shards n`. |
-| `genconfig` | Gateway `config.yaml` with many model groups and deployments pointing at the mocks, plus `keys.txt` and `keys.sql` (rows for `LiteLLM_VerificationToken`). `-key-seed` makes every machine generate the same keys. The `bifrost` key set is written as a Bifrost config; see [Bifrost](#bifrost). |
+| `loadgen` | Open-loop arrivals from a workload file, Poisson or evenly spaced (`"arrivals": "constant"`): weighted request classes with their own endpoint, stream share, context size (10k to 1M tokens), time to first token and total time. Writes one JSON line per request, with `lag_ms`, how late it left against its planned arrival (when that grows, the generator is the limit). Shard across machines with `-shard i -shards n`. `-model-headers` adds per-model-group headers (Portkey's routing config). |
+| `genconfig` | Gateway `config.yaml` with many model groups and deployments pointing at the mocks, plus `keys.txt` and `keys.sql` (rows for `LiteLLM_VerificationToken`). `-key-seed` makes every machine generate the same keys. The `bifrost` key set is written as a Bifrost config; see [Bifrost](#bifrost). The `portkey` key set is written as Portkey routing headers; see [Portkey](#portkey). |
 | `summarize` | Merges result files and prints proxy overhead (observed minus planned time) by stage, class and context size. |
 | `procmon` | Samples the gateway process's CPU, RSS, fds and TCP connections from `/proc`. |
 | `verify` | Checks what each gateway recorded for a run against what loadgen sent: spend logs, key/team/user/member spend, daily tables, Prometheus counters, S3 request logs and the headers the provider received. See [Full-feature runs](#full-feature-runs). |
@@ -180,6 +180,30 @@ verify check ... -side bifrost=bifrost:8080,bifrost
 tables, `bifrost_*` metrics, its S3 log objects) and reports what Bifrost has no counterpart for as
 n/a. With three sides it compares each pair's fitted deployment prices; metric and S3 field lists
 are only compared between the LiteLLM sides, since Bifrost's schema differs throughout.
+
+## Portkey
+
+A key set named `portkey` (`-key-sets ,portkey`, basic features only) is written as routing for the
+[open-source Portkey gateway](https://github.com/Portkey-AI/gateway) instead of key rows. That
+gateway keeps no model list, keys or database: every request carries its routing in an
+`x-portkey-config` header. So genconfig writes `portkey-headers.json`, one header per model group,
+and `keys-portkey.txt`, keys of the same shape as the other sets that Portkey never checks (it has
+no client auth). Each group's config load-balances evenly over the group's deployments (Portkey's
+counterpart of simple-shuffle) with `retry.attempts` 2, and each target points at the mock's
+`/d/<id>` with `custom_host` and `override_params.model`. Bedrock targets carry static AWS keys, so
+requests are SigV4 signed; `custom_host` replaces the Bedrock URL, so they reach the mock over plain
+HTTP, and Portkey sends Anthropic models' messages to Converse. Portkey has no limits, budgets, logs
+or metrics, so `-features full` with the `portkey` set is refused.
+
+Portkey refuses a `custom_host` on a private or `.local` name unless `TRUSTED_CUSTOM_HOSTS` lists
+it, so start it with that set to the mock's host name. loadgen sends each request's header with
+`-model-headers`, and fails at start when a model the workload can pick has none:
+
+```sh
+TRUSTED_CUSTOM_HOSTS=mockllm node build/start-server.js --headless --port=8787
+loadgen -workload workloads/smoke.json -target http://portkey:8787 -keys out/keys-portkey.txt \
+  -model-headers out/portkey-headers.json ...
+```
 
 ## Bedrock deployments
 
