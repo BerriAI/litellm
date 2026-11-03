@@ -55,7 +55,6 @@ class _FileChange(_Frozen):
 
 
 class _McpContentBlock(_Frozen):
-    type: str
     text: str | None = None
 
 
