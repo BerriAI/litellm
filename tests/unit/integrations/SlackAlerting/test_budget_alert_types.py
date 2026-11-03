@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.integrations.SlackAlerting.budget_alert_types import (
     SoftBudgetAlert,
     TokenBudgetAlert,
@@ -6,6 +8,16 @@ from litellm.proxy._types import CallInfo, Litellm_EntityType
 
 
 class TestSoftBudgetAlert:
+    def test_get_id_for_user_event_is_the_user_id(self) -> None:
+        alert: Final = SoftBudgetAlert()
+        first: Final = CallInfo(spend=1.0, user_id="user-a", event_group=Litellm_EntityType.USER)
+        second: Final = CallInfo(spend=1.0, user_id="user-b", event_group=Litellm_EntityType.USER)
+
+        team: Final = CallInfo(spend=1.0, team_id="user-a", event_group=Litellm_EntityType.TEAM)
+
+        assert alert.get_id(first) != alert.get_id(second)
+        assert alert.get_id(first) != alert.get_id(team)
+
     def test_get_id_with_token(self):
         """Test that get_id returns user_info.token when token is provided"""
         token_value = "test_token_123"

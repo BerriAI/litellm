@@ -1726,6 +1726,7 @@ from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E4
 
 class NewUserResponse(GenerateKeyResponse):
     max_budget: float | None = None
+    soft_budget: float | None = None
     user_email: str | None = None
     user_role: (
         Literal[
@@ -3236,6 +3237,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     user_role: str | None = None
     spend: float = 0.0
     max_budget: float | None = None
+    soft_budget: float | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     models: list[str] = []

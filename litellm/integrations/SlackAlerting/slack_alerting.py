@@ -78,6 +78,35 @@ else:
     Router = Any
 
 
+def _budget_alert_email_html(webhook_event: WebhookEvent, email_logo_url: str, email_support_contact: str) -> str:
+    if webhook_event.event == "budget_crossed":
+        return f"""
+            <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
+            <p> Hi {webhook_event.user_id}, <br/>
+            Your LLM API usage this month has reached your account's <b> monthly budget of ${webhook_event.max_budget} </b> <br /> <br />
+            API requests will be rejected until either (a) you increase your monthly budget or (b) your monthly usage resets at the beginning of the next calendar month. <br /> <br />
+            If you have any questions, please send an email to {email_support_contact} <br /> <br />
+            Best, <br />
+            The LiteLLM team <br />
+            """
+    if webhook_event.event == "soft_budget_crossed":
+        hard_limit: Final = (
+            f" until your budget of ${webhook_event.max_budget} is reached"
+            if webhook_event.max_budget is not None
+            else ""
+        )
+        return f"""
+            <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
+            <p> Hi {webhook_event.user_id}, <br/>
+            Your LLM API spend of <b> ${webhook_event.spend} </b> has reached your <b> soft budget of ${webhook_event.soft_budget} </b>. <br /> <br />
+            This is a warning only. API requests keep going through{hard_limit}. <br /> <br />
+            If you have any questions, please send an email to {email_support_contact} <br /> <br />
+            Best, <br />
+            The LiteLLM team <br />
+            """
+    return "Alert from LiteLLM Server"
+
+
 def _proxy_llm_router() -> Router | None:
     from litellm.proxy.proxy_server import llm_router
 
@@ -1390,28 +1419,13 @@ Model Info:
 
         event_name: Final = webhook_event.event_message
         recipient_email: Final = webhook_event.user_email
-        user_name: Final = webhook_event.user_id
-        max_budget: Final = webhook_event.max_budget
-        email_html_content = "Alert from LiteLLM Server"
         if recipient_email is None:
             verbose_proxy_logger.error("Trying to send email alert to no recipient", extra=webhook_event.dict())
-
-        if webhook_event.event == "budget_crossed":
-            email_html_content = f"""
-            <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
-
-            <p> Hi {user_name}, <br/>
-
-            Your LLM API usage this month has reached your account's <b> monthly budget of ${max_budget} </b> <br /> <br />
-
-            API requests will be rejected until either (a) you increase your monthly budget or (b) your monthly usage resets at the beginning of the next calendar month. <br /> <br />
-
-            If you have any questions, please send an email to {email_support_contact} <br /> <br />
-
-            Best, <br />
-            The LiteLLM team <br />
-            """
-
+        email_html_content: Final = _budget_alert_email_html(
+            webhook_event=webhook_event,
+            email_logo_url=email_logo_url,
+            email_support_contact=email_support_contact,
+        )
         webhook_event.model_dump_json()
         email_event: Final = {
             "to": recipient_email,

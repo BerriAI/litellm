@@ -14,6 +14,7 @@ vi.mock("./user_edit_view", () => ({
   UserEditView: ({ onSubmit, onCancel }: { onSubmit: (values: any) => void; onCancel: () => void }) => (
     <div data-testid="user-edit-view">
       <button onClick={() => onSubmit({ user_role: "admin", max_budget: 100 })}>Submit</button>
+      <button onClick={() => onSubmit({ max_budget: 100, soft_budget: 20 })}>Submit with soft budget</button>
       <button onClick={() => onSubmit({ max_budget: 100, budget_duration: null })}>Submit with unset duration</button>
       <button onClick={onCancel}>Cancel</button>
     </div>
@@ -199,6 +200,20 @@ describe("BulkEditUserModal", () => {
 
     await waitFor(() => {
       expect(mockUserBulkUpdateUserCall).toHaveBeenCalledWith("test-token", { user_role: "admin", max_budget: 100 }, [
+        "user1",
+        "user2",
+      ]);
+    });
+  });
+
+  it("forwards a bulk soft budget to the update payload", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<BulkEditUserModal {...defaultProps} />);
+
+    await user.click(screen.getByRole("button", { name: "Submit with soft budget" }));
+
+    await waitFor(() => {
+      expect(mockUserBulkUpdateUserCall).toHaveBeenCalledWith("test-token", { max_budget: 100, soft_budget: 20 }, [
         "user1",
         "user2",
       ]);

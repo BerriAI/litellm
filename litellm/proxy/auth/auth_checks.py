@@ -1417,7 +1417,7 @@ async def common_checks(
 
         async def _user_max_budget_check() -> None:
             # 4.1 personal budget
-            if user_object is None or user_object.max_budget is None:
+            if user_object is None or (user_object.max_budget is None and user_object.soft_budget is None):
                 return
             is_team_key: Final = team_object is not None and team_object.team_id is not None
             if is_team_key and general_settings.get("apply_user_budget_to_team_keys") is not True:
@@ -1431,6 +1431,9 @@ async def common_checks(
                 fallback_spend=user_object.spend or 0.0,
                 max_budget=user_budget,
             )
+            _user_soft_budget_check(user_object=user_object, user_spend=user_spend, proxy_logging_obj=proxy_logging_obj)
+            if user_budget is None:
+                return
             call_info: Final = CallInfo(
                 spend=user_spend,
                 max_budget=user_budget,
@@ -7305,6 +7308,34 @@ async def _team_multi_budget_check(
                 entity_type=Litellm_EntityType.TEAM.value,
                 entity_id=team_object.team_id,
             )
+
+
+def _user_soft_budget_check(
+    user_object: LiteLLM_UserTable,
+    user_spend: float,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    if user_object.soft_budget is None or user_spend < user_object.soft_budget:
+        return
+    verbose_proxy_logger.debug(
+        "Crossed Soft Budget for user %s, spend %s, soft_budget %s",
+        user_object.user_id,
+        user_spend,
+        user_object.soft_budget,
+    )
+    call_info: Final = CallInfo(
+        spend=user_spend,
+        soft_budget=user_object.soft_budget,
+        user_id=user_object.user_id,
+        user_email=user_object.user_email,
+        event_group=Litellm_EntityType.USER,
+    )
+    asyncio.create_task(
+        proxy_logging_obj.budget_alerts(
+            type="soft_budget",
+            user_info=call_info,
+        )
+    )
 
 
 async def _team_soft_budget_check(

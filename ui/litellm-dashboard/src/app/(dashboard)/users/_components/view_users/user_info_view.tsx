@@ -51,6 +51,9 @@ import { AutoRouterUsageView } from "@/app/(dashboard)/cost-optimization/_compon
 import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
 
+const formatBudgetValue = (value: number | null | undefined, fallback: string, precision = 4): string =>
+  value !== null && value !== undefined ? `$${formatNumberWithCommas(value, precision)}` : fallback;
+
 interface UserInfoViewProps {
   userId: string;
   onClose: () => void;
@@ -345,6 +348,7 @@ export default function UserInfoView({
         user_alias: formValues.user_alias ?? userData.user_alias,
         models: formValues.models ?? userData.models,
         max_budget: formValues.max_budget === undefined ? userData.max_budget : formValues.max_budget,
+        soft_budget: formValues.soft_budget === undefined ? userData.soft_budget : formValues.soft_budget,
         tpm_limit: formValues.tpm_limit === undefined ? userData.tpm_limit : formValues.tpm_limit,
         rpm_limit: formValues.rpm_limit === undefined ? userData.rpm_limit : formValues.rpm_limit,
         budget_duration:
@@ -400,8 +404,7 @@ export default function UserInfoView({
 
   const unknownTimestamp = t("users.userInfo.details.unknown");
   const unlimitedLabel = t("users.userInfo.unlimited");
-  const budgetLimit =
-    userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 2)}` : unlimitedLabel;
+  const budgetLimit = formatBudgetValue(userData.max_budget, unlimitedLabel, 2);
   const teamPickerPlaceholder = t("users.userInfo.addTeamDialog.teamPlaceholder");
 
   // Build a legacy-compatible shape for UserEditView
@@ -413,6 +416,7 @@ export default function UserInfoView({
       user_role: userData.user_role,
       models: userData.models,
       max_budget: userData.max_budget,
+      soft_budget: userData.soft_budget,
       tpm_limit: userData.tpm_limit,
       rpm_limit: userData.rpm_limit,
       budget_duration: userData.budget_duration,
@@ -698,11 +702,12 @@ export default function UserInfoView({
 
                 <div>
                   <p className="font-medium">{t("users.userInfo.details.maxBudget")}</p>
-                  <p>
-                    {userData.max_budget !== null && userData.max_budget !== undefined
-                      ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
-                      : unlimitedLabel}
-                  </p>
+                  <p>{formatBudgetValue(userData.max_budget, unlimitedLabel)}</p>
+                </div>
+
+                <div>
+                  <p className="font-medium">{t("users.userInfo.details.softBudget")}</p>
+                  <p>{formatBudgetValue(userData.soft_budget, t("users.userInfo.details.notSet"))}</p>
                 </div>
 
                 <div>

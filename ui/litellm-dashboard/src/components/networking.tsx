@@ -1149,6 +1149,7 @@ export interface UserInfoV2Response {
   user_role: string | null;
   spend: number;
   max_budget: number | null;
+  soft_budget?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
   models: string[];

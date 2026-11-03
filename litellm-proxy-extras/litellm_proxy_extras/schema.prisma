@@ -310,6 +310,7 @@ model LiteLLM_UserTable {
     teams    String[] @default([])
     user_role  String?
 		max_budget Float?
+    soft_budget Float?
     spend      Float    @default(0.0)
     user_email    String?
     models     String[]

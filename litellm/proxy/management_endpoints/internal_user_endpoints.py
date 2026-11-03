@@ -15,6 +15,7 @@ These are members of a Team on LiteLLM
 import asyncio
 import contextlib
 import json
+import math
 import traceback
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
@@ -23,7 +24,7 @@ from typing import Any, Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -248,8 +249,35 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
         if litellm.internal_user_budget_duration is not None and data_json.get("budget_duration") is None:
             data_json["budget_duration"] = litellm.internal_user_budget_duration
 
+    final_budgets: Final = _UserBudgetRow.model_validate(data_json)
+    _validate_user_soft_budget(soft_budget=final_budgets.soft_budget, max_budget=final_budgets.max_budget)
     data_json.pop("teams", None)  # handled separately
     return data_json
+
+
+class _UserBudgetRow(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+
+    max_budget: float | None = None
+    soft_budget: float | None = None
+
+
+_USER_BUDGET_ROWS: Final = TypeAdapter(tuple[_UserBudgetRow, ...])
+
+
+def _validate_user_soft_budget(soft_budget: float | None, max_budget: float | None) -> None:
+    if soft_budget is None:
+        return
+    if not math.isfinite(soft_budget) or soft_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"soft_budget must be a non-negative finite number. Received: {soft_budget}"},
+        )
+    if max_budget is not None and soft_budget >= max_budget:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"soft_budget ({soft_budget}) must be strictly lower than max_budget ({max_budget})"},
+        )
 
 
 async def _check_duplicate_user_field(
@@ -496,6 +524,7 @@ async def new_user(
     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
     - max_budget: Optional[float] - Specify max budget for a given user.
+    - soft_budget: Optional[float] - Spend threshold that fires a budget alert for the user without blocking requests. Must be lower than max_budget when both are set.
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models). Set to ['no-default-models'] to block all model access. Restricting user to only team-based model access.
     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -1202,6 +1231,7 @@ async def user_info_v2(
             user_role=user_data.get("user_role"),
             spend=user_data.get("spend", 0.0),
             max_budget=user_data.get("max_budget"),
+            soft_budget=user_data.get("soft_budget"),
             tpm_limit=user_data.get("tpm_limit"),
             rpm_limit=user_data.get("rpm_limit"),
             models=user_data.get("models") or [],
@@ -1346,7 +1376,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
     for k, v in data_json.items():
-        if k in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit"):
+        if k in ("max_budget", "soft_budget", "budget_duration", "tpm_limit", "rpm_limit"):
             if k in fields_set:
                 non_default_values[k] = v
         elif k == "model_max_budget":
@@ -1380,6 +1410,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
             if non_default_values["budget_duration"] is not None
             else None
         )
+    _validate_user_soft_budget(soft_budget=data.soft_budget, max_budget=None)
 
     if "max_budget" not in non_default_values:
         if (
@@ -1558,6 +1589,11 @@ async def _update_single_user_helper(
 
     if existing_user_row is not None:
         existing_user_row = LiteLLM_UserTable.model_validate(existing_user_row.model_dump(exclude_none=True))
+        requested: Final = user_request.model_fields_set
+        _validate_user_soft_budget(
+            soft_budget=user_request.soft_budget if "soft_budget" in requested else existing_user_row.soft_budget,
+            max_budget=user_request.max_budget if "max_budget" in requested else existing_user_row.max_budget,
+        )
 
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.
@@ -1749,6 +1785,7 @@ async def user_update(
         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
         - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
         - max_budget: Optional[float] - Specify max budget for a given user.
+        - soft_budget: Optional[float] - Spend threshold that fires a budget alert for the user without blocking requests. Must be lower than max_budget when both are set.
         - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
         - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
         - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -2004,6 +2041,19 @@ async def bulk_user_update(
         # Remove user identification fields since we're updating by user_id
         non_default_values.pop("user_id", None)
         non_default_values.pop("user_email", None)
+
+        if "soft_budget" in non_default_values or "max_budget" in non_default_values:
+            for user_budget in _USER_BUDGET_ROWS.validate_python(all_users_in_db, from_attributes=True):
+                _validate_user_soft_budget(
+                    soft_budget=(
+                        data.user_updates.soft_budget
+                        if "soft_budget" in non_default_values
+                        else user_budget.soft_budget
+                    ),
+                    max_budget=(
+                        data.user_updates.max_budget if "max_budget" in non_default_values else user_budget.max_budget
+                    ),
+                )
 
         successful_updates = 0
         failed_updates: Final = 0

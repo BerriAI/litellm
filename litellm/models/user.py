@@ -29,6 +29,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     teams: list[str] = []
     user_role: str | None = None
     max_budget: float | None = None
+    soft_budget: float | None = None
     spend: float = 0.0
     user_email: str | None = None
     models: list = []
