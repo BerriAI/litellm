@@ -318,6 +318,11 @@ class TestProviderScopedResolution:
                 {"base_model": "azure_ai/gpt-4o"},
                 ("azure/gpt-4o", date(2027, 4, 14), "azure"),
             ),
+            (
+                {"model": "azure_ai/prod-chat"},
+                {"base_model": "azure_ai/gpt-4o"},
+                ("azure/gpt-4o", date(2027, 4, 14), "azure"),
+            ),
             ({"model": "azure_ai/gpt-4.1"}, {}, ("azure_ai/gpt-4.1", date(2027, 5, 1), "azure_ai")),
             ({"model": "azure/gpt-4o"}, {"base_model": "custom-base"}, ("custom-base", date(2026, 12, 1), None)),
             (
@@ -351,6 +356,7 @@ class TestProviderScopedResolution:
             "azure-ai-reads-azure",
             "azure-ai-base-model-reads-azure",
             "azure-ai-copied-base-model-yields-to-azure",
+            "azure-ai-prefixed-base-model-on-custom-deployment-reads-azure",
             "azure-ai-own-row-wins",
             "custom-base-model-row-wins",
             "registered-base-model-row-wins",

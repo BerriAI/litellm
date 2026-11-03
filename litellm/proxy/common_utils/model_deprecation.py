@@ -98,11 +98,18 @@ def _as_model_key(raw_value: object) -> str | None:
     return raw_value if isinstance(raw_value, str) and raw_value else None
 
 
+def _without_provider(provider: str | None, model_name: str | None) -> str | None:
+    if provider is None or model_name is None:
+        return model_name
+    return model_name.removeprefix(f"{provider}/")
+
+
 def _schedule_keys(provider: str | None, model_name: str | None) -> tuple[str | None, ...]:
     shared_provider: Final = _SHARED_SCHEDULE_PROVIDER.get(provider) if provider is not None else None
+    unprefixed: Final = _without_provider(provider, model_name)
     return (
-        _provider_qualified(provider, model_name),
-        _provider_qualified(shared_provider, model_name),
+        _provider_qualified(provider, unprefixed),
+        _provider_qualified(shared_provider, unprefixed),
         model_name,
     )
 
