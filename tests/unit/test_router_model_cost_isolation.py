@@ -20,7 +20,7 @@ import sys
 import threading
 from pathlib import Path
 from types import MappingProxyType
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final, cast
 from unittest.mock import Mock, patch
 
@@ -3154,6 +3154,31 @@ def test_deleting_a_deployment_keeps_the_mode_off_peak_siblings_inherit_in_model
     assert litellm.model_cost[backend_model].get("mode") == registered_mode
 
 
+def test_deleting_a_deployment_keeps_the_mode_an_off_peak_sibling_copies_from_the_row_a_sibling_wrote() -> None:
+    backend_model: Final = _openai_catalog_model_with_mode("chat")
+    off_peak: Final = {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-7}
+    router: Final = Router(
+        model_list=[
+            *(
+                _cache_point_deployment(
+                    model_id, model=f"openai/{backend_model}", base_model=base_model, off_peak_pricing=off_peak
+                )
+                for model_id, base_model in (
+                    ("embedding", _openai_catalog_model_with_mode("embedding")),
+                    ("own-model", backend_model),
+                )
+            ),
+            _cache_point_deployment("doomed", model=f"openai/{backend_model}", max_input_tokens=5),
+        ]
+    )
+    registered_mode: Final = litellm.model_cost[backend_model].get("mode")
+    assert registered_mode == "embedding"
+
+    assert router.delete_deployment(id="doomed") is not None
+
+    assert litellm.model_cost[backend_model].get("mode") == registered_mode
+
+
 class _CostMapWriteRecordingHost(PythonHost):
     __slots__ = ("cost_map_writes",)
 
@@ -3223,19 +3248,23 @@ def test_deleting_one_of_many_differently_priced_deployments_rewrites_the_shared
     assert litellm.model_cost["sibling-7"].get("input_cost_per_token") == pytest.approx(8e-7)
 
 
-def test_deleting_one_of_many_deployments_alternating_two_flags_rewrites_the_shared_row_once_per_flag() -> None:
+def test_deleting_one_of_many_deployments_rewrites_the_shared_row_once_per_set_of_fields_its_siblings_set() -> None:
     row: Final = _shared_cache_point_row()
+    first_limit: Final = _unseen_max_output_tokens(row)
     flag: Final = not bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)
+
+    def sibling_fields(n: int) -> Mapping[str, object]:
+        if n == 1:
+            return {"mode": "chat"}
+        return {_CACHE_POINT_FLAG: flag} if n % 2 == 0 else {"max_output_tokens": first_limit + n}
+
     host: Final = _CostMapWriteRecordingHost()
     router: Final = Router.from_config(
         build_router_config(
             router_arguments(
                 model_list=[
-                    *(
-                        _cache_point_deployment(f"sibling-{n}", **{_CACHE_POINT_FLAG: (flag, not flag)[n % 2]})
-                        for n in range(51)
-                    ),
-                    _cache_point_deployment("doomed", max_output_tokens=_unseen_max_output_tokens(row)),
+                    *(_cache_point_deployment(f"sibling-{n}", **sibling_fields(n)) for n in range(51)),
+                    _cache_point_deployment("doomed", max_input_tokens=5),
                 ]
             )
         ),
@@ -3245,9 +3274,28 @@ def test_deleting_one_of_many_deployments_alternating_two_flags_rewrites_the_sha
 
     assert router.delete_deployment(id="doomed") is not None
 
-    assert host.cost_map_writes.call_count == 2
-    assert litellm.model_cost[row].get(_CACHE_POINT_FLAG) is flag
-    assert litellm.model_cost[row].get("max_output_tokens") == _catalog_field(row, "max_output_tokens")
+    assert host.cost_map_writes.call_count == 3
+    assert litellm.model_cost[row].get("max_output_tokens") == first_limit + 49
+    assert litellm.model_cost[row].get("max_input_tokens") == _catalog_field(row, "max_input_tokens")
+    assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is flag
+
+
+def test_deleting_a_deployment_keeps_every_entry_its_siblings_merged_into_a_dict_field() -> None:
+    row: Final = _shared_cache_point_row()
+    router: Final = Router(
+        model_list=[
+            _cache_point_deployment("us-entry", provider_specific_entry={"us": 1.0}),
+            _cache_point_deployment("eu-entry", provider_specific_entry={"eu": 2.0}),
+            _cache_point_deployment("doomed", max_input_tokens=5),
+        ]
+    )
+    merged: Final = litellm.model_cost[row].get("provider_specific_entry")
+    assert isinstance(merged, dict)
+    assert {"us": 1.0, "eu": 2.0}.items() <= merged.items()
+
+    assert router.delete_deployment(id="doomed") is not None
+
+    assert litellm.model_cost[row].get("provider_specific_entry") == merged
 
 
 @pytest.mark.parametrize(

@@ -47,7 +47,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache, partial
-from itertools import chain, count, groupby
+from itertools import accumulate, chain, count, groupby
 from operator import itemgetter
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, TypeAlias, TypeVar, Union, cast
@@ -1152,15 +1152,21 @@ class _SharedCostWrite:
         return self.model_id in writers or not writers.isdisjoint(self.backend_keys)
 
     @property
-    def may_write_mode(self) -> bool:
-        """Whether its write can carry ``mode``: set directly, or copied with the backend entry an off-peak schedule
-        inherits."""
-        return isinstance(self.model_info.get("mode"), str) or bool(self.model_info.get("off_peak_pricing"))
+    def mode(self) -> str | None:
+        mode: Final = self.model_info.get("mode")
+        return mode if isinstance(mode, str) else None
+
+    @property
+    def copies_backend_entry(self) -> bool:
+        """Whether its write copies the backend entry an off-peak schedule inherits, as that row stands."""
+        return bool(self.model_info.get("off_peak_pricing"))
 
     def replay_key(self, targets: frozenset[str]) -> tuple[str | None, str]:
-        """Equal for two entries only when replaying both writes the ``targets`` rows exactly as replaying one does.
-        A shared row never takes a price, only what a price being set pulls in from the backend model, so prices count
-        only as set or unset, and an id that names a target row or wrote onto one keeps its write apart by its id."""
+        """Equal for two entries whose writes set the same fields of the ``targets`` rows, so the later write replaces
+        every value the earlier one set. A mapping merges into the row's value, and a string can name the row or the
+        mode the write lands with, so those count by value and every other value only as set. A shared row never takes
+        a price, only what a price being set pulls in from the backend model, so prices count only as set or unset,
+        and an id that names a target row or wrote onto one keeps its write apart by its id."""
         write_inputs: Final = (
             self.model,
             self.custom_llm_provider,
@@ -1175,10 +1181,14 @@ class _SharedCostWrite:
     @staticmethod
     def _write_inputs(fields: Mapping[str, object], inputs: frozenset[str]) -> Mapping[str, object]:
         return {
-            name: bool(value) if name in _PRICE_FIELDS else value
+            name: bool(value) if name in _PRICE_FIELDS else _SharedCostWrite._value_written(value)
             for name, value in fields.items()
             if name in inputs and value is not None
         }
+
+    @staticmethod
+    def _value_written(value: object) -> object:
+        return value if isinstance(value, (str, Mapping)) else True
 
 
 MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
@@ -12594,14 +12604,31 @@ class PythonCore(DeprecatedRouterMembers):
     def _replayed_positions(
         landing: tuple[tuple[int, _SharedCostWrite], ...], targets: frozenset[str]
     ) -> tuple[int, ...]:
-        """The position of the last of each set of ``landing`` writes that leave the ``targets`` rows as one of them
-        does. Each field keeps the last value written to it, so only the last write of each set counts, unless a write
-        may carry ``mode``: what a ``mode`` write does depends on the mode the row holds, so then only back-to-back runs
-        collapse."""
-        keyed: Final = tuple((position, write.replay_key(targets)) for position, write in landing)
-        if any(write.may_write_mode for _position, write in landing):
+        """The position of the last of each set of ``landing`` writes that set the same fields of the ``targets`` rows.
+        Each field keeps the last value written to it, so the last write of a set leaves every field as replaying the
+        whole set does. What a ``mode`` write does depends on the mode the row holds, so a set never spans a change of
+        mode. An off-peak schedule copies its backend entry as that row stands, so with one only back-to-back writes
+        with the same inputs collapse."""
+        if any(write.copies_backend_entry for _position, write in landing):
+            keyed: Final = tuple((position, write.replay_key(targets)) for position, write in landing)
             return tuple(tuple(run)[-1][0] for _replay_key, run in groupby(keyed, key=itemgetter(1)))
-        return tuple(sorted({replay_key: position for position, replay_key in keyed}.values()))
+        runs: Final = PythonCore._mode_runs(tuple(write.mode for _position, write in landing))
+        last_positions: Final = {
+            (write.replay_key(targets), run): position for (position, write), run in zip(landing, runs, strict=True)
+        }
+        return tuple(sorted(last_positions.values()))
+
+    @staticmethod
+    def _mode_runs(modes: tuple[str | None, ...]) -> tuple[int, ...]:
+        """For each write, how many times the ``mode`` the writes carry changed up to it."""
+        return tuple(run for _mode, run in accumulate(modes, PythonCore._next_mode_run, initial=(None, 0)))[1:]
+
+    @staticmethod
+    def _next_mode_run(held: tuple[str | None, int], mode: str | None) -> tuple[str | None, int]:
+        held_mode, run = held
+        if mode is None or mode == held_mode:
+            return held
+        return (mode, run if held_mode is None else run + 1)
 
     def _core_delete_deployment(self, id: str) -> Deployment | None:
         """
