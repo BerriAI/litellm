@@ -620,7 +620,7 @@ def test_is_sensitive_key_splits_camel_case_names(key: str):
 
 
 def test_is_sensitive_key_camel_case_split_keeps_pricing_and_count_fields_clear():
-    masker = SensitiveDataMasker()
+    masker: Final = SensitiveDataMasker()
 
     assert masker.is_sensitive_key("maxTokens") is False
     assert masker.is_sensitive_key("inputCostPerToken") is False
@@ -632,7 +632,7 @@ def test_is_sensitive_key_camel_case_split_does_not_break_odd_cased_plain_names(
 
 
 def test_empty_non_sensitive_overrides_disables_the_cost_exemption():
-    strict = SensitiveDataMasker(non_sensitive_overrides=frozenset())
+    strict: Final = SensitiveDataMasker(non_sensitive_overrides=frozenset())
 
     assert SensitiveDataMasker().is_sensitive_key("cost_center_api_key") is False
     assert strict.is_sensitive_key("cost_center_api_key") is True
@@ -642,13 +642,13 @@ def test_empty_non_sensitive_overrides_disables_the_cost_exemption():
 def test_redact_credentials_in_payload_drops_listed_keys_at_any_depth_with_the_given_masker():
     from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 
-    payload = {
+    payload: Final = {
         "logging": [{"callback_vars": {"langfuse_secret_key": "s"}}],
         "cost_center_api_key": "sk-cost",
         "nested": {"scim_roles": ["r"], "keep": 1, "deeper": [{"logging": {}, "apiKey": "k"}]},
     }
 
-    result = redact_credentials_in_payload(
+    result: Final = redact_credentials_in_payload(
         payload,
         SensitiveDataMasker(non_sensitive_overrides=frozenset()),
         dropped_keys=frozenset({"logging", "scim_roles"}),
