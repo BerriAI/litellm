@@ -37,7 +37,7 @@ export async function navigateToPage(page: PlaywrightPage, pageEnum: Page): Prom
   // assert against the default page.
   for (let attempt = 0; attempt < 3; attempt++) {
     await page.goto(`/ui?page=${pageEnum}`);
-    await page.waitForLoadState("networkidle");
+    await expect(page.getByRole("complementary")).toBeVisible();
     const url = new URL(page.url());
     const onLegacyRoot = url.pathname.replace(/\/+$/, "").endsWith("/ui");
     if (!onLegacyRoot || url.searchParams.get("page") === pageEnum) {
