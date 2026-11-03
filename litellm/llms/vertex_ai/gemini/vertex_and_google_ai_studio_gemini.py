@@ -35,7 +35,7 @@ from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAcc
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
-from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
+from litellm.litellm_core_utils.tool_fields import declared_function_name, tool_params_without_hosted_mcp
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -561,51 +561,50 @@ def _namespace_members_or_tool(tool: JsonValue) -> tuple[JsonValue, ...]:
     return tuple(map(_as_chat_tool, members)) if isinstance(members, list) else ()
 
 
-def _declared_function_name(tool: JsonValue) -> str | None:
-    if not isinstance(tool, dict):
-        return None
-    function: Final = tool.get("function")
-    name: Final = function.get("name") if isinstance(function, dict) else tool.get("name")
-    return name if isinstance(name, str) else None
-
-
 def _is_namespace(tool: JsonValue) -> bool:
     return isinstance(tool, dict) and tool.get("type") == "namespace"
 
 
-def _declarations_with_origin(tool: JsonValue) -> tuple[tuple[JsonValue, bool], ...]:
-    return tuple((declaration, _is_namespace(tool)) for declaration in _namespace_members_or_tool(tool))
+def _listed(tools: JsonValue) -> tuple[JsonValue, ...]:
+    return tuple(tools) if isinstance(tools, list) else ()
 
 
-def _declaration_precedence(entry: tuple[int, tuple[JsonValue, bool]]) -> tuple[bool, int]:
-    index, (_, from_namespace) = entry
-    return (from_namespace, index)
+def _declarable_names(tool: JsonValue) -> tuple[str | None, ...]:
+    members: Final = _namespace_members_or_tool(tool) if _is_namespace(tool) else ()
+    return (declared_function_name(tool), *map(declared_function_name, members))
 
 
-def _kept_declarations(entries: tuple[tuple[JsonValue, bool], ...]) -> tuple[JsonValue, ...]:
-    names: Final = tuple(_declared_function_name(declaration) for declaration, _ in entries)
-    by_precedence: Final = tuple(sorted(enumerate(entries), key=_declaration_precedence, reverse=True))
-    kept_index: Final = {names[index]: index for index, _ in by_precedence}
-    return tuple(
-        declaration
-        for index, (declaration, _) in enumerate(entries)
-        if names[index] is None or kept_index[names[index]] == index
+def _declarable_names_in(tools: tuple[JsonValue, ...]) -> tuple[str | None, ...]:
+    return tuple(chain.from_iterable(map(_declarable_names, tools)))
+
+
+def _inlines_members(tool: JsonValue, declarable: tuple[str | None, ...]) -> bool:
+    members: Final = _namespace_members_or_tool(tool)
+    return _is_namespace(tool) and all(
+        name is None or declarable.count(name) == 1 for name in map(declared_function_name, members)
     )
 
 
-def _with_namespace_members_inlined(tools: JsonValue) -> JsonValue:
+def _with_namespace_members_inlined(tools: JsonValue, outside_declarations: JsonValue = None) -> JsonValue:
     if not isinstance(tools, list) or not any(map(_is_namespace, tools)):
         return tools
-    return list(_kept_declarations(tuple(chain.from_iterable(map(_declarations_with_origin, tools)))))
+    declarable: Final = _declarable_names_in((*tools, *_listed(outside_declarations)))
+    return list(
+        chain.from_iterable(
+            _namespace_members_or_tool(tool) if _inlines_members(tool, declarable) else (tool,) for tool in tools
+        )
+    )
 
 
 def _forced_function_names(name: str, tools: JsonValue) -> tuple[str, ...]:
-    candidates: Final = tools if isinstance(tools, list) else []
-    if any(not _is_namespace(tool) and _declared_function_name(tool) == name for tool in candidates):
+    candidates: Final = _listed(tools)
+    if any(not _is_namespace(tool) and declared_function_name(tool) == name for tool in candidates):
         return (name,)
     named: Final = next((tool for tool in candidates if _is_namespace(tool) and _member_name_of(tool) == name), None)
-    members: Final = map(_declared_function_name, _namespace_members_or_tool(named)) if named is not None else ()
-    return tuple(dict.fromkeys(member for member in members if member is not None)) or (name,)
+    if named is None or not _inlines_members(named, _declarable_names_in(candidates)):
+        return (name,)
+    members: Final = map(declared_function_name, _namespace_members_or_tool(named))
+    return tuple(member for member in members if member is not None) or (name,)
 
 
 def _member_name_of(tool: JsonValue) -> JsonValue:
@@ -1140,7 +1139,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
-    def _map_function(self, value: list[dict], optional_params: dict, send_integer_enums: bool = False) -> list[Tools]:
+    def _map_function(
+        self,
+        value: list[dict],
+        optional_params: dict,
+        send_integer_enums: bool = False,
+        outside_declarations: JsonValue = None,
+    ) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
 
@@ -1171,7 +1176,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # remove 'strict' from tools
         remove_strict_from_schema(schema_value)
 
-        inlined_tools: Final = _with_namespace_members_inlined(schema_value)
+        inlined_tools: Final = _with_namespace_members_inlined(schema_value, outside_declarations)
         for tool in cast(list[dict], inlined_tools):  # cast-ok: a deep copy keeps the caller's tool shape
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
             if "function" in tool:  # tools list
@@ -1807,7 +1812,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
                 # Pass optional_params so _map_function can add toolConfig if needed
                 mapped_tools = with_integer_enums_that_fit(
-                    partial(self._map_function, value, optional_params),
+                    partial(
+                        self._map_function,
+                        value,
+                        optional_params,
+                        outside_declarations=request_params.get("functions" if param == "tools" else "tools"),
+                    ),
                     allow_integer_enums and self._is_gemini_3_or_newer(model),
                 )
                 optional_params = self._add_tools_to_optional_params(optional_params, mapped_tools)
@@ -1815,7 +1825,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 _tool_choice_value = self.map_tool_choice_values(
                     model=model,
                     tool_choice=value,
-                    tools=non_default_params.get("tools", non_default_params.get("functions")),
+                    tools=[*_listed(non_default_params.get("tools")), *_listed(non_default_params.get("functions"))],
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value

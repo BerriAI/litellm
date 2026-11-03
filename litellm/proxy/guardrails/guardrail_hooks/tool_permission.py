@@ -22,6 +22,8 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.tool_fields import declared_function_name
 from litellm.llms.base_llm.guardrail_translation.utils import anthropic_tool_names
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
@@ -163,6 +165,20 @@ def _namespace_members(tool: object) -> Sequence[object]:
 
 def _qualified_member_name(namespace: str, name: str) -> str:
     return f"{namespace}__{name}"
+
+
+def _returned_namespace(tool_call: ChatCompletionMessageToolCall) -> str | None:
+    tags: Final = as_str_mapping(attribute_or_none(tool_call, "provider_specific_fields"))
+    return _non_empty_string(tags.get("namespace")) if tags is not None else None
+
+
+def _judged_call_names(
+    tool_call: ChatCompletionMessageToolCall, returned_name: str, judged_names: Mapping[str, tuple[str, ...]]
+) -> tuple[str, ...]:
+    namespace: Final = _returned_namespace(tool_call)
+    if namespace is not None:
+        return (_qualified_member_name(namespace, returned_name),)
+    return judged_names.get(returned_name, ())
 
 
 def _qualified_target(namespace: str | None, target: _ToolTarget) -> _ToolTarget:
@@ -996,7 +1012,8 @@ class ToolPermissionGuardrail(CustomGuardrail):
         member_names: Final = tuple(chain.from_iterable(map(self._bare_member_names, sent_tools)))
         if not member_names:
             return MappingProxyType({})
-        top_level_names: Final = self._function_names_in(tuple(tool for tool in sent_tools if not _is_namespace(tool)))
+        top_level_tools: Final = (tool for tool in sent_tools if not _is_namespace(tool))
+        top_level_names: Final = frozenset(name for name in map(declared_function_name, top_level_tools) if name)
         member_bare_names: Final = _grouped_values(
             (bare, name) for name, bare in member_names if bare not in top_level_names
         )
@@ -1012,7 +1029,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self, tool_call: ChatCompletionMessageToolCall, judged_names: Mapping[str, tuple[str, ...]]
     ) -> tuple[bool, str | None, str | None]:
         returned_name: Final = tool_call.function.name if tool_call.function else None
-        names: Final = judged_names.get(returned_name, ()) if returned_name is not None else ()
+        names: Final = _judged_call_names(tool_call, returned_name, judged_names) if returned_name is not None else ()
         if returned_name is None or not names:
             return self._get_permission_for_tool_call(tool_call)
         judged: Final = dict.fromkeys(self._judged_name(tool_call, returned_name, name) for name in names)
@@ -1241,10 +1258,6 @@ class ToolPermissionGuardrail(CustomGuardrail):
     def _tool_names_in(self, tools: Sequence[object]) -> frozenset[str]:
         targets: Final = chain.from_iterable(self._get_request_tool_targets(tool) for tool in tools)
         return frozenset(name for name, _ in targets if name is not None)
-
-    def _function_names_in(self, tools: Sequence[object]) -> frozenset[str]:
-        targets: Final = chain.from_iterable(self._get_request_tool_targets(tool) for tool in tools)
-        return frozenset(name for name, kind in targets if name is not None and kind not in _HOSTED_SERVER_NAME_FIELDS)
 
     def _referable_names_in(self, tools: Sequence[object]) -> frozenset[str]:
         member_names: Final = chain.from_iterable(map(self._bare_member_names, tools))

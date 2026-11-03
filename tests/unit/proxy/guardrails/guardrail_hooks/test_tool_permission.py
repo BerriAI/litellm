@@ -598,15 +598,18 @@ class TestToolPermissionGuardrail:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "hosted_server",
+        "same_named_tool",
         [
             {"type": "mcp", "server_label": "lookup", "server_url": "https://mcp.example.com/sse"},
             {"type": "mcp_toolset", "mcp_server_name": "lookup"},
+            {"ignored": {"name": "lookup"}},
+            {"type": "custom", "custom": {"name": "lookup"}},
+            {"functionDeclarations": [{"name": "lookup"}]},
         ],
-        ids=["mcp", "mcp_toolset"],
+        ids=["mcp", "mcp_toolset", "unknown_keyed_block", "chat_custom", "native_declaration"],
     )
-    async def test_post_call_judges_a_returned_namespace_member_named_like_a_hosted_mcp_server_as_that_member(
-        self, hosted_server: dict[str, str]
+    async def test_post_call_judges_a_returned_namespace_member_as_that_member_beside_a_same_named_non_function(
+        self, same_named_tool: dict[str, object]
     ) -> None:
         guardrail = ToolPermissionGuardrail(
             guardrail_name="post-mcp",
@@ -627,12 +630,45 @@ class TestToolPermissionGuardrail:
         )
 
         await guardrail.async_post_call_success_hook(
-            data={"guardrails": ["post-mcp"], "tools": [namespace, hosted_server]},
+            data={"guardrails": ["post-mcp"], "tools": [namespace, same_named_tool]},
             user_api_key_dict=UserAPIKeyAuth(),
             response=response,
         )
 
         assert [call.function.name for call in response.choices[0].message.tool_calls or ()] == []
+
+    @pytest.mark.asyncio
+    async def test_post_call_judges_a_call_tagged_with_a_namespace_as_that_member_beside_a_same_named_function(
+        self,
+    ) -> None:
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="post-mcp",
+            rules=[{"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        namespace = {"type": "namespace", "name": "mcp__weather", "tools": [{"type": "function", "name": "lookup"}]}
+        top_level = {"type": "function", "function": {"name": "lookup"}}
+        tagged_call = {
+            "id": "call_lookup",
+            "type": "function",
+            "function": Function(name="lookup", arguments='{"country": "France"}'),
+            "provider_specific_fields": {"namespace": "mcp__weather"},
+        }
+        response = ModelResponse(
+            choices=[Choices(finish_reason="tool_calls", message={"tool_calls": [tagged_call]})]
+        )
+
+        await guardrail.async_post_call_success_hook(
+            data={"guardrails": ["post-mcp"], "tools": [namespace, top_level]},
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=response,
+        )
+
+        message = response.choices[0].message
+        assert [call.function.name for call in message.tool_calls or ()] == []
+        assert "Tool 'mcp__weather__lookup' denied by rule 'deny_mcp'" in (message.content or "")
 
     @pytest.mark.asyncio
     async def test_async_post_call_success_hook_missing_arguments_blocks_param_rule(
