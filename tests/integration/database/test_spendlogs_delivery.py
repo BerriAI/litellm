@@ -114,6 +114,28 @@ async def test_delivery_first_acceptance_deduplicates_all_storage_modes(
     assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
 
 
+@pytest.mark.parametrize("mode", ["local", "url", "disabled"])
+@pytest.mark.asyncio
+async def test_duplicate_rows_in_one_flush_keep_first_accounting_payload(delivery_database, delivery_client, mode):
+    from types import SimpleNamespace
+
+    from litellm.repositories.table_repositories import SpendLogsRepository
+
+    repository = SpendLogsRepository(SimpleNamespace(db=delivery_client, writer_db=delivery_client))
+    first = {**_with_payload(_row("repeated")), "accounting_log_disabled": mode == "disabled"}
+    later = {
+        **_with_payload({**_row("repeated"), "spend": 9.0, "startTime": "2026-11-03T12:00:00+00:00"}),
+        "accounting_log_disabled": mode == "disabled",
+    }
+    assert await repository.insert_with_deliveries((first, later), write_spend_logs=mode != "url") == 1
+    assert delivery_database.execute(
+        'SELECT accounting_payload FROM "LiteLLM_SpendLogDelivery"'
+    ).fetchone() == (first["accounting_payload"],)
+    assert delivery_database.execute('SELECT spend FROM "LiteLLM_SpendLogs"').fetchall() == (
+        [(first["spend"],)] if mode == "local" else []
+    )
+
+
 @pytest.mark.asyncio
 async def test_existing_local_charge_rolls_back_new_delivery(delivery_database, delivery_client):
     from types import SimpleNamespace

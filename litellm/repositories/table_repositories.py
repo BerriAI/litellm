@@ -22,6 +22,7 @@ from typing import (
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy.db.db_span import db_span
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
@@ -119,7 +120,12 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
         legacy: Final = tuple(row for row in rows if row.get("accounting_path") != "ledger")
         legacy_count: Final = await self.table.create_many(data=legacy, skip_duplicates=True) if legacy else 0
         ledger: Final = tuple(
-            {str(row["request_id"]): row for row in rows if row.get("accounting_path") == "ledger"}.values()
+            sorted(
+                {
+                    str(row["request_id"]): row for row in reversed(rows) if row.get("accounting_path") == "ledger"
+                }.values(),
+                key=lambda row: str(row["request_id"]),
+            )
         )
         if not ledger:
             return legacy_count
@@ -163,9 +169,10 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
                 sorted(local_rows, key=lambda row: tuple(sorted(row))), key=lambda row: tuple(sorted(row))
             )
         )
-        inserted_groups: Final = tuple(
-            [await transaction.query_raw(*spend_log_insert_statement(group)) for group in groups]
-        )
+        async with db_span("insert_spend_logs", "LiteLLM_SpendLogs"):
+            inserted_groups: Final = tuple(
+                [await transaction.query_raw(*spend_log_insert_statement(group)) for group in groups]
+            )
         inserted: Final = frozenset(str(row["request_id"]) for row in chain.from_iterable(inserted_groups))
         conflicts: Final = tuple(str(row["request_id"]) for row in local_rows if row["request_id"] not in inserted)
         if conflicts:
@@ -202,7 +209,8 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
             local_row: Final = {
                 key: value for key, value in row.items() if key not in {"accounting_payload", "accounting_log_disabled"}
             }
-            await transaction.query_raw(*spend_log_takeover_statement(local_row))
+            async with db_span("update", "LiteLLM_SpendLogs"):
+                await transaction.query_raw(*spend_log_takeover_statement(local_row))
             await transaction.execute_raw(
                 'UPDATE "LiteLLM_SpendLogDelivery" SET accounting_payload = $2::jsonb, '
                 "previous_payload = CASE WHEN state = 'applied' THEN accounting_payload ELSE previous_payload END, "

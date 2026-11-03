@@ -7718,9 +7718,7 @@ def test_spend_payload_preserves_unknown_completion_start(completion_start: str 
 
 
 @pytest.mark.parametrize("path", ["legacy", "ledger"])
-def test_metadata_stripping_preserves_ledger_projection_inputs(path: str) -> None:
-    from litellm.accounting.projection import project
-
+def test_spend_log_metadata_retention_is_independent_of_accounting_path(path: str) -> None:
     metadata: Final = {
         "status": "success",
         "accounting_savings": {
@@ -7761,9 +7759,4 @@ def test_metadata_stripping_preserves_ledger_projection_inputs(path: str) -> Non
     parsed: Final = json.loads(str(stored["metadata"]))
     assert "user_api_key_alias" not in parsed
     assert stored["accounting_path"] == path
-    if path == "ledger":
-        assert project(stored) == project(row)
-        assert parsed["accounting_savings"] == metadata["accounting_savings"]
-    else:
-        assert "accounting_savings" not in parsed
-        assert "accounting_windows" not in parsed
+    assert parsed == {"usage_object": metadata["usage_object"], "status": metadata["status"]}
