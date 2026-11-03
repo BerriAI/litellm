@@ -36,6 +36,7 @@ from urllib.parse import urlparse
 from packaging.version import Version
 from pydantic import ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
 from litellm.secret_managers.main import get_secret_str
@@ -574,10 +575,13 @@ OPENAI_API_HOST: Final = "api.openai.com"
 
 
 def _is_openai_origin(api_base: object) -> bool:
-    """Whether a deployment's api_base is OpenAI itself, so its key may go to OpenAI's catalog endpoint."""
-    if not api_base:
+    """Whether a deployment's OpenAI requests go to OpenAI itself, so its key may go to OpenAI's catalog
+    endpoint: its own api_base, else the global `litellm.api_base`, `OPENAI_BASE_URL` or `OPENAI_API_BASE`
+    override the OpenAI handler would apply, else OpenAI."""
+    resolved: Final = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+    if not resolved:
         return True
-    return isinstance(api_base, str) and urlparse(api_base).hostname == OPENAI_API_HOST
+    return isinstance(resolved, str) and urlparse(resolved).hostname == OPENAI_API_HOST
 
 
 def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
@@ -596,9 +600,7 @@ def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
 
 
 def _environment_openai_key() -> str | None:
-    if not _is_openai_origin(os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")):
-        return None
-    return os.getenv("OPENAI_API_KEY") or None
+    return (os.getenv("OPENAI_API_KEY") or None) if _is_openai_origin(None) else None
 
 
 def codex_catalog_openai_key(

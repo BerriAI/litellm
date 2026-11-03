@@ -991,8 +991,14 @@ def test_a_key_for_an_openai_compatible_server_or_a_redirected_environment_never
             "api_key": "sk-internal-server",
             "api_base": "https://inference.internal.example/v1",
         },
+        {"model": "openai/gpt-5.5", "api_key": "sk-through-the-gateway"},
         {"model": "openai/gpt-5.5", "api_key": "sk-real-openai", "api_base": "https://api.openai.com/v1"},
     )
-    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(2)]
-    assert codex_catalog_openai_key(router, entries[:1]) is None
+    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(3)]
+    assert codex_catalog_openai_key(router, entries[:2]) is None
     assert codex_catalog_openai_key(router, entries) == "sk-real-openai"
+    monkeypatch.delenv("OPENAI_BASE_URL")
+    monkeypatch.setattr(litellm, "api_base", "https://llm-gateway.internal.example/v1")
+    assert codex_catalog_openai_key(router, entries[:2]) is None
+    monkeypatch.setattr(litellm, "api_base", None)
+    assert codex_catalog_openai_key(router, entries[:2]) == "sk-through-the-gateway"
