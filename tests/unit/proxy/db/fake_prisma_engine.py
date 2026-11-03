@@ -57,3 +57,34 @@ def statement_timeout_error() -> DataError:
             }
         }
     )
+
+
+class _DelegatingReadTransaction:
+    """``read_db.tx()`` of a hand-written prisma fake: raw reads go to the fake's ``db.query_raw``."""
+
+    def __init__(self, db: object) -> None:
+        self.db: Final = db
+        self.statements: tuple[str, ...] = ()
+
+    async def execute_raw(self, sql: str) -> int:
+        self.statements = (*self.statements, sql)
+        return 0
+
+    async def query_raw(self, sql: str, *args: object) -> object:
+        return await getattr(self.db, "query_raw")(sql, *args)
+
+    async def __aenter__(self) -> "_DelegatingReadTransaction":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        pass
+
+
+class ReadTargetOf:
+    """What a prisma fake returns from ``read_db``: ``tx()`` opens a transaction over the fake's ``db``."""
+
+    def __init__(self, db: object) -> None:
+        self.db: Final = db
+
+    def tx(self, **kwargs: object) -> _DelegatingReadTransaction:
+        return _DelegatingReadTransaction(self.db)

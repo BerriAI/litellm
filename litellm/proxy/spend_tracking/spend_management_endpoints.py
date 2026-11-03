@@ -1750,6 +1750,8 @@ async def get_global_spend_report(
 
             return db_response
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -4632,7 +4634,7 @@ async def _build_ui_spend_logs_response(
                     if (row.get("api_key") if isinstance(row, dict) else getattr(row, "api_key", None)) is not None
                 }
             )
-            rows: Final[Sequence[_SessionSpendRow]] = await _query_raw(
+            rows: Final[Sequence[_SessionSpendRow]] = await _query_spend_logs(
                 prisma_client,
                 f"""
                 SELECT s.*, COALESCE(m.session_models, ARRAY[]::text[]) AS session_models
