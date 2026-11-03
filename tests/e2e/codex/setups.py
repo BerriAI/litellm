@@ -13,11 +13,13 @@ from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from models import LiteLLMParamsBody
 
 GPT_ON_BEDROCK_MANTLE: Final = "bedrock_mantle/openai.gpt-6.1-sol"
+GPT_ON_BEDROCK_MANTLE_US_PROFILE: Final = "bedrock_mantle/us.openai.gpt-6.1-sol"
 GPT_ON_BEDROCK_RUNTIME: Final = "bedrock/us.openai.gpt-6.1-sol"
 GPT_ON_AZURE_OPENAI: Final = "azure/gpt-6.1-sol"
 GPT_ON_OPENAI: Final = "openai/gpt-6.1-sol"
 CLAUDE_ON_BEDROCK: Final = "bedrock/us.anthropic.claude-sonnet-5-5"
 _BEDROCK_REGION: Final = "us-east-1"
+_BEDROCK_RUNTIME_BASE: Final = f"https://bedrock-runtime.{_BEDROCK_REGION}.amazonaws.com"
 
 type SetupId = Literal["bedrock_mantle", "bedrock_runtime", "azure_openai", "openai", "claude_bedrock"]
 
@@ -87,10 +89,24 @@ SETUPS: Final = (
 )
 
 
-def with_expected_failure(setup_id: SetupId, *, reason: str) -> tuple[ParameterSet, ...]:
+BEDROCK_MANTLE_US_PROFILE: Final = pytest.param(
+    Deployment(
+        LiteLLMParamsBody(
+            model=GPT_ON_BEDROCK_MANTLE_US_PROFILE, api_base=_BEDROCK_RUNTIME_BASE, aws_region_name=_BEDROCK_REGION
+        ),
+        RateBucket.BEDROCK_MANTLE,
+    ),
+    id="bedrock_mantle",
+    marks=_drives(Provider.BEDROCK_MANTLE, GPT_ON_BEDROCK_MANTLE_US_PROFILE),
+)
+
+
+def with_expected_failure(
+    setup_id: SetupId, *, reason: str, setups: tuple[ParameterSet, ...] = SETUPS
+) -> tuple[ParameterSet, ...]:
     return tuple(
         pytest.param(*setup.values, id=setup.id, marks=(*setup.marks, pytest.mark.xfail(strict=True, reason=reason)))
         if setup.id == setup_id
         else setup
-        for setup in SETUPS
+        for setup in setups
     )
