@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from datetime import datetime
 from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call
@@ -2737,8 +2737,7 @@ async def test_a_request_that_read_before_a_seed_landed_sends_one_write_and_keep
 async def test_a_request_waits_on_other_requests_adds_for_the_limit_in_total_across_its_counters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    limit: Final = 0.3
-    monkeypatch.setattr(spend_counter_reseed, "SPEND_COUNTER_COLD_SEED_JOIN_SECONDS", limit)
+    monkeypatch.setattr(spend_counter_reseed, "SPEND_COUNTER_COLD_SEED_JOIN_SECONDS", 0.3)
     keys: Final = tuple(f"spend:end_user:shared-wait-{index}" for index in range(4))
     redis: Final = _HeldIncrementRedis(held_increments=len(keys))
     _process(monkeypatch, redis, cached_spend=6.0)
@@ -2746,17 +2745,31 @@ async def test_a_request_waits_on_other_requests_adds_for_the_limit_in_total_acr
     for arrived in redis.arrived:
         await arrived.wait()
 
-    loop: Final = asyncio.get_running_loop()
-    started: Final = loop.time()
+    clock: Final = [0.0]  # mutable-ok: the time the event loop reports to the wait
+    limits: Final[list[float]] = []  # mutable-ok: the limit of each wait the test asserts on
+
+    real_wait: Final = asyncio.wait
+
+    async def _waits_on_an_add_take_a_tenth_of_a_second(
+        waited_on: Collection[asyncio.Future[object]], timeout: float
+    ) -> tuple[set[asyncio.Future[object]], set[asyncio.Future[object]]]:
+        if any(isinstance(future, asyncio.Task) for future in waited_on):
+            return await real_wait(waited_on, timeout=timeout)
+        limits.append(timeout)
+        clock[0] += 0.1
+        return set(), set(waited_on)
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "time", lambda: clock[0])
+    monkeypatch.setattr(asyncio, "wait", _waits_on_an_add_take_a_tenth_of_a_second)
     with spend_counter_batch_scope(cast(RedisCache, redis), frozenset(keys)):
         for key in keys:
             await ps.ensure_spend_counter_initialized(counter_key=key, source_cache_key=_COLD_SEED_SOURCE)
-    waited: Final = loop.time() - started
+    monkeypatch.undo()
     for release in redis.releases:
         release.set()
     await asyncio.gather(*stalled)
 
-    assert limit <= waited < 2 * limit
+    assert limits == pytest.approx([0.3, 0.2, 0.1, 0.0])
 
 
 class _LostAndRecreatedAfterFailedMGetRedis(_SharedRedis):
