@@ -231,8 +231,20 @@ def test_passthrough_route_block_before_any_invoke_frame_is_a_whole_message_in_c
 
 async def _scanned_response_texts(response: dict[str, object]) -> tuple[str, ...]:
     guardrail: Final = MagicMock(guardrail_name="post-call", apply_guardrail=AsyncMock())
-    await PassThroughEndpointHandler().process_output_response(response, guardrail, request_data={})
+    await PassThroughEndpointHandler().process_output_response(
+        response, guardrail, MagicMock(passthrough_guardrails_config=None), request_data={}
+    )
     return tuple(text for call in guardrail.apply_guardrail.await_args_list for text in call.kwargs["inputs"]["texts"])
+
+
+@pytest.mark.asyncio
+async def test_a_scan_with_no_logging_object_reads_the_response_as_json():
+    response: Final = {"response": {"id": "chatcmpl-1", "object": "chat.completion", "choices": [{"text": "Paris."}]}}
+    guardrail: Final = MagicMock(guardrail_name="logging-only", apply_guardrail=AsyncMock())
+
+    await PassThroughEndpointHandler().process_output_response(response, guardrail, request_data={})
+
+    assert json.loads(guardrail.apply_guardrail.await_args.kwargs["inputs"]["texts"][0]) == response
 
 
 @pytest.mark.asyncio

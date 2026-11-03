@@ -330,3 +330,29 @@ async def test_baggage_never_changes_the_guardrail_mode_key_team_and_deployment_
 
     assert await runs_post_call_guardrail(()) is runs_post_call
     assert await runs_post_call_guardrail(("usecase:dev",)) is runs_post_call
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_a_request_tag_that_cant_match_falls_back_to_the_default_mode(monkeypatch, bucket):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    cg = CustomGuardrail(
+        guardrail_name="test_guardrail",
+        supported_event_hooks=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+        event_hook=Mode(tags={"test_tag": "post_call"}, default="pre_call"),
+        default_on=True,
+    )
+
+    assert (
+        cg.should_run_guardrail(
+            data={bucket: {"tags": [1, {"a": 1}, ["b"]]}},
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        is True
+    )
+    assert (
+        cg.should_run_guardrail(
+            data={bucket: {"tags": [{"a": 1}, "test_tag"]}},
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        is False
+    )
