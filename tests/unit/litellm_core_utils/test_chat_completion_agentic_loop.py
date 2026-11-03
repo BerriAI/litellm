@@ -33,6 +33,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
+    _execute_chat_completion_agentic_plan,
     maybe_run_chat_completion_agentic_loop,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -362,6 +363,60 @@ async def test_dispatcher_runs_followup_with_incremented_depth_and_patched_messa
     assert "_agentic_loop_api_surface" not in call_kwargs
     # Cleanup hook always runs.
     assert logger.cleanup_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("outer_parent", "expected_parent"),
+    (
+        pytest.param(None, "agentic-call-id", id="without-outer-parent"),
+        pytest.param("outer-id", "outer-id", id="preserves-outer-parent"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_agentic_followup_preserves_outer_internal_parent(
+    outer_parent: str | None, expected_parent: str
+) -> None:
+    from contextlib import nullcontext
+
+    from litellm._internal_context import internal_parent_request_id, internal_sub_call, is_internal_call
+
+    observed_context: Final = MagicMock()
+
+    async def fake_acompletion(**kwargs: object) -> str:
+        observed_context(internal_parent_request_id.get(), is_internal_call.get())
+        return "followup-response"
+
+    logging_obj: Final = Logging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="agentic-call-id",
+        function_id="agentic-function-id",
+    )
+    outer_context: Final = internal_sub_call(outer_parent) if outer_parent is not None else nullcontext()
+    with patch.object(litellm, "acompletion", fake_acompletion):
+        with outer_context:
+            response: Final = await _execute_chat_completion_agentic_plan(
+                plan=AgenticLoopPlan(
+                    run_agentic_loop=True,
+                    request_patch=AgenticLoopRequestPatch(messages=_patched_messages()),
+                ),
+                callback=CustomLogger(),
+                model="gpt-4o-mini",
+                optional_params={},
+                kwargs={},
+                logging_obj=logging_obj,
+                custom_llm_provider="openai",
+                depth=0,
+                max_loops=3,
+                fingerprints=[],
+                fingerprint="fp",
+            )
+
+    assert response == "followup-response"
+    observed_context.assert_called_once_with(expected_parent, True)
 
 
 @pytest.mark.asyncio
