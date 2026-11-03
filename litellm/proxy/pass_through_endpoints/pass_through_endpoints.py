@@ -332,7 +332,6 @@ def _recorded_guardrail_headers(
 def _guardrail_response_headers(
     parsed_body: object = None, kwargs: object = None, post_call_data: object = None
 ) -> Mapping[str, str]:
-    """``_recorded_guardrail_headers``, or none of them when a recorded value can't be merged or JSON-encoded."""
     try:
         return _recorded_guardrail_headers(parsed_body, kwargs, post_call_data)
     except (TypeError, ValueError, RecursionError) as error:
