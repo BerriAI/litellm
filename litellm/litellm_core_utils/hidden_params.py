@@ -1,5 +1,9 @@
-from collections.abc import Iterator, MutableMapping
+from collections.abc import Iterator, Mapping, MutableMapping
+from functools import cache, lru_cache
+from types import MappingProxyType
 from typing import Final, Protocol, cast
+
+from pydantic import BaseModel, ConfigDict, create_model
 
 from litellm.types.llms.base import HiddenParams
 
@@ -47,8 +51,54 @@ class HiddenParamsModelView(MutableMapping[str, object]):
         return frozenset(self._hidden_params.model_fields_set) | frozenset(self._hidden_params.model_extra or {})
 
 
+def stored_attribute(obj: object, name: str) -> object:
+    if not isinstance(obj, BaseModel):
+        return getattr(obj, name, None)
+    values: Final[Mapping[str, object]] = MappingProxyType[str, object](vars(obj))
+    if name in values:
+        return values[name]
+    extras: Final[Mapping[str, object]] = obj.__pydantic_extra__ or {}
+    return extras.get(name)
+
+
+@cache
+def _assigned_extras_join_fields_set() -> bool:
+    probe: Final = create_model("_ExtraAssignmentProbe", __config__=ConfigDict(extra="allow"))()
+    setattr(probe, "assigned", None)
+    return "assigned" in probe.model_fields_set
+
+
+@lru_cache(maxsize=1024)
+def _writes_plain_extra(model_class: type[BaseModel], name: str) -> bool:
+    config: Final = model_class.model_config
+    return (
+        model_class.__setattr__ is BaseModel.__setattr__
+        and config.get("extra") == "allow"
+        and not config.get("frozen")
+        and not config.get("validate_assignment")
+        and not name.startswith("_")
+        and name not in model_class.__pydantic_fields__
+        and name not in model_class.__class_vars__
+        and not hasattr(model_class, name)
+        and _assigned_extras_join_fields_set()
+    )
+
+
+def set_extra_attribute(model: BaseModel, name: str, value: object) -> None:
+    extras: Final = model.__pydantic_extra__
+    if extras is None or not _writes_plain_extra(type(model), name):
+        setattr(model, name, value)
+        return
+    extras[name] = value
+    model.__pydantic_fields_set__.add(name)
+
+
 def _get_hidden_params_storage(obj: object) -> object | None:
-    return obj.get(_HIDDEN_PARAMS_ATTR) if isinstance(obj, dict) else getattr(obj, _HIDDEN_PARAMS_ATTR, None)
+    if isinstance(obj, dict):
+        return obj.get(_HIDDEN_PARAMS_ATTR)
+    if isinstance(obj, BaseModel) and _HIDDEN_PARAMS_ATTR in type(obj).__private_attributes__:
+        return getattr(obj, _HIDDEN_PARAMS_ATTR, None)
+    return stored_attribute(obj, _HIDDEN_PARAMS_ATTR)
 
 
 def get_hidden_params_storage(obj: object) -> dict[str, object] | HiddenParams | None:
@@ -75,6 +125,11 @@ def _as_hidden_params_mapping(hidden_params: object | None) -> MutableMapping[st
 def get_hidden_params(obj: object) -> MutableMapping[str, object] | None:
     hidden_params: Final[object | None] = _get_hidden_params_storage(obj)
     return _as_hidden_params_mapping(hidden_params)
+
+
+def served_from_cache(obj: object) -> bool:
+    hidden_params: Final = get_hidden_params(obj)
+    return hidden_params is not None and hidden_params.get("cache_hit") is True
 
 
 def set_hidden_params(obj: object, hidden_params: dict[str, object] | HiddenParams) -> None:

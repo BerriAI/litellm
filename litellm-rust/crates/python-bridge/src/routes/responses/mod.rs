@@ -8,61 +8,21 @@ use litellm_auth::AuthServices;
 use litellm_cache_response::{CachePolicy, ScopedCache};
 use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_host::{call::HostedMachine, protocol::Protocol};
-use litellm_host_python::present;
 use litellm_inference_responses::{ResponsesRoute, route::Responses};
 use litellm_secrets::source::SecretSource;
 use pyo3::prelude::*;
-use serde_json::Value;
 pub(crate) use websocket::ResponsesWebSocketConnection;
 
 use super::{
     NativeCall,
     inference::{InferenceHost, InferenceRoute, run_inference},
 };
-use crate::errors::RustBridgeDeclined;
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.responses";
 
 fn run_responses(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
-    let resolved = call.resolved()?;
-    if let Some(reason) = py
-        .import(ROUTE_HOST_MODULE)?
-        .getattr("decline_reason")?
-        .call1((&resolved,))?
-        .extract::<Option<String>>()?
-    {
-        return Err(RustBridgeDeclined::new_err(reason));
-    }
-    let argument = |name: &str| present(&call.kwargs, &call.base, name);
-    let model = argument("model")?
-        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("model is required"))?
-        .extract::<String>()?;
-    let provider = argument("custom_llm_provider")?
-        .map(|value| value.extract::<String>())
-        .transpose()?;
-    if provider
-        .as_deref()
-        .is_some_and(|provider| provider != "openai")
-        || model
-            .strip_prefix("openai/")
-            .unwrap_or(&model)
-            .contains('/')
-    {
-        return Err(RustBridgeDeclined::new_err(
-            "native HTTP responses provider",
-        ));
-    }
-    if argument("stream")?
-        .map(|value| litellm_host_python::from_py::<Value>(&value))
-        .transpose()?
-        .is_some_and(|value| value == Value::Bool(true))
-    {
-        return Err(RustBridgeDeclined::new_err(
-            "native Python responses streaming",
-        ));
-    }
     let host = InferenceHost::new(call.view()?, ROUTE_HOST_MODULE);
-    run_inference::<ResponsesRoute, _>(py, call, asynchronous, ResponsesPythonHost(host))
+    run_inference::<ResponsesRoute, _>(py, call, asynchronous, ResponsesPythonHost::new(host))
 }
 
 #[pyfunction]

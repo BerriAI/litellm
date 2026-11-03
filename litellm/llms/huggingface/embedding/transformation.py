@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.custom_httpx.sse_lines import iter_sse_lines
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
@@ -357,7 +358,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         api_key: str | None = None,
     ) -> list[dict[str, str]]:
         streamed_response: Final = CustomStreamWrapper(
-            completion_stream=response.iter_lines(),
+            completion_stream=iter_sse_lines(response.iter_text()),
             model=model,
             custom_llm_provider="huggingface",
             logging_obj=logging_obj,
@@ -447,14 +448,13 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         except Exception:
             # this should remain non blocking we should not block a response returning if calculating usage fails
             pass
-        output_text: Final = model_response["choices"][0]["message"].get("content", "")
+        first_message: Final = model_response.choices[0].message
+        output_text: Final = first_message.content
         if output_text is not None and len(output_text) > 0:
             completion_tokens = 0
             try:
                 if encoding is not None:
-                    completion_tokens = len(
-                        encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-                    )  ##[TODO] use the llama2 tokenizer here
+                    completion_tokens = len(encoding.encode(output_text))  ##[TODO] use the llama2 tokenizer here
             except Exception:
                 # this should remain non blocking we should not block a response returning if calculating usage fails
                 pass

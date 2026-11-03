@@ -172,8 +172,7 @@ def _calls_to(requests: Sequence[dict[str, JsonValue]], handle: ScenarioHandle) 
 
 
 def _upstream_log(gateway: Gateway, handle: ScenarioHandle) -> Iterator[tuple[dict[str, JsonValue], ...]]:
-    fresh: Final = (_calls_to(_observed_requests(gateway), handle) for _ in itertools.count())
-    return itertools.accumulate(fresh, lambda seen, calls: (*seen, *calls))
+    return (_calls_to(_observed_requests(gateway), handle) for _ in itertools.count())
 
 
 def _polls(log: Sequence[dict[str, JsonValue]], handle: ScenarioHandle) -> tuple[dict[str, JsonValue], ...]:

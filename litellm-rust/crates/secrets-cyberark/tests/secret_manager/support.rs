@@ -62,7 +62,7 @@ pub(super) fn from_environment(
 
 pub(super) fn manager(server: &MockServer, ttl: Duration) -> CyberArkSecretManager {
     CyberArkSecretManager::with_client(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         server.uri().parse().unwrap(),
         "acct".into(),
         "admin".into(),

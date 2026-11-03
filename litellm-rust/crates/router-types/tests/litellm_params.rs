@@ -1,4 +1,6 @@
-use litellm_auth_types::{AwsParams, SecretValue, VertexParams};
+use litellm_auth_types::{AwsParams, VertexParams};
+use litellm_secret_value::SecretValue;
+
 use litellm_router_types::{LitellmParams, Spelled};
 use rstest::rstest;
 use serde_json::{Map, Value, json};

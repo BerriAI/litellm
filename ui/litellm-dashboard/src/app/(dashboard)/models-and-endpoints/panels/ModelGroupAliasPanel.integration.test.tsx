@@ -10,6 +10,7 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 
 vi.mock("@/components/networking", () => ({
   getCallbacksCall: vi.fn(),
+  getProxyBaseUrl: () => "https://proxy.test",
   getRouterSettingsCall: vi.fn(),
   setCallbacksCall: vi.fn(),
 }));

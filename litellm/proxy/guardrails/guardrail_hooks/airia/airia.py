@@ -2,12 +2,13 @@ import os
 import uuid
 from collections.abc import Mapping
 from typing import (
-    Any,  # noqa: TID251  # the only type CustomGuardrail.__init__ accepts for its open-ended kwargs
     Final,
     Literal,
 )
 
 import httpx
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -35,6 +36,12 @@ ACTION_INTERVENED: Final = "GUARDRAIL_INTERVENED"
 DEFAULT_BLOCKED_MESSAGE: Final = "Blocked by your organization's content policy."
 
 SUPPORTED_EVENT_HOOKS: Final = (GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call)
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _stream_cannot_carry_a_rewrite(request_data: Mapping[str, object] | None) -> bool:
@@ -97,7 +104,7 @@ class AiriaGuardrail(CustomGuardrail):
         timeout: float | None = None,
         supported_event_hooks: list[GuardrailEventHooks] | None = None,  # mutable-ok: matches CustomGuardrail.__init__
         async_handler: AsyncHTTPHandler | None = None,  # dependency-injected in tests; defaults to a real client
-        **kwargs: Any,  # kwargs-ok: passed straight through to CustomGuardrail.__init__
+        **kwargs: Unpack[_CustomGuardrailOptions],  # kwargs-ok: passed straight through to CustomGuardrail.__init__
     ) -> None:
         resolved_timeout: Final = timeout or float(os.getenv("AIRIA_TIMEOUT", "10"))
 
@@ -127,6 +134,9 @@ class AiriaGuardrail(CustomGuardrail):
             **kwargs,
         )
         verbose_proxy_logger.info("AiriaGuardrail initialized with gateway: %s", self.api_base)
+
+    def supports_structured_messages(self) -> bool:
+        return False
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -158,7 +168,7 @@ class AiriaGuardrail(CustomGuardrail):
                 headers={"Authorization": f"Bearer {self.api_key}"},
             )
             response.raise_for_status()
-            raw_body: Final[object] = response.json()
+            raw_body: Final = _DECODED_JSON.validate_python(response.json())
             body: Final = _as_object(raw_body)
             if body is None:
                 raise TypeError(f"expected a JSON object in the response body, got {type(raw_body).__name__}")
