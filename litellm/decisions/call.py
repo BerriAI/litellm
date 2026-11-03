@@ -109,6 +109,9 @@ _ASSET_ENTRY_ADAPTER: Final[TypeAdapter[tuple[DecisionsAssetReference, Decisions
     tuple[DecisionsAssetReference, DecisionsAsset]
 )
 _FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_EXTRA_BODY_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
+    Mapping[str, object] | None, config=ConfigDict(title="extra_body")
+)
 
 
 def _valid_image(image: object) -> DecisionsImage | None:
@@ -781,16 +784,23 @@ def _sent_fields(
         ("audio", fields.audio),
         ("videos", fields.videos),
     )
+    forwarded: Final = filter_out_litellm_params(kwargs=kwargs, excluding=_LITELLM_SETTINGS)
     sent: Final = MappingProxyType(
         {
             **{name: value for name, value in explicit if value is not None},
-            **filter_out_litellm_params(kwargs=kwargs, excluding=_LITELLM_SETTINGS),
+            **{name: value for name, value in forwarded.items() if name != "extra_body"},
         }
     )
     try:
-        return _FIELDS_ADAPTER.validate_python(to_jsonable_python(sent, exclude_none=True, fallback=_plain_mapping))
+        fields_sent: Final = _FIELDS_ADAPTER.validate_python(
+            to_jsonable_python(sent, exclude_none=True, fallback=_plain_mapping)
+        )
+        extra_body: Final = _EXTRA_BODY_ADAPTER.validate_python(
+            to_jsonable_python(forwarded.get("extra_body"), fallback=_plain_mapping)
+        )
     except (TypeError, ValueError) as error:
         raise _invalid_request(error, route) from error
+    return MappingProxyType({**fields_sent, **(extra_body or {})})
 
 
 def _native_body(

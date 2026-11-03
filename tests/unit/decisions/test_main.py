@@ -4155,6 +4155,7 @@ async def test_an_openai_deployment_behind_a_router_gets_the_caller_body_as_sent
                     "drop_params": True,
                     "timeout": 30,
                     "max_retries": 0,
+                    "extra_body": {"service_tier": "flex"},
                 },
                 "model_info": {"id": "luna-deployment"},
             }
@@ -4174,6 +4175,7 @@ async def test_an_openai_deployment_behind_a_router_gets_the_caller_body_as_sent
         "input": list(_NATIVE_OPENAI_INPUT),
         "questions": list(_NATIVE_OPENAI_QUESTIONS),
         **_NATIVE_OPENAI_FIELDS,
+        "service_tier": "flex",
     }
     assert response.model_dump(mode="json") == _NATIVE_OPENAI_RESPONSE
     assert response._hidden_params["custom_llm_provider"] == "openai"
@@ -4182,8 +4184,8 @@ async def test_an_openai_deployment_behind_a_router_gets_the_caller_body_as_sent
 
 @pytest.mark.parametrize(
     "unsendable",
-    ({"prompt_cache_key": object()}, {"prompt_cache_options": {"tag": b"\xff\xfe"}}),
-    ids=("not_json", "not_utf8"),
+    ({"prompt_cache_key": object()}, {"prompt_cache_options": {"tag": b"\xff\xfe"}}, {"extra_body": "flex"}),
+    ids=("not_json", "not_utf8", "extra_body_not_an_object"),
 )
 @pytest.mark.usefixtures("openai_default_base")
 def test_a_caller_value_that_cannot_be_sent_as_json_is_a_client_error_before_http(
