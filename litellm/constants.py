@@ -1095,6 +1095,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
     "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
+    "https://api.orcarouter.ai/v1",
 ]
 
 
@@ -1179,6 +1180,7 @@ openai_compatible_providers: Final[list[str]] = [
     "sail",
     "reka",
     "streamlake",
+    "orcarouter",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))

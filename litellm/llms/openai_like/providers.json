@@ -252,6 +252,11 @@
     "api_key_env": "REKA_API_KEY",
     "api_base_env": "REKA_API_BASE"
   },
+  "orcarouter": {
+    "base_url": "https://api.orcarouter.ai/v1",
+    "api_key_env": "ORCAROUTER_API_KEY",
+    "api_base_env": "ORCAROUTER_API_BASE"
+  },
   "openinfer": {
     "base_url": "https://api.openinfer.ai/v1",
     "api_key_env": "OPENINFER_API_KEY",
