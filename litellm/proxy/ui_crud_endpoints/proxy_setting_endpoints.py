@@ -6,6 +6,7 @@ from collections import Counter
 from collections.abc import Mapping, MutableMapping, Sequence
 from types import MappingProxyType
 from typing import (
+    TYPE_CHECKING,
     Annotated,
     Final,
     Literal,
@@ -16,7 +17,6 @@ from typing import (
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
-from prisma.errors import PrismaError
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, create_model, field_validator
 from pydantic.fields import FieldInfo, PydanticUndefined
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -64,6 +64,9 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     SSOConfig,
 )
+
+if TYPE_CHECKING:
+    from prisma.errors import PrismaError
 
 router: Final = APIRouter()
 
@@ -1291,7 +1294,9 @@ def _parse_environment_variables_param(param_value: str | Mapping[str, object] |
 
 async def _load_environment_variables_param(
     repo: ConfigRepository,
-) -> Mapping[str, object] | None | PrismaError | ValueError:
+) -> "Mapping[str, object] | None | PrismaError | ValueError":
+    from prisma.errors import PrismaError
+
     try:
         entry: Final = await _config_param_db(repo).find_unique(where={"param_name": "environment_variables"})
         param_value: Final = None if entry is None else _parse_environment_variables_param(entry.param_value)
@@ -1344,6 +1349,8 @@ async def update_sso_settings(
             status_code=500,
             detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
+
+    from prisma.errors import PrismaError
 
     # Read the existing SSO row first so the audit log captures a real
     # before/after diff. Stored values are encrypted; decrypt them so the
