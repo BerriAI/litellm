@@ -37,5 +37,6 @@ class TestCodexLongMcpToolName:
             cwd=codex.new_workspace(files={}),
         )
 
+        assert run.exit_code == 0, run
         assert McpCall(server="vault", tool=LONG_TOOL_NAME, output=marker) in run.mcp_calls, run
         assert marker in run.answer, run
