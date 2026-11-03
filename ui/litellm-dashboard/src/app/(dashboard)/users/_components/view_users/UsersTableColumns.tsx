@@ -35,9 +35,17 @@ interface UserRowActionsProps {
   onUserClick: (userId: string, openInEditMode?: boolean) => void;
   onDeleteUser: (user: UserInfo) => void;
   onResetPassword: (userId: string) => void;
+  onAdjustBudget?: (user: UserInfo) => void;
 }
 
-function UserRowActions({ user, canViewUserUsage, onUserClick, onDeleteUser, onResetPassword }: UserRowActionsProps) {
+function UserRowActions({
+  user,
+  canViewUserUsage,
+  onUserClick,
+  onDeleteUser,
+  onResetPassword,
+  onAdjustBudget,
+}: UserRowActionsProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -52,6 +60,12 @@ function UserRowActions({ user, canViewUserUsage, onUserClick, onDeleteUser, onR
           <Pencil />
           Edit user
         </DropdownMenuItem>
+        {onAdjustBudget && (
+          <DropdownMenuItem onClick={() => onAdjustBudget(user)}>
+            <Pencil />
+            Adjust budget
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onClick={() => onResetPassword(user.user_id)} data-testid="user-action-reset-password">
           <KeyRound />
           Reset password
@@ -89,6 +103,7 @@ export interface UsersTableColumnsDeps {
   onUserClick: (userId: string, openInEditMode?: boolean) => void;
   onDeleteUser: (user: UserInfo) => void;
   onResetPassword: (userId: string) => void;
+  onAdjustBudget?: (user: UserInfo) => void;
 }
 
 export const getUsersTableColumns = ({
@@ -98,6 +113,7 @@ export const getUsersTableColumns = ({
   onUserClick,
   onDeleteUser,
   onResetPassword,
+  onAdjustBudget,
 }: UsersTableColumnsDeps): ColumnDef<UserInfo>[] => {
   const baseColumns: ColumnDef<UserInfo>[] = [
     {
@@ -282,6 +298,7 @@ export const getUsersTableColumns = ({
             onUserClick={onUserClick}
             onDeleteUser={onDeleteUser}
             onResetPassword={onResetPassword}
+            onAdjustBudget={onAdjustBudget}
           />
         </div>
       ),
