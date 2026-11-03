@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
     litellm_exception_mapper,
     wrap_transcription_stream,
 )
+from litellm.litellm_core_utils.redact_messages import REDACTED_BY_LITELLM
 from litellm.llms.azure.audio_transcriptions import AzureAudioTranscription
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.transcriptions.gpt_transformation import (
@@ -722,6 +723,46 @@ async def test_atranscription_stream_under_a_post_call_guardrail_streams_the_gua
         ("transcript.text.delta", {"delta": "[REDACTED]"}),
         ("transcript.text.done", {"text": "[REDACTED]", "usage": {"type": "duration", "seconds": 2}}),
     ]
+
+
+class _StreamedTranscriptRecorder(CustomLogger):
+    def __init__(self, message_logging: bool) -> None:
+        super().__init__(message_logging=message_logging)
+        self.logged: Final[asyncio.Queue[frozenset[object]]] = asyncio.Queue()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        logged_responses: Final = (
+            response_obj,
+            *(kwargs.get(key) for key in ("complete_streaming_response", "async_complete_streaming_response")),
+        )
+        await self.logged.put(frozenset(response.text for response in logged_responses if response is not None))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opt_out", ("global", "callback"))
+async def test_atranscription_stream_keeps_the_transcript_out_of_callbacks_that_turned_off_message_logging(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, opt_out: str
+) -> None:
+    async def send_response(request: httpx.Request) -> httpx.Response:
+        return _duration_priced_transcript(streamed=_asks_for_stream(await request.aread()))
+
+    recorder: Final = _StreamedTranscriptRecorder(message_logging=opt_out != "callback")
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "turn_off_message_logging", opt_out == "global")
+    client: Final = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://example.com/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(send_response)),
+    )
+    stream: Final = await litellm.atranscription(
+        model="openai/gpt-transcribe", file=_one_second_wav(), stream=True, client=client
+    )
+    streamed_text: Final = [event.delta async for event in stream if event.type == "transcript.text.delta"]
+    logged_texts: Final = await asyncio.wait_for(recorder.logged.get(), timeout=5)
+    await client.close()
+
+    assert streamed_text == ["hello world"]
+    assert logged_texts == {REDACTED_BY_LITELLM}
 
 
 def test_transcription_stream_bills_the_provider_duration_like_the_unstreamed_call(
