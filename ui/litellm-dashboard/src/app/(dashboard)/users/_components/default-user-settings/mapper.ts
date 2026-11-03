@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type { components } from "@/lib/http/schema";
 
+import { USER_ROLES } from "../userRoles";
 import {
   EMPTY_TEAM_ROW,
   type DefaultTeamRowValues,
@@ -54,10 +55,8 @@ export const settingsToForm = (values: InternalUserSettings["values"]): DefaultU
   };
 };
 
-const DEFAULT_USER_ROLES = ["internal_user", "internal_user_viewer", "proxy_admin", "proxy_admin_viewer"] as const;
-
 const asDefaultUserRole = (raw: string): DefaultInternalUserParams["user_role"] =>
-  DEFAULT_USER_ROLES.find((role) => role === raw) ?? null;
+  USER_ROLES.find((role) => role === raw) ?? null;
 
 const numberOrNull = (raw: string): number | null => (raw.trim() === "" ? null : Number(raw));
 
