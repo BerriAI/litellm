@@ -4117,7 +4117,11 @@ async def test_load_environment_variables_litellm_license_and_edge_cases():
     mock_license_check = MagicMock()
     mock_license_check.is_premium.return_value = True
 
-    with patch("litellm.proxy.proxy_server._license_check", mock_license_check):
+    with (
+        patch("litellm.proxy.proxy_server._license_check", mock_license_check),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.premium_user_data", None),
+    ):
         with patch.dict(os.environ, {}, clear=False):
             # Call the method under test
             proxy_config._load_environment_variables(test_config_with_license)
