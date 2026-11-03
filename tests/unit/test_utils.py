@@ -1501,6 +1501,33 @@ def test_get_provider_video_config_resolves_a_custom_provider_map_base_video_con
     assert ProviderConfigManager.get_provider_video_config(model="seedance-1", provider="not-registered") is None
 
 
+def test_custom_provider_map_lookups_take_the_last_entry_for_a_duplicated_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider listed twice in `custom_provider_map` resolves to its last entry, as the per-call loops did
+    before the lookup was shared."""
+    from litellm.llms.custom_llm import CustomLLM
+    from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+
+    first_llm: Final = CustomLLM()
+    last_llm: Final = CustomLLM()
+    first_video: Final = OpenAIVideoConfig()
+    last_video: Final = OpenAIVideoConfig()
+    monkeypatch.setattr(
+        litellm,
+        "custom_provider_map",
+        [
+            {"provider": "dup", "custom_handler": first_llm},
+            {"provider": "dup", "custom_handler": first_video},
+            {"provider": "dup", "custom_handler": last_llm},
+            {"provider": "dup", "custom_handler": last_video},
+        ],
+    )
+
+    assert ProviderConfigManager.get_custom_llm_handler("dup") is last_llm
+    assert ProviderConfigManager.get_custom_provider_video_config("dup") is last_video
+
+
 def test_get_provider_text_to_speech_config_vertex_gemini_skips_cloud_tts():
     """Regression for LIT-6501: mapping vertex Gemini TTS params through Google Cloud TTS
     dropped response_format before the speech_to_completion bridge could honor it."""

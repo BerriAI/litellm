@@ -9971,7 +9971,7 @@ class ProviderConfigManager:
         return next(
             (
                 item["custom_handler"]
-                for item in litellm.custom_provider_map
+                for item in reversed(litellm.custom_provider_map)
                 if item["provider"] == provider and isinstance(item["custom_handler"], CustomLLM)
             ),
             None,
@@ -9985,7 +9985,7 @@ class ProviderConfigManager:
         return next(
             (
                 item["custom_handler"]
-                for item in litellm.custom_provider_map
+                for item in reversed(litellm.custom_provider_map)
                 if item["provider"] == provider and isinstance(item["custom_handler"], BaseVideoConfig)
             ),
             None,
