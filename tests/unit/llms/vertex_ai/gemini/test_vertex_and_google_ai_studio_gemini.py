@@ -1857,12 +1857,16 @@ def test_vertex_ai_map_tools_keeps_repeated_chat_tools_when_no_namespace_is_sent
 
 
 @pytest.mark.parametrize(
-    ("forced_name", "allowed_function_names"),
-    [("github", ["create_issue", "close_issue"]), ("close_issue", ["close_issue"])],
-    ids=["names_the_namespace", "names_a_member"],
+    ("forced_name", "other_tools", "allowed_function_names"),
+    [
+        ("github", [], ["create_issue", "close_issue"]),
+        ("close_issue", [], ["close_issue"]),
+        ("github", [{"type": "function", "function": {"name": "github"}}], ["github"]),
+    ],
+    ids=["names_the_namespace", "names_a_member", "names_a_function_sharing_the_namespace_name"],
 )
 def test_vertex_ai_tool_choice_forces_only_functions_gemini_is_sent(
-    forced_name: str, allowed_function_names: list[str]
+    forced_name: str, other_tools: list[dict[str, object]], allowed_function_names: list[str]
 ) -> None:
     namespace = {
         "type": "namespace",
@@ -1872,7 +1876,7 @@ def test_vertex_ai_tool_choice_forces_only_functions_gemini_is_sent(
 
     mapped = VertexGeminiConfig().map_openai_params(
         non_default_params={
-            "tools": [namespace],
+            "tools": [namespace, *other_tools],
             "tool_choice": {"type": "function", "function": {"name": forced_name}},
         },
         optional_params={},

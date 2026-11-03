@@ -530,6 +530,42 @@ class TestToolPermissionGuardrail:
         assert "Tool 'mcp__weather__lookup' denied by rule 'deny_mcp'" in content
 
     @pytest.mark.asyncio
+    async def test_post_call_judges_a_returned_namespace_member_by_the_rule_its_arguments_satisfy(self) -> None:
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="post-exec",
+            rules=[
+                {
+                    "id": "allow_ls",
+                    "tool_name": r"^exec$",
+                    "decision": "allow",
+                    "allowed_param_patterns": {"command": r"^ls$"},
+                },
+                {"id": "deny_exec", "tool_name": r"^exec$", "decision": "deny"},
+                {"id": "allow_ops", "tool_name": r"^ops__.*$", "decision": "allow"},
+            ],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        namespace = {"type": "namespace", "name": "ops", "tools": [{"type": "function", "name": "exec"}]}
+        data = {"guardrails": ["post-exec"], "tools": [namespace]}
+        function = Function(name="exec", arguments='{"command": "rm -rf /data"}')
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    message={"tool_calls": [{"id": "call_exec", "type": "function", "function": function}]},
+                )
+            ]
+        )
+
+        await guardrail.async_post_call_success_hook(data=data, user_api_key_dict=UserAPIKeyAuth(), response=response)
+
+        message = response.choices[0].message
+        assert [call.function.name for call in message.tool_calls or ()] == []
+        assert "Tool 'exec'" in (message.content or "")
+
+    @pytest.mark.asyncio
     async def test_async_post_call_success_hook_missing_arguments_blocks_param_rule(
         self,
     ):
@@ -2083,6 +2119,27 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
         assert message == "Tool 'Read' denied by rule 'deny_read'"
         assert rewritten["extra_body"] == {"tools": [bash], "seed": 7}
+
+    @pytest.mark.asyncio
+    async def test_pre_call_checks_and_strips_tools_loaded_in_extra_body_input(self) -> None:
+        rules = [{"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"}]
+        get_weather = {"type": "function", "name": "get_weather"}
+        lookup = {"type": "function", "name": "mcp__weather__lookup"}
+        user = {"role": "user", "content": "hi"}
+        request = {
+            "model": "gpt-5",
+            "input": "hi",
+            "tools": [],
+            "extra_body": {"input": [user, {"type": "tool_search_output", "tools": [get_weather, lookup]}], "seed": 7},
+        }
+
+        message, rewritten = await self._blocked_and_rewritten(rules, request, "responses")
+
+        assert message == "Tool 'mcp__weather__lookup' denied by rule 'deny_mcp'"
+        assert rewritten["extra_body"] == {
+            "input": [user, {"type": "tool_search_output", "tools": [get_weather]}],
+            "seed": 7,
+        }
 
     @pytest.mark.asyncio
     async def test_rewrite_relaxes_an_extra_body_tool_choice_that_names_a_dropped_tool(self) -> None:

@@ -575,7 +575,8 @@ def _is_namespace(tool: JsonValue) -> bool:
 
 def _first_declarations(tools: tuple[JsonValue, ...]) -> tuple[JsonValue, ...]:
     names: Final = tuple(map(_declared_function_name, tools))
-    return tuple(tool for index, tool in enumerate(tools) if names[index] is None or names[index] not in names[:index])
+    first_index: Final = {name: index for index, name in reversed(tuple(enumerate(names)))}
+    return tuple(tool for index, tool in enumerate(tools) if names[index] is None or first_index[names[index]] == index)
 
 
 def _with_namespace_members_inlined(tools: JsonValue) -> JsonValue:
@@ -586,6 +587,8 @@ def _with_namespace_members_inlined(tools: JsonValue) -> JsonValue:
 
 def _forced_function_names(name: str, tools: JsonValue) -> tuple[str, ...]:
     candidates: Final = tools if isinstance(tools, list) else []
+    if any(not _is_namespace(tool) and _declared_function_name(tool) == name for tool in candidates):
+        return (name,)
     named: Final = next((tool for tool in candidates if _is_namespace(tool) and _member_name_of(tool) == name), None)
     members: Final = map(_declared_function_name, _namespace_members_or_tool(named)) if named is not None else ()
     return tuple(dict.fromkeys(member for member in members if member is not None)) or (name,)
