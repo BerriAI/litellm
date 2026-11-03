@@ -111,7 +111,8 @@ def _first_chunk_error(response: object) -> Mapping[str, object] | None:
         return None
     if response.status_code < HTTPStatus.BAD_REQUEST:
         return None
-    return responses_error_fields(sse_error_object(bytes(response.body)) or {"code": response.status_code})
+    error_obj: Final = sse_error_object(bytes(response.body)) or {}
+    return responses_error_fields({**error_obj, "code": error_obj.get("code") or str(response.status_code)})
 
 
 async def _never_receive() -> Message:
@@ -387,12 +388,7 @@ async def background_streaming_task(
                                 status="in_progress",
                             )
 
-                        elif event_type in (
-                            "response.completed",
-                            "response.failed",
-                            "response.incomplete",
-                            "response.cancelled",
-                        ):
+                        elif terminal_status is None and event_type in _event_to_status:
                             # Terminal event - extract all ResponsesAPIResponse fields
                             # https://platform.openai.com/docs/api-reference/responses-streaming
                             finished_at = perf_counter()

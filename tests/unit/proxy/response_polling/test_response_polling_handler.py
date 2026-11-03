@@ -1736,6 +1736,26 @@ class TestBackgroundStreamingTerminalEvents:
                 None,
                 None,
             ),
+            (
+                (
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                    'data: {"type": "response.failed", "response": {"status": "failed", '
+                    '"error": {"code": "server_error", "message": "late"}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data: {"type": "response.failed", "response": {"status": "failed", '
+                    '"error": {"code": "server_error", "message": "first"}, "usage": {"input_tokens": 3}}}\n\n',
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 9}}}\n\n',
+                ),
+                "failed",
+                {"code": "server_error", "message": "first"},
+                {"input_tokens": 3},
+            ),
         ],
         ids=[
             "error_frame_after_a_delta",
@@ -1753,6 +1773,8 @@ class TestBackgroundStreamingTerminalEvents:
             "done_behind_a_delta_in_one_chunk_then_completed",
             "completed_then_failed_in_one_chunk",
             "event_line_sent_as_a_data_line_of_one_event",
+            "completed_then_failed_in_the_next_chunk",
+            "failed_then_completed_in_the_next_chunk",
         ],
     )
     async def test_a_poll_stores_what_its_stream_ended_with(
@@ -1836,6 +1858,11 @@ class TestBackgroundStreamingTerminalEvents:
                 403,
                 json.dumps({"error": {"type": "guardrail_scan_error", "code": 403}}),
                 {"code": "permission_error", "message": "Forbidden"},
+            ),
+            (
+                404,
+                json.dumps({"error": {"message": "model not found", "type": "invalid_request_error", "param": None}}),
+                {"code": "not_found_error", "message": "model not found"},
             ),
         ],
     )
