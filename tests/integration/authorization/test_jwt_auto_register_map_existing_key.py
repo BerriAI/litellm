@@ -37,7 +37,6 @@ def _config(
     directory: Path,
     claim_field: str,
     *,
-    skip_allowed_routes_check: bool = False,
     behavior: Literal["auto_register", "link_only", "reject"] = "auto_register",
     map_existing_key: bool = True,
     user_id_upsert: bool = False,
@@ -55,7 +54,6 @@ def _config(
             "auto_register_map_existing_key": map_existing_key,
             "user_id_upsert": user_id_upsert,
             "issuers": list(issuers),
-            "virtual_key_mapping_skip_allowed_routes_check": skip_allowed_routes_check,
         },
     }
     path: Final = directory / f"jwt_map_existing_key_{claim_field}.yaml"
@@ -121,7 +119,7 @@ def _billed_key(response: httpx.Response) -> str:
     return string_value(rows[0]["api_key"])
 
 
-def test_first_jwt_call_reuses_the_newest_durable_llm_key_and_skips_every_ineligible_newer_key(
+def test_first_jwt_call_reuses_the_newest_durable_key_and_skips_every_ineligible_newer_key(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     with _issuer() as (private_key, jwks_url), gateway.scenario() as scenario:
@@ -132,7 +130,6 @@ def test_first_jwt_call_reuses_the_newest_durable_llm_key_and_skips_every_inelig
         skipped: Final = {
             "older_durable": older_durable,
             "expiring": scenario.key(user_id=user, duration="1h"),
-            "management_only": scenario.key(user_id=user, allowed_routes=["management_routes"]),
             "auto_registered_look_alike": scenario.key(user_id=user, metadata={"auto_registered": True}),
             "other_team": scenario.key(user_id=user, team_id=scenario.team()),
             "blocked": scenario.key(user_id=user),
@@ -154,21 +151,19 @@ def test_first_jwt_call_reuses_the_newest_durable_llm_key_and_skips_every_inelig
         assert _billed_key(response) == _hash(durable)
 
 
-@pytest.mark.parametrize("skip_allowed_routes_check", [False, True])
 @pytest.mark.parametrize(
     ("behavior", "map_existing_key"), [("auto_register", True), ("link_only", False), ("link_only", True)]
 )
-def test_route_filter_can_be_skipped_without_bypassing_other_key_checks(
+def test_route_restricted_keys_are_linked_without_bypassing_other_key_checks(
     gateway: Gateway,
     tmp_path: Path,
-    skip_allowed_routes_check: bool,
     behavior: Literal["auto_register", "link_only"],
     map_existing_key: bool,
 ) -> None:
     with _issuer() as (private_key, jwks_url), gateway.scenario() as scenario:
         model: Final = scenario.model()
         user: Final = scenario.user(user_role="internal_user")
-        unrestricted: Final = scenario.key(user_id=user)
+        scenario.key(user_id=user)
         restricted: Final = scenario.key(user_id=user, allowed_routes=["/v1/chat/completions"])
         scenario.key(user_id=user, duration="1h")
         scenario.key(user_id=user, metadata={"auto_registered": True})
@@ -185,7 +180,6 @@ def test_route_filter_can_be_skipped_without_bypassing_other_key_checks(
             config=_config(
                 tmp_path,
                 "sub",
-                skip_allowed_routes_check=skip_allowed_routes_check,
                 behavior=behavior,
                 map_existing_key=map_existing_key,
             ),
@@ -194,14 +188,45 @@ def test_route_filter_can_be_skipped_without_bypassing_other_key_checks(
             repeated: Final = _chat(candidate, model, token)
             restricted_route: Final = candidate.request("GET", "/v1/models", key=token)
 
-        expected_key: Final = restricted if skip_allowed_routes_check else unrestricted
         assert response.status_code == 200, response.text
         assert repeated.status_code == 200, repeated.text
-        assert restricted_route.status_code == (403 if skip_allowed_routes_check else 200), restricted_route.text
-        assert _mapped_token("sub", user) == _hash(expected_key)
+        assert restricted_route.status_code == 403, restricted_route.text
+        assert _mapped_token("sub", user) == _hash(restricted)
         assert _user_key_hashes(user) == keys_before, "a new key was minted instead of linking an existing key"
-        assert _billed_key(response) == _hash(expected_key)
-        assert _billed_key(repeated) == _hash(expected_key)
+        assert _billed_key(response) == _hash(restricted)
+        assert _billed_key(repeated) == _hash(restricted)
+
+
+@pytest.mark.parametrize("behavior", ["auto_register", "link_only"])
+def test_management_route_keys_are_linked_by_default_and_keep_their_route_permissions(
+    gateway: Gateway, tmp_path: Path, behavior: Literal["auto_register", "link_only"]
+) -> None:
+    with _issuer() as (private_key, jwks_url), gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        user: Final = scenario.user(user_role="internal_user")
+        target: Final = f"integration-{uuid.uuid4().hex}"
+        scenario.key(user_id=user)
+        management_key: Final = scenario.key(user_id=user, allowed_routes=["/user/new"])
+        keys_before: Final = _user_key_hashes(user)
+        token: Final = _token(private_key, user)
+        with owned_proxy(
+            gateway, tmp_path, {"JWT_PUBLIC_KEY_URL": jwks_url}, config=_config(tmp_path, "sub", behavior=behavior)
+        ) as candidate:
+            denied: Final = _chat(candidate, model, token)
+            allowed: Final = candidate.request(
+                "POST",
+                "/user/new",
+                {"user_id": target, "auto_create_key": False, "user_role": "internal_user"},
+                key=token,
+            )
+            assert allowed.status_code == 200, allowed.text
+            scenario.cleanups.callback(scenario.delete_user, target)
+            repeated: Final = _chat(candidate, model, token)
+        assert denied.status_code == 403, denied.text
+        assert repeated.status_code == 403, repeated.text
+        assert allowed.json()["user_id"] == target
+        assert _mapped_token("sub", user) == _hash(management_key)
+        assert _user_key_hashes(user) == keys_before
 
 
 def test_user_matched_by_email_instead_of_sub_still_reuses_their_existing_key(gateway: Gateway, tmp_path: Path) -> None:
@@ -301,7 +326,6 @@ def test_link_only_rejects_without_writes_then_links_a_newly_available_key(
         user: Final = scenario.user(user_role="internal_user")
         if ineligible_keys:
             scenario.key(user_id=user, duration="1h")
-            scenario.key(user_id=user, allowed_routes=["management_routes"])
             scenario.key(user_id=user, metadata={"auto_registered": True})
             scenario.key(user_id=user, team_id=scenario.team())
             blocked: Final = scenario.key(user_id=user)
@@ -367,9 +391,7 @@ def test_link_only_enforces_key_permissions_on_the_first_and_cached_requests(
             gateway,
             tmp_path,
             {"JWT_PUBLIC_KEY_URL": jwks_url},
-            config=_config(
-                tmp_path, "sub", behavior="link_only", map_existing_key=False, skip_allowed_routes_check=True
-            ),
+            config=_config(tmp_path, "sub", behavior="link_only", map_existing_key=False),
         ) as candidate:
             first: Final = _chat(candidate, denied, token)
             repeated: Final = _chat(candidate, denied, token)

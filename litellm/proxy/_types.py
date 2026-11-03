@@ -5044,6 +5044,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "'auto_register': auto-create a virtual key and mapping on first encounter. "
             "'link_only': map an eligible existing user key or return HTTP 403, without creating a key. "
             "link_only ignores auto_register_map_existing_key; user provisioning still follows user_id_upsert. "
+            "Existing-key selection ignores allowed_routes; JWTs inherit the selected key's permissions, "
+            "including management routes, with request-time key restrictions still enforced. "
             "Unmapped proxy admins authenticate directly in auto_register and link_only modes."
         ),
     )
@@ -5054,19 +5056,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "field is the user_id_jwt_field or user_email_jwt_field, the JWT claim is mapped to a virtual key the "
             "JWT-resolved user already owns instead of minting a new one. If the user owns several, the most recently created key in the "
             "JWT-resolved team (or with no team when the JWT resolves none) is chosen among keys that never "
-            "expire, are not blocked, are not Admin UI session keys, were not minted by auto_register, and "
-            "have no allowed_routes or include llm_api_routes unless virtual_key_mapping_skip_allowed_routes_check is True. "
+            "expire, are not blocked, are not Admin UI session keys, and were not minted by auto_register. "
+            "allowed_routes does not affect key selection. JWTs inherit the selected key's permissions, "
+            "including management routes; request-time key restrictions still apply. "
             "Otherwise a new key is minted as usual."
-        ),
-    )
-    virtual_key_mapping_skip_allowed_routes_check: bool = Field(
-        default=False,
-        description=(
-            "Skip the allowed_routes eligibility check when selecting an existing virtual key in link_only mode "
-            "or auto_register mode with auto_register_map_existing_key=True. Other eligibility checks and "
-            "request-time route permissions still apply. JWTs inherit the selected key's existing permissions, "
-            "including management routes. Enable only when eligible user-assigned keys are intended to be "
-            "accessible through JWT authentication."
         ),
     )
     routing_overrides: list[JWTRoutingOverride] | None = Field(
