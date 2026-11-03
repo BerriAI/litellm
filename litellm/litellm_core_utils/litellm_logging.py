@@ -913,6 +913,8 @@ class Logging(LiteLLMLoggingBaseClass):
         # Timing for results that cannot carry ``_hidden_params`` (plain-dict /v1/messages
         # responses and the bridge stream wrappers); see ``update_response_metadata``.
         self.response_timing_metrics: Mapping[str, float] = {}
+        # The proxy's own per-chunk work on a stream, added to the stamped overhead in the logging payload
+        self.streaming_overhead_ms: float = 0.0
 
         # Passthrough endpoint guardrails config for field targeting
         self.passthrough_guardrails_config: dict[str, object] | None = None
@@ -7932,8 +7934,14 @@ def get_standard_logging_object_payload(
         if clean_hidden_params["litellm_overhead_time_ms"] is None and status == "success":
             # /v1/messages dict results and the bridge stream wrappers keep it on the logging object;
             # failure payloads stay None like every response type that carries its own _hidden_params
-            timing_metrics: Final = getattr(logging_obj, "response_timing_metrics", None) or {}
+            timing_metrics: Final[Mapping[str, float]] = getattr(logging_obj, "response_timing_metrics", None) or {}
             clean_hidden_params["litellm_overhead_time_ms"] = timing_metrics.get("litellm_overhead_time_ms")
+        # the overhead above was stamped when the stream object came back, before any chunk was
+        # read; the proxy's per-chunk work (hooks, cost injection, serialization) lands here
+        streaming_overhead_ms: Final = getattr(logging_obj, "streaming_overhead_ms", 0.0)
+        stamped_overhead_ms: Final = clean_hidden_params["litellm_overhead_time_ms"]
+        if status == "success" and stamped_overhead_ms is not None and isinstance(streaming_overhead_ms, float):
+            clean_hidden_params["litellm_overhead_time_ms"] = round(stamped_overhead_ms + streaming_overhead_ms, 4)
 
         model_cost_information: Final = StandardLoggingPayloadSetup.get_model_cost_information(
             base_model=base_model,

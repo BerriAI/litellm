@@ -3,6 +3,7 @@ import contextlib
 import json
 import logging
 import math
+import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -4672,12 +4673,13 @@ class ProxyBaseLLMRequestProcessing:
             response=response,
             request_data=request_data,
         )
-        release_stream_failure: Final = _ClientStreamFailureReport.hold_while_streaming(
-            stream_logging_obj if isinstance(stream_logging_obj, LiteLLMLoggingObj) else None
-        )
+        timing_sink: Final = stream_logging_obj if isinstance(stream_logging_obj, LiteLLMLoggingObj) else None
+        release_stream_failure: Final = _ClientStreamFailureReport.hold_while_streaming(timing_sink)
         try:
             str_so_far = ""
+            chunk_work_seconds = 0.0  # rebind-ok: running total of the proxy's own per-chunk work
             async for chunk in guarded_stream:
+                chunk_received_at = time.perf_counter()
                 # ``.format(chunk)`` was previously evaluated for every chunk
                 # regardless of log level; gate it behind the level check.
                 if debug_enabled:
@@ -4718,6 +4720,9 @@ class ProxyBaseLLMRequestProcessing:
                 delivered_chunk = delivered_chunk or chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
                 serialized = serialize_chunk(chunk)
                 recent_tail = advance_sse_tail(recent_tail, serialized)
+                chunk_work_seconds += time.perf_counter() - chunk_received_at  # rebind-ok: running total
+                if timing_sink is not None:
+                    timing_sink.streaming_overhead_ms = chunk_work_seconds * 1000
                 yield serialized
             held_tail: Final = flush_tail() if flush_tail is not None else b""
             if held_tail:

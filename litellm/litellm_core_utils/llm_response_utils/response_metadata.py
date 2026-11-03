@@ -307,3 +307,9 @@ def update_response_metadata(
     metadata.set_timing_metrics(start_time, end_time, logging_obj, include_overhead)
     metadata.set_hidden_params(logging_obj, model, kwargs, cache_hit=cache_hit)
     metadata.apply()
+    if logging_obj.stream is True:
+        # the response assembled from the chunks never inherits the stream wrapper's
+        # ``_hidden_params``, so the logging payload reads the timing from the logging object
+        logging_obj.set_response_timing_metrics(
+            response_timing_metrics(start_time, end_time, logging_obj, include_overhead)
+        )

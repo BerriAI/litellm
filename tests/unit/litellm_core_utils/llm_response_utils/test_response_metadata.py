@@ -207,6 +207,31 @@ class TestDictResultsSkipMetadataUpdate:
         logging_obj.set_response_timing_metrics.assert_not_called()
         assert result._hidden_params["litellm_overhead_time_ms"] == 100.0
 
+    def test_update_response_metadata_keeps_stream_wrapper_timing_on_logging_obj(self):
+        """A stream wrapper carries _hidden_params, but the response assembled from its chunks does
+        not inherit them, so the logging payload needs the stamped timing on the logging object."""
+        result = ModelResponse()
+        logging_obj = MagicMock()
+        logging_obj.stream = True
+        logging_obj.model_call_details = {"llm_api_duration_ms": 900.0}
+        logging_obj.caching_details = None
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.001)
+        logging_obj.litellm_call_id = "test-call-id"
+
+        update_response_metadata(
+            result=result,
+            logging_obj=logging_obj,
+            model="gpt-4",
+            kwargs={},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+        )
+
+        logging_obj.set_response_timing_metrics.assert_called_once_with(
+            {"_response_ms": 1000.0, "litellm_overhead_time_ms": 100.0}
+        )
+        assert result._hidden_params["litellm_overhead_time_ms"] == 100.0
+
     def test_update_response_metadata_omits_overhead_for_completed_stream(self):
         """LIT-5466: the Responses streaming iterator finishes the whole stream before updating
         metadata, and the provider call it recorded stopped at the first byte."""
