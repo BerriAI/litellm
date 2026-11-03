@@ -4150,12 +4150,15 @@ def _register_on_current_map(
 
 
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
+_runtime_registration_order: Final[dict[str, int]] = {}  # mutable-ok: tells which of two twin names registered last
+_REGISTRATION_TICKS: Final = itertools.count()
 
 
 @dataclass(frozen=True, slots=True)
 class _RegistrationsOverCatalog(Mapping[str, Mapping[str, object]]):
     catalog: Mapping[str, Mapping[str, object]]
     registrations: Mapping[str, Mapping[str, object]]
+    registration_order: Mapping[str, int]
 
     def __getitem__(self, key: str) -> Mapping[str, object]:
         catalog_entry: Final = self.catalog.get(key)
@@ -4164,9 +4167,7 @@ class _RegistrationsOverCatalog(Mapping[str, Mapping[str, object]]):
         present: Final = tuple(name for name in names if name in self.registrations)
         if not present:
             return self.catalog[key]
-        oldest_first: Final = (
-            present if len(present) == 1 else tuple(name for name in self.registrations if name in present)
-        )
+        oldest_first: Final = sorted(present, key=lambda name: self.registration_order.get(name, -1))
         registered: Final = (self.registrations[name] for name in oldest_first)
         return MappingProxyType(
             dict(itertools.chain.from_iterable(entry.items() for entry in (catalog_entry or {}, *registered)))
@@ -4184,7 +4185,9 @@ def catalog_with_runtime_registrations() -> Mapping[str, Mapping[str, object]]:
     catalog: Final = GetModelCostMap.loaded_model_cost_map()
     if not _runtime_registered_model_cost:
         return catalog
-    return _RegistrationsOverCatalog(catalog, MappingProxyType(_runtime_registered_model_cost))
+    return _RegistrationsOverCatalog(
+        catalog, MappingProxyType(_runtime_registered_model_cost), MappingProxyType(_runtime_registration_order)
+    )
 
 
 def runtime_model_cost_registrations(
@@ -4250,7 +4253,14 @@ def reapply_runtime_model_cost_registrations() -> None:
     if _LiveDeploymentReplay.callback is not None:
         _LiveDeploymentReplay.callback()
     if _runtime_registered_model_cost:
-        register_model(model_cost=dict(_runtime_registered_model_cost))
+        register_model(
+            model_cost=dict(
+                sorted(
+                    _runtime_registered_model_cost.items(),
+                    key=lambda registration: _runtime_registration_order.get(registration[0], -1),
+                )
+            )
+        )
 
 
 def cost_map_omits_token_price(*keys: object) -> bool:
@@ -4319,16 +4329,12 @@ def register_model(
 
     if persist_across_reloads:
         _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
-        _latest_registrations: Final = {
-            _registered_key: update_dictionary(
+        for _registered_key, _registered_value in _registrations.items():
+            _runtime_registered_model_cost[_registered_key] = update_dictionary(
                 dict(_runtime_registered_model_cost.get(_registered_key, {})),
                 _RATE_TABLE.validate_python(_registered_value),
             )
-            for _registered_key, _registered_value in _registrations.items()
-        }
-        for _registered_key in _latest_registrations:
-            _runtime_registered_model_cost.pop(_registered_key, None)
-        _runtime_registered_model_cost.update(_latest_registrations)
+            _runtime_registration_order[_registered_key] = next(_REGISTRATION_TICKS)
 
     for key, value in loaded_model_cost.items():
         write = _register_on_current_map(str(key), value, custom_llm_provider, warning_display_name)

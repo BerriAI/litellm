@@ -4781,6 +4781,7 @@ def test_auto_injection_honors_a_register_model_opt_out_made_under_the_provider_
     assert supports_anthropic_cache_control(model, "anthropic", {"id": "plain-id"}) is False
 
 
+@pytest.mark.parametrize("reload_cost_map", [False, True], ids=["before-reload", "after-reload"])
 @pytest.mark.parametrize(
     ("registrations", "expected"),
     [
@@ -4791,10 +4792,10 @@ def test_auto_injection_honors_a_register_model_opt_out_made_under_the_provider_
     ids=["prefixed-opt-out-last", "bare-opt-in-last", "bare-opt-out-registered-again-last"],
 )
 def test_the_later_of_a_bare_and_a_prefixed_register_model_entry_wins_for_routed_and_sdk_calls(
-    registrations: tuple[tuple[str, bool], ...], expected: bool
+    registrations: tuple[tuple[str, bool], ...], expected: bool, reload_cost_map: bool
 ) -> None:
     from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
-    from litellm.utils import catalog_with_runtime_registrations
+    from litellm.utils import catalog_with_runtime_registrations, reapply_runtime_model_cost_registrations
 
     model: Final = next(
         key
@@ -4803,6 +4804,8 @@ def test_the_later_of_a_bare_and_a_prefixed_register_model_entry_wins_for_routed
     )
     for prefix, flag in registrations:
         litellm.register_model({f"{prefix}{model}": {"supports_prompt_caching": flag}})
+    if reload_cost_map:
+        reapply_runtime_model_cost_registrations()
 
     assert (
         supports_anthropic_cache_control(model, "anthropic", {"id": "plain-id"}),
