@@ -96,6 +96,14 @@ async fn forward(
     mut request: Request,
 ) -> Result<Response, StatusCode> {
     let downstream = state.upgrades.take_handshake(&mut request)?;
+    // HTTP/2 carries the public host in :authority, which the upstream rewrite below replaces.
+    if let Some(authority) = request.uri().authority()
+        && !request.headers().contains_key(header::HOST)
+    {
+        let host =
+            HeaderValue::from_str(authority.as_str()).map_err(|_| StatusCode::BAD_REQUEST)?;
+        request.headers_mut().insert(header::HOST, host);
+    }
     let mut uri = state.upstream.into_parts();
     uri.path_and_query = request.uri().path_and_query().cloned();
     *request.uri_mut() = Uri::from_parts(uri).map_err(|_| StatusCode::BAD_GATEWAY)?;

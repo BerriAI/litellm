@@ -141,6 +141,34 @@ async fn absolute_form_targets_reach_python_as_origin_form() {
 
 #[rstest]
 #[tokio::test]
+async fn http2_clients_reach_python_with_their_public_host() {
+    let (upstream, mut received) = recording(ok).await;
+    let gateway = Gateway::start(upstream).await;
+    let stream = tokio::net::TcpStream::connect(gateway.address)
+        .await
+        .unwrap();
+    let (mut sender, connection) = hyper::client::conn::http2::handshake(
+        hyper_util::rt::TokioExecutor::new(),
+        hyper_util::rt::TokioIo::new(stream),
+    )
+    .await
+    .unwrap();
+    tokio::spawn(connection);
+    let request = axum::http::Request::get("http://public.example/v1/models")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = within(sender.send_request(request)).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        received.recv().await.unwrap().headers["host"],
+        "public.example"
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn keeps_repeated_response_headers_and_opaque_header_bytes() {
     let (upstream, mut received) = recording(|| {
         Response::builder()

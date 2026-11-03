@@ -9,7 +9,7 @@ repository.workspace = true
 [dependencies]
 axum.workspace = true
 hyper = { version = "1", features = ["http1"] }
-hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -20,6 +20,7 @@ bytes.workspace = true
 futures-util.workspace = true
 http-body-util = "0.1"
 httparse = "1"
+hyper = { version = "1", features = ["client", "http2"] }
 proptest.workspace = true
 rstest.workspace = true
 tokio = { workspace = true, features = ["io-util", "sync"] }
