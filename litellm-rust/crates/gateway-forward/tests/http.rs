@@ -183,19 +183,14 @@ async fn relays_a_response_with_more_headers_than_hyper_allows_by_default() {
     }))
     .await;
     let gateway = Gateway::start(upstream).await;
+    let mut raw = gateway.connect().await;
 
-    let response = within(
-        client().request(
-            axum::http::Request::get(gateway.url("/v1/chat/completions"))
-                .body(Body::empty())
-                .unwrap(),
-        ),
-    )
-    .await
-    .unwrap();
+    raw.send("GET /v1/chat/completions HTTP/1.1\r\nhost: public.example\r\n\r\n")
+        .await;
 
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["llm_provider-x-149"], "v");
+    let head = within(raw.response_head()).await.unwrap();
+    assert_eq!(head.status, StatusCode::OK);
+    assert_eq!(head.header("llm_provider-x-149"), Some(&b"v"[..]));
 }
 
 #[rstest]
