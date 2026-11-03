@@ -4,13 +4,23 @@ from typing import Final
 
 import pytest
 from codex.harness import CodexHarness
-from codex.setups import SETUPS, ModelSetup
+from codex.setups import ModelSetup, with_expected_failures
 from e2e_config import unique_marker
 
 pytestmark = pytest.mark.e2e
 
 
-@pytest.mark.parametrize("deployment", SETUPS)
+SETUPS_WITHOUT_PROMPT_CACHING: Final = with_expected_failures(
+    {
+        "claude_bedrock": (
+            "Codex sends no cache breakpoints, and LiteLLM adds no Bedrock cachePoint for Claude unless the"
+            " deployment sets cache_control_injection_points."
+        ),
+    }
+)
+
+
+@pytest.mark.parametrize("deployment", SETUPS_WITHOUT_PROMPT_CACHING)
 class TestCodexPromptCaching:
     def test_reads_the_repeated_prefix_from_the_cache_on_the_next_request(
         self, codex: CodexHarness, setup: ModelSetup

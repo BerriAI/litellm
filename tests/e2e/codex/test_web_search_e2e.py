@@ -13,11 +13,15 @@ CODE_MODE_GPT_GAP: Final = (
     "Codex sends no web search tool for this code-mode GPT model through a custom provider,"
     " though it searches when it talks to OpenAI directly."
 )
+IDENTITY_MAY_NOT_SEARCH: Final = "web search is not authorized for this identity"
 SETUPS_WITHOUT_WEB_SEARCH: Final = with_expected_failures(
     {
         "openai": CODE_MODE_GPT_GAP,
         "azure_openai": CODE_MODE_GPT_GAP,
-        "bedrock_runtime": "LiteLLM's Bedrock Responses config drops the web search tool before the request goes out.",
+        "bedrock_runtime": (
+            "bedrock-runtime runs no server-side tools, so LiteLLM drops Codex's web search tool before the request"
+            " goes out."
+        ),
         "claude_bedrock": (
             "LiteLLM's Responses to chat bridge drops web search for Bedrock Converse, which supports it only on Nova."
         ),
@@ -36,6 +40,8 @@ class TestCodexWebSearch:
             cwd=codex.new_workspace(files={}),
             flags=LIVE_WEB_SEARCH,
         )
+        if any(IDENTITY_MAY_NOT_SEARCH in error.message for error in run.errors):
+            pytest.skip("The gateway's AWS identity lacks the bedrock-websearch:InvokeSearch permission.")
         assert run.exit_code == 0, run
         assert run.web_searches > 0, run
         assert run.answer.strip(), run
