@@ -1,7 +1,9 @@
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use bytes::Bytes;
-use litellm_auth::{InputSource, SecretValue, TokenProviderHandle};
+use litellm_auth::{InputSource, TokenProviderHandle};
+use litellm_secret_value::SecretValue;
+
 use litellm_core_utils::call_arguments::CallArguments;
 use litellm_llms::base_llm::ocr::{
     error::Error,

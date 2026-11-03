@@ -232,7 +232,7 @@ class AzureAIAgentResponsesAPIConfig(AzureAIResponsesAPIConfig):
         model: str,
         drop_params: bool,
         *,
-        declared_reasoning_efforts: Collection[str],
+        declared_reasoning_efforts: Collection[str] | None,
     ) -> Mapping[str, object]:
         mapped: Final = super().map_openai_params_for_deployment(
             response_api_optional_params, model, drop_params, declared_reasoning_efforts=declared_reasoning_efforts

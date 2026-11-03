@@ -10,11 +10,13 @@ use aws_sdk_secretsmanager::{
     Client,
     config::{BehaviorVersion, Credentials, Region, retry::RetryConfig},
 };
+use litellm_secret_value::SecretValue;
 use litellm_secrets_aws::{AwsSecretsManagerV2, Error, RotationResponse};
 use litellm_secrets_types::{
     AwsOperationContext, BaseSecretManager, KeyManagementSettings, Secret, SecretDeleter,
-    SecretValue, SecretWriteContext, SecretWriter,
+    SecretWriteContext, SecretWriter,
 };
+
 use rstest::{fixture, rstest};
 use serde_json::json;
 use wiremock::{
