@@ -11,7 +11,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockImageContent,
     BedrockImageSource,
 )
-from litellm.types.utils import CallTypes
+from litellm.types.utils import RESPONSES_INPUT_CALL_TYPES, CallTypes
 
 BedrockImageFormat: TypeAlias = Literal["png", "jpeg"]
 
@@ -53,7 +53,6 @@ _IMAGE_FORMAT_BY_MIME: Final[Mapping[str, BedrockImageFormat]] = MappingProxyTyp
     {"image/png": "png", "image/jpeg": "jpeg", "image/jpg": "jpeg"}
 )
 _CHAT_CALL_TYPES: Final = frozenset({CallTypes.completion.value, CallTypes.acompletion.value})
-_RESPONSES_CALL_TYPES: Final = frozenset({CallTypes.responses.value, CallTypes.aresponses.value})
 _OPENAI_IMAGE_TYPES: Final = frozenset({"image_url", "input_image", "computer_screenshot"})
 _OPENAI_UNSCANNABLE_TYPES: Final = frozenset(
     {"file", "input_file", "input_audio", "video_url", "audio_url", "document", "container_upload"}
@@ -138,7 +137,7 @@ def _messages_and_classifier(
         return _mappings(data.get("messages")), _classify_openai_block, _no_nested_blocks
     if call_type == CallTypes.anthropic_messages.value:
         return _mappings(data.get("messages")), _classify_anthropic_block, _anthropic_tool_result_blocks
-    if call_type in _RESPONSES_CALL_TYPES:
+    if call_type in RESPONSES_INPUT_CALL_TYPES:
         return _mappings(data.get("input")), _classify_openai_block, _no_nested_blocks
     if call_type == CallTypes.allm_passthrough_route.value and _is_bedrock_converse(data):
         body: Final = data.get("data")

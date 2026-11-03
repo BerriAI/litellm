@@ -24,6 +24,7 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
+    RESPONSES_INPUT_CALL_TYPES,
     Choices,
     GuardrailStatus,
     ModelResponse,
@@ -402,7 +403,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         user_id: Final = self._resolve_user_id_for_blocking(data, user_api_key_dict)
 
         prompt_text: str | None = None
-        if call_type in ("responses", "aresponses"):
+        if call_type in RESPONSES_INPUT_CALL_TYPES:
             # Route Responses API calls to the responses-specific extractor
             # before the generic ``messages`` branch.  This mirrors
             # ``async_logging_hook`` and ensures ``instructions`` (system
@@ -663,7 +664,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         # Log prompt (uploadText)
         try:
             prompt_text: str | None = None
-            if call_type in ("responses", "aresponses"):
+            if call_type in RESPONSES_INPUT_CALL_TYPES:
                 # Responses API: route to the responses-specific extractor
                 # before the generic ``messages`` branch.  litellm's logging
                 # pipeline stores the raw responses ``input`` (a string or a

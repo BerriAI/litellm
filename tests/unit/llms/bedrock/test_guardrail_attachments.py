@@ -124,6 +124,23 @@ TEXT = {"type": "text", "text": "hello"}
             id="responses-chat-shaped-image-url",
         ),
         pytest.param(
+            {
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_image", "image_url": f"data:image/png;base64,{PNG_B64}"},
+                            {"type": "input_file", "file_id": "file-1"},
+                        ],
+                    }
+                ]
+            },
+            CallTypes.acompact_responses.value,
+            [_png_item()],
+            ["input_file"],
+            id="compact-input-image-and-file",
+        ),
+        pytest.param(
             _converse({"audio": {"format": "mp3", "source": {"bytes": PDF_B64}}}),
             CallTypes.allm_passthrough_route.value,
             [],

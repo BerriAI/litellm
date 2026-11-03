@@ -43,7 +43,7 @@ from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
 from litellm.proxy.mcp_server.utils import JSONLeafPath, json_string_leaves
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, Mode
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import AktoGuardrailConfigModelOptionalParams
-from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
+from litellm.types.utils import RESPONSES_INPUT_CALL_TYPES, CallTypes, GenericGuardrailAPIInputs
 
 from .akto_attachments import request_attachments, without_attachment_content
 
@@ -81,7 +81,6 @@ DEFAULT_REQUEST_PATH: Final = "/v1/chat/completions"
 MCP_PATH: Final = "/mcp"
 MCP_TOOL_PREFIX: Final = "mcp"
 DEFAULT_BLOCK_REASON: Final = "Blocked by Akto Guardrails"
-RESPONSES_API_CALL_TYPES: Final = frozenset((CallTypes.responses.value, CallTypes.aresponses.value))
 MESSAGES_API_CALL_TYPES: Final = frozenset((CallTypes.anthropic_messages.value, CallTypes.aanthropic_messages.value))
 UNMASKABLE_REASON: Final = "Content masked by Akto guardrail policy could not be applied"
 MALFORMED_ATTACHMENT_REASON: Final = "Attachment could not be read for the Akto guardrail check"
@@ -431,7 +430,7 @@ class AktoGuardrail(CustomGuardrail):
         api_messages: Final = self.messages_api_messages(request_data)
         # The Responses API sends "input", so a "messages" key there is a decoy
         raw_messages: Final = (
-            None if call_type_of(request_data) in RESPONSES_API_CALL_TYPES else request_data.get("messages")
+            None if call_type_of(request_data) in RESPONSES_INPUT_CALL_TYPES else request_data.get("messages")
         )
         messages: Final = (
             api_messages

@@ -245,6 +245,7 @@ from litellm.types.utils import (
     ABOVE_THRESHOLD_COST_KEY_PATTERN,
     API_KEY_UPSTREAM_PARAMS,
     OPENAI_RESPONSE_HEADERS,
+    RESPONSES_INPUT_CALL_TYPES,
     AdminApiKeySecretReference,
     CallTypes,
     ChatCompletionDeltaToolCall,
@@ -288,6 +289,9 @@ from litellm.types.utils import (
 )
 
 _CALL_TYPE_ENUM_MAP: Final[dict] = {ct.value: ct for ct in CallTypes}
+_CALL_TYPES_WITHOUT_DEPLOYMENT_SUCCESS_HOOK: Final[frozenset[CallTypes]] = frozenset(
+    {CallTypes.compact_responses, CallTypes.acompact_responses}
+)
 _BACKFILL_MODES: Final[frozenset[str]] = frozenset({"chat", "responses"})
 
 # +-----------------------------------------------+
@@ -1493,7 +1497,7 @@ def function_setup(
             messages = file_checksum
         elif call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value:
             messages = kwargs.get("input", "speech")
-        elif call_type == CallTypes.aresponses.value or call_type == CallTypes.responses.value:
+        elif call_type in RESPONSES_INPUT_CALL_TYPES:
             # Handle both 'input' (standard Responses API) and 'messages' (Cursor chat format)
             messages = (
                 args[0] if len(args) > 0 else kwargs.get("input") or kwargs.get("messages", "default-message-value")
@@ -2489,7 +2493,7 @@ def client(original_function):
             )
             # Only run if call_type is a valid value in CallTypes
             _call_type_enum: Final = _CALL_TYPE_ENUM_MAP.get(call_type)
-            if _call_type_enum is not None:
+            if _call_type_enum is not None and _call_type_enum not in _CALL_TYPES_WITHOUT_DEPLOYMENT_SUCCESS_HOOK:
                 result = await async_post_call_success_deployment_hook(
                     request_data=call_kwargs,
                     response=result,
