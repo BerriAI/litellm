@@ -582,6 +582,11 @@ def _is_namespace(tool: JsonValue) -> bool:
     return isinstance(tool, dict) and tool.get("type") == "namespace"
 
 
+def _top_level_name(tool: JsonValue) -> str | None:
+    name: Final = tool.get("name") if isinstance(tool, dict) else None
+    return name if isinstance(name, str) and name else None
+
+
 def _listed(tools: JsonValue) -> tuple[JsonValue, ...]:
     return tuple(tools) if isinstance(tools, list) else ()
 
@@ -615,7 +620,7 @@ def _as_declared(
 ) -> tuple[JsonValue, ...]:
     if _inlines_members(tool, declarable):
         return _namespace_members_or_tool(tool)
-    namespace: Final = declared_function_name(tool)
+    namespace: Final = _top_level_name(tool)
     if not _is_namespace(tool) or namespace is None:
         return (tool,)
     qualified: Final = (_qualified_member(namespace, member) for member in _namespace_members_or_tool(tool))
@@ -638,7 +643,7 @@ def _with_namespace_members_inlined(tools: JsonValue, outside_declarations: Json
 
 
 def _qualified_names_of(member_name: str, tool: JsonValue, declarable: Counter[str | None]) -> tuple[str, ...]:
-    namespace: Final = declared_function_name(tool)
+    namespace: Final = _top_level_name(tool)
     holds_member: Final = member_name in map(declared_function_name, _namespace_members_or_tool(tool))
     if not _is_namespace(tool) or namespace is None or not holds_member or _inlines_members(tool, declarable):
         return ()
@@ -650,16 +655,12 @@ def _forced_function_names(name: str, tools: JsonValue) -> tuple[str, ...]:
     if any(not _is_namespace(tool) and declared_function_name(tool) == name for tool in candidates):
         return (name,)
     declarable: Final = Counter(_declarable_names_in(candidates))
-    named: Final = next((tool for tool in candidates if _is_namespace(tool) and _member_name_of(tool) == name), None)
+    named: Final = next((tool for tool in candidates if _is_namespace(tool) and _top_level_name(tool) == name), None)
     if named is not None:
         declared: Final = map(declared_function_name, _as_declared(named, declarable, frozenset()))
         return tuple(member for member in declared if member is not None) or (name,)
     qualified: Final = chain.from_iterable(_qualified_names_of(name, tool, declarable) for tool in candidates)
     return tuple(qualified) or (name,)
-
-
-def _member_name_of(tool: JsonValue) -> JsonValue:
-    return tool.get("name") if isinstance(tool, dict) else None
 
 
 class VertexAIBaseConfig:

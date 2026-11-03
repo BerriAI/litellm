@@ -1896,6 +1896,29 @@ def test_vertex_ai_map_tools_never_repeats_a_generated_name(
     assert [(declaration["name"], declaration.get("description")) for declaration in declarations] == declared
 
 
+def test_vertex_ai_map_openai_params_qualifies_members_by_the_namespace_top_level_name() -> None:
+    namespace = {
+        "type": "namespace",
+        "name": "safe",
+        "function": {"name": "lookup"},
+        "tools": [{"type": "function", "name": "lookup"}],
+    }
+
+    mapped = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [namespace],
+            "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=False,
+    )
+
+    declared = [declaration["name"] for tool in mapped["tools"] for declaration in tool["function_declarations"]]
+    assert declared == ["safe__lookup"]
+    assert mapped["tool_choice"]["functionCallingConfig"]["allowed_function_names"] == ["safe__lookup"]
+
+
 def test_vertex_ai_map_openai_params_declares_qualified_member_names_when_functions_repeat_a_member() -> None:
     mapped = VertexGeminiConfig().map_openai_params(
         non_default_params={
