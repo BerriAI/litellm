@@ -302,5 +302,15 @@
       "preserve_cache_control": true
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "sagg": {
+    "base_url": "https://api.privatedeskai.com/v1",
+    "api_key_env": "SAGG_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "special_handling": {
+      "require_api_key": true
+    }
   }
 }
