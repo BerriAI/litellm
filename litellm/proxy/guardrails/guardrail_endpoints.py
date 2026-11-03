@@ -2347,7 +2347,9 @@ def _metadata_fields(value: object) -> Mapping[str, object]:
         return {}
 
 
-_CALLER_OWNED_KEY_FIELDS: Final[frozenset[str]] = frozenset({"user_api_key_end_user_id", "user_api_key_request_route"})
+_CALLER_OWNED_KEY_FIELDS: Final[frozenset[str]] = frozenset({"user_api_key_end_user_id"})
+
+_WITHHELD_FIELDS: Final[frozenset[str]] = frozenset({"user_api_key_request_route"})
 
 _RESERVED_IDENTITY_FIELDS: Final[frozenset[str]] = frozenset(
     {"requester_ip_address", "user_agent", "agent_id", "actor_agent_id"}
@@ -2357,10 +2359,8 @@ _RESERVED_IDENTITY_FIELDS: Final[frozenset[str]] = frozenset(
 def _is_key_identity_field(key: str) -> bool:
     """Whether a metadata field attributes the authenticated caller rather than the request.
 
-    Pre-call processing owns the whole ``user_api_key_`` namespace, except the two fields that
-    describe the caller's own request: the end user it is made for, and the route it came from.
-    A guardrail needs both to decide, and on ``/apply_guardrail`` the proxy's own values say
-    nothing about the call the caller is asking about.
+    Pre-call processing owns the whole ``user_api_key_`` namespace, except the end user the call
+    is made for, which the caller owns here as it does on every LLM route.
 
     Attribution also reaches outside that namespace, so the fields pre-call processing fills in
     from the key and the connection are reserved by name as well.
@@ -2377,12 +2377,19 @@ def _guardrail_request_metadata(
 
     The result is handed to the guardrail as ``request_data["metadata"]``, which providers
     write their own detection details into, so it cannot be a read-only mapping.
+
+    The request route is withheld from both sides. The tool policy guardrail reads the request
+    itself when a route is present, instead of the tools replayed to it, so a route here turns
+    its checks off: the caller must not be able to set one, and this endpoint's own route
+    describes the evaluation rather than the call being evaluated.
     """
     caller_fields: Final = tuple(
         (key, value) for key, value in _metadata_fields(caller).items() if not _is_key_identity_field(key)
     )
     key_identity: Final = tuple(
-        (key, value) for key, value in _metadata_fields(proxy).items() if _is_key_identity_field(key)
+        (key, value)
+        for key, value in _metadata_fields(proxy).items()
+        if _is_key_identity_field(key) and key not in _WITHHELD_FIELDS
     )
     return dict((*caller_fields, *key_identity))
 

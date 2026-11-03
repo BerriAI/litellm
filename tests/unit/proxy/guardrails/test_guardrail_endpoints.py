@@ -2504,16 +2504,19 @@ class TestGuardrailRequestMetadata:
         metadata: Final = _guardrail_request_metadata({"user_api_key": "spoof"}, {"user_api_key": "hashed"})
         assert metadata == {"user_api_key": "hashed"}
 
-    def test_the_caller_owns_the_end_user_and_the_route(self) -> None:
-        """Both describe the call the caller is asking about, not the key it authenticated with."""
+    def test_the_caller_owns_the_end_user(self) -> None:
+        """The end user describes the call the caller is asking about, as it does on every LLM route."""
+        metadata: Final = _guardrail_request_metadata({"user_api_key_end_user_id": "customer-42"}, {})
+        assert metadata == {"user_api_key_end_user_id": "customer-42"}
+
+    def test_no_request_route_reaches_the_guardrail(self) -> None:
+        """A route makes the tool policy guardrail read the request instead of the replayed tools,
+        so neither the caller's nor the endpoint's own route may reach it."""
         metadata: Final = _guardrail_request_metadata(
-            {"user_api_key_end_user_id": "customer-42", "user_api_key_request_route": "/v1/chat/completions"},
+            {"user_api_key_request_route": "/v1/chat/completions", "topic": "tax"},
             {"user_api_key_request_route": "/apply_guardrail"},
         )
-        assert metadata == {
-            "user_api_key_end_user_id": "customer-42",
-            "user_api_key_request_route": "/v1/chat/completions",
-        }
+        assert metadata == {"topic": "tax"}
 
     def test_identity_fields_outside_the_key_namespace_are_reserved_too(self) -> None:
         """The proxy sets who is calling and from where. A caller cannot claim another's."""
