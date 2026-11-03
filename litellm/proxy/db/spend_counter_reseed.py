@@ -80,7 +80,7 @@ _WINDOW_SPEND_LOG_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
 @dataclass(slots=True)
 class _CachedSpendSeed:
     """This process adding its cached spend to one cold counter: the add in flight, the tick it started at, the tick
-    the last plain add landed at, and the spend that add added."""
+    the last write of its spend landed at, and that spend."""
 
     started_at: int = 0
     landed_at: int = 0
@@ -179,26 +179,30 @@ class SpendCounterReseed:
         read: SpendCounterRead,
         spend: float,
         add: Callable[[], Awaitable[float | None]],
-        set_if_missing: Callable[[], Awaitable[float | None]],
+        set_if_missing: Callable[[Callable[[], None]], Awaitable[float | None]],
     ) -> None:
         """Run ``add``, this process adding ``spend`` to a cold counter, once for all of this process's requests that
         read the counter cold before that add landed. A request joins an add that started after its read came back and
         gets its result, and starts or joins another add when that one fails or is cancelled. A request whose read went
         out before an add landed, and one still waiting on an add after ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS`` across
-        its counters, runs ``set_if_missing`` in place of ``add``, then runs ``add`` too if the counter holds less than
-        the spend it should already hold, beyond what INCRBYFLOAT's 17 decimal places can round away. A request on another event loop than the add in flight, one that finds the
+        its counters, runs ``set_if_missing``, which calls its argument if it created the counter, in place of ``add``,
+        then runs ``add`` too if the counter holds less than the spend it should already hold, beyond what
+        INCRBYFLOAT's 17 decimal places can round away. A request on another event loop than the add in flight, one that finds the
         Redis circuit breaker not closed, and each other process, still run ``add``."""
         seed: Final = _cached_spend_seed(spend_counter_cache, counter_key)
 
-        async def add_spend() -> float | None:
-            added: Final = await add()
+        def spend_landed() -> None:
             seed.landed_at = spend_counter_tick()
             seed.landed_spend = spend
+
+        async def add_spend() -> float | None:
+            added: Final = await add()
+            spend_landed()
             return added
 
         async def add_if_short() -> float | None:
             least: Final = min(spend, seed.landed_spend) if seed.landed_at >= read.sent_at else spend
-            current: Final = await set_if_missing()
+            current: Final = await set_if_missing(spend_landed)
             if current is not None and least - current > SPEND_COUNTER_INCRBYFLOAT_ROUNDING:
                 return await add_spend()
             return current
@@ -224,10 +228,14 @@ class SpendCounterReseed:
     @staticmethod
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def increment_in_memory(
-        spend_counter_cache: "DualCache", counter_key: str, increment: float, only_if_missing: bool = False
+        spend_counter_cache: "DualCache",
+        counter_key: str,
+        increment: float,
+        only_if_missing: bool = False,
+        on_created: Callable[[], None] | None = None,
     ) -> float | None:
         """Apply local deltas after an in-flight reseed establishes the spend balance. With ``only_if_missing``, a
-        counter that exists keeps its value, which is returned."""
+        counter that exists keeps its value, which is returned, and ``on_created`` runs if this call created it."""
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
             current: Final[float | None] = (  # pyright: ignore[reportUnknownVariableType]  # untyped in-memory cache
@@ -237,9 +245,12 @@ class SpendCounterReseed:
             )
             if current is not None:
                 return float(current)
-            return await spend_counter_cache.async_increment_cache(
+            added: Final = await spend_counter_cache.async_increment_cache(
                 key=counter_key, value=increment, local_only=True, refresh_ttl=True
             )
+            if on_created is not None:
+                on_created()
+            return added
 
     @staticmethod
     async def from_db(prisma_client: Optional["PrismaClient"], counter_key: str) -> float | None:

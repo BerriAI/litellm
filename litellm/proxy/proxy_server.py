@@ -4106,8 +4106,8 @@ async def ensure_spend_counter_initialized(
                     read=read,
                     spend=base_spend,
                     add=lambda: increment_spend_counter_cache(counter_key=counter_key, increment=base_spend),
-                    set_if_missing=lambda: increment_spend_counter_cache(
-                        counter_key=counter_key, increment=base_spend, only_if_missing=True
+                    set_if_missing=lambda on_created: increment_spend_counter_cache(
+                        counter_key=counter_key, increment=base_spend, only_if_missing=True, on_created=on_created
                     ),
                 )
 
@@ -4213,7 +4213,10 @@ async def refresh_spend_counter_ttl(counter_key: str) -> bool:
 
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def increment_spend_counter_cache(
-    counter_key: str, increment: float, only_if_missing: bool = False
+    counter_key: str,
+    increment: float,
+    only_if_missing: bool = False,
+    on_created: Callable[[], None] | None = None,
 ) -> float | None:
     if spend_counter_cache.redis_cache is not None:
         try:
@@ -4223,6 +4226,7 @@ async def increment_spend_counter_cache(
                     value=increment,
                     refresh_ttl=True,
                     only_if_missing=True,
+                    on_created=on_created,
                 )
                 if only_if_missing
                 else spend_counter_cache.redis_cache.async_increment(
@@ -4246,6 +4250,7 @@ async def increment_spend_counter_cache(
         counter_key=counter_key,
         increment=increment,
         only_if_missing=only_if_missing,
+        on_created=on_created,
     )
 
 

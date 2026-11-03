@@ -22,6 +22,7 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 from collections.abc import Awaitable, Callable, Collection
 from datetime import datetime
@@ -2045,12 +2046,21 @@ class _SharedRedis:
         await asyncio.sleep(0)
         return self.values.get(key)
 
-    def _apply(self, key: str, value: float, only_if_missing: bool = False, **_: object) -> float:
+    def _apply(
+        self,
+        key: str,
+        value: float,
+        only_if_missing: bool = False,
+        on_created: Callable[[], None] | None = None,
+        **_: object,
+    ) -> float:
         if not only_if_missing or key not in self.values:
             self.values[key] = self.values.get(key, 0.0) + value
+            if on_created is not None:
+                on_created()
         return self.values[key]
 
-    async def async_increment(self, key: str, value: float, **kwargs: bool) -> float:
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
         await asyncio.sleep(0)
         if self.failing:
             raise ConnectionError("redis down")
@@ -2212,7 +2222,7 @@ class _HeldReplyRedis(_SharedRedis):
         self.applied: Final = asyncio.Event()
         self.release: Final = asyncio.Event()
 
-    async def async_increment(self, key: str, value: float, **kwargs: bool) -> float:
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
         total: Final = self._apply(key, value, **kwargs)
         self.applied.set()
         await self.release.wait()
@@ -2246,7 +2256,7 @@ def test_a_cold_start_on_another_event_loop_adds_on_its_own(monkeypatch: pytest.
     release: Final = threading.Event()
 
     class _ThreadHeldRedis(_SharedRedis):
-        async def async_increment(self, key: str, value: float, **kwargs: bool) -> float:
+        async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
             if threading.current_thread() is not threading.main_thread():
                 held.set()
                 while not release.is_set():
@@ -2332,7 +2342,7 @@ class _DroppedFirstIncrementRedis(_SharedRedis):
         super().__init__()
         self.dropped = False
 
-    async def async_increment(self, key: str, value: float, **kwargs: bool) -> float:
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
         if not self.dropped:
             self.dropped = True
             await asyncio.sleep(0)
@@ -2363,7 +2373,7 @@ class _StalledFirstIncrementRedis(_SharedRedis):
         self.stalled: Final = asyncio.Event()
         self.release: Final = asyncio.Event()
 
-    async def async_increment(self, key: str, value: float, **kwargs: bool) -> float:
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
         if not self.stalled.is_set():
             self.stalled.set()
             await self.release.wait()
@@ -2692,6 +2702,38 @@ async def test_a_counter_reading_back_just_under_the_spend_is_only_topped_up_whe
 
 
 @pytest.mark.asyncio
+async def test_a_counter_set_while_the_stalled_seed_is_cancelled_is_not_added_to_by_a_request_that_read_it_cold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = "spend:end_user:set-then-stalled-cancelled"
+    monkeypatch.setattr(spend_counter_reseed, "SPEND_COUNTER_COLD_SEED_JOIN_SECONDS", 0.01)
+    redis: Final = _HeldIncrementRedis(held_increments=1)
+    _process(monkeypatch, redis, cached_spend=6.0)
+    read: Final = asyncio.Event()
+    set_by_a_waiter: Final = asyncio.Event()
+
+    async def _read_before_the_set() -> None:
+        with spend_counter_batch_scope(cast(RedisCache, redis), frozenset((counter,))):
+            await _read_cold(counter)
+            read.set()
+            await set_by_a_waiter.wait()
+            await ps.ensure_spend_counter_initialized(counter_key=counter, source_cache_key=_COLD_SEED_SOURCE)
+
+    reader: Final = asyncio.ensure_future(_read_before_the_set())
+    await read.wait()
+    stalled: Final = asyncio.ensure_future(_cold_start(redis, counter))
+    await redis.arrived[0].wait()
+    await _cold_start(redis, counter)
+    stalled.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await stalled
+    set_by_a_waiter.set()
+    await reader
+
+    assert redis.values[counter] == 6.0
+
+
+@pytest.mark.asyncio
 async def test_a_request_done_waiting_on_a_stalled_seed_adds_when_the_counter_holds_less_than_its_cached_spend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2720,15 +2762,21 @@ async def test_a_counter_without_redis_set_only_if_missing_keeps_the_value_it_ho
     counter: Final = "spend:end_user:no-redis-set-if-missing"
     monkeypatch.setattr(ps, "spend_counter_cache", DualCache(in_memory_cache=InMemoryCache()))
 
-    first: Final = await ps.increment_spend_counter_cache(counter, 6.0, only_if_missing=True)
-    second: Final = await ps.increment_spend_counter_cache(counter, 4.0, only_if_missing=True)
+    created: Final[list[str]] = []  # mutable-ok: the created calls the test asserts on
+    first: Final = await ps.increment_spend_counter_cache(
+        counter, 6.0, only_if_missing=True, on_created=lambda: created.append("first")
+    )
+    second: Final = await ps.increment_spend_counter_cache(
+        counter, 4.0, only_if_missing=True, on_created=lambda: created.append("second")
+    )
     added: Final = await ps.increment_spend_counter_cache(counter, 1.0)
 
     assert (first, second, added) == (6.0, 6.0, 7.0)
+    assert created == ["first"]
 
 
 @pytest.mark.asyncio
-async def test_a_counter_lost_after_a_request_done_waiting_set_it_gets_the_add_of_a_later_request(
+async def test_a_counter_set_by_a_request_done_waiting_counts_as_the_seed_for_a_later_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     counter: Final = "spend:end_user:set-counts-as-seed"
@@ -2773,7 +2821,7 @@ class _CommandCountingRedis(_SharedRedis):
         self.commands.append("get")
         return await super().async_get_cache(key)
 
-    async def async_increment(self, key: str, value: float, **kwargs: bool) -> float:
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
         self.commands.append("set_if_missing" if kwargs.get("only_if_missing") else "add")
         return await super().async_increment(key, value, **kwargs)
 
@@ -2877,7 +2925,7 @@ class _LostAndRecreatedAfterFailedMGetRedis(_SharedRedis):
             self.cold_gets += 1
         return await super().async_get_cache(key)
 
-    async def async_increment(self, key: str, value: float, **kwargs: bool) -> float:
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
         self._other_process_increments_after_the_cold_gets()
         return await super().async_increment(key, value, **kwargs)
 
@@ -2906,7 +2954,7 @@ class _AppliedHeldThenResetRedis(_HeldReplyRedis):
         super().__init__()
         self.deleted = False
 
-    async def async_increment(self, key: str, value: float, **kwargs: bool) -> float:
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
         await super().async_increment(key, value, **kwargs)
         raise ConnectionError("connection reset")
 
@@ -2987,7 +3035,7 @@ class _HeldIncrementRedis(_SharedRedis):
         self.reads += 1
         return await super().async_get_cache(key)
 
-    async def async_increment(self, key: str, value: float, **kwargs: bool) -> float:
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
         index: Final = self.increments
         self.increments += 1
         if index < len(self.arrived):
@@ -3160,7 +3208,7 @@ async def test_a_stalled_seed_finishing_does_not_hide_the_newer_seed_still_in_fl
     await asyncio.gather(newer, late)
 
     assert commands_while_the_newer_seed_was_in_flight == 2
-    assert redis.values[counter] == 12.0
+    assert redis.values[counter] == 6.0
 
 
 class _TargetRecordingRedis(_SharedRedis):

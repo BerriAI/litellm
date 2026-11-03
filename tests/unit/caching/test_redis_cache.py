@@ -1509,7 +1509,7 @@ async def test_async_increment_only_if_missing_sets_a_missing_key_and_refreshes_
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("value", "stored"), [(6.0, b"6"), (1e-05, b"0.00001")])
 async def test_async_increment_only_if_missing_stores_a_missing_key_the_way_an_add_stores_it(
-    monkeypatch, redis_no_ping, value, stored
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object, value: float, stored: bytes
 ):
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache(namespace="ns")
@@ -1519,6 +1519,28 @@ async def test_async_increment_only_if_missing_stores_a_missing_key_the_way_an_a
         await redis_cache.async_increment(key="spend:key:k", value=value, ttl=60, only_if_missing=True)
 
     assert await client.get("ns:spend:key:k") == stored
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("existing", "reported"), [pytest.param(None, ["created"], id="created"), pytest.param(7.0, [], id="kept")]
+)
+async def test_async_increment_only_if_missing_reports_only_a_key_it_created(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object, existing: float | None, reported: list[str]
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="ns")
+    client = FakeAsyncRedis(server=FakeServer())
+    if existing is not None:
+        await client.set("ns:spend:key:k", existing)
+    created: list[str] = []
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        await redis_cache.async_increment(
+            key="spend:key:k", value=1.5, ttl=60, only_if_missing=True, on_created=lambda: created.append("created")
+        )
+
+    assert created == reported
 
 
 class _RepliesPipeline:
@@ -1551,7 +1573,7 @@ class _RepliesPipeline:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("read_back", [pytest.param(0.0, id="missing"), pytest.param(7.0, id="held")])
 async def test_async_increment_only_if_missing_reads_the_key_back_when_the_user_is_denied_setnx(
-    monkeypatch, redis_no_ping, read_back
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object, read_back: float
 ):
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache(namespace="ns")
@@ -1559,17 +1581,19 @@ async def test_async_increment_only_if_missing_reads_the_key_back_when_the_user_
     client = MagicMock()
     client.pipeline.return_value = pipeline
     failure_hook = AsyncMock()
+    created = MagicMock()
 
     with (
         patch.object(redis_cache, "init_async_client", return_value=client),
         patch.object(redis_cache.service_logger_obj, "async_service_failure_hook", failure_hook),
     ):
         current = await redis_cache.async_increment(
-            key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True
+            key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True, on_created=created
         )
     await asyncio.sleep(0)
 
     assert current == read_back
+    created.assert_not_called()
     assert pipeline.commands == [
         ("SETNX", "ns:spend:key:k", 1.5),
         ("INCRBYFLOAT", "ns:spend:key:k", 0),
@@ -1589,7 +1613,7 @@ async def test_async_increment_only_if_missing_reads_the_key_back_when_the_user_
     ],
 )
 async def test_async_increment_only_if_missing_raises_any_other_error_in_the_replies(
-    monkeypatch, redis_no_ping, replies, raised
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object, replies: list[object], raised: type[Exception]
 ):
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache(namespace="ns")

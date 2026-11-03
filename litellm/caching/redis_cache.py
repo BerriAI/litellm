@@ -1474,10 +1474,12 @@ class RedisCache(BaseCache):
             await _redis_client.expire(key, ttl)
         return float(result)
 
-    async def _set_if_missing_with_ttl(self, key: str, value: float, ttl: int | None) -> float:
+    async def _set_if_missing_with_ttl(
+        self, key: str, value: float, ttl: int | None, on_created: Callable[[], None] | None
+    ) -> float:
         """SETNX, a zero INCRBYFLOAT that reads the key back, and its TTL command in one round trip; the value the key
         holds afterwards. Those last two are the commands a plain add sends, so a user denied only SETNX reads back what
-        the key holds, which is 0 for a key that was missing."""
+        the key holds, which is 0 for a key that was missing. ``on_created`` runs when the SETNX created the key."""
         from redis.exceptions import NoPermissionError
 
         async with self._async_commands().pipeline(transaction=False) as pipe:
@@ -1489,6 +1491,8 @@ class RedisCache(BaseCache):
         for index, reply in enumerate(replies):  # pyright: ignore[reportUnknownArgumentType]  # redis generics
             if isinstance(reply, Exception) and not (index == 0 and isinstance(reply, NoPermissionError)):
                 raise reply
+        if on_created is not None and replies[0] == 1:
+            on_created()
         return _INCRBYFLOAT_REPLY.validate_python(replies[1])
 
     @_redis_circuit_breaker_guard
@@ -1500,9 +1504,10 @@ class RedisCache(BaseCache):
         parent_otel_span: Span | None = None,
         refresh_ttl: bool = False,
         only_if_missing: bool = False,
+        on_created: Callable[[], None] | None = None,
     ) -> float:
         """Add ``value`` to the key and return its new value. With ``only_if_missing``, a key that exists keeps its
-        value, which is returned, and only the TTL is refreshed."""
+        value, which is returned, and only the TTL is refreshed, and ``on_created`` runs if this call created the key."""
         from redis.asyncio import Redis
 
         _redis_client: Final[Redis] = self.init_async_client()
@@ -1511,7 +1516,7 @@ class RedisCache(BaseCache):
         key = self.check_and_fix_namespace(key=key)
         try:
             result: Final = await (
-                self._set_if_missing_with_ttl(key=key, value=value, ttl=_used_ttl)
+                self._set_if_missing_with_ttl(key=key, value=value, ttl=_used_ttl, on_created=on_created)
                 if only_if_missing
                 else self._incrbyfloat_with_ttl(
                     _redis_client, key=key, value=value, ttl=_used_ttl, refresh_ttl=refresh_ttl
