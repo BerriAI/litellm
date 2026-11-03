@@ -26,6 +26,7 @@ async def test_user_sort_binds_scope_search_and_page_and_excludes_ui_sessions(
         user_ids=" a, b ",
         user_email=search,
         team="team-1",
+        models=("model-a", "model-b"),
         sso_user_ids="sso-1, sso-2",
         organization_ids="org-1, org-2",
         search=search,
@@ -44,9 +45,11 @@ async def test_user_sort_binds_scope_search_and_page_and_excludes_ui_sessions(
         search,
         25,
         25,
+        ("model-a", "model-b"),
     ] + ([UI_SESSION_TOKEN_TEAM_ID] if sort_by == "key_count" else [])
     assert ("DESC" if descending else "ASC") + ", u.user_id ASC" in sql
-    assert ("k.team_id IS DISTINCT FROM $11::text" in sql) == (sort_by == "key_count")
+    assert "u.models && $11::text[]" in sql
+    assert ("k.team_id IS DISTINCT FROM $12::text" in sql) == (sort_by == "key_count")
 
 
 @pytest.mark.asyncio
@@ -63,9 +66,10 @@ async def test_missing_user_filters_preserve_unfiltered_query() -> None:
         user_ids=None,
         user_email=None,
         team=None,
+        models=(),
         sso_user_ids=None,
         organization_ids=None,
         search=None,
     )
     assert result == ()
-    assert prisma.db.query_raw.await_args.args[1:] == (None, None, None, None, True, (), (), None, 25, 0)
+    assert prisma.db.query_raw.await_args.args[1:] == (None, None, None, None, True, (), (), None, 25, 0, None)

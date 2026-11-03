@@ -18981,6 +18981,8 @@ export interface paths {
          *             Combined search: matches users whose user_id or user_email contains the value (case-insensitive)
          *         team: Optional[str]
          *             Filter users by team id. Will match if user has this team in their teams array.
+         *         models: Optional[str]
+         *             Filter users whose personal model grants include any of the comma-separated model ids.
          *         page: int
          *             The page number to return
          *         page_size: int
@@ -77864,6 +77866,8 @@ export interface operations {
                 search?: string | null;
                 /** @description Filter users by team id */
                 team?: string | null;
+                /** @description Filter by comma-separated personal model grants */
+                models?: string | null;
                 /** @description Page number */
                 page?: number;
                 /** @description Number of items per page */

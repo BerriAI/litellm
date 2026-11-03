@@ -7,7 +7,7 @@ import {
   RowSelectionState,
   SortingState,
 } from "@tanstack/react-table";
-import { Users } from "lucide-react";
+import { Info, Users } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { UserInfo } from "@/components/networking";
@@ -18,6 +18,8 @@ import {
   DataTableToolbar,
 } from "@/components/shared/DataTable";
 import { SearchSelect } from "@/components/shared/SearchSelect";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { CellTooltip } from "@/components/shared/table_cells";
 import { Input } from "@/components/ui/input";
 
 import { getUsersTableColumns } from "./UsersTableColumns";
@@ -33,6 +35,7 @@ interface UsersTableProps {
   isLoading: boolean;
   possibleUIRoles: Record<string, Record<string, string>> | null;
   teams: UsersTableTeamOption[] | null;
+  models: string[];
   canViewUserUsage: boolean;
   sorting: SortingState;
   onSortingChange: OnChangeFn<SortingState>;
@@ -55,6 +58,7 @@ const FILTER_LABELS: Record<string, string> = {
   sso_user_id: "SSO ID",
   user_role: "Role",
   team: "Team",
+  models: "Personal Models",
 };
 
 function EmptyState() {
@@ -75,6 +79,7 @@ export function UsersTable({
   isLoading,
   possibleUIRoles,
   teams,
+  models,
   canViewUserUsage,
   sorting,
   onSortingChange,
@@ -122,6 +127,8 @@ export function UsersTable({
       })),
     [teams],
   );
+
+  const modelOptions = useMemo(() => models.map((model) => ({ label: model, value: model })), [models]);
 
   const formatFilterValue = (columnId: string, value: unknown): string => {
     const raw = String(value);
@@ -207,6 +214,25 @@ export function UsersTable({
                     onValueChange={(value) => set("team", value ?? undefined)}
                     placeholder="Select a team…"
                     emptyText="No teams found"
+                  />
+                </DataTableFilterField>
+                <DataTableFilterField
+                  label={
+                    <span className="inline-flex items-center gap-1.5">
+                      Personal Models
+                      <CellTooltip
+                        content="Filters on models granted directly to the user. It does not include access through teams, organizations, object permissions, or All Proxy Models."
+                        trigger={<Info className="size-3.5 text-muted-foreground" aria-label="About Personal Models" />}
+                      />
+                    </span>
+                  }
+                >
+                  <MultiSelect
+                    options={modelOptions}
+                    value={(get("models") as string[] | undefined) ?? []}
+                    onValueChange={(value) => set("models", value)}
+                    placeholder="Select personal models…"
+                    emptyText="No models found"
                   />
                 </DataTableFilterField>
               </>

@@ -26,6 +26,7 @@ async def sorted_user_ids(
     user_ids: str | None,
     user_email: str | None,
     team: str | None,
+    models: Sequence[str],
     sso_user_ids: str | None,
     organization_ids: str | None,
     search: str | None,
@@ -37,7 +38,7 @@ async def sorted_user_ids(
         "CASE WHEN u.metadata->'scim_active' = 'false'::jsonb THEN 1 ELSE 0 END"
         if sort_by == "status"
         else '(SELECT COUNT(*) FROM "LiteLLM_VerificationToken" k '
-        "WHERE k.user_id = u.user_id AND k.team_id IS DISTINCT FROM $11::text)"
+        "WHERE k.user_id = u.user_id AND k.team_id IS DISTINCT FROM $12::text)"
     )
     direction: Final = "DESC" if descending else "ASC"
     sql: Final = f"""
@@ -55,6 +56,7 @@ async def sorted_user_ids(
                WHERE m.user_id = u.user_id AND m.organization_id = ANY($7::text[])))
           AND ($8::text IS NULL OR u.user_id ILIKE '%' || $8 || '%'
                OR u.user_email ILIKE '%' || $8 || '%')
+          AND ($11::text[] IS NULL OR u.models && $11::text[])
         ORDER BY {expression} {direction}, u.user_id ASC
         LIMIT $9 OFFSET $10
     """
@@ -71,6 +73,7 @@ async def sorted_user_ids(
             search or None,
             take,
             skip,
+            tuple(models) if models else None,
             *((UI_SESSION_TOKEN_TEAM_ID,) if sort_by == "key_count" else ()),
         )
     )

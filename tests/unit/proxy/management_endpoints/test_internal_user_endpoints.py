@@ -2204,6 +2204,36 @@ def test_get_users_search_matches_user_id_or_email(mocker):
         app.dependency_overrides.pop(user_api_key_auth, None)
 
 
+def test_user_list_filters_personal_models_in_rows_count_and_computed_sort(mocker):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_prisma_client = mocker.MagicMock()
+    find_many = mocker.AsyncMock(return_value=[])
+    count = mocker.AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_usertable.find_many = find_many
+    mock_prisma_client.db.litellm_usertable.count = count
+    mock_prisma_client.db.query_raw = mocker.AsyncMock(return_value=[])
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get("/user/list", params={"models": " model-a , model-b, ", "sort_by": "status"})
+        assert response.status_code == 200, response.text
+        assert response.json()["total"] == 0
+        assert count.await_args.kwargs["where"] == {"models": {"hasSome": ["model-a", "model-b"]}}
+        assert find_many.await_args.kwargs["where"] == {
+            "AND": (
+                {"models": {"hasSome": ["model-a", "model-b"]}},
+                {"user_id": {"in": ()}},
+            )
+        }
+        assert mock_prisma_client.db.query_raw.await_args.args[11] == ("model-a", "model-b")
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
 def test_update_internal_user_params_reset_max_budget_with_none():
     """
     Test that _update_internal_user_params allows setting max_budget to None.
