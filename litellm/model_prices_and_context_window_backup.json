@@ -83134,7 +83134,7 @@
         "supports_function_calling": true,
         "source": "https://tokenfactory.nebius.com/api/public/models_info"
     },
-    "umans-ai/umans-deepseek-v4.1-flash": {
+    "umans-ai/umans-deepseek-v4.1-flash-1017": {
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "umans-ai",
