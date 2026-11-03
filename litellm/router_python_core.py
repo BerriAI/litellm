@@ -12754,8 +12754,11 @@ class PythonCore(DeprecatedRouterMembers):
         Returns an empty tuple for wildcard-expanded or unknown names.
         """
         return tuple(
-            self._core_cached_deployment_model_info(deployment_id, deployment["litellm_params"]["model"])
+            self._core_cached_deployment_model_info(deployment_id, model)
             if isinstance(deployment_id := _configured_model_info(deployment).get("id"), str)
+            and isinstance(
+                model := _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"]).get("model"), str
+            )
             else None
             for deployment in self._routable_deployments(model_name, team_id)
         )
