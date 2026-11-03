@@ -2418,7 +2418,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
 
-        drop_params: Final = litellm.drop_params or litellm_params.get("drop_params") is True
         AnthropicConfig._maybe_drop_speed_param(
             model=model,
             optional_params=optional_params,
