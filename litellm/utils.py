@@ -4142,10 +4142,15 @@ class _RegistrationsOverCatalog(Mapping[str, Mapping[str, object]]):
     registrations: Mapping[str, Mapping[str, object]]
 
     def __getitem__(self, key: str) -> Mapping[str, object]:
-        registered: Final = self.registrations.get(key)
-        if registered is None:
+        catalog_entry: Final = self.catalog.get(key)
+        provider: Final = None if catalog_entry is None else catalog_entry.get("litellm_provider")
+        names: Final = (f"{provider}/{key}", key) if isinstance(provider, str) else (key,)
+        registered: Final = tuple(self.registrations[name] for name in names if name in self.registrations)
+        if not registered:
             return self.catalog[key]
-        return MappingProxyType({**self.catalog.get(key, {}), **registered})
+        return MappingProxyType(
+            dict(itertools.chain.from_iterable(entry.items() for entry in (catalog_entry or {}, *registered)))
+        )
 
     def __iter__(self) -> Iterator[str]:
         return iter({**dict.fromkeys(self.catalog), **dict.fromkeys(self.registrations)})

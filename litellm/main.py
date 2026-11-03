@@ -763,7 +763,6 @@ async def acompletion(
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
         api_base=base_url or kwargs.get("api_base"),
         model_info=routed_model_info(caller_kwargs.get("model_info")),
-        base_model=kwargs.get("base_model"),
     )
 
     prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))  # cast-ok: read from untyped kwargs
@@ -5841,7 +5840,6 @@ def completion(
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
         api_base=base_url or kwargs.get("api_base"),
         model_info=routed_model_info(cast(object, model_info)),  # cast-ok: untyped kwargs
-        base_model=base_model,
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (

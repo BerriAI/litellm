@@ -391,10 +391,6 @@ def deployment_model_info(litellm_params: object) -> Mapping[str, object] | None
     return routed_model_info(_DeclaredBaseModels.model_validate(litellm_params).model_info)
 
 
-def deployment_base_model(litellm_params: object) -> object:
-    return _DeclaredBaseModels.model_validate(litellm_params).base_model
-
-
 def deployment_prompt_cache_breakpoint_support(
     model: str, custom_llm_provider: str, litellm_params: object
 ) -> bool | None:
@@ -788,7 +784,6 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 request_params.get("api_base") or request_params.get("base_url"),
                 request_params.get("prompt_cache_options"),
                 routed_model_info(request_params.get("model_info")),
-                request_params.get("base_model"),
             )
         )
         # A provisional message list defers every role-targeted point to the pass holding
@@ -860,33 +855,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         api_base: object = None,
         prompt_cache_options: object = None,
         model_info: Mapping[str, object] | None = None,
-        base_model: object = None,
     ) -> bool:
         if model is None:
             return False
-        base_names: Final = _DeclaredBaseModels(base_model=base_model, model_info=model_info).names()
-        deployment_provider: Final = (
-            (custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model, api_base))
-            if base_names
-            else None
-        )
-        return AnthropicCacheControlHook._named_model_targets_openai_prompt_cache_breakpoint(
-            model, custom_llm_provider, api_base, prompt_cache_options, model_info
-        ) or any(
-            AnthropicCacheControlHook._named_model_targets_openai_prompt_cache_breakpoint(
-                name, deployment_provider, api_base, prompt_cache_options, model_info
-            )
-            for name in base_names
-        )
-
-    @staticmethod
-    def _named_model_targets_openai_prompt_cache_breakpoint(
-        model: str,
-        custom_llm_provider: str | None,
-        api_base: object,
-        prompt_cache_options: object,
-        model_info: Mapping[str, object] | None,
-    ) -> bool:
         declared: Final = declared_prompt_cache_breakpoint(model_info)
         hosted_flag: Final = (
             _hosted_openai_dialect_flag(
@@ -1311,7 +1282,6 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         api_base: object,
         prompt_cache_options: object,
         model_info: Mapping[str, object] | None = None,
-        base_model: object = None,
     ) -> Sequence[Mapping[str, object]]:
         """Carry onto the points what the prompt-management hook never receives.
 
@@ -1323,7 +1293,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         across requests.
         """
         with_dialect: Final = AnthropicCacheControlHook._stamped_with_dialect(
-            points, model, custom_llm_provider, api_base, prompt_cache_options, model_info, base_model
+            points, model, custom_llm_provider, api_base, prompt_cache_options, model_info
         )
         stamped_earlier: Final = any(EXTERNAL_BREAKPOINTS_STAMP in point for point in with_dialect)
         if external_breakpoints == 0 and not stamped_earlier:
@@ -1338,19 +1308,16 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         api_base: object,
         prompt_cache_options: object,
         model_info: Mapping[str, object] | None = None,
-        base_model: object = None,
     ) -> Sequence[Mapping[str, object]]:
-        names: Final = dict.fromkeys((*_DeclaredBaseModels(base_model=base_model).names(), model))
-        if model_info is None and not any(
-            AnthropicCacheControlHook._may_target_openai_prompt_cache_breakpoint(name, custom_llm_provider)
-            for name in names
+        if model_info is None and not AnthropicCacheControlHook._may_target_openai_prompt_cache_breakpoint(
+            model, custom_llm_provider
         ):
             return points
         return AnthropicCacheControlHook._stamped(
             points,
             "_litellm_openai_dialect",
             AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
-                model, custom_llm_provider, api_base, prompt_cache_options, model_info, base_model
+                model, custom_llm_provider, api_base, prompt_cache_options, model_info
             ),
         )
 
@@ -1506,7 +1473,6 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         enable_prompt_caching: bool | None = None,
         api_base: object = None,
         model_info: Mapping[str, object] | None = None,
-        base_model: object = None,
     ) -> None:
         """For /chat/completions: resolve the injection points the request should carry.
 
@@ -1534,7 +1500,6 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 api_base,
                 non_default_params.get("prompt_cache_options"),
                 model_info,
-                base_model,
             )
             non_default_params["cache_control_injection_points"] = (
                 AnthropicCacheControlHook._stamped(stamped, CUSTOM_LLM_PROVIDER_STAMP, custom_llm_provider)
@@ -1684,7 +1649,6 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             api_base,
             kwargs.get("prompt_cache_options"),
             routed_model_info(kwargs.get("model_info")),
-            kwargs.get("base_model"),
         )
         breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system)
         messages, system, remaining = AnthropicCacheControlHook.apply_to_anthropic_messages_request(

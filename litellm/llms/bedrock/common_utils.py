@@ -1497,8 +1497,8 @@ def bedrock_declared_cache_point_support(model: str, model_info: Mapping[str, ob
     if _OPENAI_FAMILY_MODEL_RE.search(model):
         return False
     deployment_flag: Final = None if model_info is None else model_info.get("supports_prompt_cache_breakpoint")
-    if isinstance(deployment_flag, bool):
-        return deployment_flag
+    if deployment_flag is not None:
+        return deployment_flag is True
     catalog_entry: Final = _catalog_entry_reader(model_info)
     map_keys: Final = (model, get_bedrock_base_model(model))
     registered_keys: Final = tuple(f"bedrock/{route}{model}" for route in ("", "converse/", "converse_like/"))
@@ -1515,8 +1515,8 @@ def bedrock_declared_cache_point_support(model: str, model_info: Mapping[str, ob
     if not any(catalog_entry(key) is not None for key in map_keys):
         return None
     deployment_caching: Final = None if model_info is None else model_info.get("supports_prompt_caching")
-    if isinstance(deployment_caching, bool):
-        return deployment_caching
+    if deployment_caching is not None:
+        return deployment_caching is True
     return any(
         entry.get("supports_prompt_caching") is True for key in map_keys if (entry := catalog_entry(key)) is not None
     )

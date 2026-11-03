@@ -5395,36 +5395,81 @@ async def test_a_wildcard_deployments_prompt_cache_flag_leaves_each_matched_mode
     }
 
 
-@pytest.mark.parametrize("entrypoint", ["acompletion", "aresponses", "aanthropic_messages"])
-@pytest.mark.parametrize("declared_in", ["litellm_params", "model_info"])
-async def test_an_openai_alias_whose_base_model_takes_breakpoints_also_gets_prompt_cache_options(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, entrypoint: str, declared_in: str
+async def test_an_azure_ai_wildcard_deployments_breakpoint_flag_still_speaks_for_each_matched_model(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    upstream: Final = _openai_route(respx_mock, monkeypatch, entrypoint)
-    base_model: Final = {"base_model": "gpt-99.0-qa"}
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    path, reply = _FOUNDRY_CHAT_ROUTE
+    chat: Final = respx_mock.post(host="qa-wildcard.services.ai.azure.com", path=path).mock(
+        return_value=Response(200, json=dict(reply))
+    )
     router: Final = Router(
         model_list=[
             {
-                "model_name": "ft-alias",
+                "model_name": "azure_ai/*",
                 "litellm_params": {
-                    "model": "openai/qa-ft-alias",
-                    "api_key": "openai-test-key",
+                    "model": "azure_ai/*",
+                    "api_base": "https://qa-wildcard.services.ai.azure.com/models",
+                    "api_key": "azure-ai-test-key",
                     "cache_control_injection_points": [{"location": "message", "role": "system"}],
-                    **(base_model if declared_in == "litellm_params" else {}),
                 },
-                "model_info": {"id": "ft-alias-id", **(base_model if declared_in == "model_info" else {})},
+                "model_info": {"id": "wildcard-id", "supports_prompt_cache_breakpoint": True},
             }
         ],
         num_retries=0,
     )
 
-    await _send_unmarked_system_prompt(router, "ft-alias", entrypoint)
+    await _send_unmarked_system_prompt(router, "azure_ai/qa-unlisted-alias", "acompletion")
 
-    body: Final = upstream.calls.last.request.content
+    body: Final = chat.calls.last.request.content
     assert (json.loads(body).get("prompt_cache_options"), b"prompt_cache_breakpoint" in body) == (
         {"mode": "implicit"},
         True,
     )
+
+
+@pytest.mark.parametrize("entrypoint", ["acompletion", "aresponses", "aanthropic_messages"])
+@pytest.mark.parametrize("declared_in", ["litellm_params", "model_info"])
+async def test_a_base_model_that_takes_breakpoints_leaves_an_openai_deployments_request_as_it_was(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, entrypoint: str, declared_in: str
+) -> None:
+    upstream: Final = _openai_route(respx_mock, monkeypatch, entrypoint)
+
+    def deployment(name: str, base_model: Mapping[str, str]) -> dict[str, object]:
+        return {
+            "model_name": name,
+            "litellm_params": {
+                "model": "openai/gpt-4.1-qa",
+                "api_key": "openai-test-key",
+                "cache_control_injection_points": [{"location": "message", "role": "system"}],
+                **(base_model if declared_in == "litellm_params" else {}),
+            },
+            "model_info": {"id": f"{name}-id", **(base_model if declared_in == "model_info" else {})},
+        }
+
+    router: Final = Router(
+        model_list=[deployment("plain", {}), deployment("priced-as-breakpoint-model", {"base_model": "gpt-99.0-qa"})],
+        num_retries=0,
+    )
+
+    async def sent_body(name: str) -> object:
+        await _send_unmarked_system_prompt(router, name, entrypoint)
+        return json.loads(upstream.calls.last.request.content)
+
+    assert await sent_body("priced-as-breakpoint-model") == await sent_body("plain")
+
+
+def test_a_routed_call_honors_a_register_model_breakpoint_opt_out_made_under_the_provider_prefixed_name() -> None:
+    from litellm.utils import catalog_with_runtime_registrations
+
+    model: Final = next(
+        key
+        for key, entry in catalog_with_runtime_registrations().items()
+        if entry.get("litellm_provider") == "openai" and entry.get("supports_prompt_cache_breakpoint") is True
+    )
+    litellm.register_model({f"openai/{model}": {"supports_prompt_cache_breakpoint": False}})
+
+    assert supports_openai_prompt_cache_breakpoint(model, "openai", {"id": "plain-id"}) is False
 
 
 _APPLICATION_INFERENCE_PROFILE: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/qa"

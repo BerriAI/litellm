@@ -188,7 +188,6 @@ def _reads_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, ob
         forwarded_kwargs.get("api_base") or forwarded_kwargs.get("base_url"),
         forwarded_kwargs.get("prompt_cache_options"),
         routed_model_info(forwarded_kwargs.get("model_info")),
-        forwarded_kwargs.get("base_model"),
     )
 
 

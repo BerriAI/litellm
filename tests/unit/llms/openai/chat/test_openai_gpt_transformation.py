@@ -2215,37 +2215,3 @@ async def test_chat_sends_a_breakpoint_by_the_deployments_own_flag_not_a_sibling
         "opted-in": True,
         "flagless": False,
     }
-
-
-async def test_chat_rewrites_a_client_mark_for_a_deployment_whose_base_model_reads_breakpoints(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    chat: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
-    )
-    router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gateway-alias",
-                "litellm_params": {
-                    "model": "openai/qa-gateway-alias",
-                    "api_base": "https://api.openai.com/v1",
-                    "api_key": "openai-test-key",
-                    "base_model": "gpt-5.6",
-                },
-                "model_info": {"id": "gateway-alias-id"},
-            }
-        ],
-        num_retries=0,
-    )
-
-    await router.acompletion(
-        model="gateway-alias",
-        messages=[{"role": "system", "content": "stable", "cache_control": _EPHEMERAL}, {"role": "user", "content": "hi"}],
-    )
-
-    assert json.loads(chat.calls.last.request.content)["messages"][0] == {
-        "role": "system",
-        "content": [_breakpoint(_text("stable"))],
-    }

@@ -10,6 +10,7 @@ Verifies that:
 - ANTHROPIC_API_KEY / ANTHROPIC_API_BASE take precedence over their aliases.
 """
 
+import itertools
 import json
 import logging
 import os
@@ -4764,3 +4765,34 @@ def test_auto_injection_leaves_an_unmapped_claude_deployment_uncached_instead_of
     from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 
     assert supports_anthropic_cache_control("claude-qa-unmapped-model", "anthropic", {"id": "unmapped-id"}) is False
+
+
+def test_auto_injection_honors_a_register_model_opt_out_made_under_the_provider_prefixed_name() -> None:
+    from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+    from litellm.utils import catalog_with_runtime_registrations
+
+    model: Final = next(
+        key
+        for key, entry in catalog_with_runtime_registrations().items()
+        if entry.get("litellm_provider") == "anthropic" and entry.get("supports_prompt_caching") is True
+    )
+    litellm.register_model({f"anthropic/{model}": {"supports_prompt_caching": False}})
+
+    assert supports_anthropic_cache_control(model, "anthropic", {"id": "plain-id"}) is False
+
+
+def test_a_register_model_opt_out_for_one_claude_model_leaves_every_other_routed_models_catalog_flag() -> None:
+    from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+    from litellm.utils import catalog_with_runtime_registrations
+
+    opted_out, untouched = itertools.islice(
+        (
+            key
+            for key, entry in catalog_with_runtime_registrations().items()
+            if entry.get("litellm_provider") == "anthropic" and entry.get("supports_prompt_caching") is True
+        ),
+        2,
+    )
+    litellm.register_model({f"anthropic/{opted_out}": {"supports_prompt_caching": False}})
+
+    assert supports_anthropic_cache_control(untouched, "anthropic", {"id": "plain-id"}) is True
