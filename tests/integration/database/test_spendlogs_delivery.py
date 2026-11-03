@@ -624,3 +624,33 @@ async def test_invalid_worker_settings_preserve_pending_work(delivery_database, 
     assert delivery_database.execute(
         'SELECT request_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery"'
     ).fetchall() == [("protected", "pending", 0)]
+
+
+@pytest.mark.parametrize("flags,state,expected", [
+    ((), "applied", 1),
+    (("--all-writers-ledger-disabled",), "applied", 1),
+    (("--ledger-buffers-drained",), "applied", 1),
+    (("--all-writers-ledger-disabled", "--ledger-buffers-drained"), "pending", 1),
+    (("--all-writers-ledger-disabled", "--ledger-buffers-drained"), "parked", 1),
+    (("--all-writers-ledger-disabled", "--ledger-buffers-drained"), "applied", 0),
+])
+def test_downgrade_command_requires_operator_attestations_and_settled_deliveries(
+    delivery_database, monkeypatch, capfd, flags, state, expected
+):
+    import runpy
+    import sys
+
+    _insert(delivery_database, (_row("downgrade"),))
+    delivery_database.execute('UPDATE "LiteLLM_SpendLogDelivery" SET state=%s', (state,))
+    url = urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{delivery_database.info.dbname}"))
+    monkeypatch.setenv("DATABASE_URL", url)
+    script = Path(__file__).resolve().parents[3] / "scripts/check_spendlogs_ledger_downgrade.py"
+    monkeypatch.setattr(sys, "argv", [str(script), *flags])
+    with pytest.raises(SystemExit) as result:
+        runpy.run_path(str(script), run_name="__main__")
+    assert result.value.code == expected
+    prefix = "Database gate passed:" if expected == 0 else "Blocked:"
+    assert any(line.startswith(prefix) for line in capfd.readouterr().out.splitlines())
+    assert delivery_database.execute('SELECT request_id, state::text FROM "LiteLLM_SpendLogDelivery"').fetchall() == [
+        ("downgrade", state)
+    ]
