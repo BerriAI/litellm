@@ -1272,6 +1272,11 @@ def sync_transform_request_body(
 
     context_caching_endpoints: Final = ContextCachingEndpoints()
 
+    if context_caching:
+        model_info = litellm_params.get("model_info") or {}
+        if model_info.get("supports_prompt_caching") is False:
+            context_caching = False
+
     (
         messages,
         optional_params,

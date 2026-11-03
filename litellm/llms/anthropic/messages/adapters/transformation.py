@@ -846,6 +846,13 @@ class LiteLLMAnthropicMessagesAdapter:
         if "gemini" in model.lower():
             from litellm.utils import is_explicitly_disabled_factory
 
+            if "/" not in model:
+                if (
+                    is_explicitly_disabled_factory(f"gemini/{model}", None, "supports_prompt_caching")
+                    or is_explicitly_disabled_factory(f"vertex_ai/{model}", None, "supports_prompt_caching")
+                ):
+                    return False
+
             if is_explicitly_disabled_factory(model, None, "supports_prompt_caching"):
                 return False
             return True
