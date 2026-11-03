@@ -168,13 +168,14 @@ from litellm.litellm_core_utils.token_counter import (
 )
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, drop_policy
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, anthropic_error_frame_exception
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
     vector_store_request_metadata,
 )
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, MaskedHTTPStatusError, get_async_httpx_client
 from litellm.llms.openai.common_utils import CreatedOnSomeDeployments, create_may_already_exist
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
@@ -8913,12 +8914,15 @@ class Router(DeprecatedRouterMembers):
         if is_create_that_may_already_exist(
             _REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("original_function"), e
         ):
-            if (
-                isinstance(original_exception, openai.APIError)
-                and litellm.expose_router_debug_in_errors
-                and not nested_fallback_hop
-            ):
-                original_exception.message += format_fallback_outcome_message(model_group, None, "")
+            if litellm.expose_router_debug_in_errors and not nested_fallback_hop:
+                no_fallback_note: Final = format_fallback_outcome_message(model_group, None, "")
+                match original_exception:
+                    case openai.APIError() | BaseLLMException():
+                        original_exception.message += no_fallback_note
+                    case MaskedHTTPStatusError(message=str(message)):
+                        original_exception.message = message + no_fallback_note
+                    case _:
+                        pass
             raise original_exception
 
         input_kwargs: Final = {

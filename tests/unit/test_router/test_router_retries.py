@@ -1397,3 +1397,80 @@ async def test_an_upload_that_one_deployment_rejected_answers_with_the_provider_
     assert healthy_route.call_count == 1
     assert raised.value.status_code == 401
     assert create_may_already_exist(raised.value)
+
+
+
+_ANTHROPIC_FILE: Final = {
+    "type": "file",
+    "id": "file_011abc",
+    "filename": "batch.jsonl",
+    "mime_type": "application/jsonl",
+    "size_bytes": 52,
+    "created_at": "2026-11-03T00:00:00Z",
+    "downloadable": False,
+}
+
+
+async def _upload_to_anthropic_group(failing_base: str, healthy_base: str) -> object:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "anthropic-files",
+                "litellm_params": {"model": "anthropic/claude-files", "api_base": api_base, "api_key": "sk-ant-test"},
+            }
+            for api_base in (failing_base, healthy_base)
+        ],
+        num_retries=2,
+    )
+    return await router.acreate_file(
+        model="anthropic-files",
+        file=("batch.jsonl", b'{"custom_id": "1", "params": {}}\n', "application/jsonl"),
+        purpose="batch",
+    )
+
+
+async def test_an_anthropic_upload_that_one_deployment_rejected_keeps_the_router_note(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "calculate_retry_after", lambda **_: 0.0)
+    rejecting_base: Final = "https://router-anthropic-file-rejecting.test"
+    healthy_base: Final = "https://router-anthropic-file-healthy.test"
+    respx_mock.post(url__startswith=rejecting_base).mock(
+        return_value=httpx.Response(
+            401, json={"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}
+        )
+    )
+    healthy_route: Final = respx_mock.post(url__startswith=healthy_base).mock(
+        return_value=httpx.Response(200, json=_ANTHROPIC_FILE)
+    )
+
+    with pytest.raises(httpx.HTTPStatusError) as raised:
+        await _upload_to_anthropic_group(rejecting_base, healthy_base)
+
+    message: Final = str(getattr(raised.value, "message", ""))
+    assert healthy_route.call_count == 1
+    assert create_may_already_exist(raised.value)
+    assert "invalid x-api-key" in message
+    assert message.endswith(
+        "\n\nLiteLLM: model group 'anthropic-files' failed with the error above. No fallback was attempted."
+    ), message
+
+
+async def test_an_anthropic_upload_that_one_deployment_refused_is_raised_as_is_and_not_resent(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "calculate_retry_after", lambda **_: 0.0)
+    refused_base: Final = "https://router-anthropic-file-refused.test"
+    healthy_base: Final = "https://router-anthropic-file-healthy.test"
+    respx_mock.post(url__startswith=refused_base).mock(side_effect=httpx.ConnectError("connection refused"))
+    healthy_route: Final = respx_mock.post(url__startswith=healthy_base).mock(
+        return_value=httpx.Response(200, json=_ANTHROPIC_FILE)
+    )
+
+    with pytest.raises(httpx.ConnectError, match=r"^connection refused$") as raised:
+        await _upload_to_anthropic_group(refused_base, healthy_base)
+
+    assert healthy_route.call_count == 1
+    assert create_may_already_exist(raised.value)
