@@ -23,7 +23,12 @@ from litellm.router import Router
 from litellm.router_api import fallback_chain
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager, get_valid_models, potential_model_names_in_lookup_order
+from litellm.utils import (
+    AZURE_MODEL_PLACEHOLDER,
+    ProviderConfigManager,
+    get_valid_models,
+    potential_model_names_in_lookup_order,
+)
 
 LLM_PROVIDER_PREFIXES: Final = frozenset(llm_provider.value for llm_provider in LlmProviders)
 _PROVIDERS_SENDING_THE_DEPLOYMENT_PATH_AS_THE_MODEL_ID: Final = frozenset({LlmProviders.TOGETHER_AI.value})
@@ -61,10 +66,17 @@ def _check_wildcard_routing(model: str) -> bool:
     return False
 
 
-def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = None) -> list[str] | None:
+def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = None) -> Sequence[str] | None:
     """
     Returns the list of known models by provider
     """
+    provider_models: Final = _provider_catalog(provider, litellm_params)
+    if provider_models is None:
+        return None
+    return tuple(model for model in provider_models if model != AZURE_MODEL_PLACEHOLDER)
+
+
+def _provider_catalog(provider: str, litellm_params: LiteLLM_Params | None) -> list[str] | None:
     if provider == "*":
         return get_valid_models(litellm_params=litellm_params)
 
@@ -375,6 +387,10 @@ def _ids_routing_to_catalog_models(
     catalog_ids: Sequence[str],
     routes_to_model: Callable[[str, str], bool],
 ) -> tuple[str, ...]:
+    if name_pattern.count("*") > deployment_pattern.count("*"):
+        return _catalog_ids_a_wider_name_matches(
+            name_pattern, deployment_pattern, provider, catalog_ids, routes_to_model
+        )
     if name_pattern.count("*") != deployment_pattern.count("*") or _lists_name_fragments(
         name_pattern, deployment_pattern
     ):
@@ -419,6 +435,23 @@ def _ids_routing_to_catalog_models(
     )
 
 
+def _catalog_ids_a_wider_name_matches(
+    name_pattern: str,
+    deployment_pattern: str,
+    provider: str,
+    catalog_ids: Sequence[str],
+    routes_to_model: Callable[[str, str], bool],
+) -> tuple[str, ...]:
+    name_regex: Final = _wildcard_name_regex(name_pattern)
+    return tuple(
+        catalog_id
+        for catalog_id in _ids_routing_to_catalog_models(
+            deployment_pattern, deployment_pattern, provider, catalog_ids, routes_to_model
+        )
+        if name_regex.fullmatch(catalog_id)
+    )
+
+
 def _model_info_field(deployment: Mapping[str, object], field: str) -> object:
     model_info: Final = deployment.get("model_info")
     return model_info.get(field) if is_str_keyed_mapping(model_info) else None
@@ -427,13 +460,6 @@ def _model_info_field(deployment: Mapping[str, object], field: str) -> object:
 def _deployment_team_id(deployment: Mapping[str, object]) -> str | None:
     team_id: Final = _model_info_field(deployment, "team_id")
     return team_id if isinstance(team_id, str) else None
-
-
-def _public_model_name(deployment: Mapping[str, object]) -> str:
-    team_public_model_name: Final = _model_info_field(deployment, "team_public_model_name")
-    if isinstance(team_public_model_name, str) and team_public_model_name:
-        return team_public_model_name
-    return str(deployment.get("model_name") or "")
 
 
 def _cached_wildcard_routing(llm_router: Router | None) -> Callable[[str, str | None], frozenset[str]] | None:
@@ -594,7 +620,7 @@ def expand_wildcard_deployments_for_model_info(
     routed_models: Final = _cached_wildcard_routing(llm_router)
     deployed_by_name: Final = _deployed_by_name(llm_router)
     for deployment in deployments:
-        model_name = _public_model_name(deployment)
+        model_name = str(deployment.get("model_name") or "")
         raw_params = deployment.get("litellm_params")
         litellm_params_dict: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
         litellm_model = str(litellm_params_dict.get("model") or "")
@@ -621,9 +647,6 @@ def expand_wildcard_deployments_for_model_info(
         for name in _names_no_deployment_serves_by_name(deployment, expanded_names, deployed_by_name):
             row = copy.deepcopy(deployment)
             row["model_name"] = name
-            model_info = row.get("model_info")
-            if isinstance(model_info, dict) and "team_public_model_name" in model_info:
-                model_info["team_public_model_name"] = name
             params = row.get("litellm_params")
             if isinstance(params, dict):
                 params["model"] = _routed_deployment_model(model_name, name, litellm_model)

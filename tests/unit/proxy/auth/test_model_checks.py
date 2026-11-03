@@ -1151,38 +1151,6 @@ def test_expand_wildcard_alias_over_one_model_is_kept_only_for_keys_with_a_name_
 
     assert rows == ([deployment] if keeps_the_alias else [])
 
-def test_team_owned_wildcard_model_info_lists_the_names_the_team_sees_on_v1_models() -> None:
-    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
-
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "model_name_team-1_abc",
-                "litellm_params": {"model": "anthropic/claude-*", "api_key": "sk-test"},
-                "model_info": {"id": "team-row", "team_id": "team-1", "team_public_model_name": "team-claude-*"},
-            }
-        ]
-    )
-    team_listing: Final = get_complete_model_list(
-        key_models=[],
-        team_models=["team-claude-*"],
-        proxy_model_list=[],
-        user_model=None,
-        infer_model_from_keys=False,
-        llm_router=router,
-        team_id="team-1",
-    )
-
-    rows: Final = expand_wildcard_deployments_for_model_info(
-        router.get_model_list(), router, allowed_model_names=team_listing
-    )
-
-    assert team_listing
-    assert sorted(
-        (row["model_name"], row["model_info"]["team_public_model_name"], row["model_info"]["team_id"]) for row in rows
-    ) == sorted((name, name, "team-1") for name in team_listing)
-
-
 def test_get_complete_model_list_excludes_wildcard_routes_by_default():
     """Regression (LIT-4108): a wildcard with a matching router deployment leaked into /v1/models."""
     from litellm import Router
@@ -1465,7 +1433,7 @@ def test_get_provider_models_admits_providers_without_a_static_catalog():
         ),
     )
 
-    assert result == []
+    assert result == ()
 
 
 def test_get_complete_model_list_discovers_litellm_proxy_wildcard_models(monkeypatch):
@@ -1526,7 +1494,7 @@ def test_transcribe_is_a_known_provider_for_wildcard_expansion():
 
     assert "transcribe" in litellm.models_by_provider
     assert "transcribe/StartTranscriptionJob" in litellm.models_by_provider["transcribe"]
-    assert get_provider_models("transcribe") == ["transcribe/StartTranscriptionJob"]
+    assert get_provider_models("transcribe") == ("transcribe/StartTranscriptionJob",)
     assert get_known_models_from_wildcard("transcribe/*") == ["transcribe/StartTranscriptionJob"]
 
 
@@ -2145,6 +2113,13 @@ _ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
         pytest.param(
             "team-*", "cloudflare/@cf/*/*", None, set(), id="slashless-alias-with-fewer-wildcards-than-its-deployment"
         ),
+        pytest.param(
+            "*partial-route-9*",
+            "openai/gpt-partial-route-9*",
+            None,
+            {f"openai/{_ROUTE_OPENAI_ID}"},
+            id="slashless-name-with-more-wildcards-than-its-deployment",
+        ),
         pytest.param("*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="catch-all-over-partial-deployment"),
         pytest.param("*", "gemini/gemini-partial-route-9*", None, set(), id="catch-all-over-mid-word-deployment"),
         pytest.param("*", "openai/responses/gpt-partial-route-9*", None, set(), id="catch-all-over-mid-word-route"),
@@ -2220,6 +2195,34 @@ def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
     assert listed_v1_models == sorted(reachable)
     if key_model is None:
         assert listed_model_info_names == sorted(reachable)
+
+
+@pytest.mark.parametrize("model_name", ["azure/*", "my-*"])
+def test_azure_wildcard_never_lists_the_catalog_placeholder_as_a_model(model_name: str) -> None:
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+    from litellm.utils import AZURE_MODEL_PLACEHOLDER, get_valid_models
+
+    router: Final = Router(model_list=[{"model_name": model_name, "litellm_params": {"model": "azure/*"}}])
+
+    v1_models: Final = get_complete_model_list(
+        key_models=[model_name],
+        team_models=[],
+        proxy_model_list=[model_name],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+    model_info_names: Final = [
+        str(row["model_name"])
+        for row in expand_wildcard_deployments_for_model_info(
+            [dict(deployment) for deployment in router.get_model_list() or []], router
+        )
+    ]
+
+    assert AZURE_MODEL_PLACEHOLDER in get_valid_models(custom_llm_provider="azure")
+    assert [name for name in [*v1_models, *model_info_names] if AZURE_MODEL_PLACEHOLDER in name] == []
+    assert model_info_names == [model_name]
 
 
 def test_inference_provider_route_lists_every_id_the_plain_provider_wildcard_lists() -> None:
