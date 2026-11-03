@@ -72,6 +72,10 @@ proxy = [
     "hiredis>=3.0.0,<4.0; python_version < '3.15'",
     "hiredis>=3.5.0,<4.0; python_version >= '3.15'",
     "apscheduler>=3.11.2,<4.0",
+    # zoneinfo fallback tz database. The OS db drops legacy IANA aliases (Asia/Calcutta on
+    # Ubuntu 24.04+ needs the separate tzdata-legacy package), so proxy startup without the
+    # wheel dies with ZoneInfoNotFoundError. Ref: BerriAI/litellm#49813.
+    "tzdata>=2024.1",
     "fastapi-sso>=0.19.0,<1.0",
     "PyJWT>=2.13.0,<3.0",
     "python-multipart>=0.0.27,<1.0",
