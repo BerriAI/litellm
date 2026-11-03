@@ -2135,12 +2135,14 @@
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 512,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-east-1/index.json",
         "token_count_model": {
             "model": "anthropic.claude-opus-5",
             "litellm_provider": "bedrock_mantle",
             "region": "us-east-1"
-        }
+        },
+        "input_cost_per_token_batches": 2.5e-06,
+        "output_cost_per_token_batches": 1.25e-05
     },
     "anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -2221,12 +2223,14 @@
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 512,
-        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-east-1/index.json",
         "token_count_model": {
             "model": "global.anthropic.claude-opus-5",
             "litellm_provider": "bedrock_mantle",
             "region": "us-east-1"
-        }
+        },
+        "input_cost_per_token_batches": 2.5e-06,
+        "output_cost_per_token_batches": 1.25e-05
     },
     "global.anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -2307,12 +2311,14 @@
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 512,
-        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-east-1/index.json",
         "token_count_model": {
             "model": "anthropic.claude-opus-5",
             "litellm_provider": "bedrock_mantle",
             "region": "us-east-1"
-        }
+        },
+        "input_cost_per_token_batches": 2.75e-06,
+        "output_cost_per_token_batches": 1.375e-05
     },
     "us.anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -2393,12 +2399,14 @@
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 512,
-        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/eu-west-1/index.json",
         "token_count_model": {
             "model": "anthropic.claude-opus-5",
             "litellm_provider": "bedrock_mantle",
             "region": "eu-west-1"
-        }
+        },
+        "input_cost_per_token_batches": 2.75e-06,
+        "output_cost_per_token_batches": 1.375e-05
     },
     "eu.anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -2474,12 +2482,14 @@
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 512,
-        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/ap-southeast-2/index.json",
         "token_count_model": {
             "model": "anthropic.claude-opus-5",
             "litellm_provider": "bedrock_mantle",
             "region": "ap-southeast-4"
-        }
+        },
+        "input_cost_per_token_batches": 2.75e-06,
+        "output_cost_per_token_batches": 1.375e-05
     },
     "au.anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -2560,7 +2570,9 @@
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 512,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/ap-northeast-1/index.json",
+        "input_cost_per_token_batches": 2.75e-06,
+        "output_cost_per_token_batches": 1.375e-05
     },
     "jp.anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -3397,6 +3409,7 @@
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2026-10-14",
+        "successor_model": "anthropic.claude-sonnet-5",
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
@@ -3440,6 +3453,7 @@
         "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
         "cache_read_input_token_cost_above_200k_tokens": 6e-07,
         "deprecation_date": "2027-04-08",
+        "successor_model": "anthropic.claude-sonnet-5-5",
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
         "max_input_tokens": 200000,
@@ -3674,6 +3688,7 @@
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2026-10-14",
+        "successor_model": "apac.anthropic.claude-sonnet-5",
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
@@ -3729,6 +3744,7 @@
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.32e-05,
         "cache_read_input_token_cost_above_200k_tokens": 6.6e-07,
         "deprecation_date": "2027-04-08",
+        "successor_model": "au.anthropic.claude-sonnet-5-5",
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
         "max_input_tokens": 200000,
@@ -3812,6 +3828,7 @@
     },
     "azure_ai/claude-haiku-4-5": {
         "deprecation_date": "2026-11-15",
+        "successor_model": "azure_ai/claude-haiku-5-5",
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -3835,6 +3852,7 @@
     },
     "azure_ai/claude-opus-4-5": {
         "deprecation_date": "2026-11-24",
+        "successor_model": "azure_ai/claude-opus-5-5",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -3949,7 +3967,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true,
+        "supports_max_reasoning_effort": false,
         "prompt_cache_min_tokens": 512
     },
     "azure_ai/claude-fable-5-1": {
@@ -3983,9 +4001,39 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true,
+        "supports_max_reasoning_effort": false,
         "prompt_cache_min_tokens": 512,
         "deprecation_date": "2027-12-05"
+    },
+    "azure_ai/claude-mythos-5-1": {
+        "input_cost_per_token": 1e-05,
+        "output_cost_per_token": 5e-05,
+        "cache_creation_input_token_cost": 1.25e-05,
+        "cache_creation_input_token_cost_above_1hr": 2e-05,
+        "cache_read_input_token_cost": 2.5e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "supports_adaptive_thinking": true,
+        "thinking_always_on": true,
+        "supports_mid_conversation_system": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_forced_tool_use": false,
+        "supports_function_calling": true,
+        "supports_native_structured_output": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": false,
+        "prompt_cache_min_tokens": 512,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/claude-models"
     },
     "azure_ai/claude-opus-5": {
         "deprecation_date": "2027-07-08",
@@ -4089,6 +4137,7 @@
     },
     "azure_ai/claude-sonnet-4-5": {
         "deprecation_date": "2026-11-30",
+        "successor_model": "azure_ai/claude-sonnet-5-5",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -4683,6 +4732,7 @@
     },
     "azure_ai/gpt-5.4": {
         "deprecation_date": "2027-09-02",
+        "successor_model": "azure_ai/gpt-5.5",
         "cache_read_input_token_cost": 2.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 5e-07,
         "cache_read_input_token_cost_priority": 5e-07,
@@ -4730,6 +4780,7 @@
     },
     "azure_ai/gpt-5.4-2026-03-05": {
         "deprecation_date": "2027-09-02",
+        "successor_model": "azure_ai/gpt-5.5",
         "cache_read_input_token_cost": 2.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 5e-07,
         "cache_read_input_token_cost_priority": 5e-07,
@@ -5053,6 +5104,7 @@
     },
     "azure/eu/gpt-4o-2024-08-06": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/eu/gpt-5.1",
         "cache_read_input_token_cost": 1.375e-06,
         "input_cost_per_token": 2.75e-06,
         "input_cost_per_token_batches": 1.375e-06,
@@ -5072,6 +5124,7 @@
     },
     "azure/eu/gpt-4o": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/eu/gpt-5.1",
         "cache_creation_input_token_cost": 1.38e-06,
         "cache_read_input_token_cost": 1.375e-06,
         "input_cost_per_token": 2.75e-06,
@@ -5091,6 +5144,7 @@
     },
     "azure/eu/gpt-4o-2024-11-20": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/eu/gpt-5.1",
         "cache_creation_input_token_cost": 1.38e-06,
         "cache_read_input_token_cost": 1.375e-06,
         "input_cost_per_token": 2.75e-06,
@@ -5176,6 +5230,7 @@
         "cache_creation_input_audio_token_cost": 2.2e-05,
         "cache_read_input_token_cost": 2.75e-06,
         "deprecation_date": "2025-03-26",
+        "successor_model": "gpt-4o-realtime-preview",
         "input_cost_per_audio_token": 0.00011,
         "input_cost_per_token": 5.5e-06,
         "litellm_provider": "azure",
@@ -5223,6 +5278,7 @@
         "cache_read_input_token_cost": 1.375e-07,
         "cache_read_input_token_cost_priority": 2.75e-07,
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/eu/gpt-5.1",
         "input_cost_per_token": 1.375e-06,
         "input_cost_per_token_batches": 6.875e-07,
         "input_cost_per_token_priority": 2.75e-06,
@@ -5267,6 +5323,7 @@
         "cache_read_input_token_cost": 2.75e-08,
         "cache_read_input_token_cost_priority": 4.95e-08,
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/eu/gpt-5.4-mini",
         "input_cost_per_token": 2.75e-07,
         "input_cost_per_token_batches": 1.375e-07,
         "input_cost_per_token_priority": 4.95e-07,
@@ -5309,6 +5366,7 @@
     },
     "azure/eu/gpt-5.1": {
         "deprecation_date": "2027-05-15",
+        "successor_model": "azure/eu/gpt-5.2",
         "cache_read_input_token_cost": 1.375e-07,
         "cache_read_input_token_cost_batches": 6.875e-08,
         "cache_read_input_token_cost_priority": 2.75e-07,
@@ -5356,6 +5414,7 @@
     },
     "azure/eu/gpt-5.1-codex": {
         "deprecation_date": "2027-05-15",
+        "successor_model": "azure/eu/gpt-5.2-codex",
         "cache_read_input_token_cost": 1.375e-07,
         "input_cost_per_token": 1.375e-06,
         "litellm_provider": "azure",
@@ -5419,6 +5478,7 @@
     "azure/eu/gpt-5-nano-2025-08-07": {
         "cache_read_input_token_cost": 5.5e-09,
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/eu/gpt-5.4-nano",
         "input_cost_per_token": 5.5e-08,
         "input_cost_per_token_batches": 2.75e-08,
         "litellm_provider": "azure",
@@ -5460,6 +5520,7 @@
     "azure/eu/o1": {
         "cache_read_input_token_cost": 8.25e-06,
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/eu/gpt-5.6-sol",
         "input_cost_per_token": 1.65e-05,
         "input_cost_per_token_batches": 8.25e-06,
         "litellm_provider": "azure",
@@ -5478,6 +5539,7 @@
     "azure/eu/o1-2024-12-17": {
         "cache_read_input_token_cost": 8.25e-06,
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/eu/gpt-5.6-sol",
         "input_cost_per_token": 1.65e-05,
         "input_cost_per_token_batches": 8.25e-06,
         "litellm_provider": "azure",
@@ -5512,6 +5574,7 @@
     "azure/eu/o3-mini": {
         "cache_read_input_token_cost": 6.05e-07,
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/eu/gpt-5.6-terra",
         "input_cost_per_token": 1.21e-06,
         "input_cost_per_token_batches": 6.05e-07,
         "litellm_provider": "azure",
@@ -5529,6 +5592,7 @@
     "azure/eu/o3-mini-2025-01-31": {
         "cache_read_input_token_cost": 6.05e-07,
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/eu/gpt-5.6-terra",
         "input_cost_per_token": 1.21e-06,
         "input_cost_per_token_batches": 6.05e-07,
         "litellm_provider": "azure",
@@ -5601,6 +5665,7 @@
     },
     "azure/global/gpt-4o-2024-08-06": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/global/gpt-5.1",
         "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_batches": 1.25e-06,
@@ -5620,6 +5685,7 @@
     },
     "azure/global/gpt-4o-2024-11-20": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/global/gpt-5.1",
         "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_batches": 1.25e-06,
@@ -5777,6 +5843,7 @@
     },
     "azure/gpt-35-turbo-16k": {
         "deprecation_date": "2025-04-30",
+        "successor_model": "azure/gpt-4.1-mini",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 16385,
@@ -5818,6 +5885,7 @@
     },
     "azure/gpt-4": {
         "deprecation_date": "2025-06-06",
+        "successor_model": "azure/gpt-4.1",
         "input_cost_per_token": 3e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 8192,
@@ -5841,6 +5909,7 @@
     },
     "azure/gpt-4-0613": {
         "deprecation_date": "2025-06-06",
+        "successor_model": "azure/gpt-4.1",
         "input_cost_per_token": 3e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 8192,
@@ -5922,6 +5991,7 @@
     },
     "azure/gpt-4.1": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/gpt-5.1",
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_priority": 8.75e-07,
         "input_cost_per_token": 2e-06,
@@ -5964,6 +6034,7 @@
     },
     "azure/gpt-4.1-2025-04-14": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/gpt-5.1",
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_priority": 8.75e-07,
         "input_cost_per_token": 2e-06,
@@ -6006,6 +6077,7 @@
     },
     "azure/gpt-4.1-mini": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/gpt-5.4-mini",
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_priority": 1.75e-07,
         "input_cost_per_token": 4e-07,
@@ -6048,6 +6120,7 @@
     },
     "azure/gpt-4.1-mini-2025-04-14": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/gpt-5.4-mini",
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_priority": 1.75e-07,
         "input_cost_per_token": 4e-07,
@@ -6090,6 +6163,7 @@
     },
     "azure/gpt-4.1-nano": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/gpt-5.4-nano",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
@@ -6123,6 +6197,7 @@
     },
     "azure/gpt-4.1-nano-2025-04-14": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/gpt-5.4-nano",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
@@ -6157,6 +6232,7 @@
     "azure/gpt-4.5-preview": {
         "cache_read_input_token_cost": 3.75e-05,
         "deprecation_date": "2025-07-14",
+        "successor_model": "azure/gpt-4.1",
         "input_cost_per_token": 7.5e-05,
         "input_cost_per_token_batches": 3.75e-05,
         "litellm_provider": "azure",
@@ -6176,6 +6252,7 @@
     },
     "azure/gpt-4o": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/gpt-5.1",
         "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_batches": 1.25e-06,
@@ -6195,6 +6272,7 @@
     },
     "azure/gpt-4o-2024-05-13": {
         "deprecation_date": "2026-12-09",
+        "successor_model": "azure/gpt-5.1",
         "input_cost_per_token": 5e-06,
         "input_cost_per_token_batches": 2.5e-06,
         "litellm_provider": "azure",
@@ -6212,6 +6290,7 @@
     },
     "azure/gpt-4o-2024-08-06": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/gpt-5.1",
         "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_batches": 1.25e-06,
@@ -6231,6 +6310,7 @@
     },
     "azure/gpt-4o-2024-11-20": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/gpt-5.1",
         "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_batches": 1.25e-06,
@@ -6652,6 +6732,7 @@
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2027-08-24",
+        "successor_model": "azure/gpt-realtime-2.1-2026-07-07",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
         "input_cost_per_token": 4e-06,
@@ -6689,6 +6770,7 @@
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2027-08-24",
+        "successor_model": "azure/gpt-realtime-2.1-2026-07-07",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
         "input_cost_per_token": 4e-06,
@@ -6908,6 +6990,7 @@
         "cache_creation_input_audio_token_cost": 2e-05,
         "cache_read_input_token_cost": 2.5e-06,
         "deprecation_date": "2025-03-26",
+        "successor_model": "gpt-4o-realtime-preview",
         "input_cost_per_audio_token": 0.0001,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure",
@@ -7005,6 +7088,7 @@
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "deprecation_date": "2027-05-15",
+        "successor_model": "azure/gpt-5.2",
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_priority": 2.5e-06,
         "litellm_provider": "azure",
@@ -7052,6 +7136,7 @@
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "deprecation_date": "2027-05-15",
+        "successor_model": "azure/gpt-5.2-codex",
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_priority": 2.5e-06,
         "litellm_provider": "azure",
@@ -7118,6 +7203,7 @@
     },
     "azure/gpt-5": {
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/gpt-5.1",
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_batches": 6.25e-08,
         "cache_read_input_token_cost_priority": 2.5e-07,
@@ -7164,6 +7250,7 @@
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/gpt-5.1",
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_batches": 6.25e-07,
         "input_cost_per_token_priority": 2.5e-06,
@@ -7207,6 +7294,7 @@
     "azure/gpt-5-codex": {
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2027-03-17",
+        "successor_model": "azure/gpt-5.1-codex",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 272000,
@@ -7237,6 +7325,7 @@
     },
     "azure/gpt-5-mini": {
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/gpt-5.4-mini",
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
@@ -7283,6 +7372,7 @@
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/gpt-5.4-mini",
         "input_cost_per_token": 2.5e-07,
         "input_cost_per_token_batches": 1.25e-07,
         "input_cost_per_token_priority": 4.5e-07,
@@ -7325,6 +7415,7 @@
     },
     "azure/gpt-5-nano": {
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/gpt-5.4-nano",
         "cache_read_input_token_cost": 5e-09,
         "cache_read_input_token_cost_batches": 2.5e-09,
         "input_cost_per_token": 5e-08,
@@ -7367,6 +7458,7 @@
     "azure/gpt-5-nano-2025-08-07": {
         "cache_read_input_token_cost": 5e-09,
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/gpt-5.4-nano",
         "input_cost_per_token": 5e-08,
         "input_cost_per_token_batches": 2.5e-08,
         "litellm_provider": "azure",
@@ -7407,6 +7499,7 @@
     },
     "azure/gpt-5-pro": {
         "deprecation_date": "2027-04-07",
+        "successor_model": "azure/gpt-5.2-pro",
         "input_cost_per_token": 1.5e-05,
         "input_cost_per_token_batches": 7.5e-06,
         "litellm_provider": "azure",
@@ -7443,6 +7536,7 @@
     },
     "azure/gpt-5.1": {
         "deprecation_date": "2027-05-15",
+        "successor_model": "azure/gpt-5.2",
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_batches": 6.25e-08,
         "cache_read_input_token_cost_priority": 2.5e-07,
@@ -7491,6 +7585,7 @@
     "azure/gpt-5-chat": {
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2026-06-29",
+        "successor_model": "azure/gpt-chat-latest",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
@@ -7515,6 +7610,7 @@
     "azure/gpt-5.1-chat": {
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2026-06-29",
+        "successor_model": "azure/gpt-chat-latest",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 111616,
@@ -7536,6 +7632,7 @@
     "azure/gpt-5.2-chat": {
         "cache_read_input_token_cost": 1.75e-07,
         "deprecation_date": "2026-06-29",
+        "successor_model": "azure/gpt-chat-latest",
         "input_cost_per_token": 1.75e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 111616,
@@ -7556,6 +7653,7 @@
     "azure/gpt-5.3-chat": {
         "cache_read_input_token_cost": 1.75e-07,
         "deprecation_date": "2026-06-29",
+        "successor_model": "azure/gpt-chat-latest",
         "input_cost_per_token": 1.75e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 111616,
@@ -7576,6 +7674,7 @@
     "azure/us/gpt-5.1-chat": {
         "cache_read_input_token_cost": 1.375e-07,
         "deprecation_date": "2026-06-29",
+        "successor_model": "azure/us/gpt-chat-latest",
         "input_cost_per_token": 1.375e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 111616,
@@ -7597,6 +7696,7 @@
     "azure/us/gpt-5.2-chat": {
         "cache_read_input_token_cost": 1.925e-07,
         "deprecation_date": "2026-06-29",
+        "successor_model": "azure/us/gpt-chat-latest",
         "input_cost_per_token": 1.925e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 111616,
@@ -7617,6 +7717,7 @@
     "azure/us/gpt-5.3-chat": {
         "cache_read_input_token_cost": 1.925e-07,
         "deprecation_date": "2026-06-29",
+        "successor_model": "azure/us/gpt-chat-latest",
         "input_cost_per_token": 1.925e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 111616,
@@ -7637,6 +7738,7 @@
     "azure/eu/gpt-5.1-chat": {
         "cache_read_input_token_cost": 1.375e-07,
         "deprecation_date": "2026-06-29",
+        "successor_model": "azure/gpt-chat-latest",
         "input_cost_per_token": 1.375e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 111616,
@@ -7658,6 +7760,7 @@
     "azure/eu/gpt-5.2-chat": {
         "cache_read_input_token_cost": 1.925e-07,
         "deprecation_date": "2026-06-29",
+        "successor_model": "azure/gpt-chat-latest",
         "input_cost_per_token": 1.925e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 111616,
@@ -7678,6 +7781,7 @@
     "azure/eu/gpt-5.3-chat": {
         "cache_read_input_token_cost": 1.925e-07,
         "deprecation_date": "2026-06-29",
+        "successor_model": "azure/gpt-chat-latest",
         "input_cost_per_token": 1.925e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 111616,
@@ -7698,6 +7802,7 @@
     "azure/us/o1-preview": {
         "cache_read_input_token_cost": 8.25e-06,
         "deprecation_date": "2025-07-28",
+        "successor_model": "azure/us/o1",
         "input_cost_per_token": 1.65e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
@@ -7713,6 +7818,7 @@
     "azure/eu/o1-preview": {
         "cache_read_input_token_cost": 8.25e-06,
         "deprecation_date": "2025-07-28",
+        "successor_model": "azure/eu/o1",
         "input_cost_per_token": 1.65e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
@@ -7727,6 +7833,7 @@
     },
     "azure/gpt-5.1-codex": {
         "deprecation_date": "2027-05-15",
+        "successor_model": "azure/gpt-5.2-codex",
         "cache_read_input_token_cost": 1.25e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
@@ -7820,6 +7927,7 @@
     },
     "azure/gpt-5.2": {
         "deprecation_date": "2027-06-08",
+        "successor_model": "azure/gpt-5.4",
         "cache_read_input_token_cost": 1.75e-07,
         "cache_read_input_token_cost_batches": 8.75e-08,
         "cache_read_input_token_cost_priority": 3.5e-07,
@@ -7867,6 +7975,7 @@
         "cache_read_input_token_cost": 1.75e-07,
         "cache_read_input_token_cost_priority": 3.5e-07,
         "deprecation_date": "2027-06-08",
+        "successor_model": "azure/gpt-5.4",
         "input_cost_per_token": 1.75e-06,
         "input_cost_per_token_batches": 8.75e-07,
         "input_cost_per_token_priority": 3.5e-06,
@@ -7911,6 +8020,7 @@
     "azure/gpt-5.2-codex": {
         "cache_read_input_token_cost": 1.75e-07,
         "deprecation_date": "2027-07-13",
+        "successor_model": "azure/gpt-5.3-codex",
         "input_cost_per_token": 1.75e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 272000,
@@ -8056,6 +8166,7 @@
     },
     "azure/gpt-5.4": {
         "deprecation_date": "2027-09-02",
+        "successor_model": "azure/gpt-5.5",
         "cache_read_input_token_cost": 2.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 5e-07,
         "cache_read_input_token_cost_above_272k_tokens_batches": 2.5e-07,
@@ -8113,6 +8224,7 @@
     },
     "azure/us/gpt-5.4": {
         "deprecation_date": "2027-09-02",
+        "successor_model": "azure/us/gpt-5.5",
         "cache_read_input_token_cost": 2.75e-07,
         "cache_read_input_token_cost_above_272k_tokens": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens_batches": 2.75e-07,
@@ -8162,6 +8274,7 @@
     },
     "azure/eu/gpt-5.4": {
         "deprecation_date": "2027-09-02",
+        "successor_model": "azure/eu/gpt-5.5",
         "cache_read_input_token_cost": 2.75e-07,
         "cache_read_input_token_cost_above_272k_tokens": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens_batches": 2.75e-07,
@@ -8216,6 +8329,7 @@
         "cache_read_input_token_cost_priority": 5e-07,
         "cache_read_input_token_cost_above_272k_tokens_priority": 1e-06,
         "deprecation_date": "2027-09-02",
+        "successor_model": "azure/gpt-5.5",
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_above_272k_tokens": 5e-06,
         "input_cost_per_token_priority": 5e-06,
@@ -8271,6 +8385,7 @@
         "cache_read_input_token_cost_above_272k_tokens": 5.5e-07,
         "cache_read_input_token_cost_priority": 5.5e-07,
         "deprecation_date": "2027-09-02",
+        "successor_model": "azure/us/gpt-5.5",
         "input_cost_per_token": 2.75e-06,
         "input_cost_per_token_priority": 5.5e-06,
         "output_cost_per_token": 1.65e-05,
@@ -8320,6 +8435,7 @@
         "cache_read_input_token_cost_above_272k_tokens": 5.5e-07,
         "cache_read_input_token_cost_priority": 5.5e-07,
         "deprecation_date": "2027-09-02",
+        "successor_model": "azure/eu/gpt-5.5",
         "input_cost_per_token": 2.75e-06,
         "input_cost_per_token_priority": 5.5e-06,
         "output_cost_per_token": 1.65e-05,
@@ -8366,6 +8482,7 @@
     },
     "azure/gpt-5.4-pro": {
         "deprecation_date": "2027-09-07",
+        "successor_model": "azure/gpt-5.5-pro",
         "cache_read_input_token_cost": 3e-06,
         "cache_read_input_token_cost_above_272k_tokens": 6e-06,
         "input_cost_per_token": 3e-05,
@@ -8417,6 +8534,7 @@
         "cache_read_input_token_cost": 3e-06,
         "cache_read_input_token_cost_above_272k_tokens": 6e-06,
         "deprecation_date": "2027-09-07",
+        "successor_model": "azure/gpt-5.5-pro",
         "input_cost_per_token": 3e-05,
         "input_cost_per_token_above_272k_tokens": 6e-05,
         "input_cost_per_token_above_272k_tokens_flex": 3e-05,
@@ -8529,6 +8647,7 @@
         "cache_read_input_token_cost_above_272k_tokens_priority": 1.6e-06,
         "cache_read_input_token_cost_flex": 2e-07,
         "deprecation_date": "2028-01-11",
+        "successor_model": "azure/gpt-6-sol",
         "input_cost_per_token": 4e-06,
         "input_cost_per_token_above_272k_tokens": 8e-06,
         "input_cost_per_token_above_272k_tokens_flex": 4e-06,
@@ -8592,6 +8711,7 @@
         "cache_read_input_token_cost_above_272k_tokens_priority": 1.6e-06,
         "cache_read_input_token_cost_flex": 2e-07,
         "deprecation_date": "2028-01-11",
+        "successor_model": "azure/gpt-6-sol",
         "input_cost_per_token": 4e-06,
         "input_cost_per_token_above_272k_tokens": 8e-06,
         "input_cost_per_token_above_272k_tokens_flex": 4e-06,
@@ -8655,6 +8775,7 @@
         "cache_read_input_token_cost_above_272k_tokens_priority": 8e-07,
         "cache_read_input_token_cost_flex": 1e-07,
         "deprecation_date": "2028-01-11",
+        "successor_model": "azure/gpt-6.1-terra",
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_272k_tokens": 4e-06,
         "input_cost_per_token_above_272k_tokens_flex": 2e-06,
@@ -8718,6 +8839,7 @@
         "cache_read_input_token_cost_above_272k_tokens_priority": 8e-07,
         "cache_read_input_token_cost_flex": 1e-07,
         "deprecation_date": "2028-01-11",
+        "successor_model": "azure/gpt-6.1-terra",
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_272k_tokens": 4e-06,
         "input_cost_per_token_above_272k_tokens_flex": 2e-06,
@@ -8781,6 +8903,7 @@
         "cache_read_input_token_cost_above_272k_tokens_priority": 8e-08,
         "cache_read_input_token_cost_flex": 1e-08,
         "deprecation_date": "2028-01-11",
+        "successor_model": "azure/gpt-6-luna",
         "input_cost_per_token": 2e-07,
         "input_cost_per_token_above_272k_tokens": 4e-07,
         "input_cost_per_token_above_272k_tokens_flex": 2e-07,
@@ -8844,6 +8967,7 @@
         "cache_read_input_token_cost_above_272k_tokens_priority": 8e-08,
         "cache_read_input_token_cost_flex": 1e-08,
         "deprecation_date": "2028-01-11",
+        "successor_model": "azure/gpt-6-luna",
         "input_cost_per_token": 2e-07,
         "input_cost_per_token_above_272k_tokens": 4e-07,
         "input_cost_per_token_above_272k_tokens_flex": 2e-07,
@@ -9760,6 +9884,7 @@
         "cache_read_input_token_cost_above_272k_tokens_priority": 1.76e-06,
         "cache_read_input_token_cost_priority": 8.8e-07,
         "deprecation_date": "2028-01-11",
+        "successor_model": "azure/us/gpt-6-sol",
         "input_cost_per_token": 4.4e-06,
         "input_cost_per_token_above_272k_tokens": 8.8e-06,
         "input_cost_per_token_above_272k_tokens_priority": 1.76e-05,
@@ -9815,6 +9940,7 @@
         "cache_read_input_token_cost_above_272k_tokens_priority": 8.8e-07,
         "cache_read_input_token_cost_priority": 4.4e-07,
         "deprecation_date": "2028-01-11",
+        "successor_model": "azure/us/gpt-6.1-terra",
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_above_272k_tokens": 4.4e-06,
         "input_cost_per_token_above_272k_tokens_priority": 8.8e-06,
@@ -9870,6 +9996,7 @@
         "cache_read_input_token_cost_above_272k_tokens_priority": 8.8e-08,
         "cache_read_input_token_cost_priority": 4.4e-08,
         "deprecation_date": "2028-01-11",
+        "successor_model": "azure/us/gpt-6-luna",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_above_272k_tokens": 4.4e-07,
         "input_cost_per_token_above_272k_tokens_priority": 8.8e-07,
@@ -10162,6 +10289,7 @@
         "cache_read_input_token_cost_above_272k_tokens_priority": 1.76e-06,
         "cache_read_input_token_cost_priority": 8.8e-07,
         "deprecation_date": "2028-01-11",
+        "successor_model": "azure/eu/gpt-6-sol",
         "input_cost_per_token": 4.4e-06,
         "input_cost_per_token_above_272k_tokens": 8.8e-06,
         "input_cost_per_token_above_272k_tokens_priority": 1.76e-05,
@@ -10217,6 +10345,7 @@
         "cache_read_input_token_cost_above_272k_tokens_priority": 8.8e-07,
         "cache_read_input_token_cost_priority": 4.4e-07,
         "deprecation_date": "2028-01-11",
+        "successor_model": "azure/eu/gpt-6.1-terra",
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_above_272k_tokens": 4.4e-06,
         "input_cost_per_token_above_272k_tokens_priority": 8.8e-06,
@@ -10272,6 +10401,7 @@
         "cache_read_input_token_cost_above_272k_tokens_priority": 8.8e-08,
         "cache_read_input_token_cost_priority": 4.4e-08,
         "deprecation_date": "2028-01-11",
+        "successor_model": "azure/eu/gpt-6-luna",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_above_272k_tokens": 4.4e-07,
         "input_cost_per_token_above_272k_tokens_priority": 8.8e-07,
@@ -10319,6 +10449,7 @@
     },
     "azure/gpt-5.5": {
         "deprecation_date": "2027-10-26",
+        "successor_model": "azure/gpt-5.6",
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1e-06,
         "cache_read_input_token_cost_above_272k_tokens_batches": 5e-07,
@@ -10379,6 +10510,7 @@
     },
     "azure/us/gpt-5.5": {
         "deprecation_date": "2027-10-26",
+        "successor_model": "azure/us/gpt-5.6",
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
         "cache_read_input_token_cost_above_272k_tokens_batches": 5.5e-07,
@@ -10433,6 +10565,7 @@
     },
     "azure/eu/gpt-5.5": {
         "deprecation_date": "2027-10-26",
+        "successor_model": "azure/eu/gpt-5.6",
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
         "cache_read_input_token_cost_above_272k_tokens_batches": 5.5e-07,
@@ -10534,6 +10667,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "deprecation_date": "2027-10-26",
+        "successor_model": "azure/gpt-5.6",
         "input_cost_per_token_above_272k_tokens_batches": 5e-06,
         "input_cost_per_token_above_272k_tokens_flex": 5e-06,
         "input_cost_per_token_batches": 2.5e-06,
@@ -10544,6 +10678,7 @@
     },
     "azure/gpt-5.5-2026-04-24": {
         "deprecation_date": "2027-10-26",
+        "successor_model": "azure/gpt-5.6",
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1e-06,
         "cache_read_input_token_cost_priority": 1.25e-06,
@@ -10647,6 +10782,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "deprecation_date": "2027-10-26",
+        "successor_model": "azure/us/gpt-5.6",
         "input_cost_per_token_above_272k_tokens_batches": 5.5e-06,
         "input_cost_per_token_batches": 2.75e-06,
         "output_cost_per_token_above_272k_tokens_batches": 2.475e-05,
@@ -10655,6 +10791,7 @@
     },
     "azure/us/gpt-5.5-2026-04-24": {
         "deprecation_date": "2027-10-26",
+        "successor_model": "azure/us/gpt-5.6",
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
         "cache_read_input_token_cost_priority": 1.375e-06,
@@ -10752,6 +10889,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "deprecation_date": "2027-10-26",
+        "successor_model": "azure/eu/gpt-5.6",
         "input_cost_per_token_above_272k_tokens_batches": 5.5e-06,
         "input_cost_per_token_batches": 2.75e-06,
         "output_cost_per_token_above_272k_tokens_batches": 2.475e-05,
@@ -10760,6 +10898,7 @@
     },
     "azure/eu/gpt-5.5-2026-04-24": {
         "deprecation_date": "2027-10-26",
+        "successor_model": "azure/eu/gpt-5.6",
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
         "cache_read_input_token_cost_priority": 1.375e-06,
@@ -11096,6 +11235,7 @@
         "cache_read_input_image_token_cost": 2.5e-06,
         "cache_read_input_token_cost": 1.25e-06,
         "deprecation_date": "2026-10-23",
+        "successor_model": "azure/gpt-image-1.5",
         "input_cost_per_image_token": 1e-05,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure",
@@ -11236,6 +11376,7 @@
     "azure/gpt-image-1.5": {
         "cache_read_input_image_token_cost": 2e-06,
         "deprecation_date": "2026-12-16",
+        "successor_model": "azure/gpt-image-2",
         "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 5e-06,
         "input_cost_per_image_token": 8e-06,
@@ -11253,6 +11394,7 @@
         "cache_read_input_image_token_cost": 2e-06,
         "cache_read_input_token_cost": 1.25e-06,
         "deprecation_date": "2026-12-16",
+        "successor_model": "azure/gpt-image-2",
         "input_cost_per_token": 5e-06,
         "input_cost_per_image_token": 8e-06,
         "litellm_provider": "azure",
@@ -11443,6 +11585,7 @@
     },
     "azure/o1": {
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/gpt-5.6-sol",
         "cache_read_input_token_cost": 7.5e-06,
         "input_cost_per_token": 1.5e-05,
         "litellm_provider": "azure",
@@ -11460,6 +11603,7 @@
     "azure/o1-2024-12-17": {
         "cache_read_input_token_cost": 7.5e-06,
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/gpt-5.6-sol",
         "input_cost_per_token": 1.5e-05,
         "input_cost_per_token_batches": 7.5e-06,
         "litellm_provider": "azure",
@@ -11512,6 +11656,7 @@
     },
     "azure/o3": {
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/gpt-5.6-sol",
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_batches": 1e-06,
@@ -11549,6 +11694,7 @@
     },
     "azure/o3-2025-04-16": {
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/gpt-5.6-sol",
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_batches": 1e-06,
@@ -11587,6 +11733,7 @@
     "azure/o3-deep-research": {
         "cache_read_input_token_cost": 2.5e-06,
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/gpt-5.6-sol",
         "input_cost_per_token": 1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 200000,
@@ -11623,6 +11770,7 @@
     },
     "azure/o3-mini": {
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/gpt-5.6-terra",
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 1.1e-06,
         "input_cost_per_token_batches": 5.5e-07,
@@ -11642,6 +11790,7 @@
     "azure/o3-mini-2025-01-31": {
         "cache_read_input_token_cost": 5.5e-07,
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/gpt-5.6-terra",
         "input_cost_per_token": 1.1e-06,
         "input_cost_per_token_batches": 5.5e-07,
         "litellm_provider": "azure",
@@ -11658,6 +11807,7 @@
     },
     "azure/o3-pro": {
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/gpt-5.6-sol",
         "input_cost_per_token": 2e-05,
         "input_cost_per_token_batches": 1e-05,
         "litellm_provider": "azure",
@@ -11693,6 +11843,7 @@
     },
     "azure/o3-pro-2025-06-10": {
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/gpt-5.6-sol",
         "input_cost_per_token": 2e-05,
         "input_cost_per_token_batches": 1e-05,
         "litellm_provider": "azure",
@@ -11728,6 +11879,7 @@
     },
     "azure/o4-mini": {
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/gpt-5.6-terra",
         "cache_read_input_token_cost": 2.75e-07,
         "input_cost_per_token": 1.1e-06,
         "input_cost_per_token_batches": 5.5e-07,
@@ -11766,6 +11918,7 @@
     "azure/o4-mini-2025-04-16": {
         "cache_read_input_token_cost": 2.75e-07,
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/gpt-5.6-terra",
         "input_cost_per_token": 1.1e-06,
         "input_cost_per_token_batches": 5.5e-07,
         "litellm_provider": "azure",
@@ -11880,6 +12033,7 @@
     },
     "azure/us/gpt-4.1-2025-04-14": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/us/gpt-5.1",
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_priority": 9.63e-07,
         "input_cost_per_token": 2.2e-06,
@@ -11922,6 +12076,7 @@
     },
     "azure/us/gpt-4.1-mini-2025-04-14": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/us/gpt-5.4-mini",
         "cache_read_input_token_cost": 1.1e-07,
         "cache_read_input_token_cost_priority": 1.93e-07,
         "input_cost_per_token": 4.4e-07,
@@ -11964,6 +12119,7 @@
     },
     "azure/us/gpt-4.1-nano-2025-04-14": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/us/gpt-5.4-nano",
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 5.5e-08,
@@ -11997,6 +12153,7 @@
     },
     "azure/us/gpt-4o-2024-08-06": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/us/gpt-5.1",
         "cache_read_input_token_cost": 1.375e-06,
         "input_cost_per_token": 2.75e-06,
         "input_cost_per_token_batches": 1.375e-06,
@@ -12016,6 +12173,7 @@
     },
     "azure/us/gpt-4o": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/us/gpt-5.1",
         "cache_creation_input_token_cost": 1.38e-06,
         "cache_read_input_token_cost": 1.375e-06,
         "input_cost_per_token": 2.75e-06,
@@ -12035,6 +12193,7 @@
     },
     "azure/us/gpt-4o-2024-11-20": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/us/gpt-5.1",
         "cache_creation_input_token_cost": 1.38e-06,
         "cache_read_input_token_cost": 1.375e-06,
         "input_cost_per_token": 2.75e-06,
@@ -12120,6 +12279,7 @@
         "cache_creation_input_audio_token_cost": 2.2e-05,
         "cache_read_input_token_cost": 2.75e-06,
         "deprecation_date": "2025-03-26",
+        "successor_model": "gpt-4o-realtime-preview",
         "input_cost_per_audio_token": 0.00011,
         "input_cost_per_token": 5.5e-06,
         "litellm_provider": "azure",
@@ -12167,6 +12327,7 @@
         "cache_read_input_token_cost": 1.375e-07,
         "cache_read_input_token_cost_priority": 2.75e-07,
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/us/gpt-5.1",
         "input_cost_per_token": 1.375e-06,
         "input_cost_per_token_batches": 6.875e-07,
         "input_cost_per_token_priority": 2.75e-06,
@@ -12211,6 +12372,7 @@
         "cache_read_input_token_cost": 2.75e-08,
         "cache_read_input_token_cost_priority": 4.95e-08,
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/us/gpt-5.4-mini",
         "input_cost_per_token": 2.75e-07,
         "input_cost_per_token_batches": 1.375e-07,
         "input_cost_per_token_priority": 4.95e-07,
@@ -12254,6 +12416,7 @@
     "azure/us/gpt-5-nano-2025-08-07": {
         "cache_read_input_token_cost": 5.5e-09,
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/us/gpt-5.4-nano",
         "input_cost_per_token": 5.5e-08,
         "input_cost_per_token_batches": 2.75e-08,
         "litellm_provider": "azure",
@@ -12294,6 +12457,7 @@
     },
     "azure/us/gpt-5.1": {
         "deprecation_date": "2027-05-15",
+        "successor_model": "azure/us/gpt-5.2",
         "cache_read_input_token_cost": 1.375e-07,
         "cache_read_input_token_cost_batches": 6.875e-08,
         "cache_read_input_token_cost_priority": 2.75e-07,
@@ -12341,6 +12505,7 @@
     },
     "azure/us/gpt-5.1-codex": {
         "deprecation_date": "2027-05-15",
+        "successor_model": "azure/us/gpt-5.2-codex",
         "cache_read_input_token_cost": 1.375e-07,
         "input_cost_per_token": 1.375e-06,
         "litellm_provider": "azure",
@@ -12404,6 +12569,7 @@
     "azure/us/o1": {
         "cache_read_input_token_cost": 8.25e-06,
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/us/gpt-5.6-sol",
         "input_cost_per_token": 1.65e-05,
         "input_cost_per_token_batches": 8.25e-06,
         "litellm_provider": "azure",
@@ -12422,6 +12588,7 @@
     "azure/us/o1-2024-12-17": {
         "cache_read_input_token_cost": 8.25e-06,
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/us/gpt-5.6-sol",
         "input_cost_per_token": 1.65e-05,
         "input_cost_per_token_batches": 8.25e-06,
         "litellm_provider": "azure",
@@ -12455,6 +12622,7 @@
     },
     "azure/us/o3": {
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/us/gpt-5.6-sol",
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_batches": 1.1e-06,
@@ -12492,6 +12660,7 @@
     },
     "azure/us/o3-2025-04-16": {
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/us/gpt-5.6-sol",
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_batches": 1.1e-06,
@@ -12530,6 +12699,7 @@
     "azure/us/o3-mini": {
         "cache_read_input_token_cost": 6.05e-07,
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/us/gpt-5.6-terra",
         "input_cost_per_token": 1.21e-06,
         "input_cost_per_token_batches": 6.05e-07,
         "litellm_provider": "azure",
@@ -12547,6 +12717,7 @@
     "azure/us/o3-mini-2025-01-31": {
         "cache_read_input_token_cost": 6.05e-07,
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/us/gpt-5.6-terra",
         "input_cost_per_token": 1.21e-06,
         "input_cost_per_token_batches": 6.05e-07,
         "litellm_provider": "azure",
@@ -12564,6 +12735,7 @@
     "azure/us/o4-mini": {
         "cache_read_input_token_cost": 3.03e-07,
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/us/gpt-5.6-terra",
         "input_cost_per_token": 1.21e-06,
         "input_cost_per_token_batches": 6.05e-07,
         "litellm_provider": "azure",
@@ -12589,6 +12761,7 @@
     "azure/us/o4-mini-2025-04-16": {
         "cache_read_input_token_cost": 3.03e-07,
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/us/gpt-5.6-terra",
         "input_cost_per_token": 1.21e-06,
         "input_cost_per_token_batches": 6.05e-07,
         "litellm_provider": "azure",
@@ -12620,6 +12793,7 @@
     },
     "azure_ai/Cohere-embed-v3-english": {
         "deprecation_date": "2027-02-15",
+        "successor_model": "azure_ai/Cohere-Embed-V5-Fast",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 512,
@@ -12631,6 +12805,7 @@
     },
     "azure_ai/Cohere-embed-v3-multilingual": {
         "deprecation_date": "2027-02-15",
+        "successor_model": "azure_ai/Cohere-Embed-V5-Fast",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 512,
@@ -12746,6 +12921,7 @@
     },
     "azure_ai/FW-GLM-5": {
         "deprecation_date": "2027-07-01",
+        "successor_model": "azure_ai/FW-GLM-5.2",
         "cache_read_input_token_cost": 2.2e-07,
         "input_cost_per_token": 1.1e-06,
         "litellm_provider": "azure_ai",
@@ -12762,6 +12938,7 @@
     },
     "azure_ai/FW-GLM-5.1": {
         "deprecation_date": "2027-07-01",
+        "successor_model": "azure_ai/FW-GLM-5.2",
         "cache_read_input_token_cost": 2.86e-07,
         "input_cost_per_token": 1.54e-06,
         "litellm_provider": "azure_ai",
@@ -13019,6 +13196,7 @@
             "/v1/images/edits"
         ],
         "deprecation_date": "2026-10-01",
+        "successor_model": "azure_ai/MAI-Image-2.6",
         "max_input_tokens": 32000
     },
     "azure_ai/MAI-Image-2.5-Flash": {
@@ -13034,6 +13212,7 @@
             "/v1/images/edits"
         ],
         "deprecation_date": "2026-10-01",
+        "successor_model": "azure_ai/MAI-Image-2.6-Flash",
         "max_input_tokens": 32000
     },
     "azure_ai/MAI-Image-2.5-Pro": {
@@ -13118,6 +13297,7 @@
     },
     "azure_ai/Meta-Llama-3-70B-Instruct": {
         "deprecation_date": "2025-06-30",
+        "successor_model": "azure_ai/Llama-3.3-70B-Instruct",
         "input_cost_per_token": 1.1e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 8192,
@@ -13130,6 +13310,7 @@
     },
     "azure_ai/Meta-Llama-3.1-70B-Instruct": {
         "deprecation_date": "2025-06-30",
+        "successor_model": "azure_ai/Llama-3.3-70B-Instruct",
         "input_cost_per_token": 2.68e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -13142,6 +13323,7 @@
     },
     "azure_ai/Phi-3-medium-128k-instruct": {
         "deprecation_date": "2025-08-30",
+        "successor_model": "azure_ai/Phi-4",
         "input_cost_per_token": 1.7e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -13155,6 +13337,7 @@
     },
     "azure_ai/Phi-3-medium-4k-instruct": {
         "deprecation_date": "2025-08-30",
+        "successor_model": "azure_ai/Phi-4",
         "input_cost_per_token": 1.7e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 4096,
@@ -13168,6 +13351,7 @@
     },
     "azure_ai/Phi-3-mini-128k-instruct": {
         "deprecation_date": "2025-08-30",
+        "successor_model": "azure_ai/Phi-4-mini-instruct",
         "input_cost_per_token": 1.3e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -13181,6 +13365,7 @@
     },
     "azure_ai/Phi-3-mini-4k-instruct": {
         "deprecation_date": "2025-08-30",
+        "successor_model": "azure_ai/Phi-4-mini-instruct",
         "input_cost_per_token": 1.3e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 4096,
@@ -13194,6 +13379,7 @@
     },
     "azure_ai/Phi-3-small-128k-instruct": {
         "deprecation_date": "2025-08-30",
+        "successor_model": "azure_ai/Phi-4-mini-instruct",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -13207,6 +13393,7 @@
     },
     "azure_ai/Phi-3-small-8k-instruct": {
         "deprecation_date": "2025-08-30",
+        "successor_model": "azure_ai/Phi-4-mini-instruct",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 8192,
@@ -13220,6 +13407,7 @@
     },
     "azure_ai/Phi-3.5-MoE-instruct": {
         "deprecation_date": "2025-08-30",
+        "successor_model": "azure_ai/Phi-4-mini-instruct",
         "input_cost_per_token": 1.6e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -13233,6 +13421,7 @@
     },
     "azure_ai/Phi-3.5-mini-instruct": {
         "deprecation_date": "2025-08-30",
+        "successor_model": "azure_ai/Phi-4-mini-instruct",
         "input_cost_per_token": 1.3e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -13246,6 +13435,7 @@
     },
     "azure_ai/Phi-3.5-vision-instruct": {
         "deprecation_date": "2025-08-30",
+        "successor_model": "azure_ai/Phi-4-mini-instruct",
         "input_cost_per_token": 1.3e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -13259,6 +13449,7 @@
     },
     "azure_ai/Phi-4": {
         "deprecation_date": "2027-01-17",
+        "successor_model": "microsoft--phi-4",
         "input_cost_per_token": 1.25e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 16384,
@@ -13273,6 +13464,7 @@
     },
     "azure_ai/Phi-4-mini-instruct": {
         "deprecation_date": "2027-01-17",
+        "successor_model": "microsoft--phi-4",
         "input_cost_per_token": 7.5e-08,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
@@ -13285,6 +13477,7 @@
     },
     "azure_ai/Phi-4-multimodal-instruct": {
         "deprecation_date": "2027-01-17",
+        "successor_model": "microsoft--phi-4",
         "input_cost_per_audio_token": 4e-06,
         "input_cost_per_token": 8e-08,
         "litellm_provider": "azure_ai",
@@ -13300,6 +13493,7 @@
     },
     "azure_ai/Phi-4-mini-reasoning": {
         "deprecation_date": "2027-01-17",
+        "successor_model": "microsoft--phi-4",
         "input_cost_per_token": 7.5e-08,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
@@ -13312,6 +13506,7 @@
     },
     "azure_ai/Phi-4-reasoning": {
         "deprecation_date": "2027-01-17",
+        "successor_model": "microsoft--phi-4",
         "input_cost_per_token": 1.25e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 32768,
@@ -13355,6 +13550,7 @@
     },
     "azure_ai/cohere-command-a": {
         "deprecation_date": "2027-02-15",
+        "successor_model": "coherelabs-command-a-plus-05-2026-fp81",
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
@@ -13408,6 +13604,7 @@
     },
     "azure_ai/cohere-rerank-v3-english": {
         "deprecation_date": "2025-06-30",
+        "successor_model": "azure_ai/cohere-rerank-v4.0-pro",
         "input_cost_per_query": 0.002,
         "input_cost_per_token": 0.0,
         "litellm_provider": "azure_ai",
@@ -13419,6 +13616,7 @@
     },
     "azure_ai/cohere-rerank-v3-multilingual": {
         "deprecation_date": "2025-06-30",
+        "successor_model": "azure_ai/cohere-rerank-v4.0-pro",
         "input_cost_per_query": 0.002,
         "input_cost_per_token": 0.0,
         "litellm_provider": "azure_ai",
@@ -13430,6 +13628,7 @@
     },
     "azure_ai/cohere-rerank-v4.0-pro": {
         "deprecation_date": "2027-09-13",
+        "successor_model": "Cohere-rerank-v5-pro",
         "input_cost_per_query": 0.0025,
         "input_cost_per_token": 0.0,
         "litellm_provider": "azure_ai",
@@ -13441,6 +13640,7 @@
     },
     "azure_ai/cohere-rerank-v4.0-fast": {
         "deprecation_date": "2027-09-13",
+        "successor_model": "Cohere-rerank-v5-fast",
         "input_cost_per_query": 0.002,
         "input_cost_per_token": 0.0,
         "litellm_provider": "azure_ai",
@@ -13452,6 +13652,7 @@
     },
     "azure_ai/deepseek-v3.2": {
         "deprecation_date": "2027-11-01",
+        "successor_model": "azure_ai/deepseek-v4.1-flash",
         "input_cost_per_token": 5.8e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -13468,6 +13669,7 @@
     },
     "azure_ai/deepseek-v3.2-speciale": {
         "deprecation_date": "2027-11-01",
+        "successor_model": "azure_ai/deepseek-v4-pro",
         "input_cost_per_token": 5.8e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -13484,6 +13686,7 @@
     },
     "azure_ai/deepseek-v3": {
         "deprecation_date": "2025-08-31",
+        "successor_model": "azure_ai/deepseek-v3-0324",
         "input_cost_per_token": 1.14e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -13512,6 +13715,7 @@
     },
     "azure_ai/deepseek-v4-flash": {
         "deprecation_date": "2028-02-20",
+        "successor_model": "azure_ai/DeepSeek-V4-Flash-0731",
         "input_cost_per_token": 1.9e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 1000000,
@@ -13544,6 +13748,7 @@
     },
     "azure_ai/embed-v-4-0": {
         "deprecation_date": "2027-06-01",
+        "successor_model": "azure_ai/Cohere-Embed-V5-Fast",
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -13563,6 +13768,7 @@
     },
     "azure_ai/grok-4": {
         "deprecation_date": "2027-01-31",
+        "successor_model": "azure_ai/grok-4.3",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 262000,
@@ -13771,6 +13977,7 @@
     },
     "azure_ai/ministral-3b": {
         "deprecation_date": "2026-12-09",
+        "successor_model": "ministral-ministral-4b-instruct",
         "input_cost_per_token": 4e-08,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -13784,6 +13991,7 @@
     },
     "azure_ai/mistral-large": {
         "deprecation_date": "2025-04-15",
+        "successor_model": "azure_ai/mistral-medium-2505",
         "input_cost_per_token": 4e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 32000,
@@ -13797,6 +14005,7 @@
     },
     "azure_ai/mistral-large-2407": {
         "deprecation_date": "2025-05-13",
+        "successor_model": "azure_ai/mistral-medium-2505",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -13835,6 +14044,7 @@
     },
     "azure_ai/mistral-medium-2505": {
         "deprecation_date": "2026-12-09",
+        "successor_model": "azure_ai/mistral-medium-3-5",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
@@ -13848,6 +14058,7 @@
     },
     "azure_ai/mistral-nemo": {
         "deprecation_date": "2026-01-30",
+        "successor_model": "azure_ai/mistral-small-2503",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
@@ -13860,6 +14071,7 @@
     },
     "azure_ai/mistral-small": {
         "deprecation_date": "2025-07-31",
+        "successor_model": "azure_ai/mistral-small-2503",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 32000,
@@ -13873,6 +14085,7 @@
     },
     "azure_ai/mistral-small-2503": {
         "deprecation_date": "2027-02-15",
+        "successor_model": "mistralai-mistral-small-4-119b-2603",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -13886,6 +14099,7 @@
     },
     "babbage-002": {
         "deprecation_date": "2026-09-28",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 4e-07,
         "input_cost_per_token_batches": 2e-07,
         "litellm_provider": "text-completion-openai",
@@ -15529,6 +15743,7 @@
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
         "deprecation_date": "2027-04-08",
+        "successor_model": "bedrock/us-gov-east-1/anthropic.claude-sonnet-5-5",
         "input_cost_per_token": 3.6e-06,
         "litellm_provider": "bedrock",
         "supports_tool_search": true,
@@ -15701,6 +15916,7 @@
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
         "deprecation_date": "2027-04-08",
+        "successor_model": "bedrock/us-gov-west-1/anthropic.claude-sonnet-5-5",
         "input_cost_per_token": 3.6e-06,
         "litellm_provider": "bedrock",
         "supports_tool_search": true,
@@ -16228,6 +16444,7 @@
             "/v1/audio/transcriptions"
         ],
         "deprecation_date": "2027-02-26",
+        "successor_model": "gpt-live-transcribe",
         "input_cost_per_second": 0.0001,
         "source": "https://developers.openai.com/api/docs/pricing"
     },
@@ -16293,6 +16510,7 @@
         "cache_creation_input_token_cost_batches": 1.875e-06,
         "cache_read_input_token_cost_batches": 1.5e-07,
         "deprecation_date": "2026-11-30",
+        "successor_model": "claude-sonnet-5-5",
         "input_cost_per_token_batches": 1.5e-06,
         "litellm_provider": "anthropic",
         "max_input_tokens": 200000,
@@ -16326,6 +16544,7 @@
         "cache_creation_input_token_cost_batches": 1.875e-06,
         "cache_read_input_token_cost_batches": 1.5e-07,
         "deprecation_date": "2026-11-30",
+        "successor_model": "claude-sonnet-5-5",
         "input_cost_per_token_batches": 1.5e-06,
         "litellm_provider": "anthropic",
         "max_input_tokens": 200000,
@@ -17705,6 +17924,7 @@
     },
     "computer-use-preview": {
         "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 8192,
@@ -17734,6 +17954,7 @@
     },
     "computer-use-preview-2025-03-11": {
         "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 8192,
@@ -21815,6 +22036,7 @@
         "cache_creation_input_token_cost": 3.74997e-06,
         "cache_read_input_token_cost": 3.0002e-07,
         "deprecation_date": "2026-10-09",
+        "successor_model": "databricks/databricks-claude-sonnet-5",
         "input_cost_per_token": 2.99999e-06,
         "input_dbu_cost_per_token": 4.2857e-05,
         "litellm_provider": "databricks",
@@ -22000,6 +22222,7 @@
         "cache_creation_input_token_cost": 3.0002e-07,
         "cache_read_input_token_cost": 3.0002e-08,
         "deprecation_date": "2026-10-02",
+        "successor_model": "databricks/databricks-gemini-3-5-flash",
         "input_cost_per_token": 3.0001999999999996e-07,
         "input_dbu_cost_per_token": 4.285999999999999e-06,
         "litellm_provider": "databricks",
@@ -22269,7 +22492,7 @@
         },
         "mode": "chat",
         "output_cost_per_token": 3.74997e-06,
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
         "supported_modalities": [
             "text",
             "image",
@@ -22287,7 +22510,9 @@
         "input_cost_per_token_priority": 1.35002e-06,
         "output_cost_per_token_priority": 6.75003e-06,
         "cache_read_input_token_cost_priority": 1.3503e-07,
-        "cache_creation_input_token_cost_priority": 1.35002e-06
+        "cache_creation_input_token_cost_priority": 1.35002e-06,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "databricks/databricks-gemini-3-7-flash": {
         "cache_creation_input_token_cost": 7.4998e-07,
@@ -22301,7 +22526,7 @@
         },
         "mode": "chat",
         "output_cost_per_token": 3.74997e-06,
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
         "supported_modalities": [
             "text",
             "image",
@@ -22319,7 +22544,9 @@
         "input_cost_per_token_priority": 1.35002e-06,
         "output_cost_per_token_priority": 6.75003e-06,
         "cache_read_input_token_cost_priority": 1.3503e-07,
-        "cache_creation_input_token_cost_priority": 1.35002e-06
+        "cache_creation_input_token_cost_priority": 1.35002e-06,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "databricks/databricks-gemini-3-6-flash": {
         "cache_creation_input_token_cost": 7.4998e-07,
@@ -22335,7 +22562,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.74997e-06,
         "output_dbu_cost_per_token": 5.3571e-05,
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
         "supported_modalities": [
             "text",
             "image",
@@ -22354,7 +22581,9 @@
         "input_cost_per_token_priority": 1.35002e-06,
         "output_cost_per_token_priority": 6.75003e-06,
         "cache_read_input_token_cost_priority": 1.3503e-07,
-        "cache_creation_input_token_cost_priority": 1.35002e-06
+        "cache_creation_input_token_cost_priority": 1.35002e-06,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "databricks/databricks-gemini-3-5-flash": {
         "cache_creation_input_token_cost": 1.87502e-06,
@@ -22370,7 +22599,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.124998e-05,
         "output_dbu_cost_per_token": 0.000160714,
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
         "supported_modalities": [
             "text",
             "image",
@@ -22388,7 +22617,9 @@
         "input_cost_per_token_priority": 3.37498e-06,
         "output_cost_per_token_priority": 2.025002e-05,
         "cache_read_input_token_cost_priority": 3.3747e-07,
-        "cache_creation_input_token_cost_priority": 3.37498e-06
+        "cache_creation_input_token_cost_priority": 3.37498e-06,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "databricks/databricks-gemini-3-5-flash-lite": {
         "cache_creation_input_token_cost": 3.7499e-07,
@@ -22404,7 +22635,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.12501e-06,
         "output_dbu_cost_per_token": 4.4643e-05,
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
         "supported_modalities": [
             "text",
             "image",
@@ -22424,7 +22655,9 @@
         "input_cost_per_token_priority": 6.7501e-07,
         "output_cost_per_token_priority": 5.62499e-06,
         "cache_read_input_token_cost_priority": 6.748e-08,
-        "cache_creation_input_token_cost_priority": 6.7501e-07
+        "cache_creation_input_token_cost_priority": 6.7501e-07,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "databricks/databricks-gemma-3-12b": {
         "cache_creation_input_token_cost": 1.5001e-07,
@@ -23273,6 +23506,7 @@
     },
     "davinci-002": {
         "deprecation_date": "2026-09-28",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_batches": 1e-06,
         "litellm_provider": "text-completion-openai",
@@ -24167,7 +24401,7 @@
         "max_output_tokens": 163840,
         "input_cost_per_token": 5e-07,
         "output_cost_per_token": 2.15e-06,
-        "cache_read_input_token_cost": 4e-07,
+        "cache_read_input_token_cost": 3.5e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
         "supports_tool_choice": true,
@@ -24241,7 +24475,7 @@
         "max_output_tokens": 163840,
         "input_cost_per_token": 2.5e-07,
         "output_cost_per_token": 9.5e-07,
-        "cache_read_input_token_cost": 2.16e-07,
+        "cache_read_input_token_cost": 1.3e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
         "supports_tool_choice": true,
@@ -25528,6 +25762,7 @@
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 1.1e-06,
         "deprecation_date": "2026-10-15",
+        "successor_model": "eu.anthropic.claude-haiku-5-5",
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
         "max_input_tokens": 200000,
@@ -25679,6 +25914,7 @@
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2026-10-14",
+        "successor_model": "eu.anthropic.claude-sonnet-5",
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
@@ -25722,6 +25958,7 @@
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.32e-05,
         "cache_read_input_token_cost_above_200k_tokens": 6.6e-07,
         "deprecation_date": "2027-04-08",
+        "successor_model": "eu.anthropic.claude-sonnet-5-5",
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
         "max_input_tokens": 200000,
@@ -28346,6 +28583,7 @@
         "cache_read_input_token_cost": 1.4e-07,
         "cache_read_input_token_cost_priority": 1.75e-07,
         "deprecation_date": "2026-09-25",
+        "successor_model": "fireworks_ai/accounts/fireworks/models/glm-5p3",
         "input_cost_per_token": 1.4e-06,
         "input_cost_per_token_priority": 1.75e-06,
         "litellm_provider": "fireworks_ai",
@@ -28721,6 +28959,7 @@
         "cache_read_input_token_cost": 1.4e-07,
         "cache_read_input_token_cost_priority": 1.75e-07,
         "deprecation_date": "2026-09-25",
+        "successor_model": "fireworks_ai/glm-5p3",
         "input_cost_per_token": 1.4e-06,
         "input_cost_per_token_priority": 1.75e-06,
         "litellm_provider": "fireworks_ai",
@@ -29104,6 +29343,7 @@
     },
     "ft:babbage-002": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 1.6e-06,
         "input_cost_per_token_batches": 8e-07,
         "litellm_provider": "text-completion-openai",
@@ -29116,6 +29356,7 @@
     },
     "ft:davinci-002": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 1.2e-05,
         "input_cost_per_token_batches": 6e-06,
         "litellm_provider": "text-completion-openai",
@@ -29128,6 +29369,7 @@
     },
     "ft:gpt-3.5-turbo": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_batches": 1.5e-06,
         "litellm_provider": "openai",
@@ -29142,6 +29384,7 @@
     },
     "ft:gpt-3.5-turbo-0125": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 16385,
@@ -29153,6 +29396,7 @@
     },
     "ft:gpt-3.5-turbo-0613": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "ft:gpt-3.5-turbo",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 4096,
@@ -29164,6 +29408,7 @@
     },
     "ft:gpt-3.5-turbo-1106": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 16385,
@@ -29175,6 +29420,7 @@
     },
     "ft:gpt-4-0613": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 3e-05,
         "litellm_provider": "openai",
         "max_input_tokens": 8192,
@@ -29190,6 +29436,7 @@
         "cache_read_input_token_cost": 1.875e-06,
         "cache_read_input_token_cost_batches": 9e-07,
         "deprecation_date": "2027-01-14",
+        "successor_model": "gpt-6-luna",
         "input_cost_per_token": 3.75e-06,
         "input_cost_per_token_batches": 2.225e-06,
         "litellm_provider": "openai",
@@ -29211,6 +29458,7 @@
     "ft:gpt-4o-2024-11-20": {
         "cache_creation_input_token_cost": 1.875e-06,
         "deprecation_date": "2027-01-14",
+        "successor_model": "gpt-6-luna",
         "input_cost_per_token": 3.75e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
@@ -29229,6 +29477,7 @@
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
         "deprecation_date": "2027-01-14",
+        "successor_model": "gpt-6-luna",
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_batches": 1.5e-07,
         "litellm_provider": "openai",
@@ -29250,6 +29499,7 @@
         "cache_read_input_token_cost": 7.5e-07,
         "cache_read_input_token_cost_batches": 5e-07,
         "deprecation_date": "2027-01-14",
+        "successor_model": "gpt-6-luna",
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_batches": 1.5e-06,
         "litellm_provider": "openai",
@@ -29270,6 +29520,7 @@
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_batches": 1e-07,
         "deprecation_date": "2027-01-14",
+        "successor_model": "gpt-6-luna",
         "input_cost_per_token": 8e-07,
         "input_cost_per_token_batches": 4e-07,
         "litellm_provider": "openai",
@@ -29290,6 +29541,7 @@
         "cache_read_input_token_cost": 5e-08,
         "cache_read_input_token_cost_batches": 2.5e-08,
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-luna",
         "input_cost_per_token": 2e-07,
         "input_cost_per_token_batches": 1e-07,
         "litellm_provider": "openai",
@@ -29310,6 +29562,7 @@
         "cache_read_input_token_cost": 1e-06,
         "cache_read_input_token_cost_batches": 5e-07,
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 4e-06,
         "input_cost_per_token_batches": 2e-06,
         "litellm_provider": "openai",
@@ -29329,6 +29582,7 @@
     "gemini-2.5-flash": {
         "cache_read_input_audio_token_cost": 1e-07,
         "deprecation_date": "2026-10-20",
+        "successor_model": "gemini-3.8-flash",
         "cache_read_input_token_cost": 3e-08,
         "cache_read_input_token_cost_flex": 3e-08,
         "cache_read_input_token_cost_priority": 5.4e-08,
@@ -29386,6 +29640,7 @@
     },
     "gemini-2.5-flash-image": {
         "deprecation_date": "2027-03-15",
+        "successor_model": "gemini-3.1-flash-lite-image",
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_batches": 1.5e-07,
@@ -29639,6 +29894,7 @@
         "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-flash-lite-image": {
+        "deprecation_date": "2027-06-28",
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
@@ -29736,6 +29992,7 @@
     "gemini-3.1-flash-lite": {
         "cache_read_input_audio_token_cost": 5e-08,
         "deprecation_date": "2027-05-07",
+        "successor_model": "gemini-3.5-flash-lite",
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
@@ -29893,6 +30150,7 @@
     "gemini-2.5-flash-lite": {
         "cache_read_input_audio_token_cost": 3e-08,
         "deprecation_date": "2026-10-20",
+        "successor_model": "gemini-3.8-flash",
         "cache_read_input_token_cost": 1e-08,
         "cache_read_input_token_cost_flex": 1e-08,
         "cache_read_input_token_cost_priority": 1.8e-08,
@@ -30042,6 +30300,7 @@
     },
     "gemini-live-2.5-flash-native-audio": {
         "deprecation_date": "2026-12-13",
+        "successor_model": "gemini-3.8-live",
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "vertex_ai-language-models",
@@ -30175,6 +30434,7 @@
     },
     "gemini-2.5-pro": {
         "deprecation_date": "2026-10-20",
+        "successor_model": "gemini-3.8-flash",
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "cache_creation_input_token_cost_above_200k_tokens": 2.5e-07,
@@ -30455,6 +30715,7 @@
     "vertex_ai/gemini-3.5-flash": {
         "prompt_cache_min_tokens": 4096,
         "deprecation_date": "2027-05-19",
+        "successor_model": "vertex_ai/gemini-3.8-flash",
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
         "input_cost_per_token": 1.5e-06,
@@ -30566,6 +30827,7 @@
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
         "deprecation_date": "2026-11-19",
+        "successor_model": "vertex_ai/gemini-3.8-flash",
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -30628,6 +30890,7 @@
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
         "deprecation_date": "2027-01-28",
+        "successor_model": "vertex_ai/gemini-3.8-flash",
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -30638,6 +30901,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/gemini-3.8-flash": {
+        "deprecation_date": "2027-09-02",
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
         "cache_read_input_token_cost_flex": 3.75e-08,
@@ -30744,6 +31008,7 @@
         "supports_native_streaming": true
     },
     "vertex_ai/gemini-3.8-live": {
+        "deprecation_date": "2027-09-25",
         "gemini_audio_only_live": true,
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_image_token": 1e-06,
@@ -31039,6 +31304,7 @@
     },
     "gemini-embedding-001": {
         "deprecation_date": "2028-05-20",
+        "successor_model": "gemini-embedding-2",
         "input_cost_per_token": 1.5e-07,
         "input_cost_per_token_batches": 1.2e-07,
         "litellm_provider": "vertex_ai-embedding-models",
@@ -31133,6 +31399,7 @@
     },
     "gemini/gemini-embedding-001": {
         "deprecation_date": "2028-05-14",
+        "successor_model": "gemini/gemini-embedding-2",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "gemini",
         "max_input_tokens": 2048,
@@ -31167,6 +31434,7 @@
     },
     "gemini/gemini-3-pro-image-preview": {
         "deprecation_date": "2026-06-25",
+        "successor_model": "gemini/gemini-3-pro-image",
         "input_cost_per_image": 0.0011,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_batches": 1e-06,
@@ -31215,6 +31483,7 @@
     },
     "gemini/gemini-3.1-flash-image-preview": {
         "deprecation_date": "2026-06-25",
+        "successor_model": "gemini/gemini-nano-banana-2.1",
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
         "litellm_provider": "gemini",
@@ -31263,6 +31532,7 @@
         "cache_read_input_token_cost_flex": 1.25e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
         "deprecation_date": "2026-05-25",
+        "successor_model": "gemini/gemini-3.1-flash-lite",
         "input_cost_per_audio_token": 5e-07,
         "input_cost_per_token": 2.5e-07,
         "input_cost_per_token_batches": 1.25e-07,
@@ -31421,6 +31691,8 @@
         "cache_read_input_token_cost_batches": 3e-08,
         "cache_read_input_token_cost_flex": 3e-08,
         "cache_read_input_token_cost_priority": 5.4e-08,
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gemini/gemini-3-flash-preview",
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_audio_token_flex": 5e-07,
         "input_cost_per_token": 3e-07,
@@ -31480,6 +31752,7 @@
     "gemini/gemini-2.5-flash-image": {
         "cache_read_input_token_cost": 3e-08,
         "deprecation_date": "2027-03-15",
+        "successor_model": "gemini/gemini-3.1-flash-lite-image",
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_batches": 1.5e-07,
@@ -31707,6 +31980,7 @@
     },
     "gemini/deep-research-pro-preview-12-2025": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gemini/deep-research-preview-04-2026",
         "input_cost_per_image": 0.0011,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_batches": 1e-06,
@@ -31924,6 +32198,7 @@
     },
     "gemini/gemini-2.5-flash-preview-tts": {
         "deprecation_date": "2026-11-17",
+        "successor_model": "gemini/gemini-3.8-flash-tts",
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
         "litellm_provider": "gemini",
@@ -32004,11 +32279,14 @@
         "output_cost_per_token_flex": 5e-06,
         "supports_url_context": true,
         "cache_read_input_token_cost_above_200k_tokens_batches": 2.5e-07,
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gemini/gemini-3.1-pro-preview",
         "input_cost_per_token_above_200k_tokens_batches": 1.25e-06,
         "output_cost_per_token_above_200k_tokens_batches": 7.5e-06
     },
     "gemini/gemini-2.5-computer-use-preview-10-2025": {
         "deprecation_date": "2026-07-28",
+        "successor_model": "gemini/gemini-3.8-flash",
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "litellm_provider": "gemini",
@@ -32047,6 +32325,7 @@
         "cache_read_input_token_cost_flex": 1.25e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
         "deprecation_date": "2027-05-07",
+        "successor_model": "gemini/gemini-3.5-flash-lite",
         "input_cost_per_audio_token": 5e-07,
         "input_cost_per_audio_token_flex": 2.5e-07,
         "input_cost_per_token": 2.5e-07,
@@ -32107,7 +32386,7 @@
     },
     "gemini/gemini-3.5-flash-lite": {
         "cache_read_input_token_cost": 3e-08,
-        "cache_read_input_token_cost_batches": 2e-08,
+        "cache_read_input_token_cost_batches": 1.5e-08,
         "cache_read_input_token_cost_flex": 2e-08,
         "cache_read_input_token_cost_priority": 5e-08,
         "input_cost_per_token": 3e-07,
@@ -32512,7 +32791,8 @@
         "supports_video_input": true,
         "supports_vision": true,
         "tpm": 800000,
-        "deprecation_date": "2026-10-22"
+        "deprecation_date": "2026-10-22",
+        "successor_model": "gemini/gemini-omni-1.1-flash"
     },
     "gemini/gemini-3.1-pro-preview": {
         "prompt_cache_min_tokens": 4096,
@@ -32704,13 +32984,13 @@
         "input_cost_per_audio_token": 1.5e-06,
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "vertex_ai-language-models",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65535,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 57920,
         "mode": "chat",
         "output_cost_per_reasoning_token": 9e-06,
         "output_cost_per_token": 9e-06,
         "output_cost_per_video_token": 1.75e-05,
-        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-flash-preview",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -32728,11 +33008,13 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-11-06"
     },
     "gemini-3.5-flash": {
         "prompt_cache_min_tokens": 4096,
         "deprecation_date": "2027-05-19",
+        "successor_model": "gemini-3.8-flash",
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
         "input_cost_per_audio_token": 1.5e-06,
@@ -32844,6 +33126,7 @@
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
         "deprecation_date": "2026-11-19",
+        "successor_model": "gemini-3.8-flash",
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -32906,6 +33189,7 @@
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
         "deprecation_date": "2027-01-28",
+        "successor_model": "gemini-3.8-flash",
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -32916,6 +33200,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini-3.8-flash": {
+        "deprecation_date": "2027-09-02",
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
         "cache_read_input_token_cost_flex": 3.75e-08,
@@ -33024,6 +33309,7 @@
     "gemini/gemini-2.5-pro-preview-tts": {
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2026-11-17",
+        "successor_model": "gemini/gemini-3.8-flash-tts",
         "input_cost_per_audio_token": 7e-07,
         "input_cost_per_token": 1e-06,
         "input_cost_per_token_batches": 5e-07,
@@ -33276,6 +33562,7 @@
     },
     "gemini/veo-3.1-fast-generate-preview": {
         "deprecation_date": "2026-10-22",
+        "successor_model": "gemini/gemini-omni-1.1-flash",
         "litellm_provider": "gemini",
         "max_input_tokens": 1024,
         "mode": "video_generation",
@@ -33292,6 +33579,7 @@
     },
     "gemini/veo-3.1-generate-preview": {
         "deprecation_date": "2026-10-22",
+        "successor_model": "gemini/gemini-omni-1.1-flash",
         "litellm_provider": "gemini",
         "max_input_tokens": 1024,
         "mode": "video_generation",
@@ -33307,6 +33595,7 @@
     },
     "gemini/veo-3.1-lite-generate-preview": {
         "deprecation_date": "2026-10-22",
+        "successor_model": "gemini/gemini-omni-1.1-flash",
         "litellm_provider": "gemini",
         "max_input_tokens": 1024,
         "mode": "video_generation",
@@ -34726,6 +35015,7 @@
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
         "cache_read_input_token_cost_above_200k_tokens": 6e-07,
         "deprecation_date": "2027-04-08",
+        "successor_model": "global.anthropic.claude-sonnet-5-5",
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
         "max_input_tokens": 200000,
@@ -34761,6 +35051,7 @@
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2026-10-14",
+        "successor_model": "global.anthropic.claude-sonnet-5",
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
@@ -34849,6 +35140,7 @@
     },
     "gpt-3.5-turbo": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 5e-07,
         "litellm_provider": "openai",
         "max_input_tokens": 16385,
@@ -34863,6 +35155,7 @@
     },
     "gpt-3.5-turbo-0125": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
         "litellm_provider": "openai",
@@ -34880,6 +35173,7 @@
     },
     "gpt-3.5-turbo-1106": {
         "deprecation_date": "2026-09-28",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 1e-06,
         "input_cost_per_token_batches": 1e-06,
         "litellm_provider": "openai",
@@ -34909,6 +35203,7 @@
     },
     "gpt-3.5-turbo-instruct": {
         "deprecation_date": "2026-09-28",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "text-completion-openai",
         "max_input_tokens": 8192,
@@ -34927,6 +35222,7 @@
     },
     "gpt-4": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 3e-05,
         "litellm_provider": "openai",
         "max_input_tokens": 8192,
@@ -34940,6 +35236,7 @@
     },
     "gpt-4-0613": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 3e-05,
         "input_cost_per_token_batches": 1.5e-05,
         "litellm_provider": "openai",
@@ -34956,6 +35253,7 @@
     },
     "gpt-4-1106-preview": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1e-05,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
@@ -34970,6 +35268,7 @@
     },
     "gpt-4-turbo": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1e-05,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
@@ -34986,6 +35285,7 @@
     },
     "gpt-4-turbo-2024-04-09": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1e-05,
         "input_cost_per_token_batches": 5e-06,
         "litellm_provider": "openai",
@@ -35007,6 +35307,7 @@
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_priority": 8.75e-07,
         "deprecation_date": "2027-01-14",
+        "successor_model": "gpt-6-luna",
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_batches": 1e-06,
         "input_cost_per_token_priority": 3.5e-06,
@@ -35050,6 +35351,7 @@
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_priority": 8.75e-07,
         "deprecation_date": "2027-01-14",
+        "successor_model": "gpt-6-luna",
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_priority": 3.5e-06,
         "input_cost_per_token_batches": 1e-06,
@@ -35093,6 +35395,7 @@
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_priority": 1.75e-07,
         "deprecation_date": "2027-01-14",
+        "successor_model": "gpt-6-luna",
         "input_cost_per_token": 4e-07,
         "input_cost_per_token_batches": 2e-07,
         "input_cost_per_token_priority": 7e-07,
@@ -35136,6 +35439,7 @@
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_priority": 1.75e-07,
         "deprecation_date": "2027-01-14",
+        "successor_model": "gpt-6-luna",
         "input_cost_per_token": 4e-07,
         "input_cost_per_token_priority": 7e-07,
         "input_cost_per_token_batches": 2e-07,
@@ -35179,6 +35483,7 @@
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_priority": 5e-08,
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-luna",
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
         "input_cost_per_token_priority": 2e-07,
@@ -35216,6 +35521,7 @@
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_priority": 5e-08,
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-luna",
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_priority": 2e-07,
         "input_cost_per_token_batches": 5e-08,
@@ -35253,6 +35559,7 @@
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_priority": 2.125e-06,
         "deprecation_date": "2027-01-14",
+        "successor_model": "gpt-6-luna",
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_batches": 1.25e-06,
         "input_cost_per_token_priority": 4.25e-06,
@@ -35275,6 +35582,7 @@
     },
     "gpt-4o-2024-05-13": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 5e-06,
         "input_cost_per_token_batches": 2.5e-06,
         "input_cost_per_token_priority": 8.75e-06,
@@ -35298,6 +35606,7 @@
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_priority": 2.125e-06,
         "deprecation_date": "2027-01-14",
+        "successor_model": "gpt-6-luna",
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_priority": 4.25e-06,
         "input_cost_per_token_batches": 1.25e-06,
@@ -35322,6 +35631,7 @@
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_priority": 2.125e-06,
         "deprecation_date": "2027-01-14",
+        "successor_model": "gpt-6-luna",
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_priority": 4.25e-06,
         "input_cost_per_token_batches": 1.25e-06,
@@ -35344,6 +35654,7 @@
     },
     "gpt-4o-audio-preview-2024-12-17": {
         "deprecation_date": "2027-01-20",
+        "successor_model": "gpt-audio-1.5",
         "input_cost_per_audio_token": 4e-05,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "openai",
@@ -35361,6 +35672,7 @@
     },
     "gpt-4o-audio-preview-2025-06-03": {
         "deprecation_date": "2027-01-20",
+        "successor_model": "gpt-audio-1.5",
         "input_cost_per_audio_token": 4e-05,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "openai",
@@ -35378,6 +35690,7 @@
     },
     "gpt-audio": {
         "deprecation_date": "2027-01-20",
+        "successor_model": "gpt-audio-1.5",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "openai",
@@ -35448,6 +35761,7 @@
     },
     "gpt-audio-2025-08-28": {
         "deprecation_date": "2027-01-20",
+        "successor_model": "gpt-audio-1.5",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "openai",
@@ -35485,6 +35799,7 @@
     },
     "gpt-audio-mini": {
         "deprecation_date": "2027-01-20",
+        "successor_model": "gpt-audio-1.5",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "openai",
@@ -35522,6 +35837,7 @@
     },
     "gpt-audio-mini-2025-10-06": {
         "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-audio-1.5",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "openai",
@@ -35592,12 +35908,14 @@
         "supports_tool_choice": true,
         "supports_vision": false,
         "deprecation_date": "2027-01-20",
+        "successor_model": "gpt-audio-1.5",
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "gpt-4o-mini": {
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_priority": 1.25e-07,
         "deprecation_date": "2027-01-14",
+        "successor_model": "gpt-6-luna",
         "input_cost_per_token": 1.5e-07,
         "input_cost_per_token_batches": 7.5e-08,
         "input_cost_per_token_priority": 2.5e-07,
@@ -35627,6 +35945,7 @@
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_priority": 1.25e-07,
         "deprecation_date": "2027-01-14",
+        "successor_model": "gpt-6-luna",
         "input_cost_per_token": 1.5e-07,
         "input_cost_per_token_priority": 2.5e-07,
         "input_cost_per_token_batches": 7.5e-08,
@@ -35715,6 +36034,7 @@
     },
     "gpt-4o-mini-search-preview-2025-03-11": {
         "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.6-terra",
         "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_token": 1.5e-07,
         "input_cost_per_token_batches": 7.5e-08,
@@ -35752,11 +36072,13 @@
             "/v1/audio/transcriptions"
         ],
         "deprecation_date": "2027-02-26",
+        "successor_model": "gpt-live-transcribe",
         "input_cost_per_second": 5e-05,
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "gpt-4o-mini-tts": {
         "deprecation_date": "2027-01-06",
+        "successor_model": "gpt-realtime-2.1-mini",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "openai",
         "mode": "audio_speech",
@@ -35777,6 +36099,7 @@
     },
     "gpt-4o-mini-tts-2025-03-20": {
         "deprecation_date": "2027-01-06",
+        "successor_model": "gpt-realtime-2.1-mini",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "openai",
         "mode": "audio_speech",
@@ -35822,6 +36145,7 @@
     },
     "gpt-4o-search-preview-2025-03-11": {
         "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.6-terra",
         "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_batches": 1.25e-06,
@@ -35859,6 +36183,7 @@
             "/v1/audio/transcriptions"
         ],
         "deprecation_date": "2027-02-26",
+        "successor_model": "gpt-live-transcribe",
         "input_cost_per_second": 0.0001,
         "source": "https://developers.openai.com/api/docs/pricing"
     },
@@ -35867,6 +36192,7 @@
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_batches": 6.3e-07,
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_token": 5e-06,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -35888,6 +36214,7 @@
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_batches": 6.3e-07,
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_token": 5e-06,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36011,6 +36338,7 @@
     },
     "low/1024-x-1024/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.009,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36023,6 +36351,7 @@
     },
     "low/1024-x-1536/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.013,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36035,6 +36364,7 @@
     },
     "low/1536-x-1024/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.013,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36047,6 +36377,7 @@
     },
     "medium/1024-x-1024/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.034,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36059,6 +36390,7 @@
     },
     "medium/1024-x-1536/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.05,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36071,6 +36403,7 @@
     },
     "medium/1536-x-1024/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.05,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36083,6 +36416,7 @@
     },
     "high/1024-x-1024/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.133,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36095,6 +36429,7 @@
     },
     "high/1024-x-1536/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.2,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36107,6 +36442,7 @@
     },
     "high/1536-x-1024/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.2,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36119,6 +36455,7 @@
     },
     "standard/1024-x-1024/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.009,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36131,6 +36468,7 @@
     },
     "standard/1024-x-1536/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.013,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36143,6 +36481,7 @@
     },
     "standard/1536-x-1024/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.013,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36155,6 +36494,7 @@
     },
     "1024-x-1024/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.009,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36167,6 +36507,7 @@
     },
     "1024-x-1536/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.013,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36179,6 +36520,7 @@
     },
     "1536-x-1024/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.013,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -36199,7 +36541,8 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-12-01"
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst"
     },
     "low/1024-x-1536/gpt-image-1.5-2025-12-16": {
         "input_cost_per_image": 0.013,
@@ -36211,7 +36554,8 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-12-01"
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst"
     },
     "low/1536-x-1024/gpt-image-1.5-2025-12-16": {
         "input_cost_per_image": 0.013,
@@ -36223,7 +36567,8 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-12-01"
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst"
     },
     "medium/1024-x-1024/gpt-image-1.5-2025-12-16": {
         "input_cost_per_image": 0.034,
@@ -36235,7 +36580,8 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-12-01"
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst"
     },
     "medium/1024-x-1536/gpt-image-1.5-2025-12-16": {
         "input_cost_per_image": 0.05,
@@ -36247,7 +36593,8 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-12-01"
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst"
     },
     "medium/1536-x-1024/gpt-image-1.5-2025-12-16": {
         "input_cost_per_image": 0.05,
@@ -36259,7 +36606,8 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-12-01"
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst"
     },
     "high/1024-x-1024/gpt-image-1.5-2025-12-16": {
         "input_cost_per_image": 0.133,
@@ -36271,7 +36619,8 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-12-01"
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst"
     },
     "high/1024-x-1536/gpt-image-1.5-2025-12-16": {
         "input_cost_per_image": 0.2,
@@ -36283,7 +36632,8 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-12-01"
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst"
     },
     "high/1536-x-1024/gpt-image-1.5-2025-12-16": {
         "input_cost_per_image": 0.2,
@@ -36295,7 +36645,8 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-12-01"
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst"
     },
     "standard/1024-x-1024/gpt-image-1.5-2025-12-16": {
         "input_cost_per_image": 0.009,
@@ -36307,7 +36658,8 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-12-01"
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst"
     },
     "standard/1024-x-1536/gpt-image-1.5-2025-12-16": {
         "input_cost_per_image": 0.013,
@@ -36319,7 +36671,8 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-12-01"
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst"
     },
     "standard/1536-x-1024/gpt-image-1.5-2025-12-16": {
         "input_cost_per_image": 0.013,
@@ -36331,7 +36684,8 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-12-01"
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst"
     },
     "1024-x-1024/gpt-image-1.5-2025-12-16": {
         "input_cost_per_image": 0.009,
@@ -36343,7 +36697,8 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-12-01"
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst"
     },
     "1024-x-1536/gpt-image-1.5-2025-12-16": {
         "input_cost_per_image": 0.013,
@@ -36355,7 +36710,8 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-12-01"
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst"
     },
     "1536-x-1024/gpt-image-1.5-2025-12-16": {
         "input_cost_per_image": 0.013,
@@ -36367,7 +36723,8 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-12-01"
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst"
     },
     "gpt-5": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -36375,6 +36732,7 @@
         "cache_read_input_token_cost_flex": 6.25e-08,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "deprecation_date": "2026-12-11",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_batches": 6.25e-07,
         "input_cost_per_token_flex": 6.25e-07,
@@ -36430,6 +36788,7 @@
     "gpt-5-codex": {
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 272000,
@@ -36515,11 +36874,13 @@
         "source": "https://developers.openai.com/api/docs/pricing",
         "supports_xhigh_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
-        "deprecation_date": "2027-04-01"
+        "deprecation_date": "2027-04-01",
+        "successor_model": "gpt-6-sol"
     },
     "gpt-5.1-codex-mini": {
         "cache_read_input_token_cost": 2.5e-08,
         "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "openai",
         "max_input_tokens": 400000,
@@ -36550,6 +36911,7 @@
     "gpt-5.1-codex-max": {
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 400000,
@@ -36581,6 +36943,7 @@
     "gpt-5.1-codex": {
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 400000,
@@ -36612,6 +36975,7 @@
     "gpt-5.1-chat-latest": {
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
@@ -36646,6 +37010,7 @@
         "cache_read_input_token_cost_flex": 6.25e-08,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "deprecation_date": "2027-04-01",
+        "successor_model": "gpt-6-sol",
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_priority": 2.5e-06,
         "litellm_provider": "openai",
@@ -36762,6 +37127,7 @@
     "gpt-5.2-codex": {
         "cache_read_input_token_cost": 1.75e-07,
         "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.75e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 272000,
@@ -36793,6 +37159,7 @@
     "gpt-5.2-chat-latest": {
         "cache_read_input_token_cost": 1.75e-07,
         "deprecation_date": "2026-08-10",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.75e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
@@ -38558,13 +38925,15 @@
         "source": "https://developers.openai.com/api/docs/pricing",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
-        "deprecation_date": "2027-04-01"
+        "deprecation_date": "2027-04-01",
+        "successor_model": "gpt-6-luna"
     },
     "gpt-5.4-nano-2026-03-17": {
         "cache_read_input_token_cost": 2e-08,
         "cache_read_input_token_cost_batches": 1e-08,
         "cache_read_input_token_cost_flex": 1e-08,
         "deprecation_date": "2027-04-01",
+        "successor_model": "gpt-6-luna",
         "input_cost_per_token": 2e-07,
         "input_cost_per_token_flex": 1e-07,
         "input_cost_per_token_batches": 1e-07,
@@ -38621,6 +38990,7 @@
     },
     "gpt-5-pro": {
         "deprecation_date": "2026-12-11",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.5e-05,
         "input_cost_per_token_batches": 7.5e-06,
         "litellm_provider": "openai",
@@ -38670,6 +39040,7 @@
     },
     "gpt-5-pro-2025-10-06": {
         "deprecation_date": "2026-12-11",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.5e-05,
         "input_cost_per_token_batches": 7.5e-06,
         "litellm_provider": "openai",
@@ -38723,6 +39094,7 @@
         "cache_read_input_token_cost_flex": 6.25e-08,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "deprecation_date": "2026-12-11",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_batches": 6.25e-07,
         "input_cost_per_token_flex": 6.25e-07,
@@ -38778,6 +39150,7 @@
     "gpt-5-chat": {
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.2-chat-latest",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
@@ -38813,6 +39186,7 @@
     "gpt-5-chat-latest": {
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
@@ -38890,11 +39264,13 @@
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
-        "deprecation_date": "2027-04-01"
+        "deprecation_date": "2027-04-01",
+        "successor_model": "gpt-6-sol"
     },
     "gpt-5.3-chat-latest": {
         "cache_read_input_token_cost": 1.75e-07,
         "deprecation_date": "2026-08-10",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.75e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
@@ -38929,6 +39305,7 @@
         "cache_read_input_token_cost_flex": 1.25e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
         "deprecation_date": "2026-12-11",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 2.5e-07,
         "input_cost_per_token_batches": 1.25e-07,
         "input_cost_per_token_flex": 1.25e-07,
@@ -38987,6 +39364,7 @@
         "cache_read_input_token_cost_flex": 1.25e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
         "deprecation_date": "2026-12-11",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 2.5e-07,
         "input_cost_per_token_batches": 1.25e-07,
         "input_cost_per_token_flex": 1.25e-07,
@@ -39044,6 +39422,7 @@
         "cache_read_input_token_cost_batches": 2.5e-09,
         "cache_read_input_token_cost_flex": 2.5e-09,
         "deprecation_date": "2026-12-11",
+        "successor_model": "gpt-5.6-luna",
         "input_cost_per_token": 5e-08,
         "input_cost_per_token_batches": 2.5e-08,
         "input_cost_per_token_flex": 2.5e-08,
@@ -39099,6 +39478,7 @@
         "cache_read_input_token_cost_batches": 2.5e-09,
         "cache_read_input_token_cost_flex": 2.5e-09,
         "deprecation_date": "2026-12-11",
+        "successor_model": "gpt-5.6-luna",
         "input_cost_per_token": 5e-08,
         "input_cost_per_token_batches": 2.5e-08,
         "input_cost_per_token_flex": 2.5e-08,
@@ -39154,6 +39534,7 @@
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_batches": 6.3e-07,
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image_token": 1e-05,
         "input_cost_per_image_token_batches": 5e-06,
         "input_cost_per_token": 5e-06,
@@ -39172,6 +39553,7 @@
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_batches": 1e-07,
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image_token": 2.5e-06,
         "input_cost_per_image_token_batches": 1.25e-06,
         "input_cost_per_token": 2e-06,
@@ -39191,6 +39573,7 @@
         "cache_read_input_image_token_cost": 5e-07,
         "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2027-01-20",
+        "successor_model": "gpt-realtime-2.1",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
         "input_cost_per_token": 4e-06,
@@ -39373,6 +39756,7 @@
         "cache_read_input_image_token_cost": 8e-08,
         "cache_read_input_token_cost": 6e-08,
         "deprecation_date": "2027-01-20",
+        "successor_model": "gpt-realtime-2.1-mini",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_image_token": 8e-07,
         "input_cost_per_token": 6e-07,
@@ -39408,6 +39792,7 @@
         "cache_read_input_image_token_cost": 5e-07,
         "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2027-01-20",
+        "successor_model": "gpt-realtime-2.1",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
         "input_cost_per_token": 4e-06,
@@ -39887,6 +40272,7 @@
     },
     "high/1024-x-1024/gpt-image-1": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.167,
         "input_cost_per_pixel": 1.59263611e-07,
         "litellm_provider": "openai",
@@ -39898,6 +40284,7 @@
     },
     "high/1024-x-1536/gpt-image-1": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.25,
         "input_cost_per_pixel": 1.58945719e-07,
         "litellm_provider": "openai",
@@ -39909,6 +40296,7 @@
     },
     "high/1536-x-1024/gpt-image-1": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.25,
         "input_cost_per_pixel": 1.58945719e-07,
         "litellm_provider": "openai",
@@ -40286,6 +40674,7 @@
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.32e-05,
         "cache_read_input_token_cost_above_200k_tokens": 6.6e-07,
         "deprecation_date": "2027-04-08",
+        "successor_model": "jp.anthropic.claude-sonnet-5-5",
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
         "max_input_tokens": 200000,
@@ -41448,6 +41837,7 @@
     },
     "low/1024-x-1024/gpt-image-1": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.011,
         "input_cost_per_pixel": 1.0490417e-08,
         "litellm_provider": "openai",
@@ -41459,6 +41849,7 @@
     },
     "low/1024-x-1536/gpt-image-1": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.016,
         "input_cost_per_pixel": 1.0172526e-08,
         "litellm_provider": "openai",
@@ -41470,6 +41861,7 @@
     },
     "low/1536-x-1024/gpt-image-1": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.016,
         "input_cost_per_pixel": 1.0172526e-08,
         "litellm_provider": "openai",
@@ -41493,6 +41885,7 @@
     },
     "medium/1024-x-1024/gpt-image-1": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.042,
         "input_cost_per_pixel": 4.0054321e-08,
         "litellm_provider": "openai",
@@ -41504,6 +41897,7 @@
     },
     "medium/1024-x-1536/gpt-image-1": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.063,
         "input_cost_per_pixel": 4.0054321e-08,
         "litellm_provider": "openai",
@@ -41515,6 +41909,7 @@
     },
     "medium/1536-x-1024/gpt-image-1": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.063,
         "input_cost_per_pixel": 4.0054321e-08,
         "litellm_provider": "openai",
@@ -41526,6 +41921,7 @@
     },
     "low/1024-x-1024/gpt-image-1-mini": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.005,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -41535,6 +41931,7 @@
     },
     "low/1024-x-1536/gpt-image-1-mini": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.006,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -41544,6 +41941,7 @@
     },
     "low/1536-x-1024/gpt-image-1-mini": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.006,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -41553,6 +41951,7 @@
     },
     "medium/1024-x-1024/gpt-image-1-mini": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.011,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -41562,6 +41961,7 @@
     },
     "medium/1024-x-1536/gpt-image-1-mini": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.015,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -41571,6 +41971,7 @@
     },
     "medium/1536-x-1024/gpt-image-1-mini": {
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image": 0.015,
         "litellm_provider": "openai",
         "mode": "image_generation",
@@ -44263,7 +44664,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/google%2Fgemma-3-27b-it"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 4e-08
     },
     "nebius/meta-llama/Llama-3.3-70B-Instruct": {
         "max_input_tokens": 131072,
@@ -44489,7 +44891,7 @@
         "source": "https://tokenfactory.nebius.com/models/catalog/text2text/deepseek-ai%2FDeepSeek-V4-Flash"
     },
     "nebius/deepseek-ai/DeepSeek-V4-Flash-0731": {
-        "max_input_tokens": 1024000,
+        "max_input_tokens": 1048576,
         "max_output_tokens": 1024000,
         "input_cost_per_token": 1.4e-07,
         "output_cost_per_token": 2.8e-07,
@@ -44497,7 +44899,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/deepseek-ai%2FDeepSeek-V4-Flash-0731"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 1e-08
     },
     "nebius/deepseek-ai/DeepSeek-V4-Pro": {
         "max_input_tokens": 1048576,
@@ -44508,29 +44911,32 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/deepseek-ai%2FDeepSeek-V4-Pro"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 1.4e-07
     },
     "nebius/deepseek-ai/DeepSeek-V4-Pro-0813": {
         "input_cost_per_token": 1.32e-06,
         "litellm_provider": "nebius",
-        "max_input_tokens": 979000,
+        "max_input_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 3.96e-06,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/deepseek-ai%2FDeepSeek-V4-Pro-0813",
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
         "supports_function_calling": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "cache_read_input_token_cost": 4e-08
     },
     "nebius/deepseek-ai/DeepSeek-V4.1-Flash": {
         "input_cost_per_token": 3e-07,
         "litellm_provider": "nebius",
-        "max_input_tokens": 1048000,
+        "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
-        "source": "https://tokenfactory.nebius.com/endpoints?modals=endpoint-details&model-id=deepseek-ai/DeepSeek-V4.1-Flash",
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 1e-08
     },
     "nebius/MiniMaxAI/MiniMax-M2.5": {
         "max_input_tokens": 196608,
@@ -44553,7 +44959,8 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_vision": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/MiniMaxAI%2FMiniMax-M3"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 6e-08
     },
     "nebius/moonshotai/Kimi-K2.6": {
         "max_input_tokens": 262144,
@@ -44565,7 +44972,8 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_vision": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/image2text/moonshotai%2FKimi-K2.6"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 1.6e-07
     },
     "nebius/moonshotai/Kimi-K2.7-Code": {
         "max_input_tokens": 262144,
@@ -44577,10 +44985,11 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_vision": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/moonshotai%2FKimi-K2.7-Code"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 1.5e-07
     },
     "nebius/moonshotai/Kimi-K3": {
-        "max_input_tokens": 1024000,
+        "max_input_tokens": 1048576,
         "max_output_tokens": 1024000,
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 1.5e-05,
@@ -44589,7 +44998,8 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_vision": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/image2text/moonshotai%2FKimi-K3"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 3e-07
     },
     "nebius/NousResearch/Hermes-4-405B": {
         "max_input_tokens": 131072,
@@ -44600,7 +45010,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/NousResearch%2FHermes-4-405B"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 2e-07
     },
     "nebius/NousResearch/Hermes-4-70B": {
         "max_input_tokens": 131072,
@@ -44644,7 +45055,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/nvidia%2FNVIDIA-Nemotron-3-Nano-30B-A3B"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 1.2e-08
     },
     "nebius/nvidia/Nemotron-3-Nano-Omni": {
         "max_input_tokens": 262144,
@@ -44667,7 +45079,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/nvidia%2Fnemotron-3-super-120b-a12b"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 6e-08
     },
     "nebius/nvidia/Nemotron-3-Ultra-550b-a55b": {
         "max_input_tokens": 1048576,
@@ -44678,7 +45091,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/nvidia%2FNemotron-3-Ultra-550b-a55b"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 1.2e-07
     },
     "nebius/nvidia/Nemotron-3_5-Lightning": {
         "max_input_tokens": 1048576,
@@ -44689,7 +45103,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/nvidia%2FNemotron-3_5-Lightning"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 3e-08
     },
     "nebius/openai/gpt-oss-120b": {
         "max_input_tokens": 131072,
@@ -44700,7 +45115,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/openai%2Fgpt-oss-120b"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 1e-07
     },
     "nebius/openbmb/MiniCPM-V-4_5": {
         "max_input_tokens": 32000,
@@ -44710,7 +45126,8 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_vision": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/image2text/openbmb%2FMiniCPM-V-4_5"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 1.3e-07
     },
     "nebius/Qwen/Qwen3-235B-A22B-Instruct-2507": {
         "max_input_tokens": 262144,
@@ -44720,7 +45137,8 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/Qwen%2FQwen3-235B-A22B-Instruct-2507"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 5e-08
     },
     "nebius/Qwen/Qwen3-30B-A3B-Instruct-2507": {
         "max_input_tokens": 262144,
@@ -44730,7 +45148,8 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/Qwen%2FQwen3-30B-A3B-Instruct-2507"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 1e-07
     },
     "nebius/Qwen/Qwen3-Next-80B-A3B-Thinking": {
         "max_input_tokens": 128000,
@@ -44752,7 +45171,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/Qwen%2FQwen3.5-397B-A17B"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 1.2e-07
     },
     "nebius/Qwen/Qwen3.8-27B": {
         "input_cost_per_token": 4.5e-07,
@@ -44760,9 +45180,10 @@
         "max_input_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 3e-06,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/Qwen%2FQwen3.8-27B",
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
         "supports_function_calling": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "cache_read_input_token_cost": 1e-07
     },
     "nebius/zai-org/GLM-5.1": {
         "max_input_tokens": 202752,
@@ -44773,7 +45194,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/zai-org%2FGLM-5.1"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 2.6e-07
     },
     "nebius/zai-org/GLM-5.2": {
         "max_input_tokens": 1048576,
@@ -44784,21 +45206,23 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/zai-org%2FGLM-5.2"
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "cache_read_input_token_cost": 1.4e-07
     },
     "nebius/zai-org/GLM-5.3": {
         "input_cost_per_token": 1.4e-06,
         "litellm_provider": "nebius",
-        "max_input_tokens": 1024000,
+        "max_input_tokens": 1048576,
         "max_output_tokens": 1024000,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/zai-org%2FGLM-5.3",
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
         "supports_function_calling": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "cache_read_input_token_cost": 2.6e-07
     },
     "nebius/zai-org/GLM-5.3-Flash": {
-        "max_input_tokens": 1024000,
+        "max_input_tokens": 1048576,
         "max_output_tokens": 1024000,
         "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 5e-07,
@@ -44806,8 +45230,9 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/zai-org%2FGLM-5.3-Flash",
-        "supports_vision": true
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-08
     },
     "nebius/BAAI/bge-en-icl": {
         "max_input_tokens": 32768,
@@ -44930,6 +45355,7 @@
     "o1": {
         "cache_read_input_token_cost": 7.5e-06,
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.5e-05,
         "input_cost_per_token_batches": 7.5e-06,
         "litellm_provider": "openai",
@@ -44952,6 +45378,7 @@
     "o1-2024-12-17": {
         "cache_read_input_token_cost": 7.5e-06,
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.5e-05,
         "input_cost_per_token_batches": 7.5e-06,
         "litellm_provider": "openai",
@@ -44973,6 +45400,7 @@
     },
     "o1-pro": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 0.00015,
         "input_cost_per_token_batches": 7.5e-05,
         "litellm_provider": "openai",
@@ -45006,6 +45434,7 @@
     },
     "o1-pro-2025-03-19": {
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 0.00015,
         "input_cost_per_token_batches": 7.5e-05,
         "litellm_provider": "openai",
@@ -45042,6 +45471,7 @@
         "cache_read_input_token_cost_flex": 2.5e-07,
         "cache_read_input_token_cost_priority": 8.75e-07,
         "deprecation_date": "2026-12-11",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_batches": 1e-06,
         "input_cost_per_token_flex": 1e-06,
@@ -45119,10 +45549,12 @@
         "supports_tool_choice": false,
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-07-23"
+        "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.6-sol"
     },
     "o3-deep-research-2025-06-26": {
         "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.6-sol",
         "cache_read_input_token_cost": 2.5e-06,
         "input_cost_per_token": 1e-05,
         "litellm_provider": "openai",
@@ -45157,6 +45589,7 @@
         "cache_read_input_token_cost_flex": 2.5e-07,
         "cache_read_input_token_cost_priority": 8.75e-07,
         "deprecation_date": "2026-12-11",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_batches": 1e-06,
         "input_cost_per_token_flex": 1e-06,
@@ -45208,6 +45641,7 @@
     "o3-mini": {
         "cache_read_input_token_cost": 5.5e-07,
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.1e-06,
         "input_cost_per_token_batches": 5.5e-07,
         "litellm_provider": "openai",
@@ -45228,6 +45662,7 @@
     "o3-mini-2025-01-31": {
         "cache_read_input_token_cost": 5.5e-07,
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.1e-06,
         "input_cost_per_token_batches": 5.5e-07,
         "litellm_provider": "openai",
@@ -45247,6 +45682,7 @@
     },
     "o3-pro": {
         "deprecation_date": "2026-12-11",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 2e-05,
         "input_cost_per_token_batches": 1e-05,
         "litellm_provider": "openai",
@@ -45291,6 +45727,7 @@
     },
     "o3-pro-2025-06-10": {
         "deprecation_date": "2026-12-11",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 2e-05,
         "input_cost_per_token_batches": 1e-05,
         "litellm_provider": "openai",
@@ -45338,6 +45775,7 @@
         "cache_read_input_token_cost_flex": 1.38e-07,
         "cache_read_input_token_cost_priority": 5e-07,
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 1.1e-06,
         "input_cost_per_token_batches": 5.5e-07,
         "input_cost_per_token_flex": 5.5e-07,
@@ -45395,10 +45833,12 @@
         "supports_tool_choice": false,
         "supports_vision": true,
         "supports_pdf_input": true,
-        "deprecation_date": "2026-07-23"
+        "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.6-sol"
     },
     "o4-mini-deep-research-2025-06-26": {
         "deprecation_date": "2026-07-23",
+        "successor_model": "gpt-5.6-sol",
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "openai",
@@ -45433,6 +45873,7 @@
         "cache_read_input_token_cost_flex": 1.38e-07,
         "cache_read_input_token_cost_priority": 5e-07,
         "deprecation_date": "2026-10-23",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 1.1e-06,
         "input_cost_per_token_batches": 5.5e-07,
         "input_cost_per_token_flex": 5.5e-07,
@@ -49376,6 +49817,7 @@
     },
     "tts-1": {
         "deprecation_date": "2027-01-06",
+        "successor_model": "gpt-realtime-2.1-mini",
         "input_cost_per_character": 1.5e-05,
         "litellm_provider": "openai",
         "mode": "audio_speech",
@@ -49386,6 +49828,7 @@
     },
     "tts-1-hd": {
         "deprecation_date": "2027-01-06",
+        "successor_model": "gpt-realtime-2.1-mini",
         "input_cost_per_character": 3e-05,
         "litellm_provider": "openai",
         "mode": "audio_speech",
@@ -49654,6 +50097,7 @@
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.32e-05,
         "cache_read_input_token_cost_above_200k_tokens": 6.6e-07,
         "deprecation_date": "2027-04-08",
+        "successor_model": "us.anthropic.claude-sonnet-5-5",
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
         "max_input_tokens": 200000,
@@ -49696,6 +50140,7 @@
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.44e-05,
         "cache_read_input_token_cost_above_200k_tokens": 7.2e-07,
         "deprecation_date": "2027-04-08",
+        "successor_model": "us-gov.anthropic.claude-sonnet-5-5",
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
         "max_input_tokens": 200000,
@@ -49811,7 +50256,7 @@
         "mode": "chat",
         "output_cost_per_token": 3e-05,
         "prompt_cache_min_tokens": 512,
-        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-gov-west-1/index.json",
         "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -49833,7 +50278,9 @@
             "model": "anthropic.claude-opus-5",
             "litellm_provider": "bedrock_mantle",
             "region": "us-gov-west-1"
-        }
+        },
+        "input_cost_per_token_batches": 3e-06,
+        "output_cost_per_token_batches": 1.5e-05
     },
     "us-gov.anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -50202,6 +50649,7 @@
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2026-10-14",
+        "successor_model": "us.anthropic.claude-sonnet-5",
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
@@ -51674,6 +52122,7 @@
     },
     "vertex_ai/claude-haiku-4-5": {
         "deprecation_date": "2026-10-15",
+        "successor_model": "vertex_ai/claude-haiku-5-5",
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_creation_input_token_cost_batches": 6.25e-07,
@@ -51845,6 +52294,7 @@
     },
     "vertex_ai/claude-opus-4-5": {
         "deprecation_date": "2026-11-24",
+        "successor_model": "vertex_ai/claude-opus-5-5",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_creation_input_token_cost_batches": 3.125e-06,
@@ -52454,6 +52904,7 @@
     },
     "vertex_ai/claude-sonnet-4-5": {
         "deprecation_date": "2026-09-29",
+        "successor_model": "vertex_ai/claude-sonnet-5-5",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
@@ -52741,6 +53192,7 @@
     },
     "vertex_ai/gemini-2.5-flash-image": {
         "deprecation_date": "2027-03-15",
+        "successor_model": "vertex_ai/gemini-3.1-flash-lite-image",
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_batches": 1.5e-07,
@@ -52920,6 +53372,7 @@
 
     },
     "vertex_ai/gemini-3.1-flash-lite-image": {
+        "deprecation_date": "2027-06-28",
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
@@ -53017,6 +53470,7 @@
     "vertex_ai/gemini-3.1-flash-lite": {
         "cache_read_input_audio_token_cost": 5e-08,
         "deprecation_date": "2027-05-07",
+        "successor_model": "vertex_ai/gemini-3.5-flash-lite",
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
@@ -53494,6 +53948,7 @@
     "vertex_ai/zai-org/glm-4.7-maas": {
         "cache_read_input_token_cost": 6e-08,
         "deprecation_date": "2026-10-21",
+        "successor_model": "vertex_ai/zai-org/glm-5.2-maas",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "vertex_ai-zai_models",
         "max_input_tokens": 200000,
@@ -53512,6 +53967,7 @@
     "vertex_ai/zai-org/glm-5-maas": {
         "cache_read_input_token_cost": 1e-07,
         "deprecation_date": "2026-10-21",
+        "successor_model": "vertex_ai/zai-org/glm-5.2-maas",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "vertex_ai-zai_models",
         "max_input_tokens": 200000,
@@ -54148,7 +54604,7 @@
     "voyage/voyage-lite-01": {
         "input_cost_per_token": 1e-07,
         "litellm_provider": "voyage",
-        "max_input_tokens": 4096,
+        "max_input_tokens": 4000,
         "mode": "embedding",
         "output_cost_per_token": 0.0
     },
@@ -54596,6 +55052,7 @@
             "/v1/audio/transcriptions"
         ],
         "deprecation_date": "2027-02-26",
+        "successor_model": "gpt-live-transcribe",
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "xai/grok-4.20-multi-agent-beta-0309": {
@@ -54859,6 +55316,7 @@
     },
     "zai.glm-4.7": {
         "deprecation_date": "2027-03-30",
+        "successor_model": "zai.glm-5",
         "input_cost_per_token": 6e-07,
         "input_cost_per_token_batches": 3e-07,
         "input_cost_per_token_flex": 3e-07,
@@ -58911,6 +59369,7 @@
     },
     "gpt-4o-mini-tts-2025-12-15": {
         "deprecation_date": "2027-01-06",
+        "successor_model": "gpt-realtime-2.1-mini",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "openai",
         "mode": "audio_speech",
@@ -58931,6 +59390,7 @@
     },
     "gpt-4o-mini-transcribe-2025-03-20": {
         "deprecation_date": "2027-01-20",
+        "successor_model": "gpt-4o-mini-transcribe-2025-12-15",
         "input_cost_per_audio_token": 1.25e-06,
         "input_cost_per_second": 5e-05,
         "input_cost_per_token": 1.25e-06,
@@ -58946,6 +59406,7 @@
     },
     "gpt-4o-mini-transcribe-2025-12-15": {
         "deprecation_date": "2027-02-26",
+        "successor_model": "gpt-live-transcribe",
         "input_cost_per_audio_token": 1.25e-06,
         "input_cost_per_second": 5e-05,
         "input_cost_per_token": 1.25e-06,
@@ -59045,6 +59506,7 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "deprecation_date": "2027-01-20",
+        "successor_model": "gpt-realtime-2.1-mini",
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "gpt-realtime-whisper": {
@@ -59111,6 +59573,7 @@
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_batches": 6.3e-07,
         "deprecation_date": "2026-12-01",
+        "successor_model": "gpt-image-2.5-sunburst",
         "input_cost_per_image_token": 8e-06,
         "input_cost_per_image_token_batches": 4e-06,
         "input_cost_per_token": 5e-06,
@@ -59220,6 +59683,7 @@
     },
     "gemini-2.5-flash-native-audio-preview-12-2025": {
         "deprecation_date": "2026-11-17",
+        "successor_model": "gemini/gemini-3.8-live",
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
@@ -59251,6 +59715,7 @@
     },
     "gemini-3.1-flash-live-preview": {
         "deprecation_date": "2026-11-17",
+        "successor_model": "gemini/gemini-3.8-live",
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_image_token": 1e-06,
         "input_cost_per_token": 7.5e-07,
@@ -59408,6 +59873,7 @@
     },
     "gemini/gemini-2.5-flash-native-audio-preview-12-2025": {
         "deprecation_date": "2026-11-17",
+        "successor_model": "gemini/gemini-3.8-live",
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
@@ -59442,6 +59908,7 @@
     },
     "gemini/gemini-3.1-flash-live-preview": {
         "deprecation_date": "2026-11-17",
+        "successor_model": "gemini/gemini-3.8-live",
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_image_token": 1e-06,
         "input_cost_per_token": 7.5e-07,
@@ -59481,6 +59948,7 @@
     },
     "gemini/gemini-3.1-flash-tts-preview": {
         "deprecation_date": "2026-11-17",
+        "successor_model": "gemini/gemini-3.8-flash-tts",
         "input_cost_per_token": 1e-06,
         "input_cost_per_token_batches": 5e-07,
         "litellm_provider": "gemini",
@@ -59550,6 +60018,7 @@
     },
     "gemini-2.5-flash-preview-tts": {
         "deprecation_date": "2026-11-17",
+        "successor_model": "gemini/gemini-3.8-flash-tts",
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
         "litellm_provider": "gemini",
@@ -64447,6 +64916,7 @@
     "fireworks_ai/glm-5p2-fast": {
         "cache_read_input_token_cost": 2.1e-07,
         "deprecation_date": "2026-09-25",
+        "successor_model": "fireworks_ai/glm-5p3-fast",
         "input_cost_per_token": 2.1e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
@@ -64716,6 +65186,7 @@
     "fireworks_ai/accounts/fireworks/routers/glm-5p2-fast": {
         "cache_read_input_token_cost": 2.1e-07,
         "deprecation_date": "2026-09-25",
+        "successor_model": "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast",
         "input_cost_per_token": 2.1e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
@@ -64807,7 +65278,7 @@
         "supports_vision": false
     },
     "novita/deepseek/deepseek-v4-pro-0813": {
-        "cache_read_input_token_cost": 1.3200000000000002e-07,
+        "cache_read_input_token_cost": 4.4e-08,
         "input_cost_per_token": 1.32e-06,
         "litellm_provider": "novita",
         "max_input_tokens": 1048576,
@@ -64919,13 +65390,13 @@
         "supports_vision": false
     },
     "novita/mindai/macaron-v1-venti": {
-        "cache_read_input_token_cost": 3e-07,
-        "input_cost_per_token": 1.5e-06,
+        "cache_read_input_token_cost": 1.65e-07,
+        "input_cost_per_token": 8.25e-07,
         "litellm_provider": "novita",
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 4.5e-06,
+        "output_cost_per_token": 2.475e-06,
         "source": "https://novita.ai/pricing",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -65028,13 +65499,13 @@
         "supports_vision": false
     },
     "novita/mindai/macaron-v1-tall": {
-        "cache_read_input_token_cost": 8e-08,
-        "input_cost_per_token": 4.5000000000000003e-07,
+        "cache_read_input_token_cost": 4.4e-08,
+        "input_cost_per_token": 2.475e-07,
         "litellm_provider": "novita",
         "max_input_tokens": 262144,
         "max_output_tokens": 32768,
         "mode": "chat",
-        "output_cost_per_token": 2.6e-06,
+        "output_cost_per_token": 1.43e-06,
         "source": "https://novita.ai/pricing",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -66459,9 +66930,9 @@
     "deepinfra/deepseek-ai/DeepSeek-V4-Flash-0731": {
         "max_output_tokens": 1048576,
         "max_input_tokens": 1048576,
-        "input_cost_per_token": 8e-08,
+        "input_cost_per_token": 6e-08,
         "output_cost_per_token": 1.8e-07,
-        "cache_read_input_token_cost": 1.6e-08,
+        "cache_read_input_token_cost": 1.5e-08,
         "supports_prompt_caching": true,
         "litellm_provider": "deepinfra",
         "mode": "chat",
@@ -66840,8 +67311,8 @@
     "deepinfra/google/gemma-4-31B-it": {
         "max_output_tokens": 262144,
         "max_input_tokens": 262144,
-        "input_cost_per_token": 1.3e-07,
-        "output_cost_per_token": 3.8e-07,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 4e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
         "supports_function_calling": true,
@@ -67170,6 +67641,7 @@
     },
     "xai/grok-voice-transcribe-1.0": {
         "deprecation_date": "2026-10-02",
+        "successor_model": "xai/grok-voice-transcribe-2.0",
         "input_cost_per_second": 2.778e-05,
         "litellm_provider": "xai",
         "metadata": {
@@ -68248,6 +68720,7 @@
     },
     "azure_ai/Cohere-command-a-plus-05-2026": {
         "deprecation_date": "2026-10-16",
+        "successor_model": "coherelabs-command-a-plus-05-2026-fp81",
         "input_cost_per_token": 8e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -68281,6 +68754,7 @@
     },
     "azure_ai/deepseek-r1": {
         "deprecation_date": "2026-08-13",
+        "successor_model": "azure_ai/deepseek-v4-pro",
         "input_cost_per_token": 1.35e-06,
         "output_cost_per_token": 5.4e-06,
         "litellm_provider": "azure_ai",
@@ -68290,6 +68764,7 @@
     },
     "azure_ai/deepseek-v3-0324": {
         "deprecation_date": "2026-07-13",
+        "successor_model": "azure_ai/deepseek-v4-flash",
         "input_cost_per_token": 1.14e-06,
         "output_cost_per_token": 4.56e-06,
         "litellm_provider": "azure_ai",
@@ -68299,6 +68774,7 @@
     },
     "azure_ai/deepseek-v3.1": {
         "deprecation_date": "2026-07-13",
+        "successor_model": "azure_ai/deepseek-v4-flash",
         "input_cost_per_token": 1.23e-06,
         "output_cost_per_token": 4.94e-06,
         "litellm_provider": "azure_ai",
@@ -68308,6 +68784,7 @@
     },
     "azure_ai/grok-3": {
         "deprecation_date": "2026-05-01",
+        "successor_model": "azure_ai/grok-4",
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 1.5e-05,
         "litellm_provider": "azure_ai",
@@ -68317,6 +68794,7 @@
     },
     "azure_ai/grok-3-mini": {
         "deprecation_date": "2026-05-01",
+        "successor_model": "azure_ai/grok-4-1-fast-reasoning",
         "input_cost_per_token": 2.5e-07,
         "output_cost_per_token": 1.27e-06,
         "litellm_provider": "azure_ai",
@@ -68326,6 +68804,7 @@
     },
     "azure_ai/grok-4-fast-non-reasoning": {
         "deprecation_date": "2026-05-01",
+        "successor_model": "azure_ai/grok-4-1-fast-non-reasoning",
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "azure_ai",
@@ -68335,6 +68814,7 @@
     },
     "azure_ai/grok-4-fast-reasoning": {
         "deprecation_date": "2026-05-01",
+        "successor_model": "azure_ai/grok-4-1-fast-reasoning",
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "azure_ai",
@@ -68552,7 +69032,10 @@
             "model": "anthropic.claude-opus-5",
             "litellm_provider": "bedrock_mantle",
             "region": "us-gov-west-1"
-        }
+        },
+        "input_cost_per_token_batches": 3e-06,
+        "output_cost_per_token_batches": 1.5e-05,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-gov-west-1/index.json"
     },
     "bedrock/us-gov-west-1/anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -68827,7 +69310,10 @@
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "input_cost_per_token_batches": 3e-06,
+        "output_cost_per_token_batches": 1.5e-05,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-gov-east-1/index.json"
     },
     "bedrock/us-gov-east-1/anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -69850,6 +70336,14 @@
         "cache_read_input_token_cost": 3e-08,
         "source": "https://docs.perplexity.ai/docs/agent-api/models"
     },
+    "perplexity/google/gemini-4-argon": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 1e-05,
+        "cache_read_input_token_cost": 1e-07,
+        "source": "https://docs.perplexity.ai/docs/agent-api/models"
+    },
     "perplexity/google/gemini-3.6-flash": {
         "litellm_provider": "perplexity",
         "mode": "responses",
@@ -69977,6 +70471,14 @@
         "cache_read_input_token_cost": 1.15e-09,
         "source": "https://docs.perplexity.ai/docs/agent-api/models"
     },
+    "perplexity/perplexity/nemotron-3.5-super-120b-a12b": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 5e-07,
+        "cache_read_input_token_cost": 4e-08,
+        "source": "https://docs.perplexity.ai/docs/agent-api/models"
+    },
     "perplexity/perplexity/nemotron-3-ultra-550b-a55b": {
         "litellm_provider": "perplexity",
         "mode": "responses",
@@ -70102,12 +70604,12 @@
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "vertex_ai",
         "max_output_tokens": 57920,
-        "max_input_tokens": 57920,
+        "max_input_tokens": 131072,
         "mode": "chat",
         "output_cost_per_reasoning_token": 9e-06,
         "output_cost_per_token": 9e-06,
         "output_cost_per_video_token": 1.75e-05,
-        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-1-flash",
         "supported_endpoints": [
             "/v1beta/interactions"
         ],
@@ -70651,6 +71153,7 @@
     },
     "azure/eu/gpt-4.1": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/eu/gpt-5.1",
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_priority": 9.63e-07,
         "input_cost_per_token": 2.2e-06,
@@ -70670,6 +71173,7 @@
     },
     "azure/eu/gpt-4.1-mini": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/eu/gpt-5.4-mini",
         "cache_read_input_token_cost": 1.1e-07,
         "cache_read_input_token_cost_priority": 1.93e-07,
         "input_cost_per_token": 4.4e-07,
@@ -70689,6 +71193,7 @@
     },
     "azure/eu/gpt-4.1-nano": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/eu/gpt-5.4-nano",
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 5.5e-08,
@@ -70700,6 +71205,7 @@
     },
     "azure/eu/gpt-4o-2024-05-13": {
         "deprecation_date": "2026-12-09",
+        "successor_model": "azure/eu/gpt-5.1",
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_batches": 2.75e-06,
         "litellm_provider": "azure",
@@ -70712,6 +71218,7 @@
     },
     "azure/eu/gpt-5": {
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/eu/gpt-5.1",
         "cache_read_input_token_cost": 1.375e-07,
         "cache_read_input_token_cost_batches": 6.875e-08,
         "cache_read_input_token_cost_priority": 2.75e-07,
@@ -70732,6 +71239,7 @@
     },
     "azure/eu/gpt-5-codex": {
         "deprecation_date": "2027-03-17",
+        "successor_model": "azure/eu/gpt-5.1-codex",
         "cache_read_input_token_cost": 1.38e-07,
         "input_cost_per_token": 1.375e-06,
         "litellm_provider": "azure",
@@ -70741,6 +71249,7 @@
     },
     "azure/eu/gpt-5-mini": {
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/eu/gpt-5.4-mini",
         "cache_read_input_token_cost": 2.75e-08,
         "cache_read_input_token_cost_batches": 1.375e-08,
         "cache_read_input_token_cost_priority": 4.95e-08,
@@ -70761,6 +71270,7 @@
     },
     "azure/eu/gpt-5-nano": {
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/eu/gpt-5.4-nano",
         "cache_read_input_token_cost": 5.5e-09,
         "cache_read_input_token_cost_batches": 2.75e-09,
         "input_cost_per_token": 5.5e-08,
@@ -70778,6 +71288,7 @@
     },
     "azure/eu/gpt-5-pro": {
         "deprecation_date": "2027-04-07",
+        "successor_model": "azure/eu/gpt-5.2-pro",
         "input_cost_per_token": 1.65e-05,
         "input_cost_per_token_batches": 8.25e-06,
         "litellm_provider": "azure",
@@ -70802,6 +71313,7 @@
     },
     "azure/eu/gpt-5.2": {
         "deprecation_date": "2027-06-08",
+        "successor_model": "azure/eu/gpt-5.4",
         "cache_read_input_token_cost": 1.925e-07,
         "cache_read_input_token_cost_batches": 9.625e-08,
         "cache_read_input_token_cost_priority": 3.85e-07,
@@ -70822,6 +71334,7 @@
     },
     "azure/eu/gpt-5.2-codex": {
         "deprecation_date": "2027-07-13",
+        "successor_model": "azure/eu/gpt-5.3-codex",
         "cache_read_input_token_cost": 1.925e-07,
         "input_cost_per_token": 1.925e-06,
         "litellm_provider": "azure",
@@ -71072,6 +71585,7 @@
     },
     "azure/eu/o3": {
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/eu/gpt-5.6-sol",
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_batches": 1.1e-06,
@@ -71090,6 +71604,7 @@
     },
     "azure/eu/o3-2025-04-16": {
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/eu/gpt-5.6-sol",
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_batches": 1.1e-06,
@@ -71108,6 +71623,7 @@
     },
     "azure/eu/o3-deep-research": {
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/eu/gpt-5.6-sol",
         "cache_read_input_token_cost": 2.75e-06,
         "input_cost_per_token": 1.1e-05,
         "litellm_provider": "azure",
@@ -71117,6 +71633,7 @@
     },
     "azure/eu/o4-mini": {
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/eu/gpt-5.6-terra",
         "cache_read_input_token_cost": 3.03e-07,
         "input_cost_per_token": 1.21e-06,
         "input_cost_per_token_batches": 6.05e-07,
@@ -71135,6 +71652,7 @@
     },
     "azure/eu/o4-mini-2025-04-16": {
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/eu/gpt-5.6-terra",
         "cache_read_input_token_cost": 3.03e-07,
         "input_cost_per_token": 1.21e-06,
         "input_cost_per_token_batches": 6.05e-07,
@@ -71232,6 +71750,7 @@
     },
     "azure/us/gpt-4.1": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/us/gpt-5.1",
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_priority": 9.63e-07,
         "input_cost_per_token": 2.2e-06,
@@ -71251,6 +71770,7 @@
     },
     "azure/us/gpt-4.1-mini": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/us/gpt-5.4-mini",
         "cache_read_input_token_cost": 1.1e-07,
         "cache_read_input_token_cost_priority": 1.93e-07,
         "input_cost_per_token": 4.4e-07,
@@ -71270,6 +71790,7 @@
     },
     "azure/us/gpt-4.1-nano": {
         "deprecation_date": "2027-04-14",
+        "successor_model": "azure/us/gpt-5.4-nano",
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 5.5e-08,
@@ -71281,6 +71802,7 @@
     },
     "azure/us/gpt-4o-2024-05-13": {
         "deprecation_date": "2026-12-09",
+        "successor_model": "azure/us/gpt-5.1",
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_batches": 2.75e-06,
         "litellm_provider": "azure",
@@ -71293,6 +71815,7 @@
     },
     "azure/us/gpt-5": {
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/us/gpt-5.1",
         "cache_read_input_token_cost": 1.375e-07,
         "cache_read_input_token_cost_batches": 6.875e-08,
         "cache_read_input_token_cost_priority": 2.75e-07,
@@ -71313,6 +71836,7 @@
     },
     "azure/us/gpt-5-codex": {
         "deprecation_date": "2027-03-17",
+        "successor_model": "azure/us/gpt-5.1-codex",
         "cache_read_input_token_cost": 1.38e-07,
         "input_cost_per_token": 1.375e-06,
         "litellm_provider": "azure",
@@ -71322,6 +71846,7 @@
     },
     "azure/us/gpt-5-mini": {
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/us/gpt-5.4-mini",
         "cache_read_input_token_cost": 2.75e-08,
         "cache_read_input_token_cost_batches": 1.375e-08,
         "cache_read_input_token_cost_priority": 4.95e-08,
@@ -71342,6 +71867,7 @@
     },
     "azure/us/gpt-5-nano": {
         "deprecation_date": "2027-02-09",
+        "successor_model": "azure/us/gpt-5.4-nano",
         "cache_read_input_token_cost": 5.5e-09,
         "cache_read_input_token_cost_batches": 2.75e-09,
         "input_cost_per_token": 5.5e-08,
@@ -71359,6 +71885,7 @@
     },
     "azure/us/gpt-5-pro": {
         "deprecation_date": "2027-04-07",
+        "successor_model": "azure/us/gpt-5.2-pro",
         "input_cost_per_token": 1.65e-05,
         "input_cost_per_token_batches": 8.25e-06,
         "litellm_provider": "azure",
@@ -71383,6 +71910,7 @@
     },
     "azure/us/gpt-5.2": {
         "deprecation_date": "2027-06-08",
+        "successor_model": "azure/us/gpt-5.4",
         "cache_read_input_token_cost": 1.925e-07,
         "cache_read_input_token_cost_batches": 9.625e-08,
         "cache_read_input_token_cost_priority": 3.85e-07,
@@ -71403,6 +71931,7 @@
     },
     "azure/us/gpt-5.2-codex": {
         "deprecation_date": "2027-07-13",
+        "successor_model": "azure/us/gpt-5.3-codex",
         "cache_read_input_token_cost": 1.925e-07,
         "input_cost_per_token": 1.925e-06,
         "litellm_provider": "azure",
@@ -71509,6 +72038,7 @@
     },
     "azure/us/o3-deep-research": {
         "deprecation_date": "2026-11-19",
+        "successor_model": "azure/us/gpt-5.6-sol",
         "cache_read_input_token_cost": 2.75e-06,
         "input_cost_per_token": 1.1e-05,
         "litellm_provider": "azure",
@@ -71542,6 +72072,7 @@
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2027-01-20",
+        "successor_model": "azure/gpt-realtime-2.1",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
         "input_cost_per_token": 4e-06,
@@ -74061,6 +74592,7 @@
     },
     "vertex_ai/gemini-2.0-flash": {
         "deprecation_date": "2026-06-01",
+        "successor_model": "vertex_ai/gemini-3.5-flash-lite",
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_audio_token_batches": 5e-07,
         "input_cost_per_character": 3.75e-08,
@@ -74074,6 +74606,7 @@
     },
     "vertex_ai/gemini-2.0-flash-lite": {
         "deprecation_date": "2026-06-01",
+        "successor_model": "vertex_ai/gemini-3.5-flash-lite",
         "input_cost_per_audio_token": 7.5e-08,
         "input_cost_per_audio_token_batches": 3.75e-08,
         "input_cost_per_character": 1.875e-08,
@@ -74125,6 +74658,7 @@
     },
     "vertex_ai/veo-3.0-generate-001": {
         "deprecation_date": "2026-06-30",
+        "successor_model": "vertex_ai/veo-3.1-generate-001",
         "litellm_provider": "vertex_ai-video-models",
         "max_input_tokens": 1024,
         "mode": "video_generation",
@@ -74140,6 +74674,7 @@
     },
     "vertex_ai/veo-3.0-fast-generate-001": {
         "deprecation_date": "2026-06-30",
+        "successor_model": "vertex_ai/veo-3.1-fast-generate-001",
         "litellm_provider": "vertex_ai-video-models",
         "max_input_tokens": 1024,
         "mode": "video_generation",
@@ -74156,6 +74691,7 @@
     },
     "vertex_ai/veo-2.0-generate-001": {
         "deprecation_date": "2026-06-30",
+        "successor_model": "vertex_ai/veo-3.1-generate-001",
         "litellm_provider": "vertex_ai-video-models",
         "max_input_tokens": 1024,
         "mode": "video_generation",
@@ -74503,12 +75039,14 @@
         "input_cost_per_token": 5.5e-06,
         "cache_read_input_token_cost": 5.5e-07,
         "output_cost_per_token": 2.75e-05,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/ap-northeast-1/index.json",
         "token_count_model": {
             "model": "anthropic.claude-opus-5",
             "litellm_provider": "bedrock_mantle",
             "region": "ap-southeast-4"
-        }
+        },
+        "input_cost_per_token_batches": 2.75e-06,
+        "output_cost_per_token_batches": 1.375e-05
     },
     "apac.anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -75105,7 +75643,7 @@
         "supports_function_calling": true,
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 1e-05,
-        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost": 1e-07,
         "source": "https://docs.perplexity.ai/docs/agent-api/models"
     },
     "perplexity/anthropic/claude-fable-5-1": {
@@ -75153,6 +75691,9 @@
         "output_cost_per_token": 5e-05,
         "cache_read_input_token_cost": 1e-06,
         "cache_creation_input_token_cost": 1.25e-05,
+        "input_cost_per_token_above_272k_tokens": 2e-05,
+        "output_cost_per_token_above_272k_tokens": 7.5e-05,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-06,
         "source": "https://docs.perplexity.ai/docs/agent-api/models"
     },
     "perplexity/openai/gpt-6-luna": {
@@ -75755,6 +76296,7 @@
     },
     "azure_ai/kimi-k2-thinking": {
         "deprecation_date": "2026-03-29",
+        "successor_model": "azure_ai/kimi-k2.5",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 262144,
@@ -76620,6 +77162,9 @@
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 5e-07,
         "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token_above_100k_tokens": 5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.5e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 5e-08,
         "source": "https://docs.perplexity.ai/docs/agent-api/models"
     },
     "us-gov.anthropic.claude-haiku-5-5": {
@@ -76954,23 +77499,19 @@
     },
     "vertex_ai/gemini-robotics-er-2-preview": {
         "cache_read_input_token_cost": 1e-07,
-        "cache_read_input_token_cost_batches": 5e-08,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 1e-06,
-        "input_cost_per_token_batches": 5e-07,
         "litellm_provider": "vertex_ai",
         "max_input_tokens": 131072,
         "max_output_tokens": 65536,
         "mode": "chat",
         "output_cost_per_reasoning_token": 5e-06,
         "output_cost_per_token": 5e-06,
-        "output_cost_per_token_batches": 2.5e-06,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
+            "/v1/completions"
         ],
         "supported_modalities": [
             "text",
@@ -77000,23 +77541,19 @@
     },
     "gemini-robotics-er-2-preview": {
         "cache_read_input_token_cost": 1e-07,
-        "cache_read_input_token_cost_batches": 5e-08,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 1e-06,
-        "input_cost_per_token_batches": 5e-07,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 131072,
         "max_output_tokens": 65536,
         "mode": "chat",
         "output_cost_per_reasoning_token": 5e-06,
         "output_cost_per_token": 5e-06,
-        "output_cost_per_token_batches": 2.5e-06,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
+            "/v1/completions"
         ],
         "supported_modalities": [
             "text",
@@ -77102,6 +77639,7 @@
         "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-4-argon": {
+        "deprecation_date": "2027-10-13",
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_batches": 5e-08,
         "cache_read_input_token_cost_flex": 5e-08,
@@ -77510,9 +78048,10 @@
         "max_output_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 1e-06,
-        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/reflection%2Fbeam",
+        "source": "https://tokenfactory.nebius.com/api/public/models_info",
         "supports_function_calling": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "cache_read_input_token_cost": 5e-08
     },
     "baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017": {
         "cache_read_input_token_cost": 7e-09,
@@ -78843,6 +79382,7 @@
         "cache_creation_input_token_cost_batches": 1.875e-06,
         "cache_read_input_token_cost_batches": 1.5e-07,
         "deprecation_date": "2026-11-30",
+        "successor_model": "bedrock/claude_platform/claude-sonnet-5-5",
         "input_cost_per_token_batches": 1.5e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -81783,5 +82323,55 @@
         "supports_response_schema": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true
+    },
+    "nebius/deepseek-ai/DeepSeek-V4.1-Flash-1017": {
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 3e-07,
+        "cache_read_input_token_cost": 6e-09,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true,
+        "source": "https://tokenfactory.nebius.com/api/public/models_info"
+    },
+    "nebius/meta-models/muse-spark-open": {
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 1.25e-06,
+        "cache_read_input_token_cost": 1.5e-07,
+        "output_cost_per_token": 4.25e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_vision": true,
+        "supports_video_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true,
+        "source": "https://tokenfactory.nebius.com/api/public/models_info"
+    },
+    "nebius/MiniMaxAI/MiniMax-M3.1-Flash": {
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 1.5e-07,
+        "cache_read_input_token_cost": 1.5e-08,
+        "output_cost_per_token": 6e-07,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true,
+        "source": "https://tokenfactory.nebius.com/api/public/models_info"
+    },
+    "nebius/nvidia/Nemotron-3.5-Super-VL": {
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 3e-07,
+        "cache_read_input_token_cost": 6e-08,
+        "output_cost_per_token": 9e-07,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_vision": true,
+        "supports_video_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true,
+        "source": "https://tokenfactory.nebius.com/api/public/models_info"
     }
 }

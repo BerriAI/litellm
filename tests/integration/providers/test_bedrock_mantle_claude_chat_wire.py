@@ -1211,6 +1211,6 @@ def test_non_claude_mantle_id_with_a_bare_bedrock_twin_keeps_its_route_and_spend
         cost: Final = _mantle_cost(gateway, _LUNA)
         assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(cost), response.text
         _assert_success_row(
-            _spend_row(_BY_CALL_ID, response.headers["x-litellm-call-id"]), model, _LUNA, "responses", cost
+            _spend_row(_BY_CALL_ID, response.headers["x-litellm-call-id"]), model, _LUNA, "acompletion", cost
         )
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", _RESPONSES_PATH)]

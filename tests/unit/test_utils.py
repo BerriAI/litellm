@@ -1026,6 +1026,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "cache_read_input_image_token_cost": {"type": "number"},
             "audio_transcription_config": {"type": "string"},
             "deprecation_date": {"type": "string"},
+            "successor_model": {"type": "string"},
             "input_cost_per_audio_per_second": {"type": "number"},
             "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
             "google_maps_grounding_cost_per_query": {"type": "number"},
