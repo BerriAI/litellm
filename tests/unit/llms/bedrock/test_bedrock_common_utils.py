@@ -737,6 +737,34 @@ def test_a_routed_deployments_own_prompt_caching_flag_decides_cache_points_for_a
 
     assert bedrock_model_accepts_cache_points(model, model_info={"id": "qa-deployment", **deployment_flag}) is expected
 
+
+@pytest.mark.parametrize(
+    ("declared", "catalog_caching", "expected"),
+    [
+        ("true", False, True),
+        (1, False, True),
+        (" TRUE ", False, True),
+        ("false", True, False),
+        (0, True, False),
+        ("maybe", True, True),
+        ("maybe", False, False),
+    ],
+)
+def test_a_deployments_prompt_caching_flag_written_as_a_string_or_number_decides_cache_points_as_the_bool_it_spells(
+    declared: object, catalog_caching: bool, expected: bool, local_model_cost_map: None
+) -> None:
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    model: Final = f"qa-catalogued-model-lax-{catalog_caching}"
+    litellm.register_model(
+        {model: {"litellm_provider": "bedrock", "mode": "chat", "supports_prompt_caching": catalog_caching}}
+    )
+
+    assert (
+        bedrock_model_accepts_cache_points(model, model_info={"id": "qa-deployment", "supports_prompt_caching": declared})
+        is expected
+    )
+
 def test_merge_bedrock_aws_request_params_strips_caller_identity_when_deployment_has_static_credentials():
     from litellm.llms.bedrock.common_utils import merge_bedrock_aws_request_params
 

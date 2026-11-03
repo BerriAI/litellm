@@ -33,6 +33,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.core_helpers import lax_bool
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.common_utils import schema_property_count
 from litellm.litellm_core_utils.url_utils import ensure_api_route
@@ -1576,9 +1577,9 @@ def bedrock_declared_cache_point_support(model: str, model_info: Mapping[str, ob
         return explicit_marker_support
     if not any(catalog_entry(key) is not None for key in map_keys):
         return None
-    deployment_caching: Final = None if model_info is None else model_info.get("supports_prompt_caching")
+    deployment_caching: Final = None if model_info is None else lax_bool(model_info.get("supports_prompt_caching"))
     if deployment_caching is not None:
-        return deployment_caching is True
+        return deployment_caching
     return any(
         entry.get("supports_prompt_caching") is True for key in map_keys if (entry := catalog_entry(key)) is not None
     )

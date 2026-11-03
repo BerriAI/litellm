@@ -4781,6 +4781,46 @@ def test_auto_injection_honors_a_register_model_opt_out_made_under_the_provider_
     assert supports_anthropic_cache_control(model, "anthropic", {"id": "plain-id"}) is False
 
 
+@pytest.mark.parametrize("route_prefix", ["bedrock/", "bedrock/converse/"])
+def test_auto_injection_honors_a_register_model_opt_out_made_under_a_bedrock_route_prefixed_name(route_prefix: str) -> None:
+    from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+    from litellm.utils import catalog_with_runtime_registrations
+
+    model: Final = next(
+        key
+        for key, entry in catalog_with_runtime_registrations().items()
+        if entry.get("litellm_provider") == "bedrock_converse"
+        and entry.get("supports_prompt_caching") is True
+        and key.startswith("us.anthropic.claude")
+    )
+    litellm.register_model({f"{route_prefix}{model}": {"supports_prompt_caching": False}})
+
+    assert (
+        supports_anthropic_cache_control(model, "bedrock", {"id": "plain-id"}),
+        supports_anthropic_cache_control(model, "bedrock"),
+    ) == (False, False)
+
+
+@pytest.mark.parametrize(
+    ("declared", "catalog_caching", "expected"),
+    [("true", False, True), (1, False, True), ("false", True, False), (0, True, False), ("maybe", True, True)],
+)
+def test_auto_injection_reads_a_string_or_numeric_deployment_prompt_caching_flag_as_the_bool_it_spells(
+    declared: object, catalog_caching: bool, expected: bool
+) -> None:
+    from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+
+    model: Final = f"claude-qa-lax-flag-model-{catalog_caching}"
+    litellm.register_model(
+        {model: {"litellm_provider": "anthropic", "mode": "chat", "supports_prompt_caching": catalog_caching}}
+    )
+
+    assert (
+        supports_anthropic_cache_control(model, "anthropic", {"id": "lax-id", "supports_prompt_caching": declared})
+        is expected
+    )
+
+
 @pytest.mark.parametrize("reload_cost_map", [False, True], ids=["before-reload", "after-reload"])
 @pytest.mark.parametrize(
     ("registrations", "expected"),

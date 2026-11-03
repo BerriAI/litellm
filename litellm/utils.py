@@ -4150,7 +4150,8 @@ def _register_on_current_map(
 
 
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
-_runtime_registration_order: Final[dict[str, int]] = {}  # mutable-ok: tells which of two twin names registered last
+_runtime_registration_order: Final[dict[str, int]] = {}  # mutable-ok: tells which of a row's registered names came last
+_runtime_registered_names: Final[dict[str, tuple[str, ...]]] = {}  # mutable-ok: names registered onto each live row
 _REGISTRATION_TICKS: Final = itertools.count()
 
 
@@ -4159,11 +4160,11 @@ class _RegistrationsOverCatalog(Mapping[str, Mapping[str, object]]):
     catalog: Mapping[str, Mapping[str, object]]
     registrations: Mapping[str, Mapping[str, object]]
     registration_order: Mapping[str, int]
+    registered_names: Mapping[str, tuple[str, ...]]
 
     def __getitem__(self, key: str) -> Mapping[str, object]:
         catalog_entry: Final = self.catalog.get(key)
-        provider: Final = None if catalog_entry is None else catalog_entry.get("litellm_provider")
-        names: Final = (f"{provider}/{key}", key) if isinstance(provider, str) else (key,)
+        names: Final = dict.fromkeys((*self.registered_names.get(key, ()), key))
         present: Final = tuple(name for name in names if name in self.registrations)
         if not present:
             return self.catalog[key]
@@ -4180,13 +4181,22 @@ class _RegistrationsOverCatalog(Mapping[str, Mapping[str, object]]):
         return len(self.catalog.keys() | self.registrations.keys())
 
 
+def _record_registered_name(written_key: str, registered_key: str) -> None:
+    names: Final = _runtime_registered_names.get(written_key, ())
+    if registered_key not in names:
+        _runtime_registered_names[written_key] = (*names, registered_key)
+
+
 def catalog_with_runtime_registrations() -> Mapping[str, Mapping[str, object]]:
     """The loaded catalog plus ``register_model`` calls, without what routers register for their deployments."""
     catalog: Final = GetModelCostMap.loaded_model_cost_map()
     if not _runtime_registered_model_cost:
         return catalog
     return _RegistrationsOverCatalog(
-        catalog, MappingProxyType(_runtime_registered_model_cost), MappingProxyType(_runtime_registration_order)
+        catalog,
+        MappingProxyType(_runtime_registered_model_cost),
+        MappingProxyType(_runtime_registration_order),
+        MappingProxyType(_runtime_registered_names),
     )
 
 
@@ -4338,6 +4348,8 @@ def register_model(
 
     for key, value in loaded_model_cost.items():
         write = _register_on_current_map(str(key), value, custom_llm_provider, warning_display_name)
+        if persist_across_reloads:
+            _record_registered_name(write.key, str(key))
 
         # Invalidate case-insensitive lookup map since model_cost was modified
         _invalidate_model_cost_lowercase_map()

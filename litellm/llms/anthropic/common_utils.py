@@ -28,7 +28,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, lax_bool
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
     is_encrypted_reasoning_block,
@@ -326,8 +326,8 @@ def supports_anthropic_cache_control(
 def _deployment_supports_prompt_caching(model: str, provider: str, model_info: Mapping[str, object] | None) -> bool:
     from litellm.utils import catalog_with_runtime_registrations, get_model_info, supports_prompt_caching
 
-    declared: Final = None if model_info is None else model_info.get("supports_prompt_caching")
-    if isinstance(declared, bool):
+    declared: Final = None if model_info is None else lax_bool(model_info.get("supports_prompt_caching"))
+    if declared is not None:
         return declared
     live: Final = supports_prompt_caching(model=model, custom_llm_provider=provider)
     if model_info is None:
