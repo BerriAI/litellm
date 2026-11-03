@@ -52,6 +52,7 @@ from ..utils import (
     REASONING_EFFORT_OFF,
     litellm_logging_obj_from_kwargs,
     local_model_name,
+    lowest_tier_instead_of_off,
     maps_bare_output_effort,
     model_reasoning_efforts,
     normalize_reasoning_effort_value,
@@ -69,7 +70,6 @@ AnthropicContextManagementSpec: TypeAlias = dict[str, object] | list[dict[str, o
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
 _KNOWN_REASONING_EFFORTS: Final = frozenset(get_args(REASONING_EFFORT))
-_LOWEST_REASONING_TIERS: Final = ("minimal", "low")
 _UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL: Final = "must be verified to generate reasoning summaries"
 
 
@@ -258,12 +258,6 @@ def _rewritten_blocks(content: object, rewrite: BlockRewrite) -> Sequence[Mappin
         return ()
 
 
-def _lowest_tier_instead_of_off(levels: tuple[str, ...] | None) -> str | None:
-    if not levels or REASONING_EFFORT_OFF in levels:
-        return None
-    return next((tier for tier in _LOWEST_REASONING_TIERS if tier in levels), None)
-
-
 def _reasoning_off_for_target(
     reasoning: Mapping[str, object],
     *,
@@ -274,7 +268,7 @@ def _reasoning_off_for_target(
     levels: Final = model_reasoning_efforts(model, custom_llm_provider)
     if levels == ():
         return None
-    lowest_tier: Final = _lowest_tier_instead_of_off(levels)
+    lowest_tier: Final = lowest_tier_instead_of_off(levels)
     if lowest_tier is not None:
         return {**reasoning, "effort": lowest_tier}
     if (

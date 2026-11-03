@@ -28,6 +28,8 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
     }
 )
 REASONING_EFFORT_OFF: Final = "none"
+RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
+_LOWEST_REASONING_TIERS: Final = ("minimal", "low")
 
 _JsonValue: Final = TypeVar("_JsonValue")
 
@@ -247,9 +249,21 @@ def model_reasoning_efforts(model: str, custom_llm_provider: str | None) -> tupl
     return resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True)
 
 
+def lowest_tier_instead_of_off(levels: tuple[str, ...] | None) -> str | None:
+    if not levels or REASONING_EFFORT_OFF in levels:
+        return None
+    return next((tier for tier in _LOWEST_REASONING_TIERS if tier in levels), None)
+
+
 def maps_bare_output_effort(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+
     model_info: Final = _mapped_model_info(model, custom_llm_provider)
-    return model_info is not None and model_info.get("default_reasoning_effort") != REASONING_EFFORT_OFF
+    return (
+        model_info is not None
+        and model_info.get("default_reasoning_effort") != REASONING_EFFORT_OFF
+        and resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) != ()
+    )
 
 
 def normalize_reasoning_effort_value(

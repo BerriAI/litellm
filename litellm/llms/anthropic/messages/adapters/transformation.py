@@ -13,10 +13,13 @@ from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.utils import (
     REASONING_EFFORT_OFF,
+    RESPONSES_API_PROVIDERS,
     is_between_tool_calls,
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
+    lowest_tier_instead_of_off,
     maps_bare_output_effort,
+    model_reasoning_efforts,
     prompt_cache_key_from_user_id,
 )
 from litellm.responses.utils import auto_reasoning_summary
@@ -1172,6 +1175,13 @@ class LiteLLMAnthropicMessagesAdapter:
         )
 
     @staticmethod
+    def _reasoning_off_for_target(model: str, custom_llm_provider: str | None) -> str | None:
+        levels: Final = model_reasoning_efforts(model, custom_llm_provider)
+        if levels == ():
+            return None
+        return lowest_tier_instead_of_off(levels) or REASONING_EFFORT_OFF
+
+    @staticmethod
     def _between_tools_reasoning_effort(anthropic_message_request: Mapping[str, object], output_effort: object) -> str:
         if not is_between_tool_calls(anthropic_message_request):
             return REASONING_EFFORT_OFF
@@ -1236,9 +1246,10 @@ class LiteLLMAnthropicMessagesAdapter:
         if is_claude_target and not declared_effort:
             return
 
+        mirrors_responses_bridge: Final = custom_llm_provider in RESPONSES_API_PROVIDERS
         reasoning_effort: Final = declared_effort or (
             self._between_tools_reasoning_effort(anthropic_message_request, output_effort)
-            if thinking_type == "between_tools"
+            if thinking_type == "between_tools" and mirrors_responses_bridge
             else self.translate_anthropic_thinking_to_reasoning_effort(
                 cast(AnthropicThinkingParam, thinking),
                 model=model,
@@ -1247,19 +1258,27 @@ class LiteLLMAnthropicMessagesAdapter:
             )
             if thinking
             else self._bare_output_effort(output_effort, model, custom_llm_provider)
-            if translate_bare_output_effort
+            if translate_bare_output_effort and mirrors_responses_bridge
             else None
         )
         if not reasoning_effort:
             return
 
-        new_kwargs["reasoning_effort"] = (
+        effort_sent: Final = (
             reasoning_effort
             if is_claude_target or not thinking
             else self._apply_reasoning_summary_wrapping(
                 reasoning_effort, cast(dict[str, object], thinking), model, custom_llm_provider
             )
         )
+        target_effort: Final = (
+            self._reasoning_off_for_target(model, custom_llm_provider)
+            if mirrors_responses_bridge and effort_sent == REASONING_EFFORT_OFF
+            else effort_sent
+        )
+        if target_effort is None:
+            return
+        new_kwargs["reasoning_effort"] = target_effort
 
     def _translate_output_format_to_openai(
         self,

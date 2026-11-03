@@ -20,7 +20,7 @@ import litellm
 from litellm.llms.anthropic.messages.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
-from litellm.llms.anthropic.messages.utils import maps_bare_output_effort
+from litellm.llms.anthropic.messages.utils import maps_bare_output_effort, model_reasoning_efforts
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 from litellm.router import Router
 from litellm.utils import reasoning_effort_with_summary_alias
@@ -593,12 +593,13 @@ TOOL_RESULT_TURN: Final = [
     },
     {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "42"}]},
 ]
-CHAT_TARGETS: Final = [
+OPENAI_CHAT_TARGETS: Final = ["openai/gpt-5.1", "openai/gpt-5-mini"]
+OTHER_PROVIDER_CHAT_TARGETS: Final = [
     ("databricks/databricks-qwen35-122b-a10b", "databricks"),
     ("fireworks_ai/kimi-k3", "fireworks_ai"),
     ("gemini/gemini-3.1-pro-preview", "gemini"),
+    ("hosted_vllm/unmapped-model", "hosted_vllm"),
 ]
-GEMINI: Final = "gemini/gemini-3.1-pro-preview"
 
 
 def _chat_completion_kwargs(
@@ -630,92 +631,55 @@ def _chat_completion_kwargs(
     return completion_kwargs
 
 
-def _gemini_includes_thoughts(sent: Mapping[str, object]) -> object:
-    gemini: Final = VertexGeminiConfig()
-    reasoning_effort: Final = reasoning_effort_with_summary_alias(
-        sent.get("reasoning_effort"), sent, accepts_summary=gemini.accepts_reasoning_summary_in_reasoning_effort
-    )
-    mapped: Final = gemini.map_openai_params({"reasoning_effort": reasoning_effort}, {}, GEMINI.split("/", 1)[1], True)
-    return mapped["thinkingConfig"]["includeThoughts"]
+def _lowest_accepted_level(levels: tuple[str, ...] | None) -> str | None:
+    if levels is None:
+        return "none"
+    return levels[0] if levels else None
 
 
-class TestBetweenToolsAndABareEffortReachAChatTargetAsOnTheResponsesBridge:
-    @pytest.mark.parametrize("model, provider", CHAT_TARGETS)
+class TestAnOpenAIChatRouteRequestGetsTheResponsesBridgeThinkingControls:
+    @pytest.mark.parametrize("model", OPENAI_CHAT_TARGETS)
     @pytest.mark.parametrize("output_config, tier", [(None, "medium"), ({"effort": "high"}, "high")])
     def test_between_tools_reasons_after_a_tool_result_at_the_declared_tier_or_medium(
-        self,
-        local_model_cost_map: None,
-        model: str,
-        provider: str,
-        output_config: dict[str, str] | None,
-        tier: str,
+        self, local_model_cost_map: None, model: str, output_config: dict[str, str] | None, tier: str
     ) -> None:
         sent: Final = _chat_completion_kwargs(
-            model, provider, thinking={"type": "between_tools"}, messages=TOOL_RESULT_TURN, output_config=output_config
+            model, "openai", thinking={"type": "between_tools"}, messages=TOOL_RESULT_TURN, output_config=output_config
         )
 
         assert sent["reasoning_effort"] == tier
 
-    @pytest.mark.parametrize("model, provider", CHAT_TARGETS)
-    def test_between_tools_turns_reasoning_off_on_a_turn_without_a_tool_result(
-        self, local_model_cost_map: None, model: str, provider: str
+    @pytest.mark.parametrize(
+        "model", [*OPENAI_CHAT_TARGETS, "openai/gpt-6.1-sol", "openai/gpt-4.1", "openai/o3"]
+    )
+    @pytest.mark.parametrize(
+        "thinking",
+        [{"type": "disabled"}, {"type": "between_tools", "summary": "concise"}],
+        ids=["disabled", "between_tools-first-turn"],
+    )
+    def test_reasoning_off_is_the_lowest_level_the_model_accepts(
+        self, local_model_cost_map: None, model: str, thinking: dict[str, object]
     ) -> None:
         sent: Final = _chat_completion_kwargs(
-            model, provider, thinking={"type": "between_tools"}, messages=MESSAGES, output_config={"effort": "high"}
+            model, "openai", thinking=thinking, messages=MESSAGES, output_config={"effort": "high"}
         )
 
-        assert sent["reasoning_effort"] == "none"
-        assert "reasoning_summary" not in sent
+        assert sent.get("reasoning_effort") == _lowest_accepted_level(model_reasoning_efforts(model, "openai"))
 
-    @pytest.mark.parametrize(
-        "thinking, messages, includes_thoughts",
-        [
-            ({"type": "between_tools"}, TOOL_RESULT_TURN, True),
-            ({"type": "between_tools", "display": "omitted"}, TOOL_RESULT_TURN, False),
-            ({"type": "between_tools", "display": "omitted", "summary": "concise"}, TOOL_RESULT_TURN, True),
-            ({"type": "between_tools", "summary": "concise"}, MESSAGES, False),
-        ],
-        ids=["after-a-tool-result", "display-omitted", "client-summary-wins", "first-turn"],
-    )
-    def test_between_tools_asks_gemini_for_thoughts_by_the_bridge_summary_rule(
-        self,
-        local_model_cost_map: None,
-        monkeypatch: pytest.MonkeyPatch,
-        thinking: dict[str, object],
-        messages: list[dict[str, object]],
-        includes_thoughts: bool,
-    ) -> None:
-        monkeypatch.setattr(litellm, "gemini_include_thoughts_default", False)
-
-        sent: Final = _chat_completion_kwargs(GEMINI, "gemini", thinking=thinking, messages=messages)
-
-        assert _gemini_includes_thoughts(sent) is includes_thoughts
-
-    def test_a_bridged_target_gets_the_plain_off_switch_on_a_turn_without_a_tool_result(
-        self, local_model_cost_map: None
-    ) -> None:
-        sent: Final = _chat_completion_kwargs(
-            "azure/responses/gpt-5.1", "azure", thinking={"type": "between_tools", "summary": "concise"}, messages=MESSAGES
-        )
-
-        assert sent["reasoning_effort"] == "none"
-
-    @pytest.mark.parametrize(
-        "model, provider", [*CHAT_TARGETS, ("openai/gpt-5.1", "openai"), ("hosted_vllm/unmapped-model", "hosted_vllm")]
-    )
+    @pytest.mark.parametrize("model", [*OPENAI_CHAT_TARGETS, "openai/gpt-4.1", "openai/o3"])
     def test_a_bare_output_effort_is_the_tier_when_the_model_reasons_unasked(
-        self, local_model_cost_map: None, model: str, provider: str
+        self, local_model_cost_map: None, model: str
     ) -> None:
         sent: Final = _chat_completion_kwargs(
-            model, provider, thinking=None, messages=MESSAGES, output_config={"effort": "high"}
+            model, "openai", thinking=None, messages=MESSAGES, output_config={"effort": "high"}
         )
 
-        assert sent.get("reasoning_effort") == ("high" if maps_bare_output_effort(model, provider) else None)
+        assert sent.get("reasoning_effort") == ("high" if maps_bare_output_effort(model, "openai") else None)
 
     def test_an_explicit_reasoning_effort_beats_a_bare_output_effort(self, local_model_cost_map: None) -> None:
         sent: Final = _chat_completion_kwargs(
-            "databricks/databricks-qwen35-122b-a10b",
-            "databricks",
+            "openai/gpt-5-mini",
+            "openai",
             thinking=None,
             messages=MESSAGES,
             output_config={"effort": "high"},
@@ -723,6 +687,26 @@ class TestBetweenToolsAndABareEffortReachAChatTargetAsOnTheResponsesBridge:
         )
 
         assert sent["reasoning_effort"] == "low"
+
+    @pytest.mark.parametrize("model, provider", OTHER_PROVIDER_CHAT_TARGETS)
+    @pytest.mark.parametrize(
+        "thinking, messages",
+        [(None, MESSAGES), ({"type": "between_tools"}, TOOL_RESULT_TURN), ({"type": "between_tools"}, MESSAGES)],
+        ids=["bare-effort", "between_tools-after-a-tool-result", "between_tools-first-turn"],
+    )
+    def test_another_provider_keeps_ignoring_between_tools_and_a_bare_effort(
+        self,
+        local_model_cost_map: None,
+        model: str,
+        provider: str,
+        thinking: dict[str, object] | None,
+        messages: list[dict[str, object]],
+    ) -> None:
+        sent: Final = _chat_completion_kwargs(
+            model, provider, thinking=thinking, messages=messages, output_config={"effort": "high"}
+        )
+
+        assert "reasoning_effort" not in sent
 
     @pytest.mark.parametrize(
         "thinking, messages",
