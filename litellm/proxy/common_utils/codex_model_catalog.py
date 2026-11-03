@@ -278,6 +278,30 @@ def _stock_for(row: CodexCatalogRow, stock: Mapping[str, CodexStockModel]) -> Co
     return next((stock[name] for name in names if name in stock), None)
 
 
+def _tier_fields(stock_model: CodexStockModel, tiers: tuple[CodexServiceTier, ...]) -> Mapping[str, object]:
+    """The tier fields of an entry offering `tiers`. Codex turns `/fast` on off a speed tier as much as off a
+    service tier, so a speed tier stays only while a service tier billed the same way is still offered, and the
+    default tier only while it is still offered."""
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_service_tier_cost_key
+
+    offered: Final = frozenset(tier.id for tier in tiers)
+    offered_prices: Final = frozenset(get_service_tier_cost_key(TOKEN_PRICE_KEY, tier) for tier in offered)
+    speed_tiers: Final = tuple(
+        tier
+        for tier in stock_model.additional_speed_tiers
+        if get_service_tier_cost_key(TOKEN_PRICE_KEY, tier) in offered_prices - {TOKEN_PRICE_KEY}
+    )
+    return MappingProxyType(
+        {
+            "service_tiers": tiers,
+            **({"additional_speed_tiers": speed_tiers} if stock_model.additional_speed_tiers else {}),
+            "default_service_tier": (
+                stock_model.default_service_tier if stock_model.default_service_tier in offered else None
+            ),
+        }
+    )
+
+
 def _priced_tiers(row: CodexCatalogRow, stock_model: CodexStockModel) -> Mapping[str, object]:
     """Codex's own tiers for the model without the ones some deployment behind the row prices tokens but not
     that tier for, or nothing when none is dropped. Sending a tier the upstream does not sell fails the
@@ -287,21 +311,7 @@ def _priced_tiers(row: CodexCatalogRow, stock_model: CodexStockModel) -> Mapping
     tiers: Final = tuple(
         tier for tier in stock_model.service_tiers if no_priced_deployment_lacks_tier(tier.id, deployments)
     )
-    speed_tiers: Final = tuple(
-        tier for tier in stock_model.additional_speed_tiers if no_priced_deployment_lacks_tier(tier, deployments)
-    )
-    if tiers == stock_model.service_tiers and speed_tiers == stock_model.additional_speed_tiers:
-        return _NO_UPDATE
-    offered: Final = frozenset(tier.id for tier in tiers)
-    return MappingProxyType(
-        {
-            "service_tiers": tiers,
-            "additional_speed_tiers": speed_tiers,
-            "default_service_tier": (
-                stock_model.default_service_tier if stock_model.default_service_tier in offered else None
-            ),
-        }
-    )
+    return _NO_UPDATE if tiers == stock_model.service_tiers else _tier_fields(stock_model, tiers)
 
 
 def _alias_context_window(row: CodexCatalogRow, stock_model: CodexStockModel) -> Mapping[str, int]:
@@ -341,8 +351,7 @@ def _deployment_defaults(row: CodexCatalogRow, stock_model: CodexStockModel) -> 
     none otherwise, and a window no larger than the alias's own limit."""
     return MappingProxyType(
         {
-            "service_tiers": (),
-            "default_service_tier": None,
+            **_tier_fields(stock_model, ()),
             "default_verbosity": None,
             "upgrade": None,
             "availability_nux": None,
@@ -397,16 +406,7 @@ def _entry(
     }
     if configured is None:
         return stock_model.model_copy(update={**_priced_tiers(row, stock_model), **listing})
-    configured_ids: Final = frozenset(tier.id for tier in configured)
-    return stock_model.model_copy(
-        update={
-            **listing,
-            "service_tiers": configured,
-            "default_service_tier": (
-                stock_model.default_service_tier if stock_model.default_service_tier in configured_ids else None
-            ),
-        }
-    )
+    return stock_model.model_copy(update={**listing, **_tier_fields(stock_model, configured)})
 
 
 def _serialized(entry: CodexCatalogEntry) -> str:

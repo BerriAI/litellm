@@ -27,7 +27,9 @@ _PROMPT = "base prompt"
 _FAST = {"id": "priority", "name": "Fast", "description": "2x speed, increased usage"}
 
 
-def _stock(slug, *, visibility="list", supported_in_api=True, upgrade=None, service_tiers=(_FAST,), default_tier=None):
+def _stock(
+    slug, *, visibility="list", supported_in_api=True, upgrade=None, service_tiers=(_FAST,), default_tier=None
+):
     return CodexStockModel(
         slug=slug,
         display_name=slug.upper(),
@@ -36,6 +38,7 @@ def _stock(slug, *, visibility="list", supported_in_api=True, upgrade=None, serv
         supported_in_api=supported_in_api,
         upgrade=CodexStockUpgrade(model=upgrade) if upgrade else None,
         service_tiers=tuple(CodexServiceTier(**tier) for tier in service_tiers),
+        additional_speed_tiers=("fast",) if service_tiers else (),
         default_service_tier=default_tier,
         model_messages={"instructions_template": f"{slug} prompt"},
     )
@@ -487,6 +490,27 @@ def test_configured_service_tiers_replace_stock_tiers_and_a_known_id_keeps_its_c
     (entry,) = _models(row)
 
     assert _tiers(entry) == expected
+
+
+@pytest.mark.parametrize(
+    ("rows", "alias_defaults"),
+    [
+        ((_row("gpt-5.5", service_tiers=[]),), "codex"),
+        ((_row("gpt-5.5", service_tiers=["ultrafast"]),), "codex"),
+        ((_row("gpt-5.5", service_tiers=["priority"]),), "codex"),
+        ((_row("gpt-5.5"),), "codex"),
+        ((_row("team-55", upstream_model="gpt-5.5"),), "deployment"),
+        ((_row("team-55", upstream_model="gpt-5.5", service_tiers=["priority"]),), "deployment"),
+    ],
+)
+def test_codexs_fast_toggle_is_on_exactly_when_the_entry_offers_the_priority_tier(rows, alias_defaults):
+    """Codex shows `/fast` for a speed tier `fast` as well as for a `priority` service tier, but only sends
+    the tier when `service_tiers` lists it (codex-rs `ModelPreset::supports_fast_mode` and
+    `get_service_tier`, 0.166.0), so a leftover speed tier is a `/fast` toggle that does nothing."""
+    (entry,) = _models(*rows, alias_defaults=alias_defaults)
+
+    offers_priority = "priority" in [tier["id"] for tier in entry["service_tiers"]]
+    assert ("fast" in entry["additional_speed_tiers"]) is offers_priority
 
 
 @pytest.mark.parametrize(
