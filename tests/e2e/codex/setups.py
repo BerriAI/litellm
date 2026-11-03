@@ -17,7 +17,7 @@ GPT_ON_BEDROCK_RUNTIME: Final = "bedrock/us.openai.gpt-6.1-sol"
 GPT_ON_AZURE_OPENAI: Final = "azure/gpt-6.1-sol"
 GPT_ON_OPENAI: Final = "openai/gpt-6.1-sol"
 CLAUDE_ON_BEDROCK: Final = "bedrock/us.anthropic.claude-sonnet-5-5"
-_BEDROCK_REGION: Final = "us-east-1"
+BEDROCK_REGION: Final = "us-east-1"
 
 type SetupId = Literal["bedrock_mantle", "bedrock_runtime", "azure_openai", "openai", "claude_bedrock"]
 
@@ -49,14 +49,14 @@ def _drives(provider: Provider, model: str) -> pytest.MarkDecorator:
 SETUPS: Final = (
     pytest.param(
         Deployment(
-            LiteLLMParamsBody(model=GPT_ON_BEDROCK_MANTLE, aws_region_name=_BEDROCK_REGION), RateBucket.BEDROCK_MANTLE
+            LiteLLMParamsBody(model=GPT_ON_BEDROCK_MANTLE, aws_region_name=BEDROCK_REGION), RateBucket.BEDROCK_MANTLE
         ),
         id="bedrock_mantle",
         marks=_drives(Provider.BEDROCK_MANTLE, GPT_ON_BEDROCK_MANTLE),
     ),
     pytest.param(
         Deployment(
-            LiteLLMParamsBody(model=GPT_ON_BEDROCK_RUNTIME, aws_region_name=_BEDROCK_REGION),
+            LiteLLMParamsBody(model=GPT_ON_BEDROCK_RUNTIME, aws_region_name=BEDROCK_REGION),
             RateBucket.BEDROCK_CONVERSE,
         ),
         id="bedrock_runtime",
@@ -79,7 +79,7 @@ SETUPS: Final = (
     ),
     pytest.param(
         Deployment(
-            LiteLLMParamsBody(model=CLAUDE_ON_BEDROCK, aws_region_name=_BEDROCK_REGION), RateBucket.BEDROCK_CONVERSE
+            LiteLLMParamsBody(model=CLAUDE_ON_BEDROCK, aws_region_name=BEDROCK_REGION), RateBucket.BEDROCK_CONVERSE
         ),
         id="claude_bedrock",
         marks=_drives(Provider.BEDROCK, CLAUDE_ON_BEDROCK),
