@@ -4212,6 +4212,25 @@ def test_speech_stream_is_logged_when_the_audio_ends(
     assert audio.rest_sent_at is not None and _logged_end(logged) >= audio.rest_sent_at
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_speech_stream_usage_is_captured_when_the_audio_ends(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio: Final = _SyncAudio(b"first", b"rest")
+    _mock_elevenlabs_audio(respx_mock, audio)
+    captured_at: Final[queue.Queue[float]] = queue.Queue()
+    monkeypatch.setattr(
+        litellm_logging.Logging, "usage_capture_callback", lambda *_: captured_at.put(time.time())
+    )
+
+    response: Final = litellm.speech(**_SPEECH_ARGS, stream=True)
+    captured_before_read: Final = captured_at.qsize()
+    assert response.read() == b"firstrest"
+
+    assert captured_before_read == 0
+    assert audio.rest_sent_at is not None and captured_at.get(timeout=5) >= audio.rest_sent_at
+
+
 class TestCallbackAsyncSyncSeparation:
     """Test that LoggingCallbackManager auto-routes async callbacks to async lists."""
 
