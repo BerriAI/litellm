@@ -9152,11 +9152,17 @@ class PythonCore(DeprecatedRouterMembers):
         if include_fallback_errors:
             input_kwargs["include_fallback_errors"] = True
 
-        # ORDER-BASED FALLBACKS: prepend higher order levels to the fallback list
-        # Skip for error types that have their own dedicated fallback handlers
-        _skip_order_fallback: Final = isinstance(
-            e,
-            (litellm_exceptions.ContextWindowExceededError, litellm_exceptions.ContentPolicyViolationError),
+        context_window_fallback_model_group: Final = (
+            self._get_fallback_model_group_for_lookup_groups(
+                fallbacks=context_window_fallbacks,
+                lookup_groups=lookup_groups,
+            )
+            if isinstance(e, litellm_exceptions.ContextWindowExceededError) and context_window_fallbacks is not None
+            else None
+        )
+        _skip_order_fallback: Final = (
+            isinstance(e, litellm_exceptions.ContentPolicyViolationError)
+            or context_window_fallback_model_group is not None
         )
         _request_team_id: Final[str | None] = (kwargs.get("metadata", {}) or {}).get("user_api_key_team_id")
         # Use wildcard-aware lookup so order-based fallback also works for model
@@ -9202,14 +9208,23 @@ class PythonCore(DeprecatedRouterMembers):
                         "original_model_group": original_model_group,
                     }
                 )
-                response = await run_async_fallback(
-                    *args,
-                    **input_kwargs,
-                )
-                return response
+                try:
+                    return await run_async_fallback(
+                        *args,
+                        **input_kwargs,
+                    )
+                except Exception:
+                    if isinstance(original_exception, litellm_exceptions.ContextWindowExceededError):
+                        raise original_exception
+                    raise
 
         # Weighted intra-group failover (simple-shuffle only); see _maybe_run_weighted_failover.
-        if self.enable_weighted_failover and not _skip_order_fallback and original_model_group is not None:
+        if (
+            self.enable_weighted_failover
+            and not _skip_order_fallback
+            and not isinstance(e, litellm_exceptions.ContextWindowExceededError)
+            and original_model_group is not None
+        ):
             response = await self._maybe_run_weighted_failover(
                 exception=e,
                 original_model_group=original_model_group,
@@ -9227,7 +9242,7 @@ class PythonCore(DeprecatedRouterMembers):
             # check if client-side fallbacks are used (e.g. fallbacks = ["gpt-3.5-turbo", "claude-3-haiku"] or fallbacks=[{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hey, how's it going?"}]}]
             is_non_standard_fallback_format: Final = check_non_standard_fallback_format(fallbacks=fallbacks)
 
-            if is_non_standard_fallback_format:
+            if is_non_standard_fallback_format and context_window_fallback_model_group is None:
                 input_kwargs.update(
                     {
                         "fallback_model_group": fallbacks,
@@ -9243,16 +9258,7 @@ class PythonCore(DeprecatedRouterMembers):
                 return response
 
             if isinstance(e, litellm_exceptions.ContextWindowExceededError):
-                if context_window_fallbacks is not None:
-                    context_window_fallback_model_group: Final[list[str] | None] = (
-                        self._get_fallback_model_group_for_lookup_groups(
-                            fallbacks=context_window_fallbacks,
-                            lookup_groups=lookup_groups,
-                        )
-                    )
-                    if context_window_fallback_model_group is None:
-                        raise original_exception
-
+                if context_window_fallback_model_group is not None:
                     input_kwargs.update(
                         {
                             "fallback_model_group": context_window_fallback_model_group,
@@ -9266,7 +9272,7 @@ class PythonCore(DeprecatedRouterMembers):
                     )
                     return response
 
-                else:
+                elif context_window_fallbacks is None:
                     error_message = f"model={model_group}. context_window_fallbacks={mask_sensitive_structure(context_window_fallbacks)}. fallbacks={mask_sensitive_structure(fallbacks)}.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks"
                     verbose_router_logger.info(
                         msg=f"Got 'ContextWindowExceededError'. No context_window_fallback set. Defaulting \
