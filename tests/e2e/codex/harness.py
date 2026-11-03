@@ -73,8 +73,14 @@ class CodexHarness:
         return workspace
 
     @step('Run Codex on {model} through the proxy with the prompt "{prompt}"')
-    def exec(self, prompt: str, *, model: str, cwd: Path, compact_after_tokens: int | None = None) -> CodexRun:
-        return self._run(("exec",), (*_compaction_flags(compact_after_tokens), "--model", model, "--", prompt), cwd)
+    def exec(
+        self, prompt: str, *, model: str, cwd: Path, compact_after_tokens: int | None = None, fast: bool = False
+    ) -> CodexRun:
+        return self._run(
+            ("exec",),
+            (*_compaction_flags(compact_after_tokens), *_fast_mode_flags(fast), "--model", model, "--", prompt),
+            cwd,
+        )
 
     @step('Resume Codex thread {thread_id} on {model} through the proxy with the prompt "{prompt}"')
     def resume(
@@ -138,6 +144,10 @@ def _compaction_flags(after_tokens: int | None) -> tuple[str, ...]:
                 "--config",
                 f"model_auto_compact_token_limit={after_tokens}",
             )
+
+
+def _fast_mode_flags(fast: bool) -> tuple[str, ...]:
+    return ("--config", 'service_tier="priority"') if fast else ()
 
 
 @step("Give Codex a fresh empty home whose config sends every request to the proxy")
