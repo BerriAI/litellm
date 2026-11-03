@@ -1297,7 +1297,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             return None
         return anthropic_beta_header.split(",")
 
-    def get_computer_tool_beta_header(self, computer_tool_version: str) -> str:
+    def get_computer_tool_beta_header(self, computer_tool_version: str) -> str | None:
         """
         Get the appropriate beta header for a given computer tool version.
 
@@ -1305,16 +1305,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             computer_tool_version: The computer tool version (e.g., 'computer_20250124', 'computer_20241022')
 
         Returns:
-            The corresponding beta header string
+            The corresponding beta header string, or None for a version with no known beta
         """
         computer_tool_beta_mapping: Final = {
+            "computer_20251124": "computer-use-2025-11-24",
             "computer_20250124": "computer-use-2025-01-24",
             "computer_20241022": "computer-use-2024-10-22",
         }
-        return computer_tool_beta_mapping.get(
-            computer_tool_version,
-            "computer-use-2024-10-22",  # Default fallback
-        )
+        return computer_tool_beta_mapping.get(computer_tool_version)
 
     def get_anthropic_beta_list(
         self,
@@ -1346,9 +1344,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if effort_used:
             betas.append(ANTHROPIC_EFFORT_BETA_HEADER)  # effort-2025-11-24
 
-        if computer_tool_used:
-            beta_header: Final = self.get_computer_tool_beta_header(computer_tool_used)
-            betas.append(beta_header)
+        if computer_tool_used and (computer_tool_beta := self.get_computer_tool_beta_header(computer_tool_used)):
+            betas.append(computer_tool_beta)
 
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
@@ -1437,9 +1434,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
         # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
-        if computer_tool_used:
-            beta_header: Final = self.get_computer_tool_beta_header(computer_tool_used)
-            betas.add(beta_header)
+        if computer_tool_used and (computer_tool_beta := self.get_computer_tool_beta_header(computer_tool_used)):
+            betas.add(computer_tool_beta)
         # if pdf_used:
         #     betas.add("pdfs-2024-09-25")
         if file_id_used:

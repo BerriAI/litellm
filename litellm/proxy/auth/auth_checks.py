@@ -125,6 +125,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
+    budget_windows_absent_cache_key,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
     get_management_object_ttl,
@@ -3471,9 +3472,20 @@ async def delete_cache_key_object(
         )
 
     await publish_auth_cache_invalidation(cache_key=key)
+    await evict_budget_windows_absent_marker(
+        entity_type=Litellm_EntityType.KEY, entity_id=hashed_token, user_api_key_cache=user_api_key_cache
+    )
 
 
 _delete_cache_key_object: Final = delete_cache_key_object
+
+
+async def evict_budget_windows_absent_marker(
+    entity_type: Litellm_EntityType, entity_id: str, user_api_key_cache: UserApiKeyCache
+) -> None:
+    marker: Final = budget_windows_absent_cache_key(entity_type.value, entity_id)
+    evict_local(cache_keys=(marker,), user_api_key_cache=user_api_key_cache)
+    await publish_auth_cache_invalidation(cache_key=marker)
 
 
 async def delete_cache_key_objects(
@@ -5375,79 +5387,6 @@ async def _granted_model_lists(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         ),
-    )
-
-
-async def _user_object_or_none(
-    valid_token: UserAPIKeyAuth,
-    prisma_client: PrismaClient,
-    user_api_key_cache: UserApiKeyCache,
-    proxy_logging_obj: ProxyLogging,
-) -> LiteLLM_UserTable | None:
-    try:
-        return await get_user_object(
-            user_id=valid_token.user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    except UserNotFoundError:
-        return None
-
-
-async def enforced_model_allowlists(
-    valid_token: UserAPIKeyAuth,
-    prisma_client: PrismaClient | None,
-    user_api_key_cache: UserApiKeyCache,
-    proxy_logging_obj: ProxyLogging,
-) -> tuple[Sequence[str], ...]:
-    """One model allowlist per level that ``common_checks`` enforces on a request from this identity."""
-    key_models: Final = _resolve_key_models_for_auth_check(valid_token=valid_token)
-    if prisma_client is None:
-        return (key_models, tuple(valid_token.team_models or ()))
-    team_object: Final = (
-        None
-        if valid_token.team_id is None
-        else await get_team_object(
-            team_id=valid_token.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    )
-    user_object: Final = (
-        None
-        if team_object is not None
-        else await _user_object_or_none(
-            valid_token=valid_token,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    )
-    project_object: Final = (
-        None
-        if valid_token.project_id is None
-        else await get_project_object(
-            project_id=valid_token.project_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    )
-    return (
-        key_models,
-        team_object.models if team_object is not None else (),
-        await _team_member_granted_models(
-            valid_token=valid_token,
-            team_object=team_object,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        ),
-        user_object.models if user_object is not None else (),
-        project_object.models if project_object is not None else (),
     )
 
 
