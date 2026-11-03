@@ -1579,7 +1579,7 @@ _JWT_AUTH_DISABLED_HINT = (
 class _PendingAutoRegister(NamedTuple):
     """
     Signal returned by ``_resolve_jwt_to_virtual_key`` when the JWT's claim is
-    unmapped and ``unregistered_jwt_client_behavior`` is AUTO_REGISTER.
+    unmapped and ``unregistered_jwt_client_behavior`` is AUTO_REGISTER or LINK_ONLY.
 
     The caller MUST run standard ``JWTAuthManager.auth_builder`` to apply RBAC,
     scope mappings, ``custom_validate``, and ``user_allowed_email_domain``
@@ -1593,16 +1593,15 @@ class _PendingAutoRegister(NamedTuple):
     claim_value: str
     cache_key: str
     jwt_issuer: str | None = None
+    behavior: UnregisteredJWTClientBehavior = UnregisteredJWTClientBehavior.AUTO_REGISTER
 
 
 def _claim_identifies_user(jwt_handler: JWTHandler, claim_field: str, jwt_issuer: str | None) -> bool:
-    if not jwt_handler.litellm_jwtauth.auto_register_map_existing_key:
-        return False
     if jwt_handler.litellm_jwtauth.is_user_identity_claim(claim_field, jwt_issuer):
         return True
     verbose_proxy_logger.warning(
-        "JWT Key Mapping (auto_register_map_existing_key): claim '%s' is not the user_id or user_email JWT field "
-        "and may be shared by several users, so a new key is minted instead of reusing one the user owns.",
+        "JWT Key Mapping: claim '%s' is not the user_id or user_email JWT field "
+        "and may be shared by several users, so existing user keys cannot be linked automatically.",
         claim_field,
     )
     return False
@@ -1632,11 +1631,13 @@ async def _auto_register_jwt_mapping(
     org_id: str | None = None,
     end_user_id: str | None = None,
     agent_id: str | None = None,
+    behavior: UnregisteredJWTClientBehavior = UnregisteredJWTClientBehavior.AUTO_REGISTER,
 ) -> UserAPIKeyAuth | None:
     """
     Auto-register: create a new virtual key + mapping for an unrecognised JWT
     claim value, or point the mapping at a key the resolved user already owns
-    when ``auto_register_map_existing_key`` is set. ``team_id`` and ``user_id``
+    when ``auto_register_map_existing_key`` is set. LINK_ONLY always searches
+    for an existing key and rejects when none is eligible. ``team_id`` and ``user_id``
     must come from a successful ``JWTAuthManager.auth_builder`` run — they
     encode the JWT identity AFTER
     RBAC/scope/custom_validate/email-domain policy has been enforced. The key
@@ -1654,16 +1655,25 @@ async def _auto_register_jwt_mapping(
         generate_key_helper_fn,
     )
 
+    link_only: Final = behavior == UnregisteredJWTClientBehavior.LINK_ONLY
+    reuse_existing: Final = link_only or jwt_handler.litellm_jwtauth.auto_register_map_existing_key
     existing_token_hash: Final = (
         await _reusable_key_hash_for_user(
             prisma_client,
             user_id,
             team_id,
-            skip_allowed_routes_check=jwt_handler.litellm_jwtauth.auto_register_skip_allowed_routes_check,
+            skip_allowed_routes_check=jwt_handler.litellm_jwtauth.virtual_key_mapping_skip_allowed_routes_check,
         )
-        if user_id is not None and _claim_identifies_user(jwt_handler, virtual_key_claim_field, jwt_issuer)
+        if reuse_existing
+        and user_id is not None
+        and _claim_identifies_user(jwt_handler, virtual_key_claim_field, jwt_issuer)
         else None
     )
+    if link_only and existing_token_hash is None:
+        raise HTTPException(
+            status_code=403,
+            detail="JWT Key Mapping: No eligible existing virtual key for this identity. Access denied.",
+        )
     minted: Final = existing_token_hash is None
     if existing_token_hash is not None:
         token_hash = existing_token_hash
@@ -1700,8 +1710,8 @@ async def _auto_register_jwt_mapping(
                     "jwt_claim_name": virtual_key_claim_field,
                     "jwt_claim_value": claim_value,
                     "token": token_hash,
-                    "created_by": "auto_register",
-                    "updated_by": "auto_register",
+                    "created_by": behavior.value,
+                    "updated_by": behavior.value,
                 }
             )
     except Exception as e:
@@ -1713,8 +1723,8 @@ async def _auto_register_jwt_mapping(
             # the DB and the cleartext is in memory on this request. Delete it
             # so orphans don't accumulate under sustained concurrency.
             verbose_proxy_logger.debug(
-                "JWT Key Mapping (auto_register): unique conflict on create — "
-                "deleting orphaned virtual key and fetching winner's mapping for %s='%s'.",
+                "JWT Key Mapping (%s): unique conflict on create, fetching winner's mapping for %s='%s'.",
+                behavior.value,
                 virtual_key_claim_field,
                 claim_value,
             )
@@ -1744,7 +1754,7 @@ async def _auto_register_jwt_mapping(
                 raise HTTPException(
                     status_code=503,
                     detail=(
-                        "JWT Key Mapping: AUTO_REGISTER race resolution failed — "
+                        f"JWT Key Mapping: {behavior.value.upper()} race resolution failed — "
                         "winner's mapping was concurrently removed. Retry the request."
                     ),
                 )
@@ -1758,7 +1768,8 @@ async def _auto_register_jwt_mapping(
     )
 
     verbose_proxy_logger.info(
-        "JWT Key Mapping (auto_register): %s virtual key for %s='%s'.",
+        "JWT Key Mapping (%s): %s virtual key for %s='%s'.",
+        behavior.value,
         "created new" if minted else "mapped existing",
         virtual_key_claim_field,
         claim_value,
@@ -1830,7 +1841,7 @@ async def _resolve_jwt_to_virtual_key(
       - ``UserAPIKeyAuth``: a resolved virtual key (cache hit or DB hit). The
         caller may use this directly; JWT policy has been enforced previously
         (at key-creation time or, for cached results, before caching).
-      - ``_PendingAutoRegister``: claim is unmapped and behavior is AUTO_REGISTER.
+      - ``_PendingAutoRegister``: claim is unmapped and behavior is AUTO_REGISTER or LINK_ONLY.
         The caller MUST run ``JWTAuthManager.auth_builder`` to enforce JWT
         policy (RBAC, scope, custom_validate, email-domain), then invoke
         ``_auto_register_jwt_mapping`` with the validated team_id/user_id.
@@ -1838,7 +1849,7 @@ async def _resolve_jwt_to_virtual_key(
         The caller falls through to standard team-based JWT auth (which itself
         enforces full JWT policy via auth_builder).
       - Raises HTTPException: REJECT policy hit, missing claim under
-        REJECT/AUTO_REGISTER, or other policy violations.
+        REJECT/AUTO_REGISTER/LINK_ONLY, or other policy violations.
     """
     raw_issuer: Final = jwt_claims.get(JWTHandler.LITELLM_JWT_ISSUER_CLAIM)
     normalized_issuer: Final = raw_issuer if isinstance(raw_issuer, str) else None
@@ -1865,6 +1876,7 @@ async def _resolve_jwt_to_virtual_key(
         if behavior in (
             UnregisteredJWTClientBehavior.REJECT,
             UnregisteredJWTClientBehavior.AUTO_REGISTER,
+            UnregisteredJWTClientBehavior.LINK_ONLY,
         ):
             raise HTTPException(
                 status_code=403,
@@ -1896,7 +1908,7 @@ async def _resolve_jwt_to_virtual_key(
                 status_code=403,
                 detail=f"JWT Key Mapping: No registered mapping for {virtual_key_claim_field}='{claim_value}'. Access denied.",
             )
-        if behavior == UnregisteredJWTClientBehavior.AUTO_REGISTER:
+        if behavior in (UnregisteredJWTClientBehavior.AUTO_REGISTER, UnregisteredJWTClientBehavior.LINK_ONLY):
             # Stale sentinel written under a prior fallback_team_mapping config —
             # evict it and defer auto-register to after auth_builder runs. Raise
             # the same 500 as the fresh-path AUTO_REGISTER branch when there is
@@ -1906,7 +1918,7 @@ async def _resolve_jwt_to_virtual_key(
                 raise HTTPException(
                     status_code=500,
                     detail=(
-                        "JWT Key Mapping: AUTO_REGISTER requires a database connection. "
+                        f"JWT Key Mapping: {behavior.value.upper()} requires a database connection. "
                         "Configure a database or change unregistered_jwt_client_behavior."
                     ),
                 )
@@ -1916,6 +1928,7 @@ async def _resolve_jwt_to_virtual_key(
                 claim_value=str(claim_value),
                 cache_key=cache_key,
                 jwt_issuer=normalized_issuer,
+                behavior=behavior,
             )
         return None
     elif cached_mapping is not None:
@@ -1976,12 +1989,12 @@ async def _resolve_jwt_to_virtual_key(
             detail=f"JWT Key Mapping: No registered mapping for {virtual_key_claim_field}='{claim_value}'. Access denied.",
         )
 
-    if behavior == UnregisteredJWTClientBehavior.AUTO_REGISTER:
+    if behavior in (UnregisteredJWTClientBehavior.AUTO_REGISTER, UnregisteredJWTClientBehavior.LINK_ONLY):
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
                 detail=(
-                    "JWT Key Mapping: AUTO_REGISTER requires a database connection. "
+                    f"JWT Key Mapping: {behavior.value.upper()} requires a database connection. "
                     "Configure a database or change unregistered_jwt_client_behavior."
                 ),
             )
@@ -1994,6 +2007,7 @@ async def _resolve_jwt_to_virtual_key(
             claim_value=str(claim_value),
             cache_key=cache_key,
             jwt_issuer=normalized_issuer,
+            behavior=behavior,
         )
 
     # FALLBACK_TEAM_MAPPING (default): cache the miss and return None so the
@@ -2486,6 +2500,7 @@ async def user_api_key_auth_builder(
                             org_id=org_id,
                             end_user_id=end_user_id,
                             agent_id=agent_id,
+                            behavior=pending_auto_register.behavior,
                         )
                         if pending_auto_register is not None and prisma_client is not None
                         else None
@@ -2505,7 +2520,13 @@ async def user_api_key_auth_builder(
 
                     falls_through_to_key_checks: Final = (
                         auto_registered is not None
-                        and jwt_handler.litellm_jwtauth.auto_register_map_existing_key
+                        and (
+                            jwt_handler.litellm_jwtauth.auto_register_map_existing_key
+                            or (
+                                pending_auto_register is not None
+                                and pending_auto_register.behavior == UnregisteredJWTClientBehavior.LINK_ONLY
+                            )
+                        )
                         and master_key is not None
                     )
                     if not falls_through_to_key_checks:

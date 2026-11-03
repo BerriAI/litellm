@@ -7,13 +7,15 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import jwt
 import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric import rsa
+from pydantic import JsonValue
+from redis import Redis
 
 from tests.integration._support.client import Gateway, eventually, string_value
 from tests.integration._support.database import read_rows
@@ -31,7 +33,16 @@ def _hash(key: str) -> str:
     return sha256(key.encode()).hexdigest()
 
 
-def _config(directory: Path, claim_field: str, *, skip_allowed_routes_check: bool = False) -> Path:
+def _config(
+    directory: Path,
+    claim_field: str,
+    *,
+    skip_allowed_routes_check: bool = False,
+    behavior: Literal["auto_register", "link_only", "reject"] = "auto_register",
+    map_existing_key: bool = True,
+    user_id_upsert: bool = False,
+    issuers: tuple[dict[str, JsonValue], ...] = (),
+) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["general_settings"] = {
         **config["general_settings"],
@@ -40,9 +51,11 @@ def _config(directory: Path, claim_field: str, *, skip_allowed_routes_check: boo
             "user_id_jwt_field": "sub",
             "user_email_jwt_field": "email",
             "virtual_key_claim_field": claim_field,
-            "unregistered_jwt_client_behavior": "auto_register",
-            "auto_register_map_existing_key": True,
-            "auto_register_skip_allowed_routes_check": skip_allowed_routes_check,
+            "unregistered_jwt_client_behavior": behavior,
+            "auto_register_map_existing_key": map_existing_key,
+            "user_id_upsert": user_id_upsert,
+            "issuers": list(issuers),
+            "virtual_key_mapping_skip_allowed_routes_check": skip_allowed_routes_check,
         },
     }
     path: Final = directory / f"jwt_map_existing_key_{claim_field}.yaml"
@@ -142,8 +155,15 @@ def test_first_jwt_call_reuses_the_newest_durable_llm_key_and_skips_every_inelig
 
 
 @pytest.mark.parametrize("skip_allowed_routes_check", [False, True])
+@pytest.mark.parametrize(
+    ("behavior", "map_existing_key"), [("auto_register", True), ("link_only", False), ("link_only", True)]
+)
 def test_route_filter_can_be_skipped_without_bypassing_other_key_checks(
-    gateway: Gateway, tmp_path: Path, skip_allowed_routes_check: bool
+    gateway: Gateway,
+    tmp_path: Path,
+    skip_allowed_routes_check: bool,
+    behavior: Literal["auto_register", "link_only"],
+    map_existing_key: bool,
 ) -> None:
     with _issuer() as (private_key, jwks_url), gateway.scenario() as scenario:
         model: Final = scenario.model()
@@ -162,7 +182,13 @@ def test_route_filter_can_be_skipped_without_bypassing_other_key_checks(
             gateway,
             tmp_path,
             {"JWT_PUBLIC_KEY_URL": jwks_url},
-            config=_config(tmp_path, "sub", skip_allowed_routes_check=skip_allowed_routes_check),
+            config=_config(
+                tmp_path,
+                "sub",
+                skip_allowed_routes_check=skip_allowed_routes_check,
+                behavior=behavior,
+                map_existing_key=map_existing_key,
+            ),
         ) as candidate:
             response: Final = _chat(candidate, model, token)
             repeated: Final = _chat(candidate, model, token)
@@ -221,8 +247,9 @@ def test_shared_client_claim_never_maps_a_second_user_onto_the_first_users_perso
         assert read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE api_key = %s', (_hash(personal),)) == []
 
 
-def test_concurrent_first_jwt_calls_of_a_keyless_user_both_succeed_on_one_surviving_mapped_key(
-    gateway: Gateway, tmp_path: Path
+@pytest.mark.parametrize("behavior", ["auto_register", "link_only"])
+def test_concurrent_first_jwt_calls_both_succeed_on_one_surviving_mapped_key(
+    gateway: Gateway, tmp_path: Path, behavior: Literal["auto_register", "link_only"]
 ) -> None:
     writer_url: Final = os.environ.get("INTEGRATION_PROXY_DATABASE_URL") or os.environ["DATABASE_URL"]
     with (
@@ -232,6 +259,7 @@ def test_concurrent_first_jwt_calls_of_a_keyless_user_both_succeed_on_one_surviv
     ):
         model: Final = scenario.model()
         user: Final = scenario.user(user_role="internal_user")
+        existing: Final = scenario.key(user_id=user) if behavior == "link_only" else None
         token: Final = _token(private_key, user)
         overrides: Final = {
             "JWT_PUBLIC_KEY_URL": jwks_url,
@@ -240,7 +268,12 @@ def test_concurrent_first_jwt_calls_of_a_keyless_user_both_succeed_on_one_surviv
         }
 
         with (
-            owned_proxy(gateway, tmp_path, overrides, config=_config(tmp_path, "sub")) as candidate,
+            owned_proxy(
+                gateway,
+                tmp_path,
+                overrides,
+                config=_config(tmp_path, "sub", behavior=behavior, map_existing_key=False),
+            ) as candidate,
             ThreadPoolExecutor(max_workers=1) as pool,
         ):
             held_call: Final = pool.submit(_chat, candidate, model, token)
@@ -253,5 +286,243 @@ def test_concurrent_first_jwt_calls_of_a_keyless_user_both_succeed_on_one_surviv
         assert held.status_code == 200, held.text
         keys: Final = _user_key_hashes(user)
         assert len(keys) == 1, keys
+        if existing is not None:
+            assert keys == frozenset({_hash(existing)})
         assert _mapped_token("sub", user) in keys
         assert (_billed_key(held), _billed_key(racing)) == (_mapped_token("sub", user),) * 2
+
+
+@pytest.mark.parametrize("ineligible_keys", [False, True])
+def test_link_only_rejects_without_writes_then_links_a_newly_available_key(
+    gateway: Gateway, tmp_path: Path, ineligible_keys: bool
+) -> None:
+    with _issuer() as (private_key, jwks_url), gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        user: Final = scenario.user(user_role="internal_user")
+        if ineligible_keys:
+            scenario.key(user_id=user, duration="1h")
+            scenario.key(user_id=user, allowed_routes=["management_routes"])
+            scenario.key(user_id=user, metadata={"auto_registered": True})
+            scenario.key(user_id=user, team_id=scenario.team())
+            blocked: Final = scenario.key(user_id=user)
+            gateway.post("/key/block", {"key": blocked})
+        keys_before: Final = _user_key_hashes(user)
+        token: Final = _token(private_key, user)
+        with owned_proxy(
+            gateway,
+            tmp_path,
+            {"JWT_PUBLIC_KEY_URL": jwks_url},
+            config=_config(tmp_path, "sub", behavior="link_only", map_existing_key=False),
+        ) as candidate:
+            first: Final = _chat(candidate, model, token)
+            repeated: Final = _chat(candidate, model, token)
+            assert first.status_code == 403, first.text
+            assert repeated.status_code == 403, repeated.text
+            assert _user_key_hashes(user) == keys_before
+            assert read_rows('SELECT token FROM "LiteLLM_JWTKeyMapping" WHERE jwt_claim_value=%s', (user,)) == []
+            available: Final = scenario.key(user_id=user)
+            accepted: Final = _chat(candidate, model, token)
+        assert accepted.status_code == 200, accepted.text
+        assert _mapped_token("sub", user) == _hash(available)
+        assert _user_key_hashes(user) == keys_before | {_hash(available)}
+        assert _billed_key(accepted) == _hash(available)
+
+
+@pytest.mark.parametrize("claim_field", ["client_id", "email"])
+def test_link_only_rejects_shared_or_missing_claims_without_linking_a_personal_key(
+    gateway: Gateway, tmp_path: Path, claim_field: str
+) -> None:
+    with _issuer() as (private_key, jwks_url), gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        user: Final = scenario.user(user_role="internal_user")
+        key: Final = scenario.key(user_id=user)
+        shared_claim: Final = f"integration-client-{uuid.uuid4().hex}"
+        with owned_proxy(
+            gateway,
+            tmp_path,
+            {"JWT_PUBLIC_KEY_URL": jwks_url},
+            config=_config(tmp_path, claim_field, behavior="link_only", map_existing_key=False),
+        ) as candidate:
+            response: Final = _chat(candidate, model, _token(private_key, user, client_id=shared_claim))
+        assert response.status_code == 403, response.text
+        assert _user_key_hashes(user) == frozenset({_hash(key)})
+        assert read_rows('SELECT token FROM "LiteLLM_JWTKeyMapping" WHERE token=%s', (_hash(key),)) == []
+        assert read_rows('SELECT token FROM "LiteLLM_JWTKeyMapping" WHERE jwt_claim_value=%s', (shared_claim,)) == []
+
+
+@pytest.mark.parametrize("restriction", ["models", "allowed_routes"])
+def test_link_only_enforces_key_permissions_on_the_first_and_cached_requests(
+    gateway: Gateway, tmp_path: Path, restriction: str
+) -> None:
+    with _issuer() as (private_key, jwks_url), gateway.scenario() as scenario:
+        allowed: Final = scenario.model()
+        denied: Final = scenario.model()
+        user: Final = scenario.user(user_role="internal_user")
+        key: Final = scenario.key(
+            user_id=user,
+            **({"models": [allowed]} if restriction == "models" else {"allowed_routes": ["/v1/models"]}),
+        )
+        token: Final = _token(private_key, user)
+        with owned_proxy(
+            gateway,
+            tmp_path,
+            {"JWT_PUBLIC_KEY_URL": jwks_url},
+            config=_config(
+                tmp_path, "sub", behavior="link_only", map_existing_key=False, skip_allowed_routes_check=True
+            ),
+        ) as candidate:
+            first: Final = _chat(candidate, denied, token)
+            repeated: Final = _chat(candidate, denied, token)
+            control: Final = (
+                _chat(candidate, allowed, token)
+                if restriction == "models"
+                else candidate.request("GET", "/v1/models", key=token)
+            )
+        assert first.status_code == 403, first.text
+        assert repeated.status_code == 403, repeated.text
+        assert control.status_code == 200, control.text
+        assert _mapped_token("sub", user) == _hash(key)
+        assert _user_key_hashes(user) == frozenset({_hash(key)})
+
+
+def test_link_only_does_not_replace_an_existing_mapping_to_a_blocked_key(gateway: Gateway, tmp_path: Path) -> None:
+    with _issuer() as (private_key, jwks_url), gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        user: Final = scenario.user(user_role="internal_user")
+        blocked: Final = scenario.key(user_id=user)
+        available: Final = scenario.key(user_id=user)
+        gateway.post("/jwt/key/mapping/new", {"jwt_claim_name": "sub", "jwt_claim_value": user, "key": blocked})
+        gateway.post("/key/block", {"key": blocked})
+        token: Final = _token(private_key, user)
+        with owned_proxy(
+            gateway,
+            tmp_path,
+            {"JWT_PUBLIC_KEY_URL": jwks_url},
+            config=_config(tmp_path, "sub", behavior="link_only", map_existing_key=False),
+        ) as candidate:
+            first: Final = _chat(candidate, model, token)
+            repeated: Final = _chat(candidate, model, token)
+        assert first.status_code == 401, first.text
+        assert repeated.status_code == 401, repeated.text
+        assert _mapped_token("sub", user) == _hash(blocked)
+        assert _user_key_hashes(user) == frozenset({_hash(blocked), _hash(available)})
+
+
+def test_link_only_exempts_proxy_admins_but_rechecks_the_role_after_a_cached_exemption(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with _issuer() as (private_key, jwks_url), gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        user: Final = scenario.user(user_role="internal_user")
+        admin: Final = _token(private_key, user, scope="litellm_proxy_admin")
+        ordinary: Final = _token(private_key, user)
+        with owned_proxy(
+            gateway,
+            tmp_path,
+            {"JWT_PUBLIC_KEY_URL": jwks_url},
+            config=_config(tmp_path, "sub", behavior="link_only", map_existing_key=False),
+        ) as candidate:
+            first: Final = candidate.request("GET", "/v1/models", key=admin)
+            repeated: Final = candidate.request("GET", "/v1/models", key=admin)
+            denied: Final = candidate.request("GET", "/v1/models", key=ordinary)
+            forbidden_route: Final = _chat(candidate, model, admin)
+        assert first.status_code == 200, first.text
+        assert repeated.status_code == 200, repeated.text
+        assert denied.status_code == 403, denied.text
+        assert forbidden_route.status_code == 401, forbidden_route.text
+        assert _user_key_hashes(user) == frozenset()
+        assert read_rows('SELECT token FROM "LiteLLM_JWTKeyMapping" WHERE jwt_claim_value=%s', (user,)) == []
+
+
+@pytest.mark.parametrize("user_id_upsert", [False, True])
+def test_link_only_keeps_user_provisioning_independent_of_key_creation(
+    gateway: Gateway, tmp_path: Path, user_id_upsert: bool
+) -> None:
+    with _issuer() as (private_key, jwks_url), gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        subject: Final = f"integration-link-only-{uuid.uuid4().hex}"
+        try:
+            with owned_proxy(
+                gateway,
+                tmp_path,
+                {"JWT_PUBLIC_KEY_URL": jwks_url},
+                config=_config(
+                    tmp_path, "sub", behavior="link_only", map_existing_key=False, user_id_upsert=user_id_upsert
+                ),
+            ) as candidate:
+                response: Final = _chat(candidate, model, _token(private_key, subject))
+            assert response.status_code == (403 if user_id_upsert else 401), response.text
+            users: Final = read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id=%s', (subject,))
+            assert users == ([{"user_id": subject}] if user_id_upsert else [])
+            assert _user_key_hashes(subject) == frozenset()
+            assert read_rows('SELECT token FROM "LiteLLM_JWTKeyMapping" WHERE jwt_claim_value=%s', (subject,)) == []
+        finally:
+            if read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id=%s', (subject,)):
+                scenario.delete_user(subject)
+
+
+@pytest.mark.parametrize("issuer_behavior", ["auto_register", "link_only"])
+def test_issuer_specific_registration_mode_overrides_the_global_mode(
+    gateway: Gateway, tmp_path: Path, issuer_behavior: Literal["auto_register", "link_only"]
+) -> None:
+    with _issuer() as (private_key, jwks_url), gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        user: Final = scenario.user(user_role="internal_user")
+        issuer: Final = f"https://integration.example.com/{uuid.uuid4().hex}"
+        token: Final = _token(private_key, user, iss=issuer, aud="integration")
+        path: Final = _config(
+            tmp_path,
+            "sub",
+            behavior="auto_register" if issuer_behavior == "link_only" else "link_only",
+            map_existing_key=False,
+            issuers=(
+                {
+                    "issuer": issuer,
+                    "jwks_url": jwks_url,
+                    "audience": "integration",
+                    "user_id_jwt_field": "sub",
+                    "virtual_key_claim_field": "sub",
+                    "unregistered_jwt_client_behavior": issuer_behavior,
+                },
+            ),
+        )
+        with owned_proxy(gateway, tmp_path, {"JWT_PUBLIC_KEY_URL": jwks_url}, config=path) as candidate:
+            response: Final = _chat(candidate, model, token)
+        assert response.status_code == (403 if issuer_behavior == "link_only" else 200), response.text
+        if issuer_behavior == "link_only":
+            assert _user_key_hashes(user) == frozenset()
+            assert read_rows('SELECT token FROM "LiteLLM_JWTKeyMapping" WHERE jwt_claim_value=%s', (user,)) == []
+        else:
+            assert len(_user_key_hashes(user)) == 1
+            assert _mapped_token("sub", user) in _user_key_hashes(user)
+            assert _billed_key(response) == _mapped_token("sub", user)
+
+
+def test_link_only_links_after_a_cached_rejection_from_the_previous_mode(gateway: Gateway, tmp_path: Path) -> None:
+    with _issuer() as (private_key, jwks_url), gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        user: Final = scenario.user(user_role="internal_user")
+        key: Final = scenario.key(user_id=user)
+        token: Final = _token(private_key, user)
+        with owned_proxy(
+            gateway,
+            tmp_path,
+            {"JWT_PUBLIC_KEY_URL": jwks_url},
+            config=_config(tmp_path, "sub", behavior="reject", map_existing_key=False),
+        ) as rejecting:
+            denied: Final = _chat(rejecting, model, token)
+            assert denied.status_code == 403, denied.text
+            with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache:
+                cached: Final = cache.get(f"jwt_key_mapping:sub:{user}")
+                assert cached is not None and b"__NO_MAPPING__" in cached, cached
+        with owned_proxy(
+            gateway,
+            tmp_path,
+            {"JWT_PUBLIC_KEY_URL": jwks_url},
+            config=_config(tmp_path, "sub", behavior="link_only", map_existing_key=False),
+        ) as linking:
+            accepted: Final = _chat(linking, model, token)
+        assert accepted.status_code == 200, accepted.text
+        assert _mapped_token("sub", user) == _hash(key)
+        assert _user_key_hashes(user) == frozenset({_hash(key)})
+        assert _billed_key(accepted) == _hash(key)

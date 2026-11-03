@@ -4796,11 +4796,14 @@ class UnregisteredJWTClientBehavior(str, enum.Enum):
     - auto_register: Automatically create a new virtual key and mapping on first
       encounter. The new key has no budget/model restrictions; admins can tighten
       it later via /jwt_client/update.
+    - link_only: Map an eligible existing user key or return HTTP 403, without
+      creating a key. Proxy admins authenticate without a mapped key.
     """
 
     FALLBACK_TEAM_MAPPING = "fallback_team_mapping"
     REJECT = "reject"
     AUTO_REGISTER = "auto_register"
+    LINK_ONLY = "link_only"
 
 
 class JWTIssuerConfig(LiteLLMBaseModel):
@@ -5038,7 +5041,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "What to do when virtual_key_claim_field is set but the JWT claim value "
             "has no registered mapping. 'fallback_team_mapping' (default): fall through "
             "to team-based JWT auth. 'reject': return HTTP 403. "
-            "'auto_register': auto-create a virtual key and mapping on first encounter."
+            "'auto_register': auto-create a virtual key and mapping on first encounter. "
+            "'link_only': map an eligible existing user key or return HTTP 403, without creating a key. "
+            "link_only ignores auto_register_map_existing_key; user provisioning still follows user_id_upsert. "
+            "Unmapped proxy admins authenticate directly in auto_register and link_only modes."
         ),
     )
     auto_register_map_existing_key: bool = Field(
@@ -5049,15 +5055,16 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "JWT-resolved user already owns instead of minting a new one. If the user owns several, the most recently created key in the "
             "JWT-resolved team (or with no team when the JWT resolves none) is chosen among keys that never "
             "expire, are not blocked, are not Admin UI session keys, were not minted by auto_register, and "
-            "have no allowed_routes or include llm_api_routes unless auto_register_skip_allowed_routes_check is True. "
+            "have no allowed_routes or include llm_api_routes unless virtual_key_mapping_skip_allowed_routes_check is True. "
             "Otherwise a new key is minted as usual."
         ),
     )
-    auto_register_skip_allowed_routes_check: bool = Field(
+    virtual_key_mapping_skip_allowed_routes_check: bool = Field(
         default=False,
         description=(
-            "When auto_register_map_existing_key is True, skip the allowed_routes eligibility check when selecting "
-            "an existing virtual key. Other eligibility checks and request-time route permissions still apply."
+            "Skip the allowed_routes eligibility check when selecting an existing virtual key in link_only mode "
+            "or auto_register mode with auto_register_map_existing_key=True. Other eligibility checks and "
+            "request-time route permissions still apply."
         ),
     )
     routing_overrides: list[JWTRoutingOverride] | None = Field(
