@@ -4781,6 +4781,35 @@ def test_auto_injection_honors_a_register_model_opt_out_made_under_the_provider_
     assert supports_anthropic_cache_control(model, "anthropic", {"id": "plain-id"}) is False
 
 
+@pytest.mark.parametrize(
+    ("registrations", "expected"),
+    [
+        ((("", True), ("anthropic/", False)), False),
+        ((("anthropic/", False), ("", True)), True),
+        ((("", False), ("anthropic/", True), ("", False)), False),
+    ],
+    ids=["prefixed-opt-out-last", "bare-opt-in-last", "bare-opt-out-registered-again-last"],
+)
+def test_the_later_of_a_bare_and_a_prefixed_register_model_entry_wins_for_routed_and_sdk_calls(
+    registrations: tuple[tuple[str, bool], ...], expected: bool
+) -> None:
+    from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+    from litellm.utils import catalog_with_runtime_registrations
+
+    model: Final = next(
+        key
+        for key, entry in catalog_with_runtime_registrations().items()
+        if entry.get("litellm_provider") == "anthropic" and entry.get("supports_prompt_caching") is True
+    )
+    for prefix, flag in registrations:
+        litellm.register_model({f"{prefix}{model}": {"supports_prompt_caching": flag}})
+
+    assert (
+        supports_anthropic_cache_control(model, "anthropic", {"id": "plain-id"}),
+        supports_anthropic_cache_control(model, "anthropic"),
+    ) == (expected, expected)
+
+
 def test_a_register_model_opt_out_for_one_claude_model_leaves_every_other_routed_models_catalog_flag() -> None:
     from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
     from litellm.utils import catalog_with_runtime_registrations

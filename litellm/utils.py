@@ -4161,9 +4161,13 @@ class _RegistrationsOverCatalog(Mapping[str, Mapping[str, object]]):
         catalog_entry: Final = self.catalog.get(key)
         provider: Final = None if catalog_entry is None else catalog_entry.get("litellm_provider")
         names: Final = (f"{provider}/{key}", key) if isinstance(provider, str) else (key,)
-        registered: Final = tuple(self.registrations[name] for name in names if name in self.registrations)
-        if not registered:
+        present: Final = tuple(name for name in names if name in self.registrations)
+        if not present:
             return self.catalog[key]
+        oldest_first: Final = (
+            present if len(present) == 1 else tuple(name for name in self.registrations if name in present)
+        )
+        registered: Final = (self.registrations[name] for name in oldest_first)
         return MappingProxyType(
             dict(itertools.chain.from_iterable(entry.items() for entry in (catalog_entry or {}, *registered)))
         )
@@ -4315,11 +4319,16 @@ def register_model(
 
     if persist_across_reloads:
         _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
-        for _registered_key, _registered_value in _registrations.items():
-            _runtime_registered_model_cost[_registered_key] = update_dictionary(
+        _latest_registrations: Final = {
+            _registered_key: update_dictionary(
                 dict(_runtime_registered_model_cost.get(_registered_key, {})),
                 _RATE_TABLE.validate_python(_registered_value),
             )
+            for _registered_key, _registered_value in _registrations.items()
+        }
+        for _registered_key in _latest_registrations:
+            _runtime_registered_model_cost.pop(_registered_key, None)
+        _runtime_registered_model_cost.update(_latest_registrations)
 
     for key, value in loaded_model_cost.items():
         write = _register_on_current_map(str(key), value, custom_llm_provider, warning_display_name)
