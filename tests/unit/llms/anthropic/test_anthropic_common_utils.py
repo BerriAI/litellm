@@ -4758,3 +4758,9 @@ def test_auto_injection_reads_a_deployments_own_prompt_caching_flag_not_a_siblin
         "caching-off": False,
         "unflagged": True,
     }
+
+
+def test_auto_injection_leaves_an_unmapped_claude_deployment_uncached_instead_of_raising() -> None:
+    from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+
+    assert supports_anthropic_cache_control("claude-qa-unmapped-model", "anthropic", {"id": "unmapped-id"}) is False
