@@ -1167,10 +1167,18 @@ premium_user: bool = _license_check.is_premium()
 premium_user_data: Optional["EnterpriseLicenseData"] = _license_check.airgapped_license_data
 
 
-def _premium_with_config_license(config_license: str) -> bool:
+def _set_premium_user(is_premium: bool) -> None:
+    global premium_user, premium_user_data
+    premium_user = is_premium
+    premium_user_data = _license_check.airgapped_license_data
+
+
+def _premium_with_config_license(config_license: str, env_license_is_premium: bool) -> bool:
     _license_check.license_str = config_license
     if _license_check.is_premium():
         return True
+    if not env_license_is_premium:
+        return False
     _license_check.license_str = os.getenv("LITELLM_LICENSE")
     return _license_check.is_premium()
 
@@ -6668,7 +6676,6 @@ class ProxyConfig:
 
     def _load_environment_variables(self, config: dict):
         ## ENVIRONMENT VARIABLES
-        global premium_user
         environment_variables: Final = config.get("environment_variables", None)
         if environment_variables:
             for key, value in environment_variables.items():
@@ -6708,7 +6715,7 @@ class ProxyConfig:
             # check if litellm_license in general_settings
             if "LITELLM_LICENSE" in environment_variables:
                 _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
-                premium_user = _license_check.is_premium()
+                _set_premium_user(_license_check.is_premium())
 
     def _set_config_environment_variable(self, key: str, value: str) -> None:
         if key in os.environ and os.environ[key] != value:
@@ -6760,7 +6767,6 @@ class ProxyConfig:
             prompt_injection_detection_obj, \
             redis_usage_cache, \
             store_model_in_db, \
-            premium_user, \
             open_telemetry_logger, \
             health_check_details, \
             proxy_batch_polling_interval, \
@@ -6777,7 +6783,7 @@ class ProxyConfig:
             _GENERAL_SETTINGS_VIEW.validate_python(config).get("general_settings") or {}
         ).get("litellm_license")
         if isinstance(config_license, str):
-            premium_user = _premium_with_config_license(config_license)
+            _set_premium_user(_premium_with_config_license(config_license, env_license_is_premium=premium_user))
 
         ## Coordination Redis (before cache init, so the explicit block wins)
         coordination_redis_cache: Final = self._init_coordination_redis(config=config)
