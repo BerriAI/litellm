@@ -79,6 +79,12 @@ def test_cli_extra_is_a_thin_client_install() -> None:
     assert cli & PROXY_SERVER_ONLY_DEPENDENCIES == frozenset()
 
 
+def test_proxy_extra_ships_tzdata_for_its_scheduler() -> None:
+    proxy: Final = _requirement_names(OPTIONAL_DEPENDENCIES["proxy"])
+    assert canonicalize_name("apscheduler") in proxy
+    assert canonicalize_name("tzdata") in proxy
+
+
 def test_declared_aiohttp_floor_excludes_pool_poisoning_releases() -> None:
     declared: Final = tuple(
         Requirement(requirement)
