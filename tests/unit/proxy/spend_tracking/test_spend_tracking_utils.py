@@ -4418,6 +4418,41 @@ def test_get_logging_payload_uses_recovered_combined_usage_on_failure():
     assert payload["total_tokens"] == 31
 
 
+def test_success_row_that_bills_a_failed_follow_up_counts_its_tokens_too():
+    from litellm.litellm_core_utils.hidden_params import set_hidden_param
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import ModelResponse, Usage
+
+    now: Final = datetime.datetime.now(timezone.utc)
+    logger: Final = Logging(
+        model="fallback-model",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=now,
+        litellm_call_id="caller",
+        function_id="function",
+    )
+    logger.update_environment_variables(
+        model="fallback-model",
+        custom_llm_provider="openai",
+        litellm_params={"metadata": {"user_api_key": "sk-test"}},
+        optional_params={},
+    )
+    fallback: Final = ModelResponse(id="fallback", usage=Usage(prompt_tokens=3, completion_tokens=1, total_tokens=4))
+    set_hidden_param(fallback, "response_cost", 0.1)
+    logger.record_served_rounds_for_failure(((Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7), 0.4),))
+    logger.carry_failed_attempt_usage()
+    logger.prepare_response_cost(fallback, now)
+
+    payload: Final = get_logging_payload(
+        kwargs=logger.model_call_details, response_obj=fallback, start_time=now, end_time=now
+    )
+
+    assert payload["spend"] == pytest.approx(0.1 + 0.4)
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (3 + 5, 1 + 2, 4 + 7)
+
+
 def test_get_logging_payload_failure_without_recovered_usage_is_zero():
     """A failure with no recovered usage keeps zero token counts, so the
     combined-usage override never invents tokens for ordinary failures.
