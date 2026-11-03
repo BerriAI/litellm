@@ -1550,6 +1550,7 @@ class TestProxyInitializationHelpers:
                 log_config=None,
                 keepalive_timeout=30,
                 timeout_worker_healthcheck=None,
+                listener_fd=None,
             )
             mock_uvicorn_run.assert_called_once()
 
@@ -1626,6 +1627,7 @@ class TestProxyInitializationHelpers:
                 log_config=None,
                 keepalive_timeout=None,
                 timeout_worker_healthcheck=15,
+                listener_fd=None,
             )
 
     @patch("uvicorn.run")
