@@ -12,6 +12,7 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.image_description_interception.handler import (
     Described,
     DescriptionFailed,
@@ -22,6 +23,7 @@ from litellm.integrations.image_description_interception.handler import (
 )
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy.hooks.prompt_injection_detection import _OPTIONAL_PromptInjectionDetection
 from litellm.proxy.child_request import ChildResponse, chat_child_request
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
@@ -527,6 +529,22 @@ async def test_a_repeated_image_that_fails_is_described_once_per_request(auth: U
     assert len(describer.requests) == 1
 
 
+class _ContentEnforcer(CustomLogger):
+    enforces_request_content: bool = True
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: object, data: dict, call_type: object
+    ) -> dict:  # mutable-ok: the pre-call hook contract hands over the request dict
+        return data
+
+
+class _ModerationLogger(CustomLogger):
+    async def async_moderation_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, call_type: object
+    ) -> None:  # mutable-ok: the moderation hook contract hands over the request dict
+        return None
+
+
 class _ProbeGuardrail(CustomGuardrail):
     async def async_pre_call_hook(
         self, user_api_key_dict: UserAPIKeyAuth, cache: object, data: dict, call_type: object
@@ -537,8 +555,8 @@ class _ProbeGuardrail(CustomGuardrail):
 def _guarded_turn(text: str, number: int = 1) -> Mapping[str, object]:
     return _turn_with_text(
         text,
-        f"[Image #{number} could not be described: image descriptions are off when input guardrails or policy "
-        "pipelines can check the request]",
+        f"[Image #{number} could not be described: image descriptions are off when guardrails, policies or content "
+        "checks can inspect the request]",
     )
 
 
@@ -549,10 +567,13 @@ def _guarded_turn(text: str, number: int = 1) -> Mapping[str, object]:
         _ProbeGuardrail(guardrail_name="on", event_hook=GuardrailEventHooks.pre_call, default_on=True),
         _ProbeGuardrail(guardrail_name="opt-in", event_hook=GuardrailEventHooks.pre_call),
         _ProbeGuardrail(guardrail_name="output", event_hook=GuardrailEventHooks.post_call, default_on=True),
+        _OPTIONAL_PromptInjectionDetection(),
+        _ContentEnforcer(),
+        _ModerationLogger(),
     ],
 )
-async def test_any_registered_guardrail_turns_images_into_placeholders(
-    monkeypatch: pytest.MonkeyPatch, guardrail: CustomGuardrail
+async def test_any_registered_request_check_turns_images_into_placeholders(
+    monkeypatch: pytest.MonkeyPatch, guardrail: CustomLogger
 ):
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
     describer: Final = _RecordingDescriber([Described("a cat")])

@@ -231,16 +231,21 @@ def _logging_disabled(kwargs: dict[str, object]) -> bool:  # mutable-ok: the dyn
 
 # Where the policy engine leaves a request's pipeline state
 _POLICY_PIPELINE_KEYS: Final = ("_guardrail_pipelines", "_pipeline_managed_guardrails")
-_GUARDED_REASON: Final = "image descriptions are off when input guardrails or policy pipelines can check the request"
+_GUARDED_REASON: Final = (
+    "image descriptions are off when guardrails, policies or content checks can inspect the request"
+)
 
 
 def _may_be_guarded(kwargs: Mapping[str, object]) -> bool:
-    """Whether a guardrail or a policy pipeline could check this request. They ran before the images became text and
-    would not see a description, so such a request gets placeholders instead. The test is wide on purpose: any
-    registered guardrail counts, whether or not it would select this request"""
+    """Whether a guardrail, another request content check or a policy pipeline could check this request. They run on
+    the request before the images become text and would not see a description, so such a request gets placeholders
+    instead. The test is wide on purpose: any registered check counts, whether or not it would select this request"""
     from litellm.proxy.utils import ProxyLogging
 
-    if ProxyLogging.callback_capabilities().has_guardrail:
+    capabilities: Final = ProxyLogging.callback_capabilities()
+    # Guardrails, request content enforcers (such as prompt injection detection) and moderation hooks all check
+    # the request text before or during the call, and none of them would see a description
+    if capabilities.has_guardrail or capabilities.has_content_enforcer or capabilities.has_moderation_override:
         return True
     return any(any(metadata.get(key) for key in _POLICY_PIPELINE_KEYS) for metadata in _request_metadatas(kwargs))
 
