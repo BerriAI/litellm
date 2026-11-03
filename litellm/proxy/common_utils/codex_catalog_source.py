@@ -116,8 +116,8 @@ class CodexCatalogSource:
         self._retry_seconds = retry_seconds
         self._timeout = timeout
         self._cached_versions = cached_versions
-        self._cache: OrderedDict[str, _Cached] = OrderedDict()
-        self._pending: dict[str, asyncio.Task[CodexStock]] = {}
+        self._cache: OrderedDict[str, _Cached] = OrderedDict()  # mutable-ok: filled as releases are first asked for
+        self._pending: dict[str, asyncio.Task[CodexStock]] = {}  # mutable-ok: the fetches in flight, one per release
 
     async def stock(self, client_version: str | None) -> CodexStock:
         tag: Final = codex_release_tag(client_version)
