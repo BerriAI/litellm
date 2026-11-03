@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { agentAuthSupport } from "./agent_auth";
 import {
   buildDiscoveryRequest,
   selectionsFromSavedAgentCard,
@@ -58,7 +59,12 @@ describe("selectionsFromUpstreamCard", () => {
 
 describe("buildDiscoveryRequest", () => {
   it("sends the LangGraph API key typed into the form", () => {
-    const values = { api_base: "https://lg.example.com/", assistant_id: "asst_1", api_key: "sk-1" };
+    const values = {
+      api_base: "https://lg.example.com/",
+      assistant_id: "asst_1",
+      auth_type: "bearer_token",
+      api_key: "sk-1",
+    };
 
     const plan = {
       url: "https://lg.example.com",
@@ -68,13 +74,20 @@ describe("buildDiscoveryRequest", () => {
       api_key: "sk-1",
     };
 
-    expect(buildDiscoveryRequest("langgraph", values)).toEqual(plan);
+    expect(buildDiscoveryRequest("langgraph", values, undefined, agentAuthSupport("langgraph"))).toEqual(plan);
   });
 
   it("sends no key when the edit form holds the redacted saved one", () => {
-    const values = { api_base: "https://lg.example.com", assistant_id: "asst_1", api_key: "REDACTED_BY_LITELM" };
+    const values = {
+      api_base: "https://lg.example.com",
+      assistant_id: "asst_1",
+      auth_type: "bearer_token",
+      api_key: "REDACTED_BY_LITELM",
+    };
 
-    expect(buildDiscoveryRequest("langgraph", values)).not.toHaveProperty("api_key");
+    expect(buildDiscoveryRequest("langgraph", values, undefined, agentAuthSupport("langgraph"))).not.toHaveProperty(
+      "api_key",
+    );
   });
 
   it("sends an A2A agent's named static headers", () => {
@@ -93,6 +106,13 @@ describe("buildDiscoveryRequest", () => {
       static_headers: { Authorization: "Basic abc" },
     };
 
-    expect(buildDiscoveryRequest("a2a", values)).toEqual(plan);
+    expect(buildDiscoveryRequest("a2a", values, undefined, agentAuthSupport("a2a"))).toEqual(plan);
+  });
+
+  it("sends no key for a saved agent whose runtime never sends it", () => {
+    const values = { url: "https://agent.example.com", auth_type: "bearer_token", api_key: "sk-typed" };
+    const support = agentAuthSupport("a2a", undefined, { custom_llm_provider: "watsonx" });
+
+    expect(buildDiscoveryRequest("a2a", values, undefined, support)).not.toHaveProperty("api_key");
   });
 });

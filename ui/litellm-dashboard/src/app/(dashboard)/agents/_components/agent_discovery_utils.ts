@@ -1,16 +1,12 @@
 import { AgentCreateInfo, DiscoveredAgentCard, DiscoveryMode } from "@/components/networking";
-import { staticHeadersFromForm } from "./agent_config";
+import { AgentAuthSupport, DiscoveryAuth, discoveryAuth } from "./agent_auth";
 
-export interface DiscoveryRequestPlan {
+export interface DiscoveryRequestPlan extends DiscoveryAuth {
   url: string;
   discovery_mode: DiscoveryMode;
   params?: Record<string, any>;
   display_url?: string;
-  api_key?: string;
-  static_headers?: Record<string, string>;
 }
-
-const REDACTED_SECRET = "REDACTED_BY_LITELM";
 
 export const skillId = (skill: any, idx: number): string => skill?.id ?? skill?.name ?? `skill-${idx}`;
 
@@ -132,36 +128,35 @@ export const overlayDiscoveredCardParams = (
 export const buildDiscoveryRequest = (
   agentType: string,
   values: Record<string, any>,
-  selectedAgentTypeInfo?: AgentCreateInfo,
+  selectedAgentTypeInfo: AgentCreateInfo | undefined,
+  authSupport: AgentAuthSupport,
 ): DiscoveryRequestPlan | undefined => {
   const trim = (v: unknown) => (v ?? "").toString().trim();
   const stripTrailingSlash = (s: string) => s.replace(/\/+$/, "");
+  const auth = discoveryAuth(values, authSupport);
 
   if (agentType === "langgraph") {
     const base = stripTrailingSlash(trim(values.api_base));
     const assistantId = trim(values.assistant_id);
     if (!base || !assistantId) return undefined;
     const query = `?assistant_id=${encodeURIComponent(assistantId)}`;
-    const apiKey = typeof values.api_key === "string" ? values.api_key : "";
     return {
       url: base,
       discovery_mode: "langgraph_platform",
       params: { assistant_id: assistantId },
       display_url: `${base}/.well-known/agent-card.json${query}`,
-      // A saved key reads back redacted, so only a key typed into the form is sent.
-      ...(apiKey.trim() && apiKey !== REDACTED_SECRET ? { api_key: apiKey } : {}),
+      ...auth,
     };
   }
 
   if (agentType === "a2a" || selectedAgentTypeInfo?.use_a2a_form_fields) {
     const base = stripTrailingSlash(trim(values.url));
     if (!base) return undefined;
-    const staticHeaders = staticHeadersFromForm(values.static_headers);
     return {
       url: base,
       discovery_mode: "well_known_fallback",
       display_url: `${base}/.well-known/agent-card.json`,
-      ...(Object.keys(staticHeaders).length > 0 ? { static_headers: staticHeaders } : {}),
+      ...auth,
     };
   }
 
