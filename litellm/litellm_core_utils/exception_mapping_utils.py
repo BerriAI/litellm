@@ -921,11 +921,17 @@ def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
     if match is not None:
         prompt_tokens, max_tokens = match.groups()
         return f"prompt is too long: {prompt_tokens} tokens > {max_tokens} maximum"
-    if _BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN.search(
-        error_str
-    ) is not None or ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
+    if _BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN.search(error_str) is not None:
+        return _BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE
+    if ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
         return _BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE
     return None
+
+
+def _bedrock_context_window_message(error_str: str) -> str:
+    if "prompt is too long" in error_str:
+        return f"BedrockException: Context Window Error - {error_str}"
+    return f"BedrockException: Context Window Error - prompt is too long: {error_str}"
 
 
 def _map_bedrock_exception(
@@ -957,7 +963,7 @@ def _map_bedrock_exception(
         or ExceptionCheckers.is_error_str_context_window_exceeded(error_str)
     ):
         raise ContextWindowExceededError(
-            message=f"BedrockException: Context Window Error - {error_str}",
+            message=_bedrock_context_window_message(error_str),
             model=model,
             llm_provider="bedrock",
             response=getattr(original_exception, "response", None),

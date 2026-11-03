@@ -1774,6 +1774,24 @@ def test_bedrock_converse_maximum_context_length_error_maps_to_context_window_ex
 
     assert exc_info.value.status_code == 400
     assert "maximum context length is 262144 tokens" in exc_info.value.message
+    assert "prompt is too long" in exc_info.value.message
+
+
+def test_bedrock_overflow_that_already_says_prompt_is_too_long_is_not_repeated():
+    original_exception: Final = BedrockError(
+        status_code=400,
+        message='{"message":"prompt is too long: 210000 tokens > 200000 maximum"}',
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError) as exc_info:
+        exception_type(
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock",
+        )
+
+    assert exc_info.value.message.count("prompt is too long") == 1
+    assert "210000 tokens > 200000 maximum" in exc_info.value.message
 
 
 @pytest.mark.parametrize(
