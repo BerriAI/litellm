@@ -60,7 +60,10 @@ SETUPS: Final = (
             RateBucket.BEDROCK_CONVERSE,
         ),
         id="bedrock_runtime",
-        marks=_drives(Provider.BEDROCK, GPT_ON_BEDROCK_RUNTIME),
+        marks=(
+            _drives(Provider.BEDROCK, GPT_ON_BEDROCK_RUNTIME),
+            pytest.mark.skip(reason="Stage IAM lacks bedrock:InvokeModel on the default Bedrock Runtime project"),
+        ),
     ),
     pytest.param(
         Deployment(
