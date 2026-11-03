@@ -222,6 +222,20 @@ async def test_user_conflict_names_constraint_and_does_not_retry(
 
 
 @pytest.mark.asyncio
+async def test_user_upsert_recovers_from_concurrent_creation(
+    prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row: Final = LiteLLM_UserTable(user_id="requested-user")
+    conflict: Final = UniqueViolationError({"user_facing_error": {"meta": {"target": ["user_id"]}}})
+    prisma_client.db.litellm_usertable.upsert = AsyncMock(side_effect=[conflict, row])
+    monkeypatch.setattr("asyncio.sleep", AsyncMock())
+
+    result: Final = await prisma_client.insert_data(data={"user_id": row.user_id}, table_name="user")
+
+    assert result is row
+
+
+@pytest.mark.asyncio
 async def test_user_insert_still_retries_transient_connection_failure(
     prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

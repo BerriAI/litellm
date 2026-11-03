@@ -313,6 +313,7 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
     from prisma.actions import LiteLLM_DeprecatedVerificationTokenActions
     from prisma.client import TransactionManager
+    from prisma.errors import UniqueViolationError
     from prisma.models import LiteLLM_DeprecatedVerificationToken
     from prisma.types import HttpConfig, LiteLLM_VerificationTokenInclude
 
@@ -5569,6 +5570,15 @@ def _user_unique_conflict_message(metadata: object, user_id: object) -> str:
             return "User conflicts with an existing unique value"
 
 
+def _raise_user_unique_conflict(error: "UniqueViolationError", user_id: object, *, allow_existing: bool) -> NoReturn:
+    if allow_existing:
+        raise error
+    raise HTTPException(
+        status_code=409,
+        detail={"error": _user_unique_conflict_message(error.meta, user_id)},
+    ) from error
+
+
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
@@ -6513,10 +6523,7 @@ class PrismaClient:
                             detail="SSO for more than 5 users requires a LiteLLM Enterprise license. Existing users can still sign in.",
                         )
                 except UniqueViolationError as e:
-                    raise HTTPException(
-                        status_code=409,
-                        detail={"error": _user_unique_conflict_message(e.meta, db_data["user_id"])},
-                    ) from e
+                    _raise_user_unique_conflict(e, db_data["user_id"], allow_existing=allow_existing_user)
                 except Exception as e:
                     if (
                         "Foreign key constraint failed on the field: `LiteLLM_UserTable_organization_id_fkey (index)`"
