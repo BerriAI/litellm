@@ -11,15 +11,15 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
-from collections.abc import AsyncGenerator, Mapping
-from copy import deepcopy
+from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import TypeAdapter, ValidationError
+from fastapi.routing import APIRoute
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -27,7 +27,8 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.a2a.agent_card import point_agent_card_at_proxy
 from litellm.proxy.a2a.version_convert import (
     A2AVersion,
     normalize_agent_card,
@@ -42,6 +43,8 @@ from litellm.proxy.agent_endpoints.databricks_oauth import (
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
+from litellm.proxy.common_utils.openai_error_payload import status_typed_proxy_exception
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING,
     coerce_keepalive_interval,
@@ -56,6 +59,42 @@ if TYPE_CHECKING:
     from litellm.types.agents import AgentResponse
 
 router: Final = APIRouter()
+
+
+class _A2AJsonRpcRequest(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    jsonrpc: Literal["2.0"]
+    id: str | int | None = None
+    method: str
+    params: Mapping[str, object]
+
+
+class _A2AJsonRpcResponse(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    jsonrpc: Literal["2.0"]
+    id: str | int | None
+    result: object | None = None
+    error: Mapping[str, object] | None = None
+
+
+_A2A_MESSAGE_STREAM_REQUEST_BODY: Final = inline_request_body(
+    _A2AJsonRpcRequest,
+    {
+        "jsonrpc": "2.0",
+        "id": "stream-1",
+        "method": "message/stream",
+        "params": {
+            "message": {
+                "messageId": "message-1",
+                "role": "user",
+                "parts": [{"kind": "text", "text": "Hello"}],
+                "kind": "message",
+            }
+        },
+    },
+)
 
 # Mirrors the native seam's own headers: a reverse proxy that batches the whole
 # stream would swallow the keepalives this route sends to defeat idle timeouts.
@@ -172,13 +211,16 @@ def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, 
 async def _resolve_backend_auth(
     litellm_params: dict[str, object],
     custom_llm_provider: object,
+    agent_extra_headers: Mapping[str, str] | None = None,
 ) -> AgentBackendAuth:
     databricks_auth: Final = await resolve_databricks_backend_auth(litellm_params)
     if has_databricks_oauth(litellm_params):
         return databricks_auth
     return AgentBackendAuth(
         litellm_params=databricks_auth.litellm_params,
-        header=await resolve_a2a_hop_auth_header(litellm_params, custom_llm_provider),
+        header=await resolve_a2a_hop_auth_header(
+            litellm_params, custom_llm_provider, agent_extra_headers=agent_extra_headers
+        ),
     )
 
 
@@ -201,6 +243,35 @@ def _forwarding_headers(
     return merged or None
 
 
+async def _log_agent_rejection(
+    *,
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_id: object,
+    method: str | None,
+    rejection: HTTPException,
+    target_agent_id: str,
+    model: str,
+) -> None:
+    request_data: Final[dict[str, object]] = {  # mutable-ok: the failure hook stamps its logging state onto it
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": method,
+        "model": model,
+        "agent_id": target_agent_id,
+        "metadata": {"agent_id": target_agent_id},
+    }
+    try:
+        await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
+            request_data=request_data,
+            original_exception=rejection,
+            user_api_key_dict=user_api_key_dict,
+            route="/a2a/{agent_id}",
+        )
+    except Exception:  # noqa: BLE001  # a logging failure must not change the rejection the caller gets
+        verbose_proxy_logger.exception("Failed to log rejected A2A request")
+
+
 def _jsonrpc_error(
     request_id: object,
     code: int,
@@ -216,6 +287,57 @@ def _jsonrpc_error(
         },
         status_code=status_code,
     )
+
+
+class _JsonRpcRequestId(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str | int | None = None
+
+
+async def _jsonrpc_request_id(request: Request) -> str | int | None:
+    try:
+        return _JsonRpcRequestId.model_validate_json(await request.body()).id
+    except ValidationError:
+        return None
+
+
+async def _jsonrpc_refusal(request: Request, refusal: ProxyException | HTTPException) -> JSONResponse:
+    from litellm.proxy.proxy_server import (
+        _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; a route that answers an error itself must stamp the OTel server span like the global ProxyException handler does
+    )
+
+    error: Final = refusal if isinstance(refusal, ProxyException) else status_typed_proxy_exception(refusal)
+    _close_dangling_otel_server_span(request, int(error.code), exc=refusal)
+    return JSONResponse(
+        content={
+            "jsonrpc": "2.0",
+            "id": await _jsonrpc_request_id(request),
+            "error": {
+                "code": -32000,
+                "message": error.message,
+                "data": {"type": error.type, "param": error.param, "code": error.code},
+            },
+        },
+        status_code=int(error.code),
+        headers=error.headers if isinstance(refusal, ProxyException) else refusal.headers,
+    )
+
+
+class _JsonRpcRefusalRoute(APIRoute):
+    def get_route_handler(self) -> Callable[[Request], Coroutine[object, object, Response]]:
+        handler: Final = super().get_route_handler()
+
+        async def answer_refusals_as_jsonrpc(request: Request) -> Response:
+            try:
+                return await handler(request)
+            except (ProxyException, HTTPException) as refusal:
+                return await _jsonrpc_refusal(request, refusal)
+
+        return answer_refusals_as_jsonrpc
+
+
+jsonrpc_router: Final = APIRouter(route_class=_JsonRpcRefusalRoute)
 
 
 async def _get_agent(agent_id: str) -> "AgentResponse | None":
@@ -431,6 +553,7 @@ async def _handle_stream_message(
     proxy_server_request: dict[str, object] | None = None,
     *,
     agent_extra_headers: dict[str, str] | None = None,
+    agent_name: str | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
     request_data: dict[str, object] | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
@@ -504,6 +627,7 @@ async def _handle_stream_message(
                 metadata=metadata,
                 proxy_server_request=proxy_server_request,
                 agent_extra_headers=agent_extra_headers,
+                agent_name=agent_name,
             )
 
             if (
@@ -626,16 +750,12 @@ async def get_agent_card(
             )
 
         proxy_url: Final = get_custom_url(str(request.base_url), route=f"a2a/{agent_id}")
-        agent_card = deepcopy(agent.agent_card_params)
-        agent_card["url"] = proxy_url
-        interfaces: Final = agent_card.get("supportedInterfaces")
-        if isinstance(interfaces, list) and interfaces:
-            interfaces[0]["url"] = proxy_url
+        agent_card: Final = point_agent_card_at_proxy(agent.agent_card_params, proxy_url)
         served_version: Final = _served_version(agent, request)
-        agent_card = normalize_agent_card(agent_card, served_version)
+        normalized_agent_card: Final = normalize_agent_card(agent_card, served_version)
 
         verbose_proxy_logger.debug("Returning agent card for '%s' with proxy URL: %s", agent_id, proxy_url)
-        return JSONResponse(content=agent_card)
+        return JSONResponse(content=normalized_agent_card)
 
     except HTTPException:
         raise
@@ -644,20 +764,34 @@ async def get_agent_card(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post(
+@jsonrpc_router.post(
     "/a2a/{agent_id}",
     tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
 )
-@router.post(
+@jsonrpc_router.post(
     "/a2a/{agent_id}/message/send",
     tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
 )
-@router.post(
+@jsonrpc_router.post(
     "/v1/a2a/{agent_id}/message/send",
     tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/a2a/{agent_id}/message/stream",
+    tags=["[beta] A2A Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+    openapi_extra={"requestBody": _A2A_MESSAGE_STREAM_REQUEST_BODY},
+    responses={200: {"model": _A2AJsonRpcResponse}},
+)
+@router.post(
+    "/v1/a2a/{agent_id}/message/stream",
+    tags=["[beta] A2A Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+    openapi_extra={"requestBody": _A2A_MESSAGE_STREAM_REQUEST_BODY},
+    responses={200: {"model": _A2AJsonRpcResponse}},
 )
 async def invoke_agent_a2a(
     agent_id: str,
@@ -720,6 +854,15 @@ async def invoke_agent_a2a(
         # Find the agent
         agent: Final = await _get_agent(agent_id)
         if agent is None:
+            await _log_agent_rejection(
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_id=request_id,
+                method=method,
+                rejection=HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found"),
+                target_agent_id=agent_id,
+                model=f"a2a_agent/{agent_id}",
+            )
             return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' not found", 404)
 
         served_version: Final = _served_version(agent, request, original_method)
@@ -729,10 +872,20 @@ async def invoke_agent_a2a(
             user_api_key_auth=user_api_key_dict,
         )
         if not is_allowed:
-            raise HTTPException(
+            denial: Final = HTTPException(
                 status_code=403,
                 detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
             )
+            await _log_agent_rejection(
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_id=request_id,
+                method=method,
+                rejection=denial,
+                target_agent_id=agent.agent_id,
+                model=f"a2a_agent/{(as_str_mapping(agent.agent_card_params or {}) or {}).get('name', agent_id)}",
+            )
+            raise denial
 
         user_api_key_dict.invoked_agent_id = agent.agent_id
         strict_policy: Final = agent.identity_managed or bool(user_api_key_dict.requires_fresh_policy)
@@ -832,14 +985,15 @@ async def invoke_agent_a2a(
                     if header_name:
                         dynamic_headers[header_name] = val
 
-        backend_auth: Final = await _resolve_backend_auth(litellm_params, custom_llm_provider)
+        merged_agent_headers: Final = merge_agent_headers(
+            dynamic_headers=dynamic_headers or None,
+            static_headers=static_headers or None,
+        )
+        backend_auth: Final = await _resolve_backend_auth(litellm_params, custom_llm_provider, merged_agent_headers)
         agent_extra_headers: Final = _forwarding_headers(
             caller_identity=caller_identity,
             request_data=data,
-            agent_extra_headers=merge_agent_headers(
-                dynamic_headers=dynamic_headers or None,
-                static_headers=static_headers or None,
-            ),
+            agent_extra_headers=merged_agent_headers,
             backend_auth_header=backend_auth.header,
         )
         forwarded_litellm_params: Final = backend_auth.litellm_params
@@ -932,6 +1086,7 @@ async def invoke_agent_a2a(
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
                 agent_extra_headers=agent_extra_headers,
+                agent_name=str(agent_name),
                 user_api_key_dict=user_api_key_auth_for_call,
                 request_data=data,
                 proxy_logging_obj=proxy_logging_obj,
@@ -1048,3 +1203,6 @@ async def invoke_agent_a2a(
         if isinstance(e, litellm.BadRequestError):
             return _jsonrpc_error(body.get("id"), -32602, e.message, 400)
         return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {e}", 500)
+
+
+router.include_router(jsonrpc_router)
