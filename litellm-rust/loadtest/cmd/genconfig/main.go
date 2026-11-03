@@ -16,7 +16,7 @@
 // on. S3 settings come from LOADTEST_S3_* environment variables.
 //
 // -key-sets ,portkey adds Portkey gateway routing (portkey.go): one x-portkey-config header per
-// model group, in portkey-headers.json, for loadgen -model-headers. Basic features only.
+// model group, in portkey-headers.json, for loadgen -model-headers. Features never change it.
 //
 // -key-sets python,rust writes one key set, with its own users and teams, per name, so each
 // gateway's spend can be told apart in a shared database.
@@ -142,9 +142,8 @@ general_settings:
 	sw.WriteString("-- Load-test virtual keys. Hash = sha256 hex of the key, as the proxy stores it.\n")
 	for _, set := range sets {
 		if set == portkeySet {
-			if full {
-				log.Fatal("the portkey key set needs -features basic: the open-source Portkey gateway has no keys, limits, budgets or logs to turn on")
-			}
+			// The same routing with -features full: the open-source Portkey gateway has no keys,
+			// limits, budgets or logs to turn on, so the other sides' features have no Portkey form.
 			writePortkey(bifrostDeps, portkeyKeys(*keys, *keySeed), *outDir)
 			continue
 		}

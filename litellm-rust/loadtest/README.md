@@ -16,8 +16,9 @@ machines.
 | `s3stub` | In-memory path-style S3 (PUT, GET, ListObjectsV2) for the `s3_v2` logs of a full-feature run. Objects are stored compressed and listed from a sorted index, so millions of logs fit. |
 
 Workloads live in `workloads/`: `smoke`, `realistic-ramp`, `long-streams`, `large-context`,
-`key-churn` and `soak`. `sustained-10`, `-25`, `-50`, `-75`, `-100`, `-250`, `-500` and `-1000` hold one rate for
-15 minutes with evenly spaced arrivals and smoke's request mix over every model group;
+`key-churn` and `soak`. `sustained-100`, `sustained-250`, `sustained-500` and `sustained-1000` hold one rate for
+15 minutes with evenly spaced arrivals and smoke's request mix over every model group (`sweep-10`, `-25`, `-50`,
+`-75` and `-100` the same for 5 minutes each, for a low-rate sweep);
 `sustained-check` runs the same mix at 100, 500 and 1,000 rps for 2 minutes each, to check that the
 client, mock and stack hold 1,000 rps before the long runs.
 
@@ -183,7 +184,7 @@ are only compared between the LiteLLM sides, since Bifrost's schema differs thro
 
 ## Portkey
 
-A key set named `portkey` (`-key-sets ,portkey`, basic features only) is written as routing for the
+A key set named `portkey` (`-key-sets ,portkey`; with `-features full` it is unchanged, since Portkey has none of those features) is written as routing for the
 [open-source Portkey gateway](https://github.com/Portkey-AI/gateway) instead of key rows. That
 gateway keeps no model list, keys or database: every request carries its routing in an
 `x-portkey-config` header. So genconfig writes `portkey-headers.json`, one header per model group,

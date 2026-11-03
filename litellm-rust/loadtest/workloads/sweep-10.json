@@ -1,6 +1,6 @@
 {
-  "name": "sustained 25 rps for 15 minutes, evenly spaced arrivals, smoke's request mix over every model group",
-  "stages": [{"duration_s": 900, "rps": 25}],
+  "name": "sustained 10 rps for 5 minutes, evenly spaced arrivals, smoke's request mix over every model group",
+  "stages": [{"duration_s": 300, "rps": 10}],
   "arrivals": "constant",
   "nonstream_max_s": 360,
   "warmup_s": 60,
