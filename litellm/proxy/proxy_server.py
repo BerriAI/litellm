@@ -513,6 +513,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
+from litellm.proxy.common_utils.codex_catalog_source import codex_catalog_source
 from litellm.proxy.common_utils.codex_model_catalog import codex_model_list_body
 from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
@@ -12814,6 +12815,7 @@ async def model_list(
                     llm_router,
                     team_id or user_api_key_dict.team_id,
                     client_version=client_version,
+                    stock=await codex_catalog_source().stock(client_version),
                 ),
                 media_type="application/json",
             )
@@ -12896,6 +12898,7 @@ async def model_list(
                 team_id or user_api_key_dict.team_id,
                 labels,
                 client_version=client_version,
+                stock=await codex_catalog_source().stock(client_version),
             ),
             media_type="application/json",
         )

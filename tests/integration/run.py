@@ -125,6 +125,7 @@ def main() -> int:
         "PYTHONPATH": os.pathsep.join((str(root), str(root / "tests"), str(root / "tests/e2e"))),
         "INTEGRATION_RESULTS_DIR": str(output),
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+        "LITELLM_LOCAL_CODEX_CATALOG": "True",
         "LITELLM_MODE": "PRODUCTION",
         "PYTHON_DOTENV_DISABLED": "1",
         **worker_settings(options.group, options.workers),

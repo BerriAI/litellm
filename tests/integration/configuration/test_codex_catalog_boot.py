@@ -130,7 +130,7 @@ def test_yaml_tiers_and_alias_in_owned_proxy(gateway: Gateway, tmp_path: Path) -
 
 
 ROOT: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
-BUNDLED_STOCK_PATH: Final = ROOT / "litellm" / "proxy" / "common_utils" / "codex_bundled_models_0.159.3.json"
+BUNDLED_STOCK_PATH: Final = ROOT / "litellm" / "proxy" / "common_utils" / "codex_bundled_models_0.166.0.json"
 STOCK_UPSTREAM: Final = "gpt-5.5"
 
 

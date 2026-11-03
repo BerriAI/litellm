@@ -12,11 +12,13 @@ upstream. A ``model_info.max_input_tokens`` the operator sets replaces a known m
 A fallback entry offers the model group's ``supported_reasoning_efforts`` as its reasoning levels,
 trimmed to the ones the requesting Codex release can parse.
 
-The stock entries are Codex 0.159.3's bundled catalog, vendored unchanged from
-https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/models-manager/models.json (Apache-2.0)
-as ``codex_bundled_models_0.159.3.json``, and ``codex_base_instructions.md`` is
-``codex-rs/models-manager/prompt.md`` at the same tag. Refresh both by downloading those two paths at
-a newer tag.
+The stock entries come from the requesting Codex release's own catalog, fetched by
+``codex_catalog_source.CodexCatalogSource`` and passed in as a ``CodexStock``. When none is passed, or
+that release's cannot be fetched, they are Codex ``CODEX_BUNDLED_VERSION``'s bundled catalog, vendored
+unchanged from https://github.com/openai/codex/blob/rust-v<version>/codex-rs/models-manager/models.json
+(Apache-2.0) as ``codex_bundled_models_<version>.json``, with ``codex_base_instructions.md`` being
+``codex-rs/models-manager/prompt.md`` at the same tag. Refresh both by downloading those two paths at a
+newer tag and renaming the json after it.
 """
 
 from __future__ import annotations
@@ -42,7 +44,8 @@ if TYPE_CHECKING:
     from litellm.types.proxy.model_listing import ModelInfoResponse
 
 CODEX_BASE_INSTRUCTIONS_PATH: Final = Path(__file__).with_name("codex_base_instructions.md")
-CODEX_BUNDLED_MODELS_PATH: Final = Path(__file__).with_name("codex_bundled_models_0.159.3.json")
+CODEX_BUNDLED_VERSION: Final = "0.166.0"
+CODEX_BUNDLED_MODELS_PATH: Final = Path(__file__).with_name(f"codex_bundled_models_{CODEX_BUNDLED_VERSION}.json")
 CODEX_CATALOG_BYTE_LIMIT: Final = 1024 * 1024
 CODEX_CHAT_MODES: Final = frozenset({"chat", "responses"})
 
@@ -190,6 +193,16 @@ class CodexCatalogRow:
     supported_reasoning_efforts: tuple[str, ...] | None = None
     search_tool_support: tuple[bool | None, ...] = ()
     configured_max_input_tokens: tuple[int | None, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CodexStock:
+    """One Codex release's own entries by slug and its base prompt; `source` names the release tag or the
+    vendored version they came from."""
+
+    models: Mapping[str, CodexStockModel]
+    instructions: str
+    source: str
 
 
 @cache
@@ -583,10 +596,15 @@ def codex_model_list_body(
     label_entries: Sequence[tuple[str, str]] | None = None,
     *,
     client_version: str | None = None,
+    stock: CodexStock | None = None,
 ) -> str:
-    """The `/v1/models?client_version=...` body, logging the models Codex's byte limit left out."""
+    """The `/v1/models?client_version=...` body built on `stock` (the vendored pair when None), logging the
+    models Codex's byte limit left out."""
     body: Final = codex_models_response_json(
-        codex_catalog_rows(rows, entries, llm_router, team_id, label_entries), client_version=client_version
+        codex_catalog_rows(rows, entries, llm_router, team_id, label_entries),
+        stock=stock.models if stock is not None else None,
+        instructions=stock.instructions if stock is not None else None,
+        client_version=client_version,
     )
     if body.left_out:
         verbose_proxy_logger.warning(
