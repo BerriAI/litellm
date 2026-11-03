@@ -64,9 +64,7 @@ def test_should_bucket_configured_models_by_urgency(authenticated_client):
 
 
 def test_should_rebucket_with_warn_within_days_override(authenticated_client):
-    response = authenticated_client.get(
-        "/v1/model/deprecations", params={"warn_within_days": 40000}
-    )
+    response = authenticated_client.get("/v1/model/deprecations", params={"warn_within_days": 40000})
 
     assert response.status_code == 200
     payload = response.json()
@@ -105,6 +103,21 @@ def client_with_cost_map_successors(monkeypatch):
             "model_info": {"id": "2", "successor_model": "my-own-pick"},
         },
         {
+            "model_name": "shared-name",
+            "litellm_params": {"model": "retiring-model", "api_key": "fake"},
+            "model_info": {"id": "4"},
+        },
+        {
+            "model_name": "shared-name",
+            "litellm_params": {"model": "retiring-model", "api_key": "fake"},
+            "model_info": {"id": "5", "successor_model": "my-own-pick"},
+        },
+        {
+            "model_name": "dated-by-hand",
+            "litellm_params": {"model": "retiring-model", "api_key": "fake"},
+            "model_info": {"id": "6", "deprecation_date": "2020-06-01"},
+        },
+        {
             "model_name": "orphan-alias",
             "litellm_params": {"model": "orphan-model"},
             "model_info": {"id": "3"},
@@ -123,5 +136,7 @@ def test_cost_map_successor_is_reported_unless_the_deployment_names_its_own(clie
     assert successors == {
         "retiring-alias": "fresh-model",
         "retiring-overridden": "my-own-pick",
+        "shared-name": "my-own-pick",
+        "dated-by-hand": "fresh-model",
         "orphan-alias": None,
     }
