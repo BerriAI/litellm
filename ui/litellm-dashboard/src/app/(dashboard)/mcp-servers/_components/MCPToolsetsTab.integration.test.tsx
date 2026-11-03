@@ -458,6 +458,7 @@ it("creates a provider toolset from registration choices without MCP discovery",
   await openCreate(user);
   fireEvent.change(screen.getByPlaceholderText("e.g. github-linear-tools"), { target: { value: "native_research" } });
   await user.click(await screen.findByText("native_docs"));
+  expect(screen.getByText("provider · permission only")).toBeInTheDocument();
   await user.click(await screen.findByRole("checkbox", { name: /^search/ }));
   await user.click(screen.getByRole("button", { name: "Create Toolset" }));
   await waitFor(() =>

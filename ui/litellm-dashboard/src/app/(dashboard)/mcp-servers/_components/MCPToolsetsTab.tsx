@@ -133,6 +133,7 @@ const selectedToolIssue = (
 interface ServerToolGroupProps {
   serverId: string;
   serverName: string;
+  providerNative: boolean;
   state: MCPServerToolsState;
   visibleTools: readonly MCPServerToolEntry[];
   expanded: boolean;
@@ -146,6 +147,7 @@ interface ServerToolGroupProps {
 function ServerToolGroup({
   serverId,
   serverName,
+  providerNative,
   state,
   visibleTools,
   expanded,
@@ -235,6 +237,11 @@ function ServerToolGroup({
         >
           <span className="text-sm font-medium text-foreground flex items-center gap-2">
             {serverName}
+            {providerNative && (
+              <span className="text-xs font-normal text-muted-foreground">
+                {t("mcpServers.toolsetsTab.serverGroup.providerPermissionOnly")}
+              </span>
+            )}
             {selectedCount > 0 && (
               <span className="ml-1 text-xs text-purple-600 font-semibold dark:text-purple-400">
                 {t("mcpServers.toolsetsTab.serverGroup.selectedCount", { count: selectedCount })}
@@ -429,6 +436,7 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
                     key={server.server_id}
                     serverId={server.server_id}
                     serverName={serverName}
+                    providerNative={server.execution_mode === "provider"}
                     state={state}
                     visibleTools={visibleTools}
                     expanded={searchActive || expandedServerIds.has(server.server_id)}

@@ -172,10 +172,11 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
           const nonDeleteTools = fetchedTools
             .filter((t) => classifyToolOp(t.name, t.description || "") !== "delete")
             .map((t) => t.name);
-          onChange(
-            applyToolPermissionWrite({ toolPermissions: latestPermissions, entry, allowed: nonDeleteTools }),
-            "default",
-          );
+          const next = applyToolPermissionWrite({ toolPermissions: latestPermissions, entry, allowed: nonDeleteTools });
+          // Provider servers resolve synchronously in one pass, before the parent re-renders,
+          // so advance the ref here or the next server's default overwrites this one.
+          toolPermissionsRef.current = next;
+          onChange(next, "default");
         }
       }
     } catch (err) {
