@@ -282,11 +282,9 @@ def _expect_metrics(
     blank: float,
     *,
     api_provider: str = "openai",
-    pf_id: str | None = None,
     pf_populated: float | None = None,
     pf_blank: float | None = None,
 ) -> tuple:
-    expected_id: Final = rig.deployment_id if pf_id is None else pf_id
     expected_pf_populated: Final = populated if pf_populated is None else pf_populated
     expected_pf_blank: Final = blank if pf_blank is None else pf_blank
 
@@ -295,7 +293,7 @@ def _expect_metrics(
         satisfied: Final = (
             _populated_failures(samples, rig, api_provider) == populated
             and _count(samples, DEPLOYMENT_FAILURE, "") == blank
-            and _count(samples, PROXY_FAILED, expected_id) == expected_pf_populated
+            and _count(samples, PROXY_FAILED, rig.deployment_id) == expected_pf_populated
             and _count(samples, PROXY_FAILED, "") == expected_pf_blank
         )
         return samples if satisfied else ()
@@ -424,7 +422,7 @@ def test_cache_hit_post_call_reject_keeps_deployment_labels_anthropic(gateway: G
             raised = True
         assert raised, "cache-hit post_call guardrail did not reject /v1/messages"
         assert rig.provider.received.qsize() == 1, rig.provider.drain()
-        _expect_metrics(rig, 1, 0, api_provider="anthropic", pf_id="None")
+        _expect_metrics(rig, 1, 0, api_provider="anthropic")
 
 
 def test_cache_hit_post_call_reject_keeps_deployment_labels_responses(gateway: Gateway, tmp_path: Path) -> None:
@@ -441,7 +439,7 @@ def test_cache_hit_post_call_reject_keeps_deployment_labels_responses(gateway: G
         )
         assert reject.status_code == 400, reject.text
         assert rig.provider.received.qsize() == 1, rig.provider.drain()
-        _expect_metrics(rig, 1, 0, pf_id="None")
+        _expect_metrics(rig, 1, 0)
         _assert_spend(_call_id(reject), rig)
 
 
