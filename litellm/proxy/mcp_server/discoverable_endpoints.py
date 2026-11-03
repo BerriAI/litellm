@@ -986,6 +986,9 @@ async def _user_can_reach_mcp_server(user_id: str, server_id: str) -> bool:
         if exc.status_code >= 500:
             raise
         return False
+    # Caller-facing: an admin-disabled config server is unreachable for OAuth authorization binding.
+    if global_mcp_server_manager.is_config_server_caller_hidden(server_id):
+        return False
     return server_id in await global_mcp_server_manager.get_allowed_mcp_servers(admitted)
 
 

@@ -13747,6 +13747,8 @@ async def test_identity_bound_authorize_preserves_presented_jwt_permissions(
     manager.get_allowed_mcp_servers = AsyncMock(
         side_effect=lambda auth: [server.server_id] if allowed or auth.mcp_admitted_user_subject else [],
     )
+    # The server under test is an enabled (non-disabled) server for reachability checks.
+    manager.is_config_server_caller_hidden = MagicMock(return_value=False)
     monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
     bearer: Final = (
         key
@@ -13855,6 +13857,8 @@ async def test_identity_bound_authorize_unrelated_bearer_uses_browser_session(
     manager.get_allowed_mcp_servers = AsyncMock(
         return_value=[] if cookie_state == "server_denied" else [server.server_id]
     )
+    # The server under test is an enabled (non-disabled) server for reachability checks.
+    manager.is_config_server_caller_hidden = MagicMock(return_value=False)
     monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
     bearer: Final = (
         _oauth_identity_jwt(signing_key, issuer="https://unrelated.example.test")
