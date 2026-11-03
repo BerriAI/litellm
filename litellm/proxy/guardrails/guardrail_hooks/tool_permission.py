@@ -241,6 +241,11 @@ def _extra_body_tools(data: object) -> Sequence[object] | None:
     return _request_list(_extra_body(data), "tools")
 
 
+def _extra_body_tool_choice(data: object) -> object:
+    extra_body: Final = _extra_body(data)
+    return extra_body.get("tool_choice") if extra_body is not None else None
+
+
 def _sent_tools(data: object) -> tuple[object, ...]:
     return (
         *(_request_list(data, "tools") or ()),
@@ -1071,6 +1076,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         listed_names: Final = frozenset(name for name, _ in request_tools)
         for forced_tool_name in (
             self._get_named_tool_choice(_REQUEST_DATA.validate_python(data.get("tool_choice"))),
+            self._get_named_tool_choice(_extra_body_tool_choice(request)),
             self._get_named_function_call(data),
         ):
             if forced_tool_name is not None and forced_tool_name not in listed_names:

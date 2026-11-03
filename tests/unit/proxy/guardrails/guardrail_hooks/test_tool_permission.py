@@ -2045,6 +2045,31 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
+        ("call_type", "tool_choice"),
+        [
+            ("acompletion", {"type": "function", "function": {"name": "Read"}}),
+            ("responses", {"type": "function", "name": "Read"}),
+        ],
+        ids=["chat", "responses"],
+    )
+    async def test_pre_call_checks_an_extra_body_tool_choice_that_names_an_unlisted_tool(
+        self, call_type: CallTypesLiteral, tool_choice: dict[str, object]
+    ) -> None:
+        request = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "input": "hi",
+            "tools": [{"type": "function", "name": "Bash"}],
+            "extra_body": {"tool_choice": tool_choice, "seed": 7},
+        }
+
+        message, rewritten = await self._blocked_and_rewritten(self.rules, request, call_type)
+
+        assert message == "Tool 'Read' denied by rule 'deny_read'"
+        assert rewritten["extra_body"] == {"tool_choice": "none", "seed": 7}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
         "rule",
         [
             {"id": "deny_deepwiki", "tool_name": r"^deepwiki$", "decision": "deny"},
