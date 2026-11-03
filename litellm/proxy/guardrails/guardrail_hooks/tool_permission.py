@@ -1235,6 +1235,15 @@ class ToolPermissionGuardrail(CustomGuardrail):
         targets: Final = chain.from_iterable(self._get_request_tool_targets(tool) for tool in tools)
         return frozenset(name for name, _ in targets if name is not None)
 
+    def _referable_names_in(self, tools: Sequence[object]) -> frozenset[str]:
+        member_names: Final = chain.from_iterable(map(self._bare_member_names, tools))
+        namespace_names: Final = (_member_name(tool) for tool in tools if _namespace_members(tool))
+        return (
+            self._tool_names_in(tools)
+            | frozenset(bare for _, bare in member_names)
+            | frozenset(name for name in namespace_names if name is not None)
+        )
+
     def _kept_tools(
         self,
         tool: object,
@@ -1345,7 +1354,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
         sent_tools: Final = _layer_sent_tools(_sent_fields(request))
         kept_sent: Final = reduce(_KeptLayer.overlaid_by, kept_layers)
         kept_sent_tools: Final = kept_sent.sent_tools()
-        removed_names: Final = denied_names | (self._tool_names_in(sent_tools) - self._tool_names_in(kept_sent_tools))
+        removed_names: Final = denied_names | (
+            self._referable_names_in(sent_tools) - self._referable_names_in(kept_sent_tools)
+        )
         kept_types: Final = self._tool_types_in(kept_sent_tools)
         removed_types: Final = self._tool_types_in(sent_tools) - kept_types
 

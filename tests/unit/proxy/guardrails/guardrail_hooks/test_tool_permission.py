@@ -2425,6 +2425,78 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert result["tools"] == [{"type": "namespace", "name": "functions", "tools": members[1:]}]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("choice", "relaxed"),
+        [
+            ({"tool_choice": {"type": "function", "function": {"name": "exec"}}}, {"tool_choice": "none"}),
+            ({"tool_choice": {"type": "function", "function": {"name": "ops"}}}, {"tool_choice": "none"}),
+            (
+                {
+                    "tool_choice": {
+                        "type": "allowed_tools",
+                        "allowed_tools": {
+                            "mode": "required",
+                            "tools": [
+                                {"type": "function", "function": {"name": "exec"}},
+                                {"type": "function", "function": {"name": "get_weather"}},
+                            ],
+                        },
+                    }
+                },
+                {
+                    "tool_choice": {
+                        "type": "allowed_tools",
+                        "allowed_tools": {
+                            "mode": "required",
+                            "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+                        },
+                    }
+                },
+            ),
+            (
+                {"toolConfig": {"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": ["exec"]}}},
+                {"toolConfig": {"functionCallingConfig": {"mode": "NONE"}}},
+            ),
+        ],
+        ids=["bare_member_choice", "namespace_choice", "allowed_tools_entry", "allowed_function_names"],
+    )
+    async def test_pre_call_rewrite_relaxes_a_bare_name_a_dropped_namespace_member_was_sent_under(
+        self, choice: dict[str, object], relaxed: dict[str, object]
+    ) -> None:
+        guardrail = self._pre_call([{"id": "deny_exec", "tool_name": r"^ops__exec$", "decision": "deny"}], "rewrite")
+        weather = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
+        namespace = {"type": "namespace", "name": "ops", "tools": [{"type": "function", "name": "exec"}]}
+        data = {
+            "model": "gemini/gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [weather, namespace],
+            **choice,
+        }
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [weather]
+        assert {key: result[key] for key in relaxed} == relaxed
+
+    @pytest.mark.asyncio
+    async def test_pre_call_rewrite_keeps_a_bare_name_another_kept_namespace_still_serves(self) -> None:
+        guardrail = self._pre_call([{"id": "deny_exec", "tool_name": r"^ops__exec$", "decision": "deny"}], "rewrite")
+        dropped_namespace = {"type": "namespace", "name": "ops", "tools": [{"type": "function", "name": "exec"}]}
+        kept_namespace = {"type": "namespace", "name": "dev", "tools": [{"type": "function", "name": "exec"}]}
+        tool_choice = {"type": "function", "function": {"name": "exec"}}
+        data = {
+            "model": "gemini/gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [dropped_namespace, kept_namespace],
+            "tool_choice": tool_choice,
+        }
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [kept_namespace]
+        assert result["tool_choice"] == tool_choice
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("exec_first", [True, False], ids=["exec_namespace_first", "exec_namespace_last"])
     @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
     async def test_pre_call_denies_a_bare_name_another_namespace_shares_a_qualified_name_with(
