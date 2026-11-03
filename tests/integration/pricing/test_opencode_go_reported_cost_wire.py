@@ -1,4 +1,5 @@
 import json
+import uuid
 from collections.abc import Mapping
 from typing import Final
 
@@ -44,10 +45,10 @@ def _event_frame(event: Mapping[str, JsonValue]) -> bytes:
     return f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
 
 
-def _chat_completion() -> bytes:
+def _chat_completion(tag: str) -> bytes:
     return json.dumps(
         {
-            "id": "chatcmpl-go",
+            "id": f"chatcmpl-go-{tag}",
             "object": "chat.completion",
             "created": 1,
             "model": "glm-5.3",
@@ -57,9 +58,9 @@ def _chat_completion() -> bytes:
     ).encode()
 
 
-def _chat_stream() -> tuple[bytes, ...]:
+def _chat_stream(tag: str) -> tuple[bytes, ...]:
     text: Final = {
-        "id": "chatcmpl-go",
+        "id": f"chatcmpl-go-{tag}",
         "object": "chat.completion.chunk",
         "created": 1,
         "model": "glm-5.3",
@@ -70,16 +71,16 @@ def _chat_stream() -> tuple[bytes, ...]:
     return (*(_data_frame(event) for event in (text, finish, final_usage)), b"data: [DONE]\n\n")
 
 
-def _responses_response() -> Mapping[str, JsonValue]:
+def _responses_response(tag: str) -> Mapping[str, JsonValue]:
     return {
-        "id": "resp_go",
+        "id": f"resp_go_{tag}",
         "object": "response",
         "created_at": 1,
         "status": "completed",
         "model": "gpt-6-luna",
         "output": [
             {
-                "id": "msg_go",
+                "id": f"msg_go_{tag}",
                 "type": "message",
                 "status": "completed",
                 "role": "assistant",
@@ -90,8 +91,8 @@ def _responses_response() -> Mapping[str, JsonValue]:
     }
 
 
-def _responses_stream() -> tuple[bytes, ...]:
-    response: Final = _responses_response()
+def _responses_stream(tag: str) -> tuple[bytes, ...]:
+    response: Final = _responses_response(tag)
     return (
         _event_frame(
             {"type": "response.created", "sequence_number": 0, "response": {**response, "status": "in_progress"}}
@@ -100,7 +101,7 @@ def _responses_stream() -> tuple[bytes, ...]:
             {
                 "type": "response.output_text.delta",
                 "sequence_number": 1,
-                "item_id": "msg_go",
+                "item_id": f"msg_go_{tag}",
                 "output_index": 0,
                 "content_index": 0,
                 "delta": "ok",
@@ -110,9 +111,9 @@ def _responses_stream() -> tuple[bytes, ...]:
     )
 
 
-def _anthropic_message() -> Mapping[str, JsonValue]:
+def _anthropic_message(tag: str) -> Mapping[str, JsonValue]:
     return {
-        "id": "msg_go",
+        "id": f"msg_go_{tag}",
         "type": "message",
         "role": "assistant",
         "model": "claude-haiku-5-5",
@@ -123,8 +124,8 @@ def _anthropic_message() -> Mapping[str, JsonValue]:
     }
 
 
-def _anthropic_stream() -> tuple[bytes, ...]:
-    start: Final = {**_anthropic_message(), "content": [], "stop_reason": None}
+def _anthropic_stream(tag: str) -> tuple[bytes, ...]:
+    start: Final = {**_anthropic_message(tag), "content": [], "stop_reason": None}
     return (
         _event_frame(
             {"type": "message_start", "message": {**start, "usage": {"input_tokens": 1200, "output_tokens": 0}}}
@@ -146,20 +147,21 @@ def _anthropic_stream() -> tuple[bytes, ...]:
 def _respond(request: Request) -> Reply:
     assert request.method == "POST", request.method
     streaming: Final = _JSON_OBJECT.validate_json(request.body).get("stream") is True
+    tag: Final = uuid.uuid4().hex
     if request.target.endswith("/chat/completions"):
         return (
-            Reply(content_type="text/event-stream", chunks=_chat_stream())
+            Reply(content_type="text/event-stream", chunks=_chat_stream(tag))
             if streaming
-            else Reply(body=_chat_completion())
+            else Reply(body=_chat_completion(tag))
         )
     if request.target.endswith("/responses"):
         if streaming:
-            return Reply(content_type="text/event-stream", chunks=_responses_stream())
-        return Reply(body=json.dumps(_responses_response()).encode())
+            return Reply(content_type="text/event-stream", chunks=_responses_stream(tag))
+        return Reply(body=json.dumps(_responses_response(tag)).encode())
     assert request.target.endswith("/v1/messages"), request.target
     if streaming:
-        return Reply(content_type="text/event-stream", chunks=_anthropic_stream())
-    return Reply(body=json.dumps(_anthropic_message()).encode())
+        return Reply(content_type="text/event-stream", chunks=_anthropic_stream(tag))
+    return Reply(body=json.dumps(_anthropic_message(tag)).encode())
 
 
 def _logged_spend(call_id: str) -> float:

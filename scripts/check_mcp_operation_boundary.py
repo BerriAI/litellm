@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from typing import Final
 
-PACKAGE: Final = Path("litellm/proxy/_experimental/mcp_server")
+PACKAGE: Final = Path("litellm/proxy/mcp_server")
 LEGACY_ADAPTERS: Final = frozenset({"server.py", "legacy_callbacks.py", "mcp_context.py", "mcp_debug.py"})
 CONFINED_NAMES: Final = frozenset(
     {

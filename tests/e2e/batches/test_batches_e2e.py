@@ -1893,6 +1893,13 @@ class TestBatchTerminalState:
             f"listed-completed marker retrieved as {fetched.status!r}"
         )
         assert fetched.output_file_id, "completed batch has no output_file_id"
+        usage: Final = fetched.usage
+        assert usage is not None and usage.input_tokens and usage.output_tokens, (
+            f"completed batch has no batch token counts: {usage!r}"
+        )
+        assert (usage.prompt_tokens, usage.completion_tokens) == (usage.input_tokens, usage.output_tokens), (
+            f"chat token counts disagree with the batch token counts: {usage!r}"
+        )
 
         downloaded = client.proxy.transport.download(
             f"/v1/files/{fetched.output_file_id}/content",

@@ -13,9 +13,9 @@ from litellm import ModelResponse, token_counter, verbose_logger
 from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs, safe_divide_seconds
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import LiteLLMPydanticObjectBase
 

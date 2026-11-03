@@ -45,6 +45,7 @@ def _key(
     max_budget: float | None = None,
     budget_limits: Sequence[Mapping[str, object]] | None = None,
     budget_id: str | None = None,
+    budget_duration: str | None = None,
 ) -> LiteLLM_VerificationToken:
     return LiteLLM_VerificationToken(
         token="hashed-owner-key",
@@ -54,6 +55,7 @@ def _key(
         max_budget=max_budget,
         budget_limits=None if budget_limits is None else [dict(window) for window in budget_limits],
         budget_id=budget_id,
+        budget_duration=budget_duration,
         metadata={},
     )
 
@@ -127,6 +129,56 @@ def _window(duration: str, cap: float) -> Mapping[str, object]:
         (UpdateKeyRequest(key="sk-1", spend=0.0), _key(), KeyBudgetAdminOnly()),
         (UpdateKeyRequest(key="sk-1", soft_budget=1.0), _key(), KeyBudgetAdminOnly()),
         (UpdateKeyRequest(key="sk-1", soft_budget=None, max_budget=5.0), _key(max_budget=10.0), KeyBudgetAdminOnly()),
+        (
+            UpdateKeyRequest(key="sk-1", budget_duration="1s"),
+            _key(max_budget=10.0, budget_duration="30d"),
+            KeyBudgetLoosened(),
+        ),
+        (
+            UpdateKeyRequest(key="sk-1", budget_duration="60d"),
+            _key(max_budget=10.0, budget_duration="30d"),
+            KeyBudgetLoosened(),
+        ),
+        (UpdateKeyRequest(key="sk-1", budget_duration="1d"), _key(max_budget=10.0), KeyBudgetLoosened()),
+        (
+            UpdateKeyRequest(key="sk-1", budget_duration=None),
+            _key(max_budget=10.0, budget_duration="30d"),
+            KeyBudgetTightened(),
+        ),
+        (
+            UpdateKeyRequest(key="sk-1", budget_duration="30d"),
+            _key(max_budget=10.0, budget_duration="30d"),
+            KeyBudgetUnchanged(),
+        ),
+        (
+            UpdateKeyRequest(key="sk-1", budget_duration="30d"),
+            _key(max_budget=10.0, budget_duration="Monthly"),
+            KeyBudgetUnchanged(),
+        ),
+        (UpdateKeyRequest(key="sk-1", budget_duration="1s"), _key(budget_duration="30d"), KeyBudgetUnchanged()),
+        (UpdateKeyRequest(key="sk-1", max_budget=5.0, budget_duration="1s"), _key(), KeyBudgetTightened()),
+        (
+            UpdateKeyRequest(key="sk-1", budget_duration="1s"),
+            _key(budget_id="shared-tier-10", budget_duration="30d"),
+            KeyBudgetAdminOnly(),
+        ),
+        (
+            UpdateKeyRequest(key="sk-1", budget_duration=None),
+            _key(budget_id="shared-tier-10", budget_duration="30d"),
+            KeyBudgetAdminOnly(),
+        ),
+        (
+            UpdateKeyRequest(key="sk-1", budget_id="shared-tier-100"),
+            _key(budget_id="shared-tier-10"),
+            KeyBudgetAdminOnly(),
+        ),
+        (UpdateKeyRequest(key="sk-1", budget_id=None), _key(budget_id="shared-tier-10"), KeyBudgetAdminOnly()),
+        (UpdateKeyRequest(key="sk-1", budget_id="shared-tier-10"), _key(), KeyBudgetAdminOnly()),
+        (
+            UpdateKeyRequest(key="sk-1", budget_id="shared-tier-10"),
+            _key(budget_id="shared-tier-10"),
+            KeyBudgetUnchanged(),
+        ),
     ],
 )
 def test_classify_key_budget_change(
@@ -463,5 +515,62 @@ async def test_owner_cannot_clear_max_budget_by_default(monkeypatch: pytest.Monk
             policy=policy,
             data=UpdateKeyRequest(key="sk-1", max_budget=None),
             existing=_key(max_budget=10.0),
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy", "data", "existing"),
+    [
+        (None, UpdateKeyRequest(key="sk-1", budget_duration="1s"), _key(max_budget=10.0, budget_duration="30d")),
+        (
+            "lower_only",
+            UpdateKeyRequest(key="sk-1", budget_duration="1s"),
+            _key(max_budget=10.0, budget_duration="30d"),
+        ),
+        ("ceiling", UpdateKeyRequest(key="sk-1", budget_id="shared-tier-100"), _key(budget_id="shared-tier-10")),
+        ("ceiling", UpdateKeyRequest(key="sk-1", budget_duration="1s"), _key(budget_id="shared-tier-10")),
+    ],
+)
+async def test_owner_cannot_restart_or_relink_a_key_budget_without_admin(
+    monkeypatch: pytest.MonkeyPatch, policy: str | None, data: UpdateKeyRequest, existing: LiteLLM_VerificationToken
+) -> None:
+    with pytest.raises(HTTPException) as exc:
+        await _update(monkeypatch, policy=policy, data=data, existing=existing)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy", "data", "existing"),
+    [
+        (None, UpdateKeyRequest(key="sk-1", budget_duration="1d"), _key(budget_duration="30d")),
+        (None, UpdateKeyRequest(key="sk-1", budget_duration="24h"), _key(max_budget=10.0, budget_duration="daily")),
+        (
+            "lower_only",
+            UpdateKeyRequest(key="sk-1", budget_duration=None),
+            _key(max_budget=10.0, budget_duration="30d"),
+        ),
+        ("ceiling", UpdateKeyRequest(key="sk-1", budget_duration="1s"), _key(max_budget=10.0, budget_duration="30d")),
+    ],
+)
+async def test_owner_changes_budget_duration_when_it_cannot_restart_a_cap_or_policy_allows(
+    monkeypatch: pytest.MonkeyPatch, policy: str | None, data: UpdateKeyRequest, existing: LiteLLM_VerificationToken
+) -> None:
+    assert await _denial(monkeypatch, policy=policy, data=data, existing=existing) is None
+
+
+@pytest.mark.asyncio
+async def test_team_member_cannot_restart_a_team_key_budget_created_by_someone_else(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(HTTPException) as exc:
+        await _update(
+            monkeypatch,
+            policy=None,
+            data=UpdateKeyRequest(key="sk-1", budget_duration="1s"),
+            existing=_key(created_by=_TEAM_ADMIN, team_id=_TEAM, max_budget=10.0, budget_duration="30d"),
+            team=_team(["/key/update"]),
         )
     assert exc.value.status_code == 403

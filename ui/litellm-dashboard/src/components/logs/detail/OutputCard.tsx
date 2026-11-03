@@ -4,7 +4,7 @@
  */
 
 import { useState } from "react";
-import { toast } from "@/lib/toast";
+import { copyToClipboard } from "@/utils/dataUtils";
 import { COLOR_BORDER } from "./constants";
 import { ParsedMessage } from "./prettyMessagesTypes";
 import { SectionHeader } from "./SectionHeader";
@@ -22,8 +22,7 @@ export function OutputCard({ message, completionTokens, outputCost }: OutputCard
   const handleCopy = () => {
     if (!message) return;
 
-    navigator.clipboard.writeText(message.content || "");
-    toast.success("Output copied");
+    void copyToClipboard(message.content || "", "Output copied");
   };
 
   return (
