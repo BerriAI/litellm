@@ -116,7 +116,7 @@ fn eval(
         .arg(keys)
         .arg(arguments)
         .query(connection)
-        .map_err(|_| Error::Unavailable)
+        .map_err(Error::unavailable)
 }
 
 impl<S, C> ScriptCache for RedisCache<S, C>

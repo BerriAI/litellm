@@ -48,7 +48,7 @@ describe("MyUserTab", () => {
     expect(screen.getByText("Never resets")).toBeInTheDocument();
   });
 
-  it("shows the next reset time when the member budget has a reset window", () => {
+  it("shows the budget period and next reset when the member budget has a reset window", () => {
     vi.mocked(useMyTeamMember).mockReturnValue({
       data: {
         user_id: "user-1",
@@ -69,6 +69,8 @@ describe("MyUserTab", () => {
 
     renderWithProviders(<MyUserTab teamId="team-1" />);
 
-    expect(screen.getByText("Resets Jul 15, 2026 12:00")).toBeInTheDocument();
+    expect(screen.getByText("Current Period Spend (USD)")).toBeInTheDocument();
+    expect(screen.getByText("Jun 15 - Jul 15, 2026 (resets Jul 15, 2026 12:00)")).toBeInTheDocument();
+    expect(screen.queryByText(/cycle/i)).not.toBeInTheDocument();
   });
 });

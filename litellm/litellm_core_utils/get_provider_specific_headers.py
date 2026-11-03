@@ -1,10 +1,23 @@
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.types.utils import ProviderSpecificHeader
+
+_PROVIDER_HEADERS: Final[TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]] = TypeAdapter(
+    ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None
+)
 
 
 class ProviderSpecificHeaderUtils:
+    @staticmethod
+    def forwarded_authorization(provider_specific_header: object, custom_llm_provider: str | None) -> str | None:
+        headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            _PROVIDER_HEADERS.validate_python(provider_specific_header), custom_llm_provider
+        )
+        return next((value for key, value in headers.items() if key.lower() == "authorization"), None)
+
     @staticmethod
     def get_provider_specific_headers(
         provider_specific_header: ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None,

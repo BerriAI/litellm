@@ -154,6 +154,12 @@ vi.mock("@/components/common_components/team_multi_select", () => ({
   ),
 }));
 
+vi.mock("@/components/common_components/CustomerMultiSelect", () => ({
+  default: ({ value, onChange }: { value: readonly string[]; onChange: (ids: string[]) => void }) => (
+    <button onClick={() => onChange(["customer-1", "customer-2"])}>Customer Multi Select {value.join(",")}</button>
+  ),
+}));
+
 // Mock useTeams hook
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(() => ({
@@ -917,6 +923,36 @@ describe("EntityUsage", () => {
     });
   });
 
+  it("uses customer aliases from activity metadata without loading the customer directory", async () => {
+    mockCustomerDailyActivityCall.mockResolvedValue({
+      ...mockSpendData,
+      results: mockSpendData.results.map((day) => ({
+        ...day,
+        breakdown: {
+          ...day.breakdown,
+          entities: {
+            "customer-1": {
+              ...day.breakdown.entities["tag-1"],
+              metadata: { alias: "Selected Customer" },
+            },
+          },
+        },
+      })),
+    });
+    render(<StatefulEntityUsage {...defaultProps} entityType="customer" entityList={null} />);
+    expect(await screen.findByText("Selected Customer")).toBeInTheDocument();
+  });
+
+  it("passes multiple selected customers to the activity request", async () => {
+    render(<StatefulEntityUsage {...defaultProps} entityType="customer" entityList={null} />);
+    fireEvent.click(screen.getByRole("button", { name: "Customer Multi Select" }));
+    await waitFor(() => {
+      expect(mockCustomerDailyActivityCall).toHaveBeenLastCalledWith(
+        expect.objectContaining({ entityIds: ["customer-1", "customer-2"] }),
+      );
+    });
+  });
+
   it("should fallback to team_alias when entityList is null", async () => {
     render(<StatefulEntityUsage {...defaultProps} entityList={null} />);
 
@@ -1122,6 +1158,34 @@ describe("EntityUsage", () => {
     expect(segments).toHaveLength(1);
     expect(segments[0]).toHaveStyle({ backgroundColor: "rgb(236, 72, 153)" });
     expect(screen.getByTestId("provider-spend-total")).toHaveTextContent("$100.50");
+  });
+
+  it("lists a subscription-covered provider on the team view as included in the subscription at zero spend", async () => {
+    const day = mockSpendData.results[0];
+    mockTeamDailyActivityCall.mockResolvedValue({
+      ...mockSpendData,
+      results: [
+        {
+          ...day,
+          breakdown: {
+            ...day.breakdown,
+            providers: {
+              ...day.breakdown.providers,
+              chatgpt: {
+                metrics: { ...day.breakdown.providers.openai.metrics, spend: 0, api_requests: 4 },
+                metadata: { subscription_covered: true },
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    render(<StatefulEntityUsage {...defaultProps} entityType="team" />);
+
+    expect(await screen.findByText("Included in subscription")).toBeInTheDocument();
+    expect(screen.getByText("chatgpt")).toBeInTheDocument();
+    expect(screen.getAllByTestId("provider-share-segment")).toHaveLength(1);
   });
 
   it("should label the chart with user_email metadata instead of the raw UUID (LIT-3889)", async () => {
