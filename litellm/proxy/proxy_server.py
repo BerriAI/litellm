@@ -1185,6 +1185,27 @@ server_root_path: Final = get_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
 premium_user_data: Optional["EnterpriseLicenseData"] = _license_check.airgapped_license_data
+
+
+def _set_premium_user(is_premium: bool) -> None:
+    global premium_user, premium_user_data
+    premium_user = is_premium  # rebind-ok: config load can switch the license in use
+    premium_user_data = _license_check.airgapped_license_data  # rebind-ok: tracks the license in use
+
+
+def _use_config_license(config_license: str, env_license_is_premium: bool) -> bool:
+    env_license: Final = _license_check.license_str
+    env_license_data: Final = _license_check.airgapped_license_data
+    _license_check.license_str = config_license
+    if _license_check.is_premium():
+        return True
+    if not env_license_is_premium:
+        return False
+    _license_check.license_str = env_license
+    _license_check.airgapped_license_data = env_license_data
+    return True
+
+
 global_max_parallel_request_retries_env: Final[str | None] = os.getenv("LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES")
 proxy_state: Final = ProxyState()
 SENSITIVE_DATA_MASKER: Final = SensitiveDataMasker()
@@ -6686,7 +6707,6 @@ class ProxyConfig:
 
     def _load_environment_variables(self, config: dict):
         ## ENVIRONMENT VARIABLES
-        global premium_user
         environment_variables: Final = config.get("environment_variables", None)
         if environment_variables:
             for key, value in environment_variables.items():
@@ -6726,7 +6746,7 @@ class ProxyConfig:
             # check if litellm_license in general_settings
             if "LITELLM_LICENSE" in environment_variables:
                 _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
-                premium_user = _license_check.is_premium()
+                _set_premium_user(_license_check.is_premium())
 
     def _set_config_environment_variable(self, key: str, value: str) -> None:
         if key in os.environ and os.environ[key] != value:
@@ -6778,7 +6798,6 @@ class ProxyConfig:
             prompt_injection_detection_obj, \
             redis_usage_cache, \
             store_model_in_db, \
-            premium_user, \
             open_telemetry_logger, \
             health_check_details, \
             proxy_batch_polling_interval, \
@@ -6790,6 +6809,12 @@ class ProxyConfig:
         self._warn_on_misplaced_jwt_keys(config=config)
 
         self._load_environment_variables(config=config)
+
+        config_license: Final = _GENERAL_SETTINGS_VIEW.validate_python(
+            _GENERAL_SETTINGS_VIEW.validate_python(config).get("general_settings") or {}
+        ).get("litellm_license")
+        if isinstance(config_license, str):
+            _set_premium_user(_use_config_license(config_license, env_license_is_premium=premium_user))
 
         ## Coordination Redis (before cache init, so the explicit block wins)
         coordination_redis_cache: Final = self._init_coordination_redis(config=config)
@@ -7367,7 +7392,7 @@ class ProxyConfig:
             allowed_ips: Final = general_settings.get("allowed_ips", None)
             if allowed_ips is not None and premium_user is False:
                 raise ValueError(
-                    "allowed_ips is an Enterprise Feature. Please add a valid LITELLM_LICENSE to your envionment."
+                    "allowed_ips is an Enterprise Feature. Please add a valid LITELLM_LICENSE to your environment."
                 )
             ## BUDGET RESCHEDULER ##
             proxy_budget_rescheduler_min_time = general_settings.get(
@@ -7422,11 +7447,6 @@ class ProxyConfig:
             ## check if user has set a premium feature in general_settings
             if general_settings.get("enforced_params") is not None and premium_user is not True:
                 raise ValueError("Trying to use `enforced_params`" + CommonProxyErrors.not_premium_user.value)
-
-            # check if litellm_license in general_settings
-            if "litellm_license" in general_settings:
-                _license_check.license_str = general_settings["litellm_license"]
-                premium_user = _license_check.is_premium()
 
         router_params: Final[dict] = {
             "cache_responses": litellm.cache is not None,  # cache if user passed in cache values
