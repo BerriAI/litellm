@@ -9,9 +9,12 @@ litellm-regression-tests/tests/test_inference_endpoints.py.
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
 from e2e_config import unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody, RerankBody, RerankResponse
 from proxy_client import ProxyClient
@@ -24,6 +27,8 @@ DOCUMENTS = [
     "Washington, D.C. is the capital of the United States.",
     "Capital punishment has existed in the United States since before it was a country.",
 ]
+COHERE_RERANK_BACKEND: Final = "cohere/rerank-v3.5"
+BEDROCK_RERANK_BACKEND: Final = "bedrock/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0"
 QUERY = "What is the capital of the United States?"
 
 
@@ -43,11 +48,20 @@ def _rerank_top_3(proxy: ProxyClient, key: str, model: str) -> RerankResponse:
 
 class TestRerank:
     @pytest.mark.covers("llm.rerank.cohere.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RERANK,
+            providers=(Provider.COHERE,),
+            models=(COHERE_RERANK_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_rerank_scores_top_n(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model = f"e2e-rerank-{unique_marker()}"
         model_id = proxy.create_model(
             model,
-            LiteLLMParamsBody(model="cohere/rerank-v3.5", api_key="os.environ/COHERE_API_KEY"),
+            LiteLLMParamsBody(model=COHERE_RERANK_BACKEND, api_key="os.environ/COHERE_API_KEY"),
         )
         resources.defer(lambda: proxy.delete_model(model_id))
         key = resources.key()
@@ -55,6 +69,15 @@ class TestRerank:
         _assert_top_n_scored(_rerank_top_3(proxy, key, model))
 
     @pytest.mark.covers("llm.rerank.bedrock.basic.nonstream.works", exercised_on=["rerank"])
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RERANK,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_RERANK_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_rerank_scores_top_n(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
@@ -62,7 +85,7 @@ class TestRerank:
         model_id = proxy.create_model(
             model,
             LiteLLMParamsBody(
-                model="bedrock/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0",
+                model=BEDROCK_RERANK_BACKEND,
                 aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
                 aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
                 aws_region_name="os.environ/AWS_REGION",

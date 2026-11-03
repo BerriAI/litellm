@@ -48,7 +48,7 @@ def test_adaptive_thinking_detected_for_fable_5(local_model_cost_map, model):
     maps to ``thinking.type='adaptive'`` + ``output_config.effort``."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-    assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+    assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is True
 
 
 FABLE_5_1_VARIANTS = (
@@ -91,6 +91,4 @@ def test_fable_5_1_registered_for_bedrock_converse():
 def test_adaptive_thinking_detected_for_fable_5_1(local_model_cost_map, model):
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-    assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
-
-
+    assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is True

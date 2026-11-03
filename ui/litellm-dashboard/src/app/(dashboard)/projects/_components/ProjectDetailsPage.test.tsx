@@ -14,6 +14,16 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeam: (id?: string) => mockUseTeam(id),
 }));
 
+const mockUseAuthorized = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => mockUseAuthorized(),
+}));
+
+const mockUseUISettings = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: () => mockUseUISettings(),
+}));
+
 vi.mock("./ProjectModals/EditProjectModal", () => ({
   EditProjectModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="edit-modal" /> : null),
 }));
@@ -63,6 +73,8 @@ describe("ProjectDetail", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseTeam.mockReturnValue({ data: undefined, isLoading: false });
+    mockUseAuthorized.mockReturnValue({ userId: "admin-user", userRole: "Admin", isViewOnly: false });
+    mockUseUISettings.mockReturnValue({ data: { values: {} } });
   });
 
   describe("when loading", () => {
@@ -169,6 +181,40 @@ describe("ProjectDetail", () => {
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       await user.click(screen.getByRole("button", { name: /edit project/i }));
       expect(screen.getByTestId("edit-modal")).toBeInTheDocument();
+    });
+
+    it.each([
+      { who: "a proxy admin without the setting", role: "Admin", teamRole: "user", fields: [], visible: true },
+      {
+        who: "the project team's admin without the setting",
+        role: "Internal User",
+        teamRole: "admin",
+        fields: [],
+        visible: false,
+      },
+      {
+        who: "the project team's admin when the setting grants projects",
+        role: "Internal User",
+        teamRole: "admin",
+        fields: ["projects"],
+        visible: true,
+      },
+      {
+        who: "a plain member of the project team when the setting grants projects",
+        role: "Internal User",
+        teamRole: "user",
+        fields: ["projects"],
+        visible: false,
+      },
+    ])("should gate 'Edit Project' for $who", ({ role, teamRole, fields, visible }) => {
+      mockUseAuthorized.mockReturnValue({ userId: "caller", userRole: role, isViewOnly: false });
+      mockUseUISettings.mockReturnValue({ data: { values: { team_admin_editable_team_fields: fields } } });
+      mockUseTeam.mockReturnValue({
+        data: { team_id: "team-1", members_with_roles: [{ user_id: "caller", role: teamRole }] },
+        isLoading: false,
+      });
+      renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+      expect(screen.queryByRole("button", { name: /edit project/i }) !== null).toBe(visible);
     });
 
     it("should show 'No team assigned' when the project has no team", () => {

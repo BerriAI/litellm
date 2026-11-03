@@ -1,5 +1,6 @@
 from typing import Final
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 
@@ -8,7 +9,7 @@ PARAMS_VLLM_OMNI_DOES_NOT_ACCEPT: Final = frozenset({"mask", "quality", "input_f
 
 class HostedVLLMImageEditConfig(OpenAIImageEditConfig):
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseImageEditConfig contract
-        return [  # mutable-ok: BaseImageEditConfig returns list
+        return [
             param
             for param in super().get_supported_openai_params(model)
             if param not in PARAMS_VLLM_OMNI_DOES_NOT_ACCEPT
@@ -23,7 +24,7 @@ class HostedVLLMImageEditConfig(OpenAIImageEditConfig):
         api_base: str | None = None,
     ) -> dict:  # mutable-ok: BaseImageEditConfig contract
         resolved_key: Final = api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
-        return {**headers, "Authorization": f"Bearer {resolved_key}"}  # mutable-ok: httpx headers are a dict
+        return {**headers, "Authorization": f"Bearer {resolved_key}"}
 
     def get_complete_url(
         self,
@@ -39,5 +40,5 @@ class HostedVLLMImageEditConfig(OpenAIImageEditConfig):
             )
         trimmed: Final = resolved_api_base.rstrip("/")
         if trimmed.endswith("/v1"):
-            return f"{trimmed}/images/edits"
-        return f"{trimmed}/v1/images/edits"
+            return join_api_base(trimmed, "images/edits")
+        return join_api_base(trimmed, "v1/images/edits")

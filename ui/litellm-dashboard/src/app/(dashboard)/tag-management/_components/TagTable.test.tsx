@@ -150,4 +150,77 @@ describe("TagTable", () => {
     expect(mockOnEdit).not.toHaveBeenCalled();
     expect(mockOnDelete).not.toHaveBeenCalled();
   });
+
+  describe("filters", () => {
+    const prodTag: Tag = { ...mockTag, name: "Prod-Billing", description: "Handles Invoices" };
+    const devTag: Tag = { ...mockTag, name: "dev-billing", description: "Sandbox usage" };
+    const prodOnlyTag: Tag = { ...mockTag, name: "prod-search", description: "Search traffic" };
+    const data = [prodTag, devTag, prodOnlyTag];
+
+    it("should narrow rows by tag name containing the text, ignoring case", async () => {
+      const user = userEvent.setup();
+      render(<TagTable {...defaultProps} data={data} />);
+      await user.type(screen.getByRole("textbox", { name: "Filter by tag name" }), "PROD");
+      expect(screen.getByText("Prod-Billing")).toBeInTheDocument();
+      expect(screen.getByText("prod-search")).toBeInTheDocument();
+      expect(screen.queryByText("dev-billing")).not.toBeInTheDocument();
+    });
+
+    it("should match the name anywhere in the string, not only as a prefix", async () => {
+      const user = userEvent.setup();
+      render(<TagTable {...defaultProps} data={data} />);
+      await user.type(screen.getByRole("textbox", { name: "Filter by tag name" }), "billing");
+      expect(screen.getByText("Prod-Billing")).toBeInTheDocument();
+      expect(screen.getByText("dev-billing")).toBeInTheDocument();
+      expect(screen.queryByText("prod-search")).not.toBeInTheDocument();
+    });
+
+    it("should narrow rows by description containing the text", async () => {
+      const user = userEvent.setup();
+      render(<TagTable {...defaultProps} data={data} />);
+      await user.type(screen.getByRole("textbox", { name: "Filter by description" }), "invoice");
+      expect(screen.getByText("Prod-Billing")).toBeInTheDocument();
+      expect(screen.queryByText("dev-billing")).not.toBeInTheDocument();
+      expect(screen.queryByText("prod-search")).not.toBeInTheDocument();
+    });
+
+    it("should require both filters to match when both are set", async () => {
+      const user = userEvent.setup();
+      render(<TagTable {...defaultProps} data={data} />);
+      await user.type(screen.getByRole("textbox", { name: "Filter by tag name" }), "billing");
+      await user.type(screen.getByRole("textbox", { name: "Filter by description" }), "sandbox");
+      expect(screen.getByText("dev-billing")).toBeInTheDocument();
+      expect(screen.queryByText("Prod-Billing")).not.toBeInTheDocument();
+      expect(screen.queryByText("prod-search")).not.toBeInTheDocument();
+    });
+
+    it("should restore every row when the filters are cleared", async () => {
+      const user = userEvent.setup();
+      render(<TagTable {...defaultProps} data={data} />);
+      const nameFilter = screen.getByRole("textbox", { name: "Filter by tag name" });
+      await user.type(nameFilter, "dev");
+      expect(screen.queryByText("Prod-Billing")).not.toBeInTheDocument();
+      await user.clear(nameFilter);
+      expect(screen.getByText("Prod-Billing")).toBeInTheDocument();
+      expect(screen.getByText("dev-billing")).toBeInTheDocument();
+      expect(screen.getByText("prod-search")).toBeInTheDocument();
+    });
+
+    it("should show a no-matching message rather than the empty state when nothing matches", async () => {
+      const user = userEvent.setup();
+      render(<TagTable {...defaultProps} data={data} />);
+      await user.type(screen.getByRole("textbox", { name: "Filter by tag name" }), "zzz");
+      expect(screen.getByText("No matching tags")).toBeInTheDocument();
+      expect(screen.queryByText("No tags yet")).not.toBeInTheDocument();
+    });
+
+    it("should not fail on tags without a description", async () => {
+      const user = userEvent.setup();
+      const noDescription: Tag = { ...mockTag, name: "bare", description: undefined };
+      render(<TagTable {...defaultProps} data={[noDescription, prodTag]} />);
+      await user.type(screen.getByRole("textbox", { name: "Filter by description" }), "invoice");
+      expect(screen.getByText("Prod-Billing")).toBeInTheDocument();
+      expect(screen.queryByText("bare")).not.toBeInTheDocument();
+    });
+  });
 });

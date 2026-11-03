@@ -9,12 +9,14 @@ response. A failure raised after the router picked a deployment (a post-call
 guardrail block, a provider error) carries no flag and keeps its deployment labels.
 """
 
+from typing import Final
+
 import pytest
 from fastapi import HTTPException
 from prometheus_client import REGISTRY
 
 from litellm.constants import PROXY_REJECTED_BEFORE_ROUTING_KEY
-from litellm.exceptions import GuardrailRaisedException
+from litellm.exceptions import GuardrailRaisedException, MalformedRequestFieldError
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -99,3 +101,15 @@ def test_failure_after_routing_still_marks_deployment_partial_outage(failure: Ex
 
     assert _model_id_values(logger.litellm_deployment_state) == {"dep-1"}
     assert _model_id_values(logger.litellm_deployment_failure_responses) == {"dep-1"}
+
+
+def test_malformed_field_rejection_after_routing_leaves_deployment_healthy() -> None:
+    logger: Final = PrometheusLogger()
+    rejection: Final = MalformedRequestFieldError(
+        message="tools: Input should be a valid list", model="internal-model", llm_provider="openai"
+    )
+
+    logger.set_llm_deployment_failure_metrics(_attributed_failure_kwargs(rejection, rejected_before_routing=False))
+
+    assert logger.litellm_deployment_state._metrics == {}
+    assert _model_id_values(logger.litellm_deployment_failure_responses) == {""}

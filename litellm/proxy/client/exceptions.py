@@ -25,3 +25,19 @@ class NotFoundError(Exception):
     def __init__(self, orig_exception: requests.exceptions.HTTPError | str):
         self.orig_exception = _redact_orig_exception(orig_exception)
         super().__init__(str(self.orig_exception))
+
+
+def _stream_error_message(error: object) -> str:
+    match error:
+        case {"message": str(message)}:
+            return message
+        case _:
+            return str(error)
+
+
+class StreamError(Exception):
+    """Exception raised when the server ends a stream with an error event."""
+
+    def __init__(self, error: object) -> None:
+        self.error = error
+        super().__init__(redact_string(_stream_error_message(error)))

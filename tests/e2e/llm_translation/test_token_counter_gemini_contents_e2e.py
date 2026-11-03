@@ -9,15 +9,43 @@ route the claude_code rows never reach
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
+from e2e_metadata import Domain, Provider, Route, Subject, meta
 from proxy_client import ProxyClient
 from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
-GEMINI_DEPLOYMENTS = ("gemini-2.5-flash", "gemini-2.5-flash-vertex")
+GEMINI_STUDIO_DEPLOYMENT: Final = "gemini-2.5-flash"
+GEMINI_VERTEX_DEPLOYMENT: Final = "gemini-2.5-flash-vertex"
+GEMINI_DEPLOYMENTS = (
+    pytest.param(
+        GEMINI_STUDIO_DEPLOYMENT,
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.COUNT_TOKENS,
+                providers=(Provider.GEMINI,),
+                models=(GEMINI_STUDIO_DEPLOYMENT,),
+            )
+        ),
+    ),
+    pytest.param(
+        GEMINI_VERTEX_DEPLOYMENT,
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.COUNT_TOKENS,
+                providers=(Provider.VERTEX_AI,),
+                models=(GEMINI_VERTEX_DEPLOYMENT,),
+            )
+        ),
+    ),
+)
 
 
 class _Part(BaseModel):

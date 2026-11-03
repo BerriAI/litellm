@@ -102,7 +102,7 @@ class FalAIGPTImage2Config(FalAIBaseConfig):
         return f"{base_url}/{endpoint}"
 
     def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
-        return list(SUPPORTED_OPENAI_PARAMS)  # mutable-ok: base class contract returns a list
+        return list(SUPPORTED_OPENAI_PARAMS)
 
     def map_openai_params(
         self,
@@ -127,7 +127,7 @@ class FalAIGPTImage2Config(FalAIBaseConfig):
                 if key in self.PARAM_TRANSLATION and self.PARAM_TRANSLATION[key] not in optional_params
             }
         )
-        return {**optional_params, **translated_params}  # mutable-ok: base class contract returns a dict
+        return {**optional_params, **translated_params}
 
     def _translate_value(self, key: str, value: object, model: str) -> object:
         if key == "size":
@@ -144,4 +144,4 @@ class FalAIGPTImage2Config(FalAIBaseConfig):
         litellm_params: Mapping[str, object],
         headers: Mapping[str, str],
     ) -> dict:
-        return {"prompt": prompt, **optional_params}  # mutable-ok: base class contract returns a dict
+        return {"prompt": prompt, **optional_params}

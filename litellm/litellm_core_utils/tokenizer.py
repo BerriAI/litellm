@@ -14,16 +14,15 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, UnionType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
 import tiktoken
-from tokenizers import AddedToken
-from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
 
 if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
+    from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
 
     from litellm.rust_bridge._native import HuggingFaceEncoding
     from litellm.rust_bridge._native import Tokenizer as NativeTokenizer
@@ -72,7 +71,7 @@ class OpenAIEncoding:
         return self._special_tokens["<|endoftext|>"]
 
     @property
-    def special_tokens_set(self) -> set[str]:  # mutable-ok: [LIT001, LIT002] SDK return type
+    def special_tokens_set(self) -> set[str]:  # mutable-ok: [LIT001] SDK return type
         return set(self._special_tokens)
 
     def is_special_token(self, token: int) -> bool:
@@ -80,7 +79,7 @@ class OpenAIEncoding:
 
     # ---- encoding -------------------------------------------------------------------------
 
-    def encode_ordinary(self, text: str) -> list[int]:  # mutable-ok: [LIT001, LIT002] SDK return type
+    def encode_ordinary(self, text: str) -> list[int]:  # mutable-ok: [LIT001] SDK return type
         return self._native.encode(text)
 
     def encode(
@@ -89,7 +88,7 @@ class OpenAIEncoding:
         *,
         allowed_special: AllowedSpecial = frozenset(),
         disallowed_special: SpecialTokens = "all",
-    ) -> list[int]:  # mutable-ok: [LIT001, LIT002] SDK return type
+    ) -> list[int]:  # mutable-ok: [LIT001] SDK return type
         allowed: Final = self._allowed(text, allowed_special, disallowed_special)
         if not allowed:
             return self.encode_ordinary(text)
@@ -111,11 +110,9 @@ class OpenAIEncoding:
 
     def encode_ordinary_batch(
         self, text: Sequence[str], *, num_threads: int = 8
-    ) -> list[list[int]]:  # mutable-ok: [LIT001, LIT002] SDK return type
+    ) -> list[list[int]]:  # mutable-ok: [LIT001] SDK return type
         with ThreadPoolExecutor(num_threads) as executor:
-            return list(  # mutable-ok: [LIT002] SDK returns a list
-                executor.map(self.encode_ordinary, text)
-            )
+            return list(executor.map(self.encode_ordinary, text))
 
     def encode_batch(
         self,
@@ -124,12 +121,10 @@ class OpenAIEncoding:
         num_threads: int = 8,
         allowed_special: AllowedSpecial = frozenset(),
         disallowed_special: SpecialTokens = "all",
-    ) -> list[list[int]]:  # mutable-ok: [LIT001, LIT002] SDK return type
+    ) -> list[list[int]]:  # mutable-ok: [LIT001] SDK return type
         encode: Final = partial(self.encode, allowed_special=allowed_special, disallowed_special=disallowed_special)
         with ThreadPoolExecutor(num_threads) as executor:
-            return list(  # mutable-ok: [LIT002] SDK returns a list
-                executor.map(encode, text)
-            )
+            return list(executor.map(encode, text))
 
     def encode_with_unstable(
         self,
@@ -137,7 +132,7 @@ class OpenAIEncoding:
         *,
         allowed_special: AllowedSpecial = frozenset(),
         disallowed_special: SpecialTokens = "all",
-    ) -> tuple[list[int], list[list[int]]]:  # mutable-ok: [LIT001, LIT002] SDK return type
+    ) -> tuple[list[int], list[list[int]]]:  # mutable-ok: [LIT001] SDK return type
         """The stable tokens of `text` and every completion its unstable tail could become.
 
         Completions come back sorted; tiktoken returns them in hash order."""
@@ -164,14 +159,12 @@ class OpenAIEncoding:
     def decode_single_token_bytes(self, token: int) -> bytes:
         return self.decode_bytes((token,))
 
-    def decode_tokens_bytes(self, tokens: Sequence[int]) -> list[bytes]:  # mutable-ok: [LIT001, LIT002] SDK return type
-        return [  # mutable-ok: [LIT002] SDK returns a list
-            self.decode_single_token_bytes(token) for token in tokens
-        ]
+    def decode_tokens_bytes(self, tokens: Sequence[int]) -> list[bytes]:  # mutable-ok: [LIT001] SDK return type
+        return [self.decode_single_token_bytes(token) for token in tokens]
 
     def decode_with_offsets(
         self, tokens: Sequence[int]
-    ) -> tuple[str, list[int]]:  # mutable-ok: [LIT001, LIT002] SDK return type
+    ) -> tuple[str, list[int]]:  # mutable-ok: [LIT001] SDK return type
         """The decoded text and, per token, the index of the first character holding its bytes.
 
         Like tiktoken, raises `UnicodeDecodeError` when the tokens do not decode to valid UTF-8."""
@@ -185,21 +178,17 @@ class OpenAIEncoding:
 
     def decode_batch(
         self, batch: Sequence[Sequence[int]], *, errors: str = "replace", num_threads: int = 8
-    ) -> list[str]:  # mutable-ok: [LIT001, LIT002] SDK return type
+    ) -> list[str]:  # mutable-ok: [LIT001] SDK return type
         with ThreadPoolExecutor(num_threads) as executor:
-            return list(  # mutable-ok: [LIT002] SDK returns a list
-                executor.map(partial(self.decode, errors=errors), batch)
-            )
+            return list(executor.map(partial(self.decode, errors=errors), batch))
 
     def decode_bytes_batch(
         self, batch: Sequence[Sequence[int]], *, num_threads: int = 8
-    ) -> list[bytes]:  # mutable-ok: [LIT001, LIT002] SDK return type
+    ) -> list[bytes]:  # mutable-ok: [LIT001] SDK return type
         with ThreadPoolExecutor(num_threads) as executor:
-            return list(  # mutable-ok: [LIT002] SDK returns a list
-                executor.map(self.decode_bytes, batch)
-            )
+            return list(executor.map(self.decode_bytes, batch))
 
-    def token_byte_values(self) -> list[bytes]:  # mutable-ok: [LIT001, LIT002] SDK return type
+    def token_byte_values(self) -> list[bytes]:  # mutable-ok: [LIT001] SDK return type
         return self._native.token_byte_values()
 
     def __reduce__(self) -> tuple[Callable[[str], OpenAIEncoding], tuple[str]]:
@@ -225,6 +214,19 @@ class OpenAIEncoding:
                     "To disable this check for all special tokens, pass `disallowed_special=()`.\n"
                 )
         return allowed
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeAddedToken:
+    content: str
+    single_word: bool
+    lstrip: bool
+    rstrip: bool
+    normalized: bool
+    special: bool
+
+    def __str__(self) -> str:
+        return self.content
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,16 +275,21 @@ class HuggingFaceTokenizer:
     def id_to_token(self, id: int) -> str | None:
         return self._native.id_to_token(id)
 
-    def get_vocab(
-        self, with_added_tokens: bool = True
-    ) -> dict[str, int]:  # mutable-ok: [LIT001, LIT002] SDK return type
+    def get_vocab(self, with_added_tokens: bool = True) -> dict[str, int]:  # mutable-ok: [LIT001] SDK return type
         return self._native.get_vocab(with_added_tokens)
 
     def get_vocab_size(self, with_added_tokens: bool = True) -> int:
         return self._native.get_vocab_size(with_added_tokens)
 
-    def get_added_tokens_decoder(self) -> dict[int, AddedToken]:  # mutable-ok: [LIT001, LIT002] SDK return type
-        return {  # mutable-ok: [LIT002] SDK returns a dict
+    def get_added_tokens_decoder(self) -> dict[int, _AddedToken]:  # mutable-ok: [LIT001] SDK return type
+        try:
+            from tokenizers import AddedToken
+        except ModuleNotFoundError as error:
+            if error.name != "tokenizers":
+                raise
+            return {token_id: _NativeAddedToken(*data) for token_id, data in self._native.added_tokens_decoder()}
+
+        return {
             token_id: AddedToken(
                 content, single_word=single_word, lstrip=lstrip, rstrip=rstrip, normalized=normalized, special=special
             )
@@ -300,11 +307,11 @@ class HuggingFaceTokenizer:
         return self._native.num_special_tokens_to_add(is_pair)
 
     @property
-    def padding(self) -> dict[str, object] | None:  # mutable-ok: [LIT001, LIT002] SDK return type
+    def padding(self) -> dict[str, object] | None:  # mutable-ok: [LIT001] SDK return type
         return self._native.padding()
 
     @property
-    def truncation(self) -> dict[str, object] | None:  # mutable-ok: [LIT001, LIT002] SDK return type
+    def truncation(self) -> dict[str, object] | None:  # mutable-ok: [LIT001] SDK return type
         return self._native.truncation()
 
     @property
@@ -327,7 +334,7 @@ class HuggingFaceTokenizer:
         input: Sequence[HuggingFaceBatchInput],
         is_pretokenized: bool = False,
         add_special_tokens: bool = True,
-    ) -> list[HuggingFaceEncoding]:  # mutable-ok: [LIT001, LIT002] SDK return type
+    ) -> list[HuggingFaceEncoding]:  # mutable-ok: [LIT001] SDK return type
         return self._encode_batch(input, is_pretokenized, add_special_tokens, fast=False)
 
     def encode_batch_fast(
@@ -335,12 +342,12 @@ class HuggingFaceTokenizer:
         input: Sequence[HuggingFaceBatchInput],
         is_pretokenized: bool = False,
         add_special_tokens: bool = True,
-    ) -> list[HuggingFaceEncoding]:  # mutable-ok: [LIT001, LIT002] SDK return type
+    ) -> list[HuggingFaceEncoding]:  # mutable-ok: [LIT001] SDK return type
         return self._encode_batch(input, is_pretokenized, add_special_tokens, fast=True)
 
     def _encode_batch(
         self, input: Sequence[HuggingFaceBatchInput], is_pretokenized: bool, add_special_tokens: bool, fast: bool
-    ) -> list[HuggingFaceEncoding]:  # mutable-ok: [LIT001, LIT002] SDK return type
+    ) -> list[HuggingFaceEncoding]:  # mutable-ok: [LIT001] SDK return type
         sequences: Final = tuple(_batch_input(item, is_pretokenized) for item in input)
         return self._native.encode_batch_huggingface(sequences, is_pretokenized, add_special_tokens, fast)
 
@@ -353,10 +360,8 @@ class HuggingFaceTokenizer:
 
     def decode_batch(
         self, sequences: Sequence[Sequence[int]], skip_special_tokens: bool = True
-    ) -> list[str]:  # mutable-ok: [LIT001, LIT002] SDK return type
-        return [  # mutable-ok: [LIT002] SDK returns a list
-            self.decode(ids, skip_special_tokens=skip_special_tokens) for ids in sequences
-        ]
+    ) -> list[str]:  # mutable-ok: [LIT001] SDK return type
+        return [self.decode(ids, skip_special_tokens=skip_special_tokens) for ids in sequences]
 
     def __reduce__(self) -> tuple[Callable[[str], HuggingFaceTokenizer], tuple[str]]:
         return (HuggingFaceTokenizer.from_str, (self.to_str(),))
@@ -375,11 +380,40 @@ def _batch_input(
 
 
 Encoding: TypeAlias = tiktoken.Encoding | OpenAIEncoding
-HuggingFace: TypeAlias = PythonHuggingFaceTokenizer | HuggingFaceTokenizer
-Tokenizer: TypeAlias = Encoding | HuggingFace
+if TYPE_CHECKING:
+    HuggingFace: TypeAlias = PythonHuggingFaceTokenizer | HuggingFaceTokenizer
+    Tokenizer: TypeAlias = Encoding | HuggingFace
+
+
+def __getattr__(name: str) -> UnionType | type[HuggingFaceTokenizer]:
+    if name not in {"HuggingFace", "Tokenizer"}:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    available: Final = HuggingFaceTokenizer if name == "HuggingFace" else Encoding | HuggingFaceTokenizer
+    try:
+        from tokenizers import Tokenizer as PythonTokenizer
+    except ModuleNotFoundError as error:
+        if error.name == "tokenizers":
+            return available
+        raise
+    return available | PythonTokenizer
 
 
 class _AddedToken(Protocol):
+    @property
+    def content(self) -> str: ...
+
+    @property
+    def single_word(self) -> bool: ...
+
+    @property
+    def lstrip(self) -> bool: ...
+
+    @property
+    def rstrip(self) -> bool: ...
+
+    @property
+    def normalized(self) -> bool: ...
+
     @property
     def special(self) -> bool: ...
 

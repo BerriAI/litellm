@@ -11,7 +11,6 @@ This is an __init__.py file to allow the following interface
 """
 
 from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import Any
 
 from litellm.messages import (
     anthropic_messages as _async_anthropic_messages,
@@ -102,8 +101,8 @@ def create(
 ) -> (
     AnthropicMessagesResponse
     | Iterator[bytes]
-    | AsyncIterator[Any]
-    | Coroutine[Any, Any, AnthropicMessagesResponse | AsyncIterator[Any] | Iterator[bytes]]
+    | AsyncIterator[object]
+    | Coroutine[object, object, AnthropicMessagesResponse | AsyncIterator[object] | Iterator[bytes]]
 ):
     """
     Async wrapper for Anthropic's messages API

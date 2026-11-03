@@ -1,0 +1,13 @@
+{% macro hint(data_type) -%}
+{%- if data_type.is_list -%}
+tuple[{% for child in data_type.data_types %}{{ hint(child) }}{% if not loop.last %} | {% endif %}{% endfor %}, ...]{% if data_type.is_optional %} | None{% endif %}
+{%- elif data_type.is_tuple -%}
+tuple[{% for child in data_type.data_types %}{{ hint(child) }}{% if not loop.last %}, {% endif %}{% endfor %}]{% if data_type.is_optional %} | None{% endif %}
+{%- elif data_type.is_dict -%}
+Mapping[{{ hint(data_type.dict_key) if data_type.dict_key else 'str' }}, {% for child in data_type.data_types %}{{ hint(child) }}{% if not loop.last %} | {% endif %}{% endfor %}]{% if data_type.is_optional %} | None{% endif %}
+{%- elif data_type.data_types and not data_type.type and not data_type.reference -%}
+{% for child in data_type.data_types %}{{ hint(child) }}{% if not loop.last %} | {% endif %}{% endfor %}{% if data_type.is_optional %} | None{% endif %}
+{%- else -%}
+{{ data_type.type_hint }}
+{%- endif -%}
+{%- endmacro %}

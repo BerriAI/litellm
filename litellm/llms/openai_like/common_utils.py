@@ -2,6 +2,8 @@ from typing import Literal
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
+
 
 class OpenAILikeError(Exception):
     def __init__(self, status_code, message):
@@ -48,7 +50,7 @@ class OpenAILikeBase:
 
         if not custom_endpoint:
             if endpoint_type == "chat_completions":
-                api_base = f"{api_base}/chat/completions"
+                api_base = join_api_base(api_base, "chat/completions")
             elif endpoint_type == "embeddings":
-                api_base = f"{api_base}/embeddings"
+                api_base = join_api_base(api_base, "embeddings")
         return api_base, headers

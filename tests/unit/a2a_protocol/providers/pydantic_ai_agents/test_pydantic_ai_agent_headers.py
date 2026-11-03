@@ -2,10 +2,15 @@
 Tests for Pydantic AI agents header forwarding via agent_extra_headers.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Final
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
+import litellm
+from litellm.a2a_protocol.providers.pydantic_ai_agents.config import PydanticAIProviderConfig
 from litellm.a2a_protocol.providers.pydantic_ai_agents.transformation import (
     PydanticAITransformation,
 )
@@ -198,3 +203,67 @@ async def test_provider_config_threads_agent_extra_headers():
     sent_headers = mock_client.post.await_args.kwargs["headers"]
     assert sent_headers["x-trace-id"] == "abc-123"
     assert sent_headers["Content-Type"] == "application/json"
+
+
+COMPLETED_TASK: Final = {
+    "jsonrpc": "2.0",
+    "id": "req-5",
+    "result": {
+        "id": "task-5",
+        "kind": "task",
+        "status": {"state": "completed"},
+        "history": [],
+        "artifacts": [{"artifactId": "a-5", "parts": [{"kind": "text", "text": "ok"}]}],
+    },
+}
+
+
+def _user_params() -> dict[str, object]:
+    return {"message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}], "messageId": "msg-user-5"}}
+
+
+@pytest.fixture
+def agent_route(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> respx.Route:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    return respx_mock.post("http://agent.test/").mock(return_value=httpx.Response(200, json=COMPLETED_TASK))
+
+
+@pytest.mark.asyncio
+async def test_provider_config_non_streaming_defaults_to_sixty_second_timeout(agent_route: respx.Route) -> None:
+    response: Final = await PydanticAIProviderConfig().handle_non_streaming(
+        "req-5", _user_params(), "http://agent.test"
+    )
+
+    request: Final = agent_route.calls.last.request
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": "req-5",
+        "result": {"kind": "message", "role": "agent", "parts": [{"kind": "text", "text": "ok"}], "messageId": ANY},
+    }
+    assert request.extensions["timeout"] == {"connect": 60.0, "read": 60.0, "write": 60.0, "pool": 60.0}
+    assert request.headers["content-type"] == "application/json"
+
+
+@pytest.mark.asyncio
+async def test_provider_config_non_streaming_forwards_timeout_and_ignores_unrelated_keywords(
+    agent_route: respx.Route,
+) -> None:
+    response: Final = await PydanticAIProviderConfig().handle_non_streaming(
+        request_id="req-5",
+        params=_user_params(),
+        api_base="http://agent.test",
+        timeout=5.5,
+        agent_extra_headers={"x-trace-id": "abc-123"},
+        litellm_params={"custom_llm_provider": "pydantic_ai_agents"},
+    )
+
+    request: Final = agent_route.calls.last.request
+    assert response["id"] == "req-5"
+    assert request.extensions["timeout"] == {"connect": 5.5, "read": 5.5, "write": 5.5, "pool": 5.5}
+    assert request.headers["x-trace-id"] == "abc-123"
+
+
+@pytest.mark.asyncio
+async def test_provider_config_non_streaming_requires_api_base() -> None:
+    with pytest.raises(ValueError, match="api_base is required for PydanticAIProviderConfig"):
+        await PydanticAIProviderConfig().handle_non_streaming("req-5", _user_params())

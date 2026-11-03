@@ -1,7 +1,9 @@
 import React, { useContext, useId } from "react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ChevronDownIcon } from "lucide-react";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { ChevronDownIcon, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -16,6 +18,11 @@ import {
   type ClassifierType,
   type ComplexityRouterConfigValue,
 } from "./ComplexityRouterConfig";
+import {
+  defaultJevClassifierConfig,
+  isOssClassifierProvider,
+  normalizeJevClassifierConfig,
+} from "./jev_classifier_config";
 import { transitionClassifierType } from "./classifier_type_transition";
 import { isForecastClassifier } from "./forecast_classifier_config";
 import {
@@ -27,7 +34,7 @@ import {
   AUTO_ROUTER_CONTACT_URL,
 } from "./AutoRouterAvailability";
 
-function ClassifierOption({
+export function ClassifierOption({
   value,
   label,
   description,
@@ -74,7 +81,7 @@ function ClassifierOption({
   );
 }
 
-function ClassifierMenu({
+export function ClassifierMenu({
   id,
   label,
   value,
@@ -119,9 +126,17 @@ interface AutoRouterClassifierTabsProps {
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
   children: React.ReactNode;
+  judgeModel?: React.ReactNode;
+  decisionModel?: React.ReactNode;
 }
 
-const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ value, onChange, children }) => {
+const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
+  value,
+  onChange,
+  children,
+  judgeModel,
+  decisionModel,
+}) => {
   const id = useId();
   const availability = useContext(AutoRouterAvailabilityContext);
   const classifierType = effectiveClassifierType(value);
@@ -148,23 +163,42 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
     if (next === "llm") changeType("llm");
     if (next === "jev") changeType("jev");
   };
+  const changeProvider = (provider: unknown) => {
+    if (!isOssClassifierProvider(provider)) return;
+    const defaults = defaultJevClassifierConfig(provider);
+    onChange({
+      ...value,
+      jev_classifier_config: { ...defaults, ...value.jev_classifier_config, provider, model: defaults.model },
+    });
+  };
   const approachLabels: Partial<Record<ClassifierType, string>> = { capability: "Capability", llm_v2: "Fuse v2" };
   const approachDescription: Partial<Record<ClassifierType, string>> = {
     capability: "Use the efficient model when it is likely to succeed",
     llm_v2: "Use the efficient model when its predicted quality is close enough to the capable model",
   };
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       <fieldset>
-        <legend className="mb-3 flex w-full items-center justify-between gap-3 text-sm font-medium">
-          What classifies your requests?
+        <legend className="mb-4 flex w-full items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <h4 className="m-0 text-xl font-semibold text-foreground">Choose your classifier</h4>
+            <SimpleTooltip content="Choose how requests are evaluated and routed to your tiers">
+              <button type="button" aria-label="About classifiers" className="text-muted-foreground">
+                <Info className="size-4" />
+              </button>
+            </SimpleTooltip>
+          </div>
           <AutoRouterLimits />
         </legend>
         <RadioGroup value={family} onValueChange={changeFamily} className="grid gap-3 sm:grid-cols-3">
           {[
             { value: "heuristics", label: "Heuristics", description: "Classify locally, with no API call" },
             { value: "llm", label: "LLM", description: "Use a judge model to choose a solver" },
-            { value: "jev", label: "Jev", description: "Use TypeSafe System One Choice to choose a tier" },
+            {
+              value: "jev",
+              label: "Decisions Model",
+              description: "Use a decision model to choose a tier",
+            },
           ].map((option) => (
             <Label
               key={option.value}
@@ -189,6 +223,32 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
           ))}
         </RadioGroup>
       </fieldset>
+      {family === "jev" &&
+        (decisionModel ?? (
+          <div className="space-y-2">
+            <Label htmlFor={`${id}-decision-model`}>Decision model</Label>
+            <Select
+              items={[
+                { value: "jev", label: "Jev" },
+                { value: "laya", label: "Laya" },
+                { value: "bespoke", label: "Bespoke Nimble" },
+                { value: "databricks", label: "Databricks" },
+              ]}
+              value={normalizeJevClassifierConfig(value.jev_classifier_config).provider}
+              onValueChange={changeProvider}
+            >
+              <SelectTrigger id={`${id}-decision-model`} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="jev">Jev</SelectItem>
+                <SelectItem value="laya">Laya</SelectItem>
+                <SelectItem value="bespoke">Bespoke Nimble</SelectItem>
+                <SelectItem value="databricks">Databricks</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        ))}
       {family === "custom" && (
         <p className="text-sm text-muted-foreground">This router uses a custom classifier plugin</p>
       )}
@@ -224,7 +284,8 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
           </p>
         </div>
       )}
-      {(family === "llm" || family === "jev") && (
+      {family === "llm" && judgeModel}
+      {family === "llm" && (
         <div className="space-y-2">
           <Label htmlFor={`${id}-approach`}>Routing approach</Label>
           <ClassifierMenu

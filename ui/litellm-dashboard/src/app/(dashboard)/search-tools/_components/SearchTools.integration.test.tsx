@@ -33,6 +33,7 @@ const toolWithServerOnlyParams: SearchTool = {
     api_base: "https://api.example.com",
     timeout: 30,
     max_retries: 2,
+    input_cost_per_query: 0.05,
   },
   search_tool_info: { description: "Test description" },
   created_at: "2024-01-15T10:30:00Z",
@@ -95,12 +96,68 @@ describe("SearchTools edit payload", () => {
       litellm_params: {
         search_provider: "perplexity",
         api_key: "sk-test-key",
+        input_cost_per_query: 0.05,
       },
       search_tool_info: { description: "Test description" },
     });
     expect(JSON.stringify(payload)).toBe(
-      '{"search_tool_name":"Perplexity Search","litellm_params":{"search_provider":"perplexity","api_key":"sk-test-key"},"search_tool_info":{"description":"Test description"}}',
+      '{"search_tool_name":"Perplexity Search","litellm_params":{"search_provider":"perplexity","api_key":"sk-test-key","input_cost_per_query":0.05},"search_tool_info":{"description":"Test description"}}',
     );
+  });
+
+  it("shows the stored cost per query in the edit form and sends the new value typed into it", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openEditModal(user);
+
+    expect(screen.getByLabelText("Cost per Query (USD)")).toHaveValue(0.05);
+    fireEvent.change(screen.getByLabelText("Cost per Query (USD)"), { target: { value: "0.007" } });
+    await user.click(screen.getByRole("button", { name: "OK" }));
+
+    await waitFor(() => expect(networking.updateSearchTool).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.updateSearchTool).mock.calls[0][2]).toMatchObject({
+      litellm_params: { search_provider: "perplexity", api_key: "sk-test-key", input_cost_per_query: 0.007 },
+    });
+  });
+
+  it("sends a zero cost per query when the admin types 0 instead of dropping it as unset", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openEditModal(user);
+
+    fireEvent.change(screen.getByLabelText("Cost per Query (USD)"), { target: { value: "0" } });
+    await user.click(screen.getByRole("button", { name: "OK" }));
+
+    await waitFor(() => expect(networking.updateSearchTool).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.updateSearchTool).mock.calls[0][2]).toMatchObject({
+      litellm_params: { input_cost_per_query: 0 },
+    });
+  });
+
+  it("sends null for the cost per query when the admin clears it, so the proxy falls back to the cost map", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openEditModal(user);
+
+    fireEvent.change(screen.getByLabelText("Cost per Query (USD)"), { target: { value: "" } });
+    await user.click(screen.getByRole("button", { name: "OK" }));
+
+    await waitFor(() => expect(networking.updateSearchTool).toHaveBeenCalledTimes(1));
+    expect(JSON.stringify(vi.mocked(networking.updateSearchTool).mock.calls[0][2])).toBe(
+      '{"search_tool_name":"Perplexity Search","litellm_params":{"search_provider":"perplexity","api_key":"sk-test-key","input_cost_per_query":null},"search_tool_info":{"description":"Test description"}}',
+    );
+  });
+
+  it("rejects a negative cost per query and does not call the update endpoint", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openEditModal(user);
+
+    fireEvent.change(screen.getByLabelText("Cost per Query (USD)"), { target: { value: "-1" } });
+    await user.click(screen.getByRole("button", { name: "OK" }));
+
+    expect(await screen.findByText("Cost per query cannot be negative")).toBeInTheDocument();
+    expect(networking.updateSearchTool).not.toHaveBeenCalled();
   });
 
   it("carries an edited description through to search_tool_info", async () => {
@@ -133,6 +190,7 @@ describe("SearchTools edit payload", () => {
       litellm_params: {
         search_provider: "perplexity",
         api_key: "sk-test-key",
+        input_cost_per_query: 0.05,
       },
       search_tool_info: undefined,
     });
@@ -175,6 +233,7 @@ describe("SearchTools edit payload", () => {
       litellm_params: {
         search_provider: "perplexity",
         api_key: null,
+        input_cost_per_query: undefined,
       },
       search_tool_info: undefined,
     });

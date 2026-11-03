@@ -2,7 +2,7 @@
 Unit tests for VertexAIRealtimeConfig.
 
 Validates:
-- URL construction (regional and global)
+- URL construction (regional, multi-region and global)
 - Auth headers (Bearer token + project header)
 - Session setup message format
 - Full text-in / text-out round-trip via RealTimeStreaming with a mocked
@@ -10,12 +10,15 @@ Validates:
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import websockets.exceptions  # registers websockets.exceptions on the websockets namespace
 
 import litellm
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import OPENAI_TO_GEMINI_TTS_VOICES
 from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 
 # ---------------------------------------------------------------------------
@@ -43,6 +46,26 @@ def test_get_complete_url_global():
         "wss://aiplatform.googleapis.com"
         "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
     )
+
+
+@pytest.mark.parametrize("location", ["us", "eu"])
+def test_get_complete_url_multi_region_uses_rep_host(location: str):
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location=location)
+    url: Final = cfg.get_complete_url(api_base=None, model="gemini-3.8-live")
+    # Google documents the multi-region Vertex endpoints as aiplatform.{us,eu}.rep.googleapis.com
+    # (https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/locations, read 2026-10-07)
+    assert url == (
+        f"wss://aiplatform.{location}.rep.googleapis.com"
+        "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+    )
+
+
+@pytest.mark.parametrize("location", ["us", "eu", "global", "us-central1", "europe-west4"])
+def test_get_complete_url_host_matches_shared_vertex_host(location: str):
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location=location)
+    url: Final = cfg.get_complete_url(api_base=None, model="gemini-3.8-live")
+    shared_host: Final = get_vertex_base_url(location).removeprefix("https://")
+    assert url == f"wss://{shared_host}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
 
 
 def test_get_complete_url_custom_api_base():
@@ -157,6 +180,25 @@ def test_vertex_audio_only_live_model_coerces_text_modality_to_audio(
     assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
 
 
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_vertex_realtime_config_carries_drop_params(drop_params, patch_native_audio_cost_map_entry):
+    from litellm.llms.vertex_ai.realtime.transformation import vertex_realtime_config
+
+    cfg: Final = vertex_realtime_config(
+        _NATIVE_AUDIO_MODEL,
+        access_token="tok",
+        resolve_access_token=AsyncMock(return_value="tok"),
+        project="my-proj",
+        location="us-central1",
+        drop_params=drop_params,
+    )
+
+    rejection: Final = cfg.setup_session_update_rejection(
+        _NATIVE_AUDIO_MODEL, {"modalities": ["text"]}, setup_sent=False
+    )
+    assert (rejection is None) is drop_params
+
+
 def test_vertex_session_update_normalizes_ga_remapped_fields(
     patch_native_audio_cost_map_entry,
 ):
@@ -201,6 +243,56 @@ def test_vertex_session_update_normalizes_ga_remapped_fields(
     )
 
 
+def test_vertex_keeps_turn_detection_tuning_when_auto_response_is_off():
+    session_update: Final = {
+        "type": "session.update",
+        "session": {
+            "audio": {
+                "input": {
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "create_response": False,
+                        "prefix_padding_ms": 200,
+                        "silence_duration_ms": 700,
+                    }
+                },
+            },
+        },
+    }
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
+    messages: Final = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        _NATIVE_AUDIO_MODEL,
+        session_configuration_request=None,
+    )
+    setup: Final = json.loads(messages[0])["setup"]
+    assert setup["realtimeInputConfig"]["automaticActivityDetection"] == {
+        "disabled": True,
+        "prefixPaddingMs": 200,
+        "silenceDurationMs": 700,
+    }
+
+
+
+@pytest.mark.parametrize(
+    ("session", "disabled"),
+    [
+        ({"turn_detection": None}, True),
+        ({"type": "realtime", "audio": {"input": {"turn_detection": None}}}, True),
+        ({"type": "realtime", "audio": {"input": {}}}, False),
+    ],
+)
+def test_vertex_turns_activity_detection_off_for_null_turn_detection(session, disabled):
+    """OpenAI's turn_detection null is push-to-talk, so Vertex must wait for the client's activity markers."""
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
+    messages: Final = cfg.transform_realtime_request(
+        json.dumps({"type": "session.update", "session": session}),
+        _NATIVE_AUDIO_MODEL,
+        session_configuration_request=None,
+    )
+    setup: Final = json.loads(messages[0])["setup"]
+    assert setup["realtimeInputConfig"]["automaticActivityDetection"]["disabled"] is disabled
+
 # ---------------------------------------------------------------------------
 # Round-trip test: text-in / text-out via RealTimeStreaming
 # ---------------------------------------------------------------------------
@@ -243,6 +335,7 @@ async def test_vertex_realtime_text_in_text_out():
     VertexAIRealtimeConfig for message translation.  All I/O is mocked.
     """
     from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
 
     cfg = VertexAIRealtimeConfig(
         access_token="fake-token",
@@ -292,7 +385,8 @@ async def test_vertex_realtime_text_in_text_out():
 
     backend_ws.send = AsyncMock(side_effect=_backend_send)
 
-    logging_obj = MagicMock()
+    logging_obj: Final = MagicMock(dispatch_success_handlers=AsyncMock(), dispatch_failure_handlers=AsyncMock())
+    logging_worker: Final = LoggingWorker()
     logging_obj.litellm_trace_id = "test-trace-id"
     logging_obj.pre_call = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
@@ -302,6 +396,7 @@ async def test_vertex_realtime_text_in_text_out():
         websocket=client_ws,
         backend_ws=backend_ws,
         logging_obj=logging_obj,
+        logging_worker=logging_worker,
         provider_config=cfg,
         model="gemini-2.0-flash-live-001",
     )
@@ -309,6 +404,9 @@ async def test_vertex_realtime_text_in_text_out():
     # Run backend→client forwarding for the three queued messages, then stop.
     # We don't run client_ack_messages here to avoid the blocking receive loop.
     await streaming.backend_to_client_send_messages()
+    await logging_worker.flush()
+    await logging_worker.stop()
+    logging_obj.dispatch_success_handlers.assert_awaited_once_with(streaming.messages, prefer_async_handlers=True)
 
     # --- Assertions ---
 
@@ -549,3 +647,73 @@ def test_vertex_native_audio_unmapped_voice_passes_through(patch_native_audio_co
 
     generation_config = json.loads(messages[0])["setup"]["generationConfig"]
     assert generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+def test_vertex_session_update_two_output_modalities_collapse_to_audio():
+    """Vertex Live rejects a setup naming two response modalities, so a GA
+    ["text", "audio"] request must be sent as AUDIO only."""
+    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="global")
+    session_update = {
+        "type": "session.update",
+        "session": {"output_modalities": ["text", "audio"], "instructions": "Be brief."},
+    }
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-live-2.5-flash",
+        session_configuration_request=None,
+    )
+
+    assert len(messages) == 1
+    assert json.loads(messages[0])["setup"]["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+@pytest.mark.parametrize(
+    ("session", "param"),
+    [
+        ({"voice": "Nova"}, "session.voice"),
+        ({"type": "realtime", "audio": {"output": {"voice": "Nova"}}}, "session.audio.output.voice"),
+    ],
+)
+def test_vertex_rejects_an_undocumented_voice_on_the_session_update(session, param):
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
+
+    rejection: Final = cfg.setup_session_update_rejection("gemini-live-2.5-flash", session, setup_sent=False)
+
+    assert rejection is not None
+    assert (rejection.code, rejection.param) == ("invalid_value", param)
+
+
+@pytest.mark.parametrize("voice", ["Kore", "alloy"])
+def test_vertex_accepts_documented_and_openai_stock_voices_on_the_session_update(voice):
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
+
+    assert cfg.setup_session_update_rejection("gemini-live-2.5-flash", {"voice": voice}, setup_sent=False) is None
+
+
+def test_vertex_drops_an_undocumented_voice_with_drop_params():
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1", drop_params=True)
+    session_update: Final = {"type": "session.update", "session": {"voice": "Nova", "instructions": "Be brief."}}
+
+    assert cfg.setup_session_update_rejection("gemini-live-2.5-flash", session_update["session"], setup_sent=False) is None
+    messages: Final = cfg.transform_realtime_request(
+        json.dumps(session_update), "gemini-live-2.5-flash", session_configuration_request=None
+    )
+    assert "speechConfig" not in json.loads(messages[0])["setup"].get("generationConfig", {})
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("voice", ["fable", "onyx"])
+def test_vertex_sends_the_documented_voice_an_openai_tts_voice_maps_to(voice, drop_params):
+    cfg: Final = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1", drop_params=drop_params
+    )
+    session_update: Final = {"type": "session.update", "session": {"voice": voice}}
+
+    assert cfg.setup_session_update_rejection("gemini-live-2.5-flash", session_update["session"], setup_sent=False) is None
+    messages: Final = cfg.transform_realtime_request(
+        json.dumps(session_update), "gemini-live-2.5-flash", session_configuration_request=None
+    )
+    assert json.loads(messages[0])["setup"]["generationConfig"]["speechConfig"] == {
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES[voice]}}
+    }

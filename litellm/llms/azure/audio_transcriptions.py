@@ -1,5 +1,5 @@
 from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from openai import AsyncAzureOpenAI, AzureOpenAI
 from pydantic import BaseModel
@@ -38,7 +38,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         atranscription: bool = False,
         litellm_params: dict | None = None,
         custom_llm_provider: str = "azure",
-    ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
+    ) -> TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]:
         data: Final = {"model": model, "file": audio_file, **optional_params}
 
         if atranscription is True:
@@ -78,7 +78,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             api_key=azure_client.api_key,
             additional_args={
                 "headers": {"Authorization": f"Bearer {azure_client.api_key}"},
-                "api_base": azure_client._base_url._uri_reference,
+                "api_base": azure_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                 "atranscription": True,
                 "complete_input_dict": data,
             },
@@ -149,7 +149,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 api_key=async_azure_client.api_key,
                 additional_args={
                     "headers": {"Authorization": f"Bearer {async_azure_client.api_key}"},
-                    "api_base": async_azure_client._base_url._uri_reference,
+                    "api_base": async_azure_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                     "atranscription": True,
                     "complete_input_dict": data,
                 },
@@ -175,7 +175,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 api_key=api_key,
                 additional_args={
                     "headers": {"Authorization": f"Bearer {async_azure_client.api_key}"},
-                    "api_base": async_azure_client._base_url._uri_reference,
+                    "api_base": async_azure_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                     "atranscription": True,
                     "complete_input_dict": data,
                 },

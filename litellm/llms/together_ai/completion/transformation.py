@@ -16,7 +16,7 @@ from litellm.types.llms.openai import (
 )
 
 from ...openai.completion.transformation import OpenAITextCompletionConfig
-from ...openai.completion.utils import _transform_prompt
+from ...openai.completion.utils import transform_prompt
 
 
 class TogetherAITextCompletionConfig(OpenAITextCompletionConfig):
@@ -27,7 +27,7 @@ class TogetherAITextCompletionConfig(OpenAITextCompletionConfig):
         """
         TogetherAI expects a string prompt.
         """
-        initial_prompt: Final[AllPromptValues] = _transform_prompt(messages)
+        initial_prompt: Final[AllPromptValues] = transform_prompt(messages)
         ## TOGETHER AI SPECIFIC VALIDATION ##
         if isinstance(initial_prompt, list) and is_tokens_or_list_of_tokens(value=initial_prompt):
             raise ValueError("TogetherAI does not support integers as input")

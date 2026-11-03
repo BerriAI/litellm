@@ -4,10 +4,11 @@ from typing import Final, cast
 import httpx
 
 import litellm
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.vector_store_files.transformation import (
     BaseVectorStoreFilesConfig,
 )
+from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_store_files import (
@@ -20,11 +21,15 @@ from litellm.types.vector_store_files import (
     VectorStoreFileObject,
     VectorStoreFileUpdateRequest,
 )
-from litellm.utils import add_openai_metadata
 
 
 def _clean_dict(source: Mapping[str, object]) -> dict[str, object]:
     return {k: v for k, v in source.items() if v is not None}
+
+
+def _visible_attributes(attributes: Mapping[str, object]) -> Mapping[str, str]:
+    """The caller's string attributes, all of them, so the provider enforces its own key limit."""
+    return {str(k): v for k, v in attributes.items() if k != "hidden_params" and isinstance(v, str)}
 
 
 class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
@@ -66,11 +71,13 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         headers: dict[str, str],
         litellm_params: GenericLiteLLMParams | None,
     ) -> dict[str, str]:
-        litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = litellm_params.api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+        params: Final = litellm_params or GenericLiteLLMParams()
+        bearer_token: Final = resolve_openai_bearer_token(
+            api_key=params.api_key, api_base=params.api_base, litellm_params=params.model_dump(exclude_none=True)
+        )
         headers.update(
             {
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": f"Bearer {bearer_token}",
                 "Content-Type": "application/json",
             }
         )
@@ -85,16 +92,15 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         vector_store_id: str,
         litellm_params: Mapping[str, object],
     ) -> str:
-        base_url = (
+        base_url: Final = (
             api_base
             or litellm.api_base
             or get_secret_str("OPENAI_BASE_URL")
             or get_secret_str("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
-        base_url = base_url.rstrip("/")
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        return f"{base_url}/vector_stores/{encoded_vector_store_id}/files"
+        return join_api_base(base_url, f"vector_stores/{encoded_vector_store_id}/files")
 
     def transform_create_vector_store_file_request(
         self,
@@ -106,11 +112,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         payload: Final[dict[str, object]] = _clean_dict(dict(create_request))
         attributes: Final = payload.get("attributes")
         if isinstance(attributes, dict):
-            filtered_attributes: Final = add_openai_metadata(attributes)
-            if filtered_attributes is not None:
-                payload["attributes"] = filtered_attributes
-            else:
-                payload.pop("attributes", None)
+            payload["attributes"] = _visible_attributes(attributes)
         url: Final = api_base
         return url, payload
 
@@ -184,7 +186,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         api_base: str,
     ) -> tuple[str, dict[str, object]]:
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
-        return f"{api_base}/{encoded_file_id}/content", {}
+        return join_api_base(api_base, f"{encoded_file_id}/content"), {}
 
     def transform_retrieve_vector_store_file_content_response(
         self,
@@ -211,11 +213,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         payload: Final[dict[str, object]] = dict(update_request)
         attributes: Final = payload.get("attributes")
         if isinstance(attributes, dict):
-            filtered_attributes: Final = add_openai_metadata(attributes)
-            if filtered_attributes is not None:
-                payload["attributes"] = filtered_attributes
-            else:
-                payload.pop("attributes", None)
+            payload["attributes"] = _visible_attributes(attributes)
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
         return f"{api_base}/{encoded_file_id}", payload
 

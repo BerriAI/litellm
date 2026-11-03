@@ -1,10 +1,41 @@
-import type { CustomDimensionRow } from "./custom_dimensions";
+import { serializeCustomDimensions, type CustomDimensionRow } from "./custom_dimensions";
+import { heuristicScoringRoleFor, type ClassifierFallback } from "./ComplexityRouterConfig";
+import { isHeuristicChain, type ClassifierType, type LocalHeuristic } from "./classifier_types";
 
 export type TierBoundaries = Record<string, number>;
 
 export type TokenThresholds = Record<string, number>;
 
 export type DimensionWeights = Record<string, number>;
+
+interface ScorerKnobInputs {
+  classifierType: ClassifierType;
+  localHeuristic: LocalHeuristic | undefined;
+  classifierFallback: ClassifierFallback | undefined;
+  tierBoundaries: TierBoundaries | undefined;
+  tokenThresholds: TokenThresholds | undefined;
+  dimensionWeights: DimensionWeights | undefined;
+  customDimensions: CustomDimensionRow[] | undefined;
+  reasoningOverrideMinScore: number | undefined;
+}
+
+export const scorerKnobPayload = (knobs: ScorerKnobInputs) => {
+  const role = heuristicScoringRoleFor(knobs.classifierType, knobs.classifierFallback, knobs.localHeuristic);
+  return role === "never" && !isHeuristicChain(knobs.classifierType)
+    ? {}
+    : {
+        ...(knobs.tierBoundaries && { tier_boundaries: knobs.tierBoundaries }),
+        ...(knobs.tokenThresholds && { token_thresholds: knobs.tokenThresholds }),
+        ...(knobs.dimensionWeights && { dimension_weights: knobs.dimensionWeights }),
+        ...(role === "decides" &&
+          knobs.customDimensions !== undefined && {
+            custom_dimensions: serializeCustomDimensions(knobs.customDimensions),
+          }),
+        ...(knobs.reasoningOverrideMinScore !== undefined && {
+          reasoning_override_min_score: knobs.reasoningOverrideMinScore,
+        }),
+      };
+};
 
 /**
  * Display names for the scorer's dimensions. Only the wording lives here; the dimension set and its

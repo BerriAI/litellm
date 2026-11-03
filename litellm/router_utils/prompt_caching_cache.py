@@ -6,13 +6,14 @@ import hashlib
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import accumulate
+from itertools import accumulate, chain
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 from typing_extensions import TypedDict
 
+from litellm._internal_context import service_target
 from litellm.caching.caching import DualCache
 from litellm.constants import PROMPT_CACHE_LOOKBACK_POSITIONS
 from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
@@ -36,6 +37,8 @@ class PromptCachingCacheValue(TypedDict):
 
 
 PROMPT_CACHE_PIN_TTL_SECONDS: Final = 300
+PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS: Final = 3600
+_PROMPT_CACHE_PINS_TARGET: Final = "prompt_cache_pins"
 _TOOL_RUN_BLOCK_TYPES: Final = frozenset({"tool_use", "tool_result"})
 _PREFIX_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 _TOOLS_ADAPTER: Final = TypeAdapter(tuple[JsonValue, ...])
@@ -82,14 +85,77 @@ def _chain_digest(digest: bytes, unit: bytes) -> bytes:
     return hashlib.sha256(digest + unit).digest()
 
 
+def _is_ephemeral_mark(mark: object) -> bool:
+    if not isinstance(mark, dict):
+        return False
+    mark_map: Final = cast(  # cast-ok: cache_control marks are plain JSON dicts
+        Mapping[str, object], mark
+    )
+    return mark_map.get("type") == "ephemeral"
+
+
+def _tool_carries_ephemeral_mark(tool: object) -> bool:
+    if not isinstance(tool, dict):
+        return False
+    tool_map: Final = cast(  # cast-ok: tools are plain JSON dicts
+        Mapping[str, object], tool
+    )
+    if _is_ephemeral_mark(tool_map.get("cache_control")):
+        return True
+    function: Final = tool_map.get("function")
+    if not isinstance(function, dict):
+        return False
+    return _is_ephemeral_mark(
+        cast(Mapping[str, object], function).get("cache_control")  # cast-ok: function is a plain JSON dict
+    )
+
+
+def _strip_tool_cache_control(tool: JsonValue) -> JsonValue:
+    if not isinstance(tool, dict):
+        return tool
+    function: Final = tool.get("function")
+    stripped_function: Final = (
+        {key: value for key, value in function.items() if key != "cache_control"}
+        if isinstance(function, dict) and "cache_control" in function
+        else function
+    )
+    return {
+        key: (stripped_function if key == "function" else value)
+        for key, value in tool.items()
+        if key != "cache_control"
+    }
+
+
+def _pin_cache_key(digest: bytes) -> str:
+    return f"deployment:{digest.hex()}:prompt_caching"
+
+
 def _seed(tools: Sequence[ChatCompletionToolParam] | None) -> bytes:
-    if tools is None:
+    if not tools:
         return hashlib.sha256(b"").digest()
     return hashlib.sha256(
         _canonical_bytes(
-            _TOOLS_ADAPTER.validate_python(to_jsonable_python(tools, serialize_unknown=True, bytes_mode="base64"))
+            tuple(
+                _strip_tool_cache_control(tool)
+                for tool in _TOOLS_ADAPTER.validate_python(
+                    to_jsonable_python(tools, serialize_unknown=True, bytes_mode="base64")
+                )
+            )
         )
     ).digest()
+
+
+def _tool_boundary_position(tools: Sequence[ChatCompletionToolParam] | None) -> tuple[PrefixPosition, ...]:
+    if not tools:
+        return ()
+    last_marked: Final = max(
+        (index for index, tool in enumerate(tools) if _tool_carries_ephemeral_mark(tool)),
+        default=None,
+    )
+    if last_marked is None:
+        return ()
+    digest: Final = _seed(tools[: last_marked + 1])
+    return (PrefixPosition(cache_key=_pin_cache_key(digest), position=0),)
 
 
 def _positions_of(
@@ -103,7 +169,7 @@ def _positions_of(
         for run_type, previous in zip(run_types, (None, *run_types[:-1]))
     )
     return tuple(
-        PrefixPosition(cache_key=f"deployment:{digest.hex()}:prompt_caching", position=position)
+        PrefixPosition(cache_key=_pin_cache_key(digest), position=position)
         for digest, position in zip(digests, positions)
     )
 
@@ -113,6 +179,26 @@ def _lookback_keys(positions: tuple[PrefixPosition, ...]) -> tuple[str, ...]:
         return ()
     oldest_probed_position: Final = positions[-1].position - PROMPT_CACHE_LOOKBACK_POSITIONS
     return tuple(entry.cache_key for entry in reversed(positions) if entry.position > oldest_probed_position)
+
+
+def _carrier_cache_control(carrier: Mapping[str, JsonValue]) -> JsonValue | None:
+    function: Final = carrier.get("function")
+    nested: Final = function.get("cache_control") if isinstance(function, dict) else None
+    return carrier.get("cache_control", nested)
+
+
+def _breakpoint_pin_ttl_seconds(carrier: JsonValue | Mapping[str, JsonValue]) -> int | None:
+    if not isinstance(carrier, Mapping):
+        return None
+    cache_control: Final = _carrier_cache_control(carrier)
+    if not isinstance(cache_control, dict) or cache_control.get("type") != "ephemeral":
+        return None
+    return PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS if cache_control.get("ttl") == "1h" else PROMPT_CACHE_PIN_TTL_SECONDS
+
+
+def _breakpoint_carriers(message: Mapping[str, JsonValue]) -> tuple[JsonValue | Mapping[str, JsonValue], ...]:
+    content: Final = message.get("content")
+    return (message, *content) if isinstance(content, list) else (message,)
 
 
 def _pinned_value(value: JsonValue) -> PromptCachingCacheValue | None:
@@ -222,6 +308,22 @@ class PromptCachingCache:
         return cacheable_prefix
 
     @staticmethod
+    def prepend_system_prompt(
+        messages: list[AllMessageValues],  # mutable-ok: callers pass the request messages list through
+        system: object,
+    ) -> list[AllMessageValues]:  # mutable-ok: callers bind the result back into list-typed slots
+        if not isinstance(system, (str, list)) or not system:
+            return messages
+        first: Final = cast(  # cast-ok: every AllMessageValues member is a dict
+            Mapping[str, object], messages[0] if messages else {}
+        )
+        if first.get("role") == "system" and first.get("content") == system:
+            return messages
+        return cast(  # cast-ok: the prepended system message is a plain dict the AllMessageValues union covers
+            list[AllMessageValues], [{"role": "system", "content": system}, *messages]
+        )
+
+    @staticmethod
     def prefix_positions(
         messages: list[AllMessageValues] | None,
         tools: Sequence[ChatCompletionToolParam] | None,
@@ -239,17 +341,21 @@ class PromptCachingCache:
         already replaced by their size placeholder, so a request carrying the raw image bytes
         derives the same keys the write side stored.
         """
+        boundary: Final = _tool_boundary_position(tools)
         if not messages:
-            return ()
-        return _positions_of(
-            _PREFIX_ADAPTER.validate_python(
-                to_jsonable_python(
-                    truncate_base64_in_messages(PromptCachingCache.extract_cacheable_prefix(messages)),
-                    serialize_unknown=True,
-                    bytes_mode="base64",
-                )
+            return boundary
+        return (
+            *boundary,
+            *_positions_of(
+                _PREFIX_ADAPTER.validate_python(
+                    to_jsonable_python(
+                        truncate_base64_in_messages(PromptCachingCache.extract_cacheable_prefix(messages)),
+                        serialize_unknown=True,
+                        bytes_mode="base64",
+                    )
+                ),
+                tools,
             ),
-            tools,
         )
 
     @staticmethod
@@ -257,9 +363,30 @@ class PromptCachingCache:
         messages: list[AllMessageValues] | None,
         tools: Sequence[ChatCompletionToolParam] | None,
     ) -> tuple[PrefixPosition, ...]:
-        if not messages:
+        if not messages and not _tool_boundary_position(tools):
             return ()
         return await offload_token_count(PromptCachingCache.prefix_positions)(messages, tools)
+
+    @staticmethod
+    def pin_ttl_seconds(
+        messages: Sequence[AllMessageValues] | None,
+        tools: Sequence[ChatCompletionToolParam] | None,
+    ) -> int:
+        if not messages:
+            return PROMPT_CACHE_PIN_TTL_SECONDS
+        prefix: Final = _PREFIX_ADAPTER.validate_python(
+            to_jsonable_python(
+                PromptCachingCache.extract_cacheable_prefix(list(messages)), serialize_unknown=True, bytes_mode="base64"
+            )
+        )
+        tool_carriers: Final = _TOOLS_ADAPTER.validate_python(
+            to_jsonable_python(tools or (), serialize_unknown=True, bytes_mode="base64")
+        )
+        carriers: Final = chain(tool_carriers, *map(_breakpoint_carriers, prefix))
+        return max(
+            (ttl for ttl in map(_breakpoint_pin_ttl_seconds, carriers) if ttl is not None),
+            default=PROMPT_CACHE_PIN_TTL_SECONDS,
+        )
 
     @staticmethod
     def get_prompt_caching_cache_key(
@@ -274,28 +401,44 @@ class PromptCachingCache:
         model_id: str,
         messages: list[AllMessageValues] | None,
         tools: Sequence[ChatCompletionToolParam] | None,
+        honors_one_hour_ttl: bool = False,
     ) -> None:
         cache_key: Final = PromptCachingCache.get_prompt_caching_cache_key(messages, tools)
         if cache_key is None:
             return
 
-        self.cache.set_cache(cache_key, PromptCachingCacheValue(model_id=model_id), ttl=PROMPT_CACHE_PIN_TTL_SECONDS)
+        self.cache.in_memory_cache.delete_cache(cache_key)
+        self.cache.set_cache(
+            cache_key,
+            PromptCachingCacheValue(model_id=model_id),
+            ttl=PromptCachingCache.pin_ttl_seconds(messages, tools)
+            if honors_one_hour_ttl
+            else PROMPT_CACHE_PIN_TTL_SECONDS,
+        )
 
     async def async_add_model_id(
         self,
         model_id: str,
         messages: list[AllMessageValues] | None,
         tools: Sequence[ChatCompletionToolParam] | None,
+        honors_one_hour_ttl: bool = False,
     ) -> None:
         positions: Final = await PromptCachingCache.async_prefix_positions(messages, tools)
         if not positions:
             return
 
-        await self.cache.async_set_cache(
-            positions[-1].cache_key,
-            PromptCachingCacheValue(model_id=model_id),
-            ttl=PROMPT_CACHE_PIN_TTL_SECONDS,
+        ttl: Final = (
+            await offload_token_count(PromptCachingCache.pin_ttl_seconds)(messages, tools)
+            if honors_one_hour_ttl
+            else PROMPT_CACHE_PIN_TTL_SECONDS
         )
+        self.cache.in_memory_cache.delete_cache(positions[-1].cache_key)
+        with service_target(_PROMPT_CACHE_PINS_TARGET):
+            await self.cache.async_set_cache(
+                positions[-1].cache_key,
+                PromptCachingCacheValue(model_id=model_id),
+                ttl=ttl,
+            )
 
     async def async_get_model_id(
         self,
@@ -311,13 +454,9 @@ class PromptCachingCache:
         if not cache_keys:
             return None
 
-        return _first_pin(
-            _PINS_ADAPTER.validate_python(
-                await self.cache.async_batch_get_cache(
-                    keys=list(cache_keys),  # mutable-ok: DualCache.async_batch_get_cache only takes a list
-                )
-            )
-        )
+        with service_target(_PROMPT_CACHE_PINS_TARGET):
+            pins: Final = await self.cache.async_batch_get_cache(keys=list(cache_keys))
+        return _first_pin(_PINS_ADAPTER.validate_python(pins))
 
     def get_model_id(
         self,
@@ -331,7 +470,7 @@ class PromptCachingCache:
         return _first_pin(
             _PINS_ADAPTER.validate_python(
                 self.cache.batch_get_cache(
-                    keys=list(cache_keys),  # mutable-ok: DualCache.batch_get_cache only takes a list
+                    keys=list(cache_keys),
                 )
             )
         )

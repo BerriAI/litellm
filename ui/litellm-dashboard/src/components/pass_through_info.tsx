@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { updatePassThroughEndpoint, deletePassThroughEndpointsCall } from "./networking";
 import { Eye, EyeOff } from "lucide-react";
 import { useWatch } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 import RoutePreview from "./route_preview";
 import { toast } from "@/lib/toast";
 import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
@@ -91,7 +91,6 @@ export interface PassThroughInfoProps {
   onClose: () => void;
   accessToken: string | null;
   isAdmin: boolean;
-  premiumUser?: boolean;
   onEndpointUpdated?: () => void;
 }
 
@@ -139,7 +138,6 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
   onClose,
   accessToken,
   isAdmin,
-  premiumUser = false,
   onEndpointUpdated,
 }) => {
   const [endpointData, setEndpointData] = useState<PassThroughEndpoint | null>(initialEndpointData);
@@ -157,7 +155,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       include_subpath: initialEndpointData.include_subpath || false,
       cost_per_request: initialEndpointData.cost_per_request,
       timeout: initialEndpointData.timeout,
-      auth: initialEndpointData.auth || false,
+      auth: initialEndpointData.auth ?? true,
     },
   });
 
@@ -189,7 +187,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
         include_subpath: values.include_subpath,
         cost_per_request: values.cost_per_request,
         timeout: values.timeout,
-        auth: premiumUser ? values.auth : undefined,
+        auth: values.auth,
         methods: values.methods.length > 0 ? values.methods : undefined,
         guardrails: guardrails && Object.keys(guardrails).length > 0 ? guardrails : undefined,
       };
@@ -472,11 +470,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
 
                     <FormField control={form.control} name="auth">
                       {({ value, onChange }) => (
-                        <PassThroughSecuritySection
-                          premiumUser={premiumUser}
-                          authEnabled={value}
-                          onAuthChange={onChange}
-                        />
+                        <PassThroughSecuritySection authEnabled={value} onAuthChange={onChange} />
                       )}
                     </FormField>
 

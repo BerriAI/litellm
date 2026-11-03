@@ -28,7 +28,7 @@ from litellm.router_strategy.adaptive_router.config import (
 from litellm.router_strategy.adaptive_router.signals import Turn
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 # Identity fields hashed into a derived session key so the same conversation
 # from the same caller produces a stable key, while different keys/teams/users
@@ -135,7 +135,7 @@ def _recent_tool_results(
     return results
 
 
-def _assistant_content_and_tool_calls(response_obj: Any) -> tuple:
+def _assistant_content_and_tool_calls(response_obj: Any) -> tuple[object, Sequence[Mapping[str, object]]]:
     """Return (assistant_text, tool_calls_list) extracted from a ModelResponse-ish object."""
     if response_obj is None:
         return None, []
@@ -170,12 +170,7 @@ def _assistant_content_and_tool_calls(response_obj: Any) -> tuple:
     return content, tool_calls
 
 
-class AdaptiveRouterPostCallHook(CustomLogger):
-    """One hook instance per AdaptiveRouter. Registered into litellm.callbacks."""
-
-    def __init__(self, adaptive_router: AdaptiveRouter) -> None:
-        self.adaptive_router = adaptive_router
-
+class AdaptiveRouterResponseHeaderHook(CustomLogger):
     async def async_post_call_response_headers_hook(
         self,
         data: Mapping[str, object],
@@ -199,6 +194,13 @@ class AdaptiveRouterPostCallHook(CustomLogger):
         if not chosen:
             return None
         return {ADAPTIVE_ROUTER_RESPONSE_HEADER: chosen}
+
+
+class AdaptiveRouterPostCallHook(CustomLogger):
+    """One hook instance per AdaptiveRouter. Registered into litellm.callbacks."""
+
+    def __init__(self, adaptive_router: AdaptiveRouter) -> None:
+        self.adaptive_router = adaptive_router
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         await self._record(kwargs, response_obj, response_status=200)

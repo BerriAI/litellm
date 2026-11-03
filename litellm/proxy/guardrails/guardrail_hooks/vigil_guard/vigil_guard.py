@@ -85,7 +85,7 @@ class _AsyncPostHandler(Protocol):
         url: str,
         headers: dict[str, str],
         json: _AnalyzePayload,
-        timeout: httpx.Timeout,
+        timeout: float | httpx.Timeout | None,
     ) -> Awaitable[httpx.Response]: ...
 
 
@@ -122,10 +122,6 @@ class VigilGuardGuardrail(CustomGuardrail):
         fallback: Final = (unreachable_fallback or "fail_closed").lower()
         self.unreachable_fallback: _FallbackMode = "fail_open" if fallback == "fail_open" else "fail_closed"
 
-        self.timeout: httpx.Timeout = (
-            _DEFAULT_VIGIL_TIMEOUT if timeout is None else httpx.Timeout(timeout, connect=min(timeout, 5.0))
-        )
-
         self.async_handler: _AsyncPostHandler = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -136,6 +132,8 @@ class VigilGuardGuardrail(CustomGuardrail):
         }
 
         super().__init__(**forwarded)
+
+        self.timeout = _DEFAULT_VIGIL_TIMEOUT if timeout is None else httpx.Timeout(timeout, connect=min(timeout, 5.0))
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
@@ -302,7 +300,7 @@ class VigilGuardGuardrail(CustomGuardrail):
     def _build_output(
         inputs: GenericGuardrailAPIInputs,
         final_texts: list[str],
-        final_tool_calls: Any,
+        final_tool_calls: _ToolCalls | None,
     ) -> GenericGuardrailAPIInputs:
         # When nothing was changed, return the input shape verbatim so the guardrail
         # logs "allow" rather than "mask". When a text or a tool-call argument was
@@ -317,7 +315,7 @@ class VigilGuardGuardrail(CustomGuardrail):
             guardrailed["images"] = inputs["images"]
         if "tools" in inputs:
             guardrailed["tools"] = inputs["tools"]
-        if tool_calls_changed:
+        if tool_calls_changed and final_tool_calls is not None:
             guardrailed["tool_calls"] = final_tool_calls
         return guardrailed
 

@@ -114,6 +114,21 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
         [field]: callbackValue,
         callback_vars: {},
       };
+    } else if (field === "callback_type" && newValue === "failure") {
+      const callbackDisplayName = Object.entries(callback_map).find(
+        ([_, value]) => value === updatedConfigs[index].callback_name,
+      )?.[0];
+      const successOnlyParams = new Set(
+        (callbackDisplayName && callbackInfo[callbackDisplayName]?.success_event_params) || [],
+      );
+      const callbackVars = Object.fromEntries(
+        Object.entries(updatedConfigs[index].callback_vars).filter(([key]) => !successOnlyParams.has(key)),
+      );
+      updatedConfigs[index] = {
+        ...updatedConfigs[index],
+        [field]: newValue,
+        callback_vars: callbackVars,
+      };
     } else {
       updatedConfigs[index] = {
         ...updatedConfigs[index],
@@ -196,6 +211,10 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
 
     const dynamicParams = callbackInfo[callbackDisplayName]?.dynamic_params || {};
     const paramOptions = callbackInfo[callbackDisplayName]?.dynamic_param_options || {};
+    const successOnlyParams =
+      config.callback_type === "failure"
+        ? new Set(callbackInfo[callbackDisplayName]?.success_event_params ?? [])
+        : new Set<string>();
 
     if (Object.keys(dynamicParams).length === 0) return null;
 
@@ -208,22 +227,24 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
           <span className="text-sm font-medium text-foreground">Integration Parameters</span>
         </div>
         <div className="grid grid-cols-1 gap-4">
-          {Object.entries(dynamicParams).map(([paramName, paramType]) => (
-            <div key={paramName} className="space-y-2">
-              <label className="text-sm font-medium text-foreground capitalize flex items-center space-x-1">
-                <span>{paramName.replace(/_/g, " ")}</span>
-                {paramType === "password" && <Badge variant="secondary">Sensitive</Badge>}
-                {paramType === "number" && <Badge variant="secondary">Number</Badge>}
-              </label>
-              {paramType === "number" && (
-                <span className="text-xs text-muted-foreground">Value must be between 0 and 1</span>
-              )}
-              {renderParamControl(config, configIndex, paramName, {
-                type: paramType,
-                options: paramType === "select" ? paramOptions[paramName] || [] : [],
-              })}
-            </div>
-          ))}
+          {Object.entries(dynamicParams)
+            .filter(([paramName]) => !successOnlyParams.has(paramName))
+            .map(([paramName, paramType]) => (
+              <div key={paramName} className="space-y-2">
+                <label className="text-sm font-medium text-foreground capitalize flex items-center space-x-1">
+                  <span>{paramName.replace(/_/g, " ")}</span>
+                  {paramType === "password" && <Badge variant="secondary">Sensitive</Badge>}
+                  {paramType === "number" && <Badge variant="secondary">Number</Badge>}
+                </label>
+                {paramType === "number" && (
+                  <span className="text-xs text-muted-foreground">Value must be between 0 and 1</span>
+                )}
+                {renderParamControl(config, configIndex, paramName, {
+                  type: paramType,
+                  options: paramType === "select" ? paramOptions[paramName] || [] : [],
+                })}
+              </div>
+            ))}
         </div>
       </div>
     );

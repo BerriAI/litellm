@@ -6,7 +6,7 @@ Canonical definition for ``litellm_organizationmembership``. Re-exported from
 """
 
 from datetime import datetime
-from typing import Any
+from typing import Final
 
 from pydantic import ConfigDict, model_validator
 
@@ -24,7 +24,7 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
     budget_id: str | None = None
     created_at: datetime
     updated_at: datetime
-    user: Any | None = None
+    user: object | None = None
     litellm_budget_table: LiteLLM_BudgetTable | None = None
     user_email: str | None = None
 
@@ -32,9 +32,10 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="after")
     def populate_user_email(self) -> "LiteLLM_OrganizationMembershipTable":
-        if self.user_email is None and self.user is not None:
-            if isinstance(self.user, dict):
-                self.user_email = self.user.get("user_email")
+        user: Final[object] = self.user
+        if self.user_email is None and user is not None:
+            if isinstance(user, dict):
+                self.user_email = user.get("user_email")
             else:
-                self.user_email = getattr(self.user, "user_email", None)
+                self.user_email = getattr(user, "user_email", None)
         return self

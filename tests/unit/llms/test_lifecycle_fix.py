@@ -17,7 +17,7 @@ async def test_httpx_client_not_closed_by_handler_gc():
     After the fix: returns a standalone httpx.AsyncClient, no handler involved.
     """
     # Get the client the same way AsyncOpenAI would
-    client = BaseOpenAILLM._get_async_http_client()
+    client = BaseOpenAILLM.get_async_http_client()
     assert isinstance(client, httpx.AsyncClient)
 
     # Simulate what the old code did: create an AsyncHTTPHandler and GC it

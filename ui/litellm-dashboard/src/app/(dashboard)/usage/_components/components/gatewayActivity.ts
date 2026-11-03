@@ -15,6 +15,7 @@ export interface GatewayActivity {
   total_failed_requests: number;
   by_date: { date: string; successful_requests: number; failed_requests: number }[];
   by_route: { category: string; route: string; successful_requests: number; failed_requests: number }[];
+  by_status_code?: { status_code: number; failed_requests: number }[];
 }
 
 /** A fetched result carrying the range key it was fetched for. */
@@ -32,11 +33,6 @@ export interface GatewayRouteBar extends Record<string, unknown> {
   failed_requests: number;
 }
 
-/**
- * Identifies what a result was fetched for: the date range, plus any other
- * input that changes the answer. The usage aggregate is scoped to a user, so
- * two results covering the same dates still describe different numbers.
- */
 export const fetchedRangeKey = (
   startTime: Date | null | undefined,
   endTime: Date | null | undefined,

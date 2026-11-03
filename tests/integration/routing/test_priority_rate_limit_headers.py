@@ -174,7 +174,7 @@ def test_streaming_chat_completion_success_logs_v3_rate_limit_remaining_values_f
         assert len(wire.drain()) == 1
         batches: Final[
             list[Request]
-        ] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
+        ] = []
 
         def delivered() -> tuple[dict, ...]:
             batches.extend(endpoint.drain())

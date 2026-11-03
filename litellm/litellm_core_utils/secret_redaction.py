@@ -88,13 +88,16 @@ def _build_secret_patterns() -> "re.Pattern[str]":
 _SECRET_RE: Final = _build_secret_patterns()
 
 
-def _python_redact_string(value: str) -> str:
+def python_redact_string(value: str) -> str:
     return _SECRET_RE.sub(REDACTED, value)
+
+
+_python_redact_string = python_redact_string
 
 
 def redact_string(value: str) -> str:
     """Scrub known secret/credential patterns from *value* and return the result."""
-    return diagnostics.run(lambda native: native.redact_text(value), lambda: _python_redact_string(value))
+    return diagnostics.run(lambda native: native.redact_text(value), lambda: python_redact_string(value))
 
 
 _UNIX_SYSTEM_PATH: Final = r"/(?:etc|var|opt|usr|home|root|private|Users|tmp|mnt|srv)/[^\s'\"\)\]}>,]+"
@@ -115,7 +118,7 @@ def _python_redact_internal_details(value: str) -> str:
     on top of redact_string(). For client-facing messages only: server logs keep this detail."""
     marker_index: Final = value.find(_TRACEBACK_MARKER)
     without_traceback: Final = value[:marker_index].rstrip() if marker_index != -1 else value
-    return _INTERNAL_DETAIL_RE.sub(REDACTED, _python_redact_string(without_traceback))
+    return _INTERNAL_DETAIL_RE.sub(REDACTED, python_redact_string(without_traceback))
 
 
 def redact_internal_details(value: str) -> str:
@@ -124,7 +127,7 @@ def redact_internal_details(value: str) -> str:
     )
 
 
-def _python_redact_structured_value(key: str | None, value: str) -> str:
+def python_redact_structured_value(key: str | None, value: str) -> str:
     """Scrub *value* as it appeared under *key* inside a structured record.
 
     redact_string() replaces a whole ``key: value`` span with REDACTED, which is
@@ -133,15 +136,18 @@ def _python_redact_structured_value(key: str | None, value: str) -> str:
     repr would, so the key-name patterns still fire, but collapses only the value
     so the caller's structure survives.
     """
-    scrubbed: Final = _python_redact_string(value)
+    scrubbed: Final = python_redact_string(value)
     if scrubbed != value or key is None:
         return scrubbed
     rendered: Final = f"'{key}': '{value}'"
-    return REDACTED if _python_redact_string(rendered) != rendered else value
+    return REDACTED if python_redact_string(rendered) != rendered else value
+
+
+_python_redact_structured_value = python_redact_structured_value
 
 
 def redact_structured_value(key: str | None, value: str) -> str:
     return diagnostics.run(
         lambda native: native.redact_structured_text(key, value),
-        lambda: _python_redact_structured_value(key, value),
+        lambda: python_redact_structured_value(key, value),
     )

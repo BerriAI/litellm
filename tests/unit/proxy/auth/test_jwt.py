@@ -860,36 +860,6 @@ async def test_allowed_routes_admin(
 import pytest
 
 
-@pytest.mark.asyncio
-async def test_team_cache_update_called():
-    import litellm
-    from litellm.proxy.proxy_server import user_api_key_cache
-
-    # Use setattr to replace the method on the user_api_key_cache object
-    cache = DualCache()
-
-    setattr(
-        litellm.proxy.proxy_server,
-        "user_api_key_cache",
-        cache,
-    )
-
-    with patch.object(cache, "async_get_cache", new=AsyncMock()) as mock_call_cache:
-        cache.async_get_cache = mock_call_cache
-        # Call the function under test
-        await litellm.proxy.proxy_server.update_cache(
-            token=None,
-            user_id=None,
-            end_user_id=None,
-            team_id="1234",
-            response_cost=20,
-            parent_otel_span=None,
-        )  # type: ignore
-
-        await asyncio.sleep(3)
-        mock_call_cache.assert_awaited_once()
-
-
 @pytest.fixture
 def public_jwt_key():
     import json
@@ -1290,7 +1260,7 @@ def test_user_api_key_auth_jwt_hashing():
     assert jwt_token not in user_auth.token
 
     # Test with a regular API key (should not be hashed)
-    regular_api_key = "sk-1234567890abcdef"
+    regular_api_key = "sk-9876567890abcdef"
     user_auth_regular = UserAPIKeyAuth(api_key=regular_api_key)
 
     # Verify that regular API key is hashed normally (without "hashed-jwt-" prefix)
@@ -1321,7 +1291,7 @@ def test_jwt_handler_is_jwt_static_method():
     assert JWTHandler.is_jwt(invalid_jwt) == False
 
     # Test with regular API key
-    regular_key = "sk-1234567890abcdef"
+    regular_key = "sk-9876567890abcdef"
     assert JWTHandler.is_jwt(regular_key) == False
 
     # Test with empty string

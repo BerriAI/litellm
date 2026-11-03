@@ -116,6 +116,7 @@ export const canCreateAutoRouterForTeam = (actor: ModelActor, team: Team): boole
 export const autoRouterCreationScope = (actor: ModelActor, limits: ModelCreationLimits): ModelWriteScope => {
   const scope = modelCreationScope(actor, limits);
   if (scope !== "forbidden") return scope;
+  if (limits.disabledForInternalUsers) return "forbidden";
   return limits.teams?.some((team) => canMemberCreateAutoRouterForTeam(actor, team)) ? "team-required" : "forbidden";
 };
 

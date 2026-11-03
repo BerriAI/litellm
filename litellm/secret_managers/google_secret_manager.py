@@ -1,15 +1,21 @@
 import base64
 import os
+from collections.abc import Mapping
 from typing import Final
+
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import SECRET_MANAGER_REFRESH_INTERVAL
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
-from litellm.proxy._types import CommonProxyErrors, KeyManagementSystem
-from litellm.rust_bridge.secret_manager import resolve_native_provider_reader
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
+from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
+from litellm.types.secret_managers.main import KeyManagementSystem
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_BASE64_TEXT: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class GoogleSecretManager(GCSBucketBase):
@@ -35,7 +41,7 @@ class GoogleSecretManager(GCSBucketBase):
             raise ValueError(
                 "Google Secret Manager requires a project ID, please set 'GOOGLE_SECRET_MANAGER_PROJECT_ID' in your .env"
             )
-        self.sync_httpx_client = _get_httpx_client()
+        self.sync_httpx_client = get_httpx_client()
         litellm.secret_manager_client = self
         litellm._key_management_system = KeyManagementSystem.GOOGLE_SECRET_MANAGER
         _refresh_interval = os.environ.get("GOOGLE_SECRET_MANAGER_REFRESH_INTERVAL", refresh_interval)
@@ -61,10 +67,6 @@ class GoogleSecretManager(GCSBucketBase):
         Returns:
             str: The secret value if successful, None otherwise.
         """
-        native: Final = resolve_native_provider_reader(self, "google_secret_manager")
-        if native is not None:
-            return native.sync_read_secret(secret_name)
-
         if self.always_read_secret_manager is not True:
             cached_secret: Final = self.cache.get_cache(secret_name)
             if cached_secret is not None:
@@ -90,12 +92,14 @@ class GoogleSecretManager(GCSBucketBase):
         )
 
         # Parse the JSON response and return the secret value
-        secret_data: Final = response.json()
-        _base64_encoded_value: Final = secret_data.get("payload", {}).get("data")
+        secret_data: Final = _JSON_OBJECT.validate_python(response.json())
+        _base64_encoded_value: Final = _JSON_OBJECT.validate_python(secret_data.get("payload", {})).get("data")
 
         # decode the base64 encoded value
         if _base64_encoded_value is not None:
-            _decoded_value: Final = base64.b64decode(_base64_encoded_value).decode("utf-8")
+            _decoded_value: Final = base64.b64decode(_BASE64_TEXT.validate_python(_base64_encoded_value)).decode(
+                "utf-8"
+            )
             self.cache.set_cache(secret_name, _decoded_value)  # Cache the retrieved secret
             return _decoded_value
 

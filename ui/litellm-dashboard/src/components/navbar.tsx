@@ -26,6 +26,7 @@ interface NavbarProps {
   isPublicPage: boolean;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
+  deploymentHealth?: React.ReactNode;
 }
 
 const NAV_LOGO_CLASS_NAME = "h-auto max-h-full w-auto max-w-full object-contain";
@@ -35,9 +36,10 @@ const Navbar: React.FC<NavbarProps> = ({
   isPublicPage = false,
   sidebarCollapsed = false,
   onToggleSidebar,
+  deploymentHealth,
 }) => {
   const baseUrl = getProxyBaseUrl();
-  const { logoUrl } = useTheme();
+  const { logoUrl, logoUrlDark } = useTheme();
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const version = healthData?.litellm_version;
   const disableBouncingIcon = useDisableBouncingIcon();
@@ -46,7 +48,7 @@ const Navbar: React.FC<NavbarProps> = ({
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
 
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
-  const darkImageUrl = logoUrl || `${baseUrl}/get_image?theme=dark`;
+  const darkImageUrl = logoUrlDark || logoUrl || `${baseUrl}/get_image?theme=dark`;
 
   const handleLogout = useLogout(accessToken);
 
@@ -149,7 +151,8 @@ const Navbar: React.FC<NavbarProps> = ({
                 <div className="flex items-center gap-0.5 rounded-lg bg-muted px-1 py-0 transition-colors hover:bg-accent">
                   <ThemeToggle />
                   <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
-                  <NotificationsBell />
+                  {deploymentHealth}
+                  <NotificationsBell accessToken={accessToken} />
                   <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
                   <UserDropdown onLogout={handleLogout} />
                 </div>

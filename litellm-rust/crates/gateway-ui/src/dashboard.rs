@@ -1,7 +1,13 @@
 use std::path::Path;
 
-use axum::{Router, routing::get};
-use serde::Serialize;
+use axum::{
+    Router,
+    extract::{FromRequestParts, Query, Request},
+    http::request::Parts,
+    routing::get,
+};
+use serde::{Deserialize, Serialize};
+use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
 
 #[derive(Serialize)]
@@ -9,9 +15,50 @@ struct Logo {
     logo_url: &'static str,
 }
 
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Theme {
+    Light,
+    Dark,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Variant {
+    Full,
+    Monogram,
+}
+
+#[derive(Deserialize)]
+struct LogoQuery {
+    theme: Option<Theme>,
+    variant: Option<Variant>,
+}
+
+impl<S: Send + Sync> FromRequestParts<S> for LogoQuery {
+    type Rejection = crate::Error;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        Query::<Self>::from_request_parts(parts, state)
+            .await
+            .map(|Query(query)| query)
+            .map_err(crate::Error::Query)
+    }
+}
+
+fn logo_file(query: &LogoQuery) -> &'static str {
+    match (query.variant, query.theme) {
+        (Some(Variant::Monogram), Some(Theme::Dark)) => "assets/logos/litellm_monogram_dark.svg",
+        (Some(Variant::Monogram), _) => "assets/logos/litellm_monogram.svg",
+        (_, Some(Theme::Dark)) => "assets/logos/litellm_logo_dark.png",
+        _ => "assets/logos/litellm_logo.png",
+    }
+}
+
 pub fn dashboard_assets(directory: impl AsRef<Path>) -> Router {
     let directory = directory.as_ref();
     let assets = ServeDir::new(directory.join("_next")).append_index_html_on_directories(false);
+    let logos = directory.to_path_buf();
 
     crate::static_assets(directory)
         .route(
@@ -22,9 +69,11 @@ pub fn dashboard_assets(directory: impl AsRef<Path>) -> Router {
                 })
             }),
         )
-        .route_service(
+        .route(
             "/get_image",
-            ServeFile::new(directory.join("assets/logos/litellm_logo.jpg")),
+            get(move |query: LogoQuery, request: Request| {
+                ServeFile::new(logos.join(logo_file(&query))).oneshot(request)
+            }),
         )
         .route_service(
             "/get_favicon",

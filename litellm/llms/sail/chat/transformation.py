@@ -22,7 +22,7 @@ class SailChatConfig(OpenAIGPTConfig):
             param for param in super().get_supported_openai_params(model) if param not in _REJECTED_BY_SAIL
         )
         added: Final = tuple(param for param in _ACCEPTED_BY_SAIL if param not in inherited)
-        return [*inherited, *added]  # mutable-ok: the base interface returns a list
+        return [*inherited, *added]
 
     def map_openai_params(
         self,

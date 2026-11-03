@@ -7,7 +7,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 const MOCK_DATA: KeyInfoData = {
   keyName: "My Test Key",
-  keyId: "sk-1234567890abcdef",
+  keyId: "sk-9876543210fedcba",
   userId: "user-abc-123",
   userEmail: "test@example.com",
   userAlias: null,
@@ -32,7 +32,7 @@ describe("KeyInfoHeader", () => {
   it("should render the key ID with prefix", () => {
     render(<KeyInfoHeader data={MOCK_DATA} />);
     expect(screen.getByText(/Key ID:/)).toBeInTheDocument();
-    expect(screen.getByText(/sk-1234567890abcdef/)).toBeInTheDocument();
+    expect(screen.getByText(/sk-9876543210fedcba/)).toBeInTheDocument();
   });
 
   it("should render all metadata fields", () => {

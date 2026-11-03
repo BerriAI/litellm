@@ -21,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.tinyfish import (
@@ -36,6 +37,7 @@ from litellm.types.passthrough_endpoints.tinyfish import (
 from litellm.types.utils import StandardPassThroughResponseObject
 
 _RUN_ADAPTER: Final = TypeAdapter(TinyfishRun)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 _EMPTY_KWARGS: Final[Mapping[str, object]] = MappingProxyType({})
 
@@ -80,7 +82,7 @@ def sse_poller_spawned(logging_obj: LiteLLMLoggingObj) -> bool:
 
 
 def run_id_from_sse_frames(frames: bytes) -> str | None:
-    return _run_id_from_sse_chunks(frames.decode("utf-8", errors="replace").splitlines())
+    return _run_id_from_sse_chunks(split_sse_lines(frames.decode("utf-8", errors="replace")))
 
 
 def resolve_tinyfish_agent_api_base() -> str:
@@ -310,20 +312,20 @@ class TinyFishPassthroughLoggingHandler:
         safe_run_id: Final = urllib.parse.quote(run_id, safe="")
         resolved_client: Final = client or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.PassThroughEndpoint,
-            params={"timeout": 30.0},  # mutable-ok: get_async_httpx_client takes a plain dict of client params
+            params={"timeout": 30.0},
         )
         try:
             # screenshots=none keeps the poll payload small (no per-step screenshot URLs needed)
             response: Final = await resolved_client.get(
                 f"{resolve_tinyfish_agent_api_base()}/v1/runs/{safe_run_id}?screenshots=none",
-                headers={"X-API-Key": api_key},  # mutable-ok: httpx headers= takes a plain dict
+                headers={"X-API-Key": api_key},
             )
             if not (200 <= response.status_code < 300):
                 verbose_proxy_logger.warning(
                     "TinyFish passthrough: GET /v1/runs/%s returned %s", safe_run_id, response.status_code
                 )
                 return None
-            payload: Final[object] = response.json()  # any-ok: httpx Response.json() -> Any
+            payload: Final = _DECODED_JSON.validate_python(response.json())
             return _parse_run(payload)
         except Exception as e:  # noqa: BLE001  # billing/logging must never break the relayed request
             verbose_proxy_logger.warning("[Non blocking logging error] TinyFish run fetch failed: %s", e)
@@ -373,7 +375,7 @@ class TinyFishPassthroughLoggingHandler:
         kwargs: Mapping[str, object],
     ) -> _TinyfishLoggingPayload:
         response_cost: Final = _run_cost(run)
-        updated_kwargs: Final = {  # mutable-ok: the logging pipeline requires a plain kwargs dict
+        updated_kwargs: Final = {
             **kwargs,
             "model": TINYFISH_MODEL_NAME,
             "custom_llm_provider": "tinyfish",
@@ -383,7 +385,7 @@ class TinyFishPassthroughLoggingHandler:
             # the poller paths pass no request kwargs, so SLO attribution (key hash, team, tags) needs the stored params
             "litellm_params": kwargs.get("litellm_params")
             or logging_obj.model_call_details.get("litellm_params")
-            or {},  # mutable-ok: the logging pipeline requires a plain kwargs dict
+            or {},
         }
         logging_obj.model_call_details.update(
             model=TINYFISH_MODEL_NAME,
@@ -413,7 +415,7 @@ def _run_id_from_sse_chunks(all_chunks: Sequence[str]) -> str | None:
         if not line.startswith("data:"):
             continue
         try:
-            event_payload: object = json.loads(line[5:].strip())  # any-ok: json.loads -> Any
+            event_payload: object = _DECODED_JSON.validate_python(json.loads(line[5:].strip()))
         except json.JSONDecodeError:
             continue
         event = _parse_run(event_payload)

@@ -5,6 +5,7 @@ import pytest
 from .containers import Containers, ready
 from .database import Database
 from .upgrade import assert_history_clean, assert_upgraded, confirm, migration_names, provision
+from e2e_metadata import Domain, Subject, meta
 
 SPEND_ROWS: Final = 20_000
 
@@ -22,6 +23,11 @@ def seed_spend_logs(database: Database, rows: int) -> None:
 
 
 class TestPopulatedDatabaseUpgrade:
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_upgrade_completes_and_preserves_a_populated_spend_log(
         self, containers: Containers, baseline_image: str, baseline_database: Database
     ) -> None:
