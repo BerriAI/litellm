@@ -17,7 +17,7 @@ import httpx
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
 import litellm
@@ -80,6 +80,7 @@ TOOL_CALLS_ATTRIBUTE: Final = "tool_calls"
 FUNCTION_CALL_ATTRIBUTE: Final = "function_call"
 
 _SYNC_ITER_EXHAUSTED: Final = object()
+_STREAM_OPTIONS_VALUE: Final = TypeAdapter(object)
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
@@ -484,7 +485,9 @@ class CustomStreamWrapper:
         self.received_model_id: str | None = None
         self.logging_loop = None
         self.rules = Rules()
-        self.stream_options = stream_options or getattr(logging_obj, "stream_options", None)
+        self.stream_options: object = _STREAM_OPTIONS_VALUE.validate_python(
+            stream_options or getattr(logging_obj, "stream_options", None)
+        )
         self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
@@ -660,8 +663,11 @@ class CustomStreamWrapper:
                     )
         self._restore_consumer_correlation_context()
 
-    def check_send_stream_usage(self, stream_options: dict | None):
-        return stream_options is not None and stream_options.get("include_usage", False) is True
+    def check_send_stream_usage(self, stream_options: object) -> bool:
+        if stream_options is None:
+            return False
+        get_option: Final[Callable[[str, object], object] | None] = getattr(stream_options, "get", None)
+        return get_option is not None and get_option("include_usage", False) is True
 
     def check_is_function_call(self, logging_obj) -> bool:
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
