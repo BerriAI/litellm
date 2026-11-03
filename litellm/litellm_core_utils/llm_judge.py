@@ -108,7 +108,7 @@ def judge_target(router: Router | None, model: str, team_id: str | None = None) 
     only for its own team and a team's own deployment resolves for nobody else, so asking
     without it answers for a caller who does not exist.
     """
-    served: Final = router.resolved_litellm_models(model, team_id=team_id) if router is not None else ()
+    served: Final = router.registry().names(model, kind="litellm_models", team_id=team_id) if router is not None else ()
     if served:
         return JudgeTarget("router", frozenset(_provider_qualified(m) or m for m in served))
     qualified: Final = _provider_qualified(model)
@@ -148,7 +148,7 @@ def attached_auth(request_data: object) -> UserAPIKeyAuth | None:
 
 
 def _named_route(router: Router, deployment_id: str) -> bool:
-    deployment: Final = router.get_deployment(model_id=deployment_id)
+    deployment: Final = router.registry().deployment(deployment_id)
     if deployment is None:
         return False
     public_names: Final = (deployment.model_name, deployment.model_info.team_public_model_name or "")
@@ -167,7 +167,7 @@ def caller_team_for(router: Router | None, model: str, auth: UserAPIKeyAuth | No
     team_id: Final = auth.team_id if auth is not None else None
     if team_id is None or router is None or judge_target(router, model).via != "nothing":
         return None
-    team_route: Final = router.get_candidate_model_ids_for_route(model, team_id)
+    team_route: Final = router.registry().names(model, kind="route_candidates", team_id=team_id)
     return team_id if team_route and all(_named_route(router, deployment_id) for deployment_id in team_route) else None
 
 

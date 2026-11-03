@@ -621,7 +621,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         # For Azure v1 API, use standard OpenAI client instead of AzureOpenAI
         # See: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#api-specs
-        if self._is_azure_v1_api_version(api_version):
+        if self.is_azure_v1_api_version(api_version):
             # Extract only params that OpenAI client accepts
             # Always use /openai/v1/ regardless of whether user passed "v1", "latest", or "preview"
             # The OpenAI client accepts a callable for `api_key` and re-invokes it
@@ -922,7 +922,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         else:
             new_url = api_base
 
-        if BaseAzureLLM._is_azure_v1_api_version(api_version):
+        if BaseAzureLLM.is_azure_v1_api_version(api_version):
             # ensure the request go to /openai/v1 and not just /openai
             if "/openai/v1" not in new_url:
                 parsed_url: Final = httpx.URL(new_url)
@@ -952,7 +952,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         Returns None when ``api_version`` is a dated one, which still uses the deployment route.
         """
-        if not BaseAzureLLM._is_azure_v1_api_version(api_version):
+        if not BaseAzureLLM.is_azure_v1_api_version(api_version):
             return None
 
         base_url: Final = httpx.URL(api_base)
@@ -970,7 +970,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         )
 
     @staticmethod
-    def _is_azure_v1_api_version(api_version: str | None) -> bool:
+    def is_azure_v1_api_version(api_version: str | None) -> bool:
         if api_version is None:
             return False
         return api_version in {"preview", "latest", "v1"}

@@ -210,6 +210,8 @@ def langfuse_rig(
     sink_reply: Callable[[Request], Reply] | None = None,
     overrides: Mapping[str, str] | None = None,
     model_list: Callable[[str], Sequence[Mapping[str, object]]] | None = None,
+    remove_environment: tuple[str, ...] = (),
+    operator_keys: bool = True,
 ) -> Iterator[LangfuseRig]:
     def upstream(request: Request) -> Reply:
         if request.method == "GET":
@@ -253,8 +255,11 @@ def langfuse_rig(
             gateway,
             tmp_path,
             {
-                "LANGFUSE_PUBLIC_KEY": "pk-lf-integration",
-                "LANGFUSE_SECRET_KEY": "sk-lf-integration",
+                **(
+                    {"LANGFUSE_PUBLIC_KEY": "pk-lf-integration", "LANGFUSE_SECRET_KEY": "sk-lf-integration"}
+                    if operator_keys
+                    else {}
+                ),
                 "LANGFUSE_HOST": collector.url,
                 "LITELLM_OTEL_V2": "1",
                 **{
@@ -264,6 +269,11 @@ def langfuse_rig(
             },
             config=path,
             workers=2,
+            remove_environment=(
+                remove_environment
+                if operator_keys
+                else (*remove_environment, "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
+            ),
         ) as owned:
             yield LangfuseRig(owned.gateway, provider, collector, owned)
 

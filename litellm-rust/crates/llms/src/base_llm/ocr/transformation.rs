@@ -5,7 +5,9 @@ use serde::{
 use serde_json::{Map, Value};
 use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 
-use litellm_auth::{InputSource, SecretValue, Sourced, TokenProviderHandle};
+use litellm_auth::{InputSource, Sourced, TokenProviderHandle};
+use litellm_secret_value::SecretValue;
+
 use litellm_core_utils::{call_arguments::CallArguments, settings::ProcessEnvironment};
 use litellm_http::outbound::RequestSigner;
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
@@ -21,6 +23,7 @@ pub const OCR_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
 pub const OCR_INLINE_MAX_BYTES: usize = 50 * 1024 * 1024;
 pub const OCR_MAX_FETCH_REDIRECTS: usize = 10;
 pub const OCR_POLL_RETRY_SECS: u64 = 2;
+pub const DROP_PARAMS_PARAM: &str = "drop_params";
 
 #[derive(Clone, Default)]
 pub struct OcrCredentialInputs {
@@ -183,6 +186,10 @@ pub fn response_format(optional_params: &CallArguments) -> Result<OcrResponseFor
         .map(|value| serde_json::from_value(value.clone()).map_err(|_| Error::RequestFormat))
         .transpose()
         .map(|format| format.unwrap_or_default())
+}
+
+pub fn drops_unsupported_params(optional_params: &CallArguments) -> bool {
+    optional_params.get(DROP_PARAMS_PARAM) == Some(&Value::Bool(true))
 }
 
 #[derive(Debug)]

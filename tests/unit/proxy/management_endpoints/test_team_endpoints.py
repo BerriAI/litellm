@@ -2684,7 +2684,7 @@ async def test_team_block_unblock_reach_warmed_auth_on_every_worker(
     from litellm.proxy._types import BlockTeamRequest
     from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.auth.team_grants import team_model_aliases
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, budget_windows_absent_cache_key
     from litellm.proxy.management_endpoints import team_endpoints
 
     team_id: Final = "team-kill-switch"
@@ -2721,7 +2721,11 @@ async def test_team_block_unblock_reach_warmed_auth_on_every_worker(
     seen_by_auth: Final = await get_team_object(team_id=team_id, prisma_client=prisma_client, user_api_key_cache=cache)
     assert seen_by_auth.blocked is blocked
     assert team_model_aliases(seen_by_auth) == {"fast": "gpt-4o"}
-    assert redis.broadcast_keys == [f"team_id:{team_id}", "team_alias:kill-switch"]
+    assert redis.broadcast_keys == [
+        f"team_id:{team_id}",
+        "team_alias:kill-switch",
+        budget_windows_absent_cache_key("team", team_id),
+    ]
     assert (response.blocked, response.litellm_model_table, response.object_permission) == (blocked, None, None)
 
 
@@ -19095,7 +19099,7 @@ _DB_OUTAGE_503_BODY: Final = {
     "error": {
         "message": "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
         "type": "no_db_connection",
-        "param": "None",
+        "param": None,
         "code": "503",
     }
 }
@@ -19372,3 +19376,48 @@ async def test_default_budget_cache_eviction_does_not_fail_after_redis_error() -
     )
 
     user_api_key_cache.async_delete_cache.assert_awaited_once_with(key="team_member_default_budget:budget_456")
+
+
+@pytest.mark.asyncio
+async def test_team_info_reports_a_missing_team_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="no-such-team",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("404", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_team_info_keeps_the_auth_label_for_a_caller_outside_the_team(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    other_team: Final = MagicMock()
+    other_team.model_dump.return_value = {"team_id": "team-a", "members_with_roles": []}
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=other_team)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="team-a",
+            user_api_key_dict=UserAPIKeyAuth(user_id="outsider", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("403", "auth_error")

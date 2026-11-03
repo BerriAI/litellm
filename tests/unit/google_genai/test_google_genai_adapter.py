@@ -158,6 +158,18 @@ def test_native_function_response_preserves_json_when_media_is_malformed(invalid
     assert messages == [{"role": "tool", "tool_call_id": "call_lookup", "content": '{"ok": true}'}]
 
 
+@pytest.mark.parametrize("role", ["user", "model"])
+def test_one_object_content_parts_translate_like_their_list_form(role: str) -> None:
+    part: Final = {"text": "Reply with OK"}
+
+    def messages(parts: object) -> object:
+        return GoogleGenAIAdapter().translate_generate_content_to_completion(
+            model="anthropic/claude-haiku-5-5", contents=[{"role": role, "parts": parts}]
+        )["messages"]
+
+    assert messages(part) == messages([part]) != []
+
+
 @pytest.mark.parametrize(
     ("args", "expected_arguments"),
     [(None, "null"), ('{"query":"x"}', '"{\\"query\\":\\"x\\"}"')],

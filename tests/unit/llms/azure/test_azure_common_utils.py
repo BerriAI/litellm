@@ -467,6 +467,9 @@ def test_default_max_retries_env_var_reaches_azure_sdk_client():
             "add_message",
             "arun_thread_stream",
             "aresponses",
+            "aget_responses",
+            "adelete_responses",
+            "acancel_responses",
             "aresponses_websocket",
             "alist_input_items",
             "acreate_fine_tuning_job",
@@ -1658,9 +1661,9 @@ def test_get_azure_ad_token_fallback_to_default_azure_credential(
 )
 def test_is_azure_v1_api_version(api_version, expected):
     """
-    Test that _is_azure_v1_api_version correctly identifies v1 API versions.
+    Test that is_azure_v1_api_version correctly identifies v1 API versions.
     """
-    result = BaseAzureLLM._is_azure_v1_api_version(api_version=api_version)
+    result = BaseAzureLLM.is_azure_v1_api_version(api_version=api_version)
     assert result == expected
 
 
