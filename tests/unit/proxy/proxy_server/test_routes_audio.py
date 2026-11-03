@@ -9,7 +9,9 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import contextlib
 import io
+from typing import TYPE_CHECKING, Callable, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -21,6 +23,9 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import RouterErrors
+
+if TYPE_CHECKING:
+    from fastapi.testclient import TestClient
 
 _TAG_ROUTING_DENIAL = f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model=tts-1 and tags=['x']"
 
@@ -359,3 +364,32 @@ def test_audio_transcription_error(client, auth_as, patched_transcription_error,
         response = client.post(path, files=files, data=data)
     assert response.status_code == 500
     assert len(response.content) > 0
+
+
+def _post_speech(client: TestClient) -> httpx.Response:
+    return client.post("/v1/audio/speech", json={"model": "tts-1", "input": "Hi", "voice": "alloy"})
+
+
+def _post_transcription(client: TestClient) -> httpx.Response:
+    return client.post(
+        "/v1/audio/transcriptions",
+        files={"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")},
+        data={"model": "whisper-1"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("send", "call_type"),
+    [(_post_speech, "aspeech"), (_post_transcription, "atranscription")],
+)
+def test_a_provider_rejection_logs_the_audio_endpoint_call_type(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[object]],
+    failed_spend_row: Callable[[], tuple[str, str]],
+    send: Callable[[TestClient], httpx.Response],
+    call_type: str,
+) -> None:
+    with auth_as():
+        response: Final = send(client)
+    assert response.status_code == 400, response.text
+    assert failed_spend_row() == ("failure", call_type)

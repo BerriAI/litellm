@@ -19,6 +19,7 @@ pub enum ServiceTier {
     Balanced,
 }
 
+/// A prompt-size range. `OverPromptTokens(n)` is spelled `_above_<n>_tokens` or `_above_<n / 1000>k_tokens`
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Band {
     #[default]
@@ -26,12 +27,15 @@ pub enum Band {
     OverPromptTokens(NonZeroU64),
 }
 
+/// The request condition a price applies under, its service tier and prompt band
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct When {
     pub tier: ServiceTier,
     pub band: Band,
 }
 
+/// The route whose price list a call reads, from the `_batches` and `_decisions` suffixes. Not part of `When`,
+/// since a missing batch price is half the online rate and a missing decisions price is the full online rate
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Channel {
     #[default]
@@ -40,6 +44,7 @@ pub enum Channel {
     Decisions,
 }
 
+/// The key of one rate, what is counted, through which channel and under which condition
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Price {
     pub meter: Meter,
@@ -47,6 +52,7 @@ pub struct Price {
     pub when: When,
 }
 
+/// Every rate a row lists, its off-peak overlay and the row attributes that say how the rates apply
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Prices {
     rates: BTreeMap<Price, UnitPrice>,
@@ -117,6 +123,7 @@ pub enum TierScope {
     WholeCall,
 }
 
+/// Rates that replace the row's token rates while a UTC window in the schedule is open
 #[derive(Clone, Debug, PartialEq)]
 pub struct OffPeak {
     schedule: Schedule,
@@ -133,6 +140,7 @@ pub struct OffPeakRates {
     pub reasoning: Option<UnitPrice>,
 }
 
+/// Multipliers applied on top of a priced call, never prices themselves
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Adjustments(BTreeMap<Uplift, Multiplier>);
 

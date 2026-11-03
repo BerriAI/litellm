@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from httpx._models import Headers, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._uuid import uuid
@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_reasoning_content,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -39,6 +40,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_REQUEST_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
 class OllamaChatConfig(BaseConfig):
@@ -152,7 +155,13 @@ class OllamaChatConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        for param, value in non_default_params.items():
+        request_params: Final = tool_params_without_hosted_mcp(
+            _REQUEST_PARAMS.validate_python(non_default_params),
+            model=model,
+            route="ollama_chat",
+            drop_params=drop_params,
+        )
+        for param, value in request_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["num_predict"] = value
             if param == "stream":

@@ -78,6 +78,13 @@ async def test_byte_limit_rejects_new_work_without_evicting_admitted_work() -> N
     meter: Final = DurableUsageMeter(
         database.write, UsageCaptureSettings(max_pending_bytes=size), wait_for_batch=_manual_flush
     )
+    reservation: Final = meter.reserve_producer(size // 2, size // 2)
+    with pytest.raises(UsageCaptureError, match="producer byte capacity"):
+        meter.reserve_producer(1, size)
+    with pytest.raises(UsageCaptureError, match="producer byte capacity"):
+        meter.resize_producer(reservation, size, 1)
+    assert meter.pending_bytes == size // 2
+    meter.release_producer(reservation)
     receipt: Final = meter.submit((write,))
     with pytest.raises(UsageCaptureError, match="capacity"):
         meter.submit((_write("extra"),))
@@ -88,6 +95,8 @@ async def test_byte_limit_rejects_new_work_without_evicting_admitted_work() -> N
     assert database.committed == (write.event.event_id,)
     with pytest.raises(UsageCaptureError, match="closed"):
         meter.submit((_write("after-close"),))
+    with pytest.raises(UsageCaptureError, match="producer byte capacity"):
+        meter.reserve_producer(1, 1)
 
 
 @pytest.mark.asyncio
@@ -387,3 +396,78 @@ async def test_shutdown_does_not_cancel_dependency_receipt_or_leak_reserved_capa
     assert meter.pending_records == 0
     assert meter.pending_bytes == 0
     prerequisite.set_result(None)
+
+
+@pytest.mark.asyncio
+async def test_large_write_sequence_drains_within_byte_and_record_bounds() -> None:
+    database: Final = CommitBarrier()
+    database.release.set()
+    meter: Final = DurableUsageMeter(
+        database.write,
+        UsageCaptureSettings(batch_size=8, max_pending_records=2, max_pending_bytes=1024),
+        wait_for_batch=_manual_flush,
+    )
+    writes: Final = tuple(_write(str(index)) for index in range(20))
+    pending: Final = meter.submit((_write("pending-a"), _write("pending-b")))
+    await meter.record_writes(writes)
+    await pending
+    with pytest.raises(UsageCaptureError, match="One usage observation"):
+        await meter.record_writes((_write("oversized" * 300),))
+    await meter.close()
+    assert database.committed == ("pending-a", "pending-b", *(write.event.event_id for write in writes))
+    assert database.transactions > 1
+    assert (meter.pending_bytes, meter.pending_records) == (0, 0)
+    with pytest.raises(UsageCaptureError):
+        await meter.record_writes((_write("closed"),))
+
+
+@pytest.mark.asyncio
+async def test_cancelling_bounded_capture_preserves_admitted_writes_without_admitting_remaining_rows() -> None:
+    database: Final = CommitBarrier()
+    meter: Final = DurableUsageMeter(
+        database.write, UsageCaptureSettings(batch_size=2, max_pending_records=2), wait_for_batch=_manual_flush
+    )
+    recording: Final = asyncio.create_task(meter.record_writes(tuple(_write(str(index)) for index in range(8))))
+    await database.entered.wait()
+    recording.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await recording
+    database.release.set()
+    await meter.close()
+    assert database.committed == ("0", "1")
+    assert meter.pending_bytes == meter.pending_records == 0
+
+
+@pytest.mark.asyncio
+async def test_capacity_wait_retries_admission_before_other_producers_finish() -> None:
+    entered: Final = asyncio.Queue[tuple[str, ...]]()
+    release: Final = asyncio.Queue[None]()
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        entered.put_nowait(tuple(write.event.event_id for write in writes))
+        await release.get()
+
+    meter: Final = DurableUsageMeter(
+        persist, UsageCaptureSettings(batch_size=2, max_pending_records=3), wait_for_batch=_manual_flush
+    )
+    initial: Final = meter.submit((_write("first"), _write("second")))
+    remaining: Final = meter.submit((_write("remaining"),))
+    assert await entered.get() == ("first", "second")
+    recording: Final = asyncio.create_task(meter.record_writes((_write("target"),)))
+    try:
+        await asyncio.sleep(0)
+        release.put_nowait(None)
+        assert await entered.get() == ("remaining",)
+        await asyncio.sleep(0)
+        assert meter.pending_records == 2
+        release.put_nowait(None)
+        assert await entered.get() == ("target",)
+        release.put_nowait(None)
+        await recording
+        await asyncio.gather(initial, remaining)
+    finally:
+        recording.cancel()
+        await asyncio.gather(recording, return_exceptions=True)
+        release.put_nowait(None)
+        release.put_nowait(None)
+        await meter.close()

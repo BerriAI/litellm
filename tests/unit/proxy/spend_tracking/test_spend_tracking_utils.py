@@ -5150,6 +5150,23 @@ def test_a_background_response_billing_event_writes_a_row_apart_from_the_read_th
     assert request_ids == ("resp_shared", "resp_shared_background_cost")
 
 
+@pytest.mark.parametrize("call_type", ["aget_responses", "acancel_responses"])
+def test_a_read_or_cancel_row_carries_the_id_its_callbacks_logged(call_type: str):
+    row: Final = get_logging_payload(
+        kwargs={
+            "call_type": call_type,
+            "model": "gpt-5.6",
+            "litellm_call_id": "call-read",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj={"id": "resp_logged_by_callbacks", "object": "response", "status": "completed"},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert row["request_id"] == "resp_logged_by_callbacks"
+
+
 @pytest.mark.parametrize("forged_marker", [True, BackgroundResponseSettlement.SETTLES.value])
 def test_a_request_body_cannot_move_its_spend_row_onto_a_background_settlement_id(forged_marker):
     """A failed call logs its raw request body as kwargs, so a body field named like the settlement
@@ -7543,3 +7560,47 @@ def test_get_logging_payload_stores_end_user_only_while_end_user_cost_tracking_i
         end_time=datetime.datetime.now(timezone.utc),
     )
     assert payload["end_user"] == expected_end_user
+
+
+@pytest.mark.parametrize("tool_metadata", [{"name": "tool"}, {"name": "tool", "arguments": "invalid"}])
+def test_optional_mcp_metadata_does_not_change_legacy_spend_payload(tool_metadata: Mapping[str, object]) -> None:
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    kwargs: Final = {
+        "call_type": "call_mcp_tool",
+        "litellm_call_id": "tool-call",
+        "litellm_params": {},
+        "litellm_trace_id": "fixed-trace",
+        "response_cost": 0.5,
+    }
+    response: Final = {"id": "tool-call"}
+    expected: Final = spend_tracking_utils.get_logging_payload(kwargs, response, now, now)
+    actual: Final = spend_tracking_utils.get_logging_payload(
+        {**kwargs, "mcp_tool_call_metadata": tool_metadata}, response, now, now
+    )
+    assert actual == expected
+
+
+@pytest.mark.parametrize("capture_enabled", [False, True])
+@pytest.mark.parametrize("completion_start", [None, "absent", "reported"])
+def test_spend_payload_preserves_unknown_completion_start(capture_enabled: bool, completion_start: str | None) -> None:
+    start: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end: Final = start + datetime.timedelta(seconds=2)
+    reported: Final = start + datetime.timedelta(seconds=1)
+    observations: Final[list[object]] = []
+    kwargs: Final = {
+        "call_type": "acompletion",
+        "litellm_call_id": "timestamp-call",
+        "litellm_params": {},
+        **({} if completion_start == "absent" else {"completion_start_time": reported if completion_start else None}),
+    }
+    payload: Final = spend_tracking_utils.get_logging_payload(
+        kwargs,
+        {"id": "timestamp-response"},
+        start,
+        end,
+        capture_usage=(lambda row, usage: observations.append(row)) if capture_enabled else None,
+    )
+    assert payload["completionStartTime"] == (
+        end if completion_start == "absent" else reported if completion_start else None
+    )
+    assert observations == ([payload] if capture_enabled else [])

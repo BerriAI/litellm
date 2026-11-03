@@ -456,7 +456,7 @@ def _inner_response_id(identity: str) -> str:
 
 def _completed_response_id(events: Iterable[dict[str, JsonValue]]) -> str:
     (completed,) = tuple(event for event in events if event.get("type") == "response.completed")
-    return _inner_response_id(str(_JSON.validate_python(completed["response"])["id"]))
+    return str(_JSON.validate_python(completed["response"])["id"])
 
 
 def _chat_text(body: Mapping[str, JsonValue]) -> str:
@@ -911,7 +911,7 @@ async def test_k06_openai_sdk_async_responses_stream_reaches_kimi_without_a_cach
     received: Final = _only_received(rig.wire)
     assert received.model == _KIMI_US and received.streaming, received
     assert received.cache_points == 0, received.body
-    _success_row(_inner_response_id(completed[0].id))
+    _success_row(completed[0].id)
 
 
 _LOCATIONS: Final = (
