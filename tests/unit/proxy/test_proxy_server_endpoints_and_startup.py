@@ -16589,3 +16589,63 @@ async def test_initialize_prints_the_banner_as_one_json_record_in_json_mode(
     banner_records: Final = [record for record in records if record["message"] == LITELLM_BANNER]
     assert len(banner_records) == 1, records
     assert banner_records[0]["level"] == "INFO"
+
+
+@contextlib.contextmanager
+def _accounting_window_env(cached: Mapping[str, object], client: MagicMock) -> Iterator[None]:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache: Final = UserApiKeyCache()
+    for key, value in cached.items():
+        cache.set_cache(key=key, value=value)
+    originals: Final = (proxy_server_module.user_api_key_cache, proxy_server_module.prisma_client)
+    proxy_server_module.user_api_key_cache = cache
+    proxy_server_module.prisma_client = client
+    try:
+        yield
+    finally:
+        proxy_server_module.user_api_key_cache, proxy_server_module.prisma_client = originals
+
+
+@pytest.mark.asyncio
+async def test_accounting_window_keys_cover_the_stored_key_and_the_cached_team():
+    key_reset: Final = datetime.now(timezone.utc) + timedelta(days=10)
+    team_reset: Final = datetime.now(timezone.utc) + timedelta(days=3)
+    key_row: Final = _StoredRow(
+        budget_limits=[{"budget_duration": "30d", "max_budget": 100.0, "reset_at": key_reset.isoformat()}]
+    )
+    team_obj: Final = MagicMock()
+    team_obj.budget_limits = [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": team_reset.isoformat()}]
+
+    with _accounting_window_env({"team_id:team-1": team_obj}, _prisma_with_rows(keys={"hashed-key": key_row})):
+        windows = await proxy_server_module.accounting_window_keys("hashed-key", "team-1")
+
+    assert windows == (
+        {
+            "entity_type": "key",
+            "entity_id": "hashed-key",
+            "window_duration": "30d",
+            "window_start": (key_reset - timedelta(days=30)).isoformat(),
+        },
+        {
+            "entity_type": "team",
+            "entity_id": "team-1",
+            "window_duration": "7d",
+            "window_start": (team_reset - timedelta(days=7)).isoformat(),
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_accounting_window_keys_remember_a_key_without_windows_but_retry_a_failed_read():
+    client: Final = _prisma_with_rows(keys={"no-windows": _StoredRow(budget_limits=[])})
+
+    with _accounting_window_env({}, client):
+        assert await proxy_server_module.accounting_window_keys("no-windows", None) == ()
+        assert await proxy_server_module.accounting_window_keys("no-windows", None) == ()
+        assert client.db.litellm_verificationtoken.find_unique.await_count == 1
+
+        client.db.litellm_verificationtoken.find_unique.side_effect = RuntimeError("database unavailable")
+        assert await proxy_server_module.accounting_window_keys("unreadable", None) == ()
+        assert await proxy_server_module.accounting_window_keys("unreadable", None) == ()
+        assert client.db.litellm_verificationtoken.find_unique.await_count == 3
