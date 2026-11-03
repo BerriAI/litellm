@@ -4,6 +4,7 @@ Tests for Voyage AI rerank transformation functionality.
 
 import json
 import uuid
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -189,9 +190,7 @@ class TestVoyageRerankTransform:
         )
 
         assert len(result.results) == 2
-        assert (
-            result.results[0]["document"]["text"] == "Paris is the capital of France."
-        )
+        assert result.results[0]["document"]["text"] == "Paris is the capital of France."
         assert result.results[1]["document"]["text"] == "France is a country in Europe."
 
     def test_transform_rerank_response_missing_data(self):
@@ -229,7 +228,7 @@ class TestVoyageRerankTransform:
         mock_logging = MagicMock()
         model_response = RerankResponse()
 
-        with pytest.raises(Exception, match='Unauthorized') as exc_info:
+        with pytest.raises(Exception, match="Unauthorized") as exc_info:
             self.config.transform_rerank_response(
                 model=self.model,
                 raw_response=mock_response,
@@ -250,7 +249,7 @@ class TestVoyageRerankTransform:
         mock_logging = MagicMock()
         model_response = RerankResponse()
 
-        with pytest.raises(Exception, match='Failed to parse response: Invalid JSON response') as exc_info:
+        with pytest.raises(Exception, match="Failed to parse response: Invalid JSON response") as exc_info:
             self.config.transform_rerank_response(
                 model=self.model,
                 raw_response=mock_response,
@@ -421,3 +420,14 @@ def test_transform_rerank_response_shape_errors_do_not_echo_the_payload():
         _transform({"data": [["leaked document text"]]})
 
     assert "leaked document text" not in str(exc_info.value)
+
+
+def test_validate_environment_preserves_custom_gateway_headers() -> None:
+    original: Final = {"X-Gateway-Token": "gateway-token", "X-Trace-ID": "trace-id"}
+    headers: Final = VoyageRerankConfig().validate_environment(
+        headers=original, model="test-model", api_key="provider-key"
+    )
+    assert headers["X-Gateway-Token"] == "gateway-token"
+    assert headers["X-Trace-ID"] == "trace-id"
+    assert headers["Authorization"] == "Bearer provider-key"
+    assert original == {"X-Gateway-Token": "gateway-token", "X-Trace-ID": "trace-id"}

@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+from typing import Final
 import importlib
 import json
 import os
@@ -579,3 +580,14 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
         )
         == "https://gateway.example.com/voyage/v1/contextualizedembeddings"
     )
+
+
+def test_validate_environment_preserves_custom_gateway_headers() -> None:
+    original: Final = {"X-Gateway-Token": "gateway-token", "X-Trace-ID": "trace-id"}
+    headers: Final = VoyageContextualEmbeddingConfig().validate_environment(
+        headers=original, model="test-model", messages=[], optional_params={}, litellm_params={}, api_key="provider-key"
+    )
+    assert headers["X-Gateway-Token"] == "gateway-token"
+    assert headers["X-Trace-ID"] == "trace-id"
+    assert headers["Authorization"] == "Bearer provider-key"
+    assert original == {"X-Gateway-Token": "gateway-token", "X-Trace-ID": "trace-id"}

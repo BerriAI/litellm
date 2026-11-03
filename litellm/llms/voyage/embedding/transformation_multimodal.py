@@ -93,7 +93,7 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
                 "Set VOYAGE_API_KEY / VOYAGE_AI_API_KEY / VOYAGE_AI_TOKEN "
                 "or pass `api_key` explicitly."
             )
-        return {"Authorization": f"Bearer {resolved_api_key}"}
+        return {**headers, "Authorization": f"Bearer {resolved_api_key}"}
 
     def _normalize_content_item(self, item: dict[str, object]) -> dict[str, object]:
         item_type: Final = item.get("type")

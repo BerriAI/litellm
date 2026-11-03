@@ -165,6 +165,7 @@ class VoyageRerankConfig(BaseRerankConfig):
             raise ValueError("Voyage AI API key is required. Set via `api_key` parameter or `VOYAGE_API_KEY` env var.")
         self._api_key = resolved_api_key
         return {
+            **headers,
             "Authorization": f"Bearer {resolved_api_key}",
             "content-type": "application/json",
         }
