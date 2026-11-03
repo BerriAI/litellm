@@ -967,21 +967,11 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "cache_creation_input_token_cost": {"type": "number"},
             "cache_creation_input_token_cost_above_1hr": {"type": "number"},
             "cache_creation_input_token_cost_above_12hr": {"type": "number"},
-            "cache_creation_input_token_cost_above_12hr_above_272k_tokens": {
-                "type": "number"
-            },
-            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex": {
-                "type": "number"
-            },
-            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority": {
-                "type": "number"
-            },
-            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches": {
-                "type": "number"
-            },
-            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast": {
-                "type": "number"
-            },
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast": {"type": "number"},
             "cache_creation_input_token_cost_above_12hr_flex": {"type": "number"},
             "cache_creation_input_token_cost_above_12hr_priority": {"type": "number"},
             "cache_creation_input_token_cost_above_12hr_batches": {"type": "number"},
@@ -1670,6 +1660,38 @@ def test_get_provider_rerank_config():
         "my_model", LlmProviders.HOSTED_VLLM, "http://localhost", []
     )
     assert isinstance(config, HostedVLLMRerankConfig)
+
+
+def test_get_provider_video_config_resolves_a_custom_provider_map_base_video_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `BaseVideoConfig` registered in `custom_provider_map` answers for its provider name, a `CustomLLM`
+    registered there does not, and a built-in name still resolves to its built-in config even when a `CustomLLM`
+    shadows it in the map."""
+    from litellm.llms.custom_llm import CustomLLM
+    from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+
+    class QueueVideoConfig(OpenAIVideoConfig):
+        pass
+
+    video_config: Final = QueueVideoConfig()
+    monkeypatch.setattr(
+        litellm,
+        "custom_provider_map",
+        [
+            {"provider": "queue-video", "custom_handler": video_config},
+            {"provider": "image-only", "custom_handler": CustomLLM()},
+            {"provider": "openai", "custom_handler": CustomLLM()},
+        ],
+    )
+    monkeypatch.setattr(litellm, "_custom_providers", ["queue-video", "image-only", "openai"])
+
+    assert ProviderConfigManager.get_provider_video_config(model="seedance-1", provider="queue-video") is video_config
+    assert ProviderConfigManager.get_provider_video_config(model="seedance-1", provider="image-only") is None
+    assert isinstance(
+        ProviderConfigManager.get_provider_video_config(model="sora-2", provider="openai"), OpenAIVideoConfig
+    )
+    assert ProviderConfigManager.get_provider_video_config(model="seedance-1", provider="not-registered") is None
 
 
 def test_get_provider_text_to_speech_config_vertex_gemini_skips_cloud_tts():
@@ -7573,9 +7595,10 @@ async def test_oidc_google_api_key_fails_closed_when_the_metadata_server_fails_a
             side_effect=[metadata_failure(), httpx.Response(200, text=recovered_token)]
         )
         chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
-        with caplog.at_level(logging.WARNING, logger="LiteLLM"), pytest.raises(
-            (litellm.AuthenticationError, litellm.ServiceUnavailableError)
-        ) as excinfo:
+        with (
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+            pytest.raises((litellm.AuthenticationError, litellm.ServiceUnavailableError)) as excinfo,
+        ):
             await _ping_vllm_through(call_path, "vllm-sa")
         sent_while_failing: Final = chat.call_count
         await _ping_vllm_through(call_path, "vllm-sa")
@@ -7824,9 +7847,7 @@ async def test_router_resolves_an_oidc_api_key_only_on_a_proxy_level_deployment(
     try:
         with respx.mock(assert_all_called=True) as upstream:
             upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
-            await router.acompletion(
-                model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"}
-            )
+            await router.acompletion(model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"})
             sent: Final = upstream.calls.last.request.headers["Authorization"]
     finally:
         router.discard()
@@ -7894,7 +7915,9 @@ async def test_an_inline_oidc_api_key_reaches_the_endpoint_its_deployment_config
         with respx.mock(assert_all_called=False) as upstream:
             upstream.route().respond(200, json=_BEDROCK_REPLY)
             await router.acompletion(
-                model="claude", messages=_PING, aws_bedrock_runtime_endpoint="https://BEDROCK-runtime.us-east-1.amazonaws.com"
+                model="claude",
+                messages=_PING,
+                aws_bedrock_runtime_endpoint="https://BEDROCK-runtime.us-east-1.amazonaws.com",
             )
             sent: Final = tuple(
                 (call.request.url.host, call.request.headers["Authorization"]) for call in upstream.calls
@@ -8103,7 +8126,9 @@ async def test_a_team_row_naming_an_oidc_credential_reaches_only_the_credentials
         (
             lambda reference: LiteLLM_Params(
                 **litellm.Router(
-                    model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": reference}}]
+                    model_list=[
+                        {"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": reference}}
+                    ]
                 ).get_model_list(model_name="openai/*")[0]["litellm_params"]
             ),
             lambda reference: "Bearer listing-token",
@@ -9109,7 +9134,9 @@ def test_basic_trimming_no_max_tokens_specified():
     trimmed_messages = trim_messages(messages, model="gpt-4")
     print("trimmed messages for gpt-4")
     print(trimmed_messages)
-    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost["gpt-4"]["max_input_tokens"]
+    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost["gpt-4"][
+        "max_input_tokens"
+    ]
 
 
 def test_multiple_messages_trimming():
@@ -11428,7 +11455,9 @@ def test_declared_mid_conversation_system_support_prefers_the_deployment_over_th
     )
 
 
-def test_declared_mid_conversation_system_support_is_none_when_the_model_lookup_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_declared_mid_conversation_system_support_is_none_when_the_model_lookup_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setitem(litellm.model_cost, "hosted_vllm/unreadable-probe", "not a model info entry")
     litellm.get_model_info.cache_clear()
     assert litellm.utils.declared_mid_conversation_system_support("unreadable-probe", "hosted_vllm", None) is None
@@ -11447,7 +11476,6 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     )
 
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
-
 
 
 @pytest.mark.parametrize(

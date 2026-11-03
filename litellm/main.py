@@ -266,7 +266,7 @@ from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from .llms.custom_llm import CustomLLM, custom_chat_llm_router
+from .llms.custom_llm import custom_chat_llm_router
 from .llms.databricks.common_utils import DatabricksBase
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha
@@ -5337,10 +5337,7 @@ def _complete_custom_providers(
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
-    custom_handler: CustomLLM | None = None
-    for item in litellm.custom_provider_map:
-        if item["provider"] == custom_llm_provider:
-            custom_handler = item["custom_handler"]
+    custom_handler: Final = ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
 
     if custom_handler is None:
         raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
@@ -7403,6 +7400,7 @@ def embedding(
                 aembedding=aembedding,
                 litellm_params=litellm_params_dict,
                 headers=headers,
+                timeout=timeout,
             )
         elif custom_llm_provider == "bedrock":
             if isinstance(input, str):
@@ -7911,10 +7909,7 @@ def embedding(
                 litellm_params={},
             )
         elif custom_llm_provider in litellm._custom_providers:
-            custom_handler: CustomLLM | None = None
-            for item in litellm.custom_provider_map:
-                if item["provider"] == custom_llm_provider:
-                    custom_handler = item["custom_handler"]
+            custom_handler: Final = ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
 
             if custom_handler is None:
                 raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
