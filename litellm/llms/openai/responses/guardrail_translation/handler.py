@@ -177,9 +177,23 @@ def _post_guardrail_tool_call_shapes(
     returned_tool_calls: Sequence[object] | None,
     pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
     guardrail_name: str | None,
+    *,
+    deliver_ended_stream_rewrites: bool = False,
 ) -> tuple[_ToolCallShape, ...]:
     if not pre_guardrail_tool_calls:
         return pre_guardrail_tool_calls
+    if (
+        deliver_ended_stream_rewrites
+        and returned_tool_calls is not None
+        and len(returned_tool_calls) != len(pre_guardrail_tool_calls)
+    ):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        raise UndeliverableStreamRewrite(
+            guardrail_name or "unknown",
+            f"the guardrail returned {len(returned_tool_calls)} tool calls for a stream that carried "
+            f"{len(pre_guardrail_tool_calls)}",
+        )
     if returned_tool_calls is None or len(returned_tool_calls) != len(pre_guardrail_tool_calls):
         verbose_proxy_logger.warning(
             "OpenAI Responses API: guardrail %s returned %s tool calls for the %d scanned, "
@@ -1284,6 +1298,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                     returned_tool_calls=guardrailed_inputs.get("tool_calls"),
                     pre_guardrail_tool_calls=pre_guardrail_tool_calls,
                     guardrail_name=guardrail_to_apply.guardrail_name,
+                    deliver_ended_stream_rewrites=deliver_ended_stream_rewrites,
                 )
 
                 # Write guardrailed texts back into the output items in-place.

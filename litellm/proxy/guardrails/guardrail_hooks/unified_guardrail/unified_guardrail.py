@@ -9,6 +9,7 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 import asyncio
 import contextlib
 import copy
+import functools
 import json
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast, runtime_checkable
@@ -232,6 +233,57 @@ def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> N
         user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
         if user_metadata:
             data["litellm_metadata"] = user_metadata
+
+
+async def _scan_ended_stream(
+    endpoint_translation: "BaseTranslation",
+    *,
+    guardrail_to_apply: CustomGuardrail,
+    responses_so_far: list[object],  # mutable-ok: the translation writes the rewrites into the caller's buffer
+    user_api_key_dict: UserAPIKeyAuth,
+    request_data: dict[str, object],  # mutable-ok: handed through to the translation's dict parameter
+    buffered_items: tuple[object, ...] | None,
+    deliver_rewrites: bool,
+    shield: bool,
+) -> tuple[object, ...] | None:
+    """Run the end-of-stream scan and return the chunks to release to the client.
+
+    A fully withheld stream holds every chunk in ``responses_so_far``, so the guardrail's text and tool-call rewrites
+    are released from there, whether the translation rewrote the chunks in place or replaced them (SSE bytes).
+    A rewrite the translation cannot place (a changed tool-call count) fails closed: nothing is released and the
+    client gets a 500, since the originals carry the very content the guardrail rewrote.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    scan: Final = functools.partial(
+        endpoint_translation.process_output_streaming_response,
+        responses_so_far=responses_so_far,
+        guardrail_to_apply=guardrail_to_apply,
+        litellm_logging_obj=logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None,
+        user_api_key_dict=user_api_key_dict,
+        request_data=request_data,
+    )
+    try:
+        with anyio.CancelScope(shield=shield):
+            await (scan(deliver_ended_stream_rewrites=True) if deliver_rewrites else scan())
+    except UndeliverableStreamRewrite as undeliverable:
+        verbose_proxy_logger.warning(
+            "UnifiedLLMGuardrails: guardrail %s rewrote the buffered stream but the rewrite cannot be written back "
+            "(%s). The response was withheld",
+            undeliverable.guardrail_name,
+            undeliverable.reason,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": f"Guardrail {undeliverable.guardrail_name} rewrote the response but the rewrite cannot be "
+                f"delivered on this stream ({undeliverable.reason}). The response was withheld",
+                "guardrail": undeliverable.guardrail_name,
+            },
+        ) from undeliverable
+    return tuple(responses_so_far) if deliver_rewrites else buffered_items
 
 
 class UnifiedLLMGuardrails(CustomLogger):
@@ -1158,30 +1210,12 @@ class UnifiedLLMGuardrails(CustomLogger):
         # path; "incremental_diff" emits them as synthetic deltas (see
         # _run_incremental_transform_stream).
         streaming_transform_mode: Final = _streaming_setting("streaming_transform_mode", "block_only")
-        # Withhold every chunk until end-of-stream moderation passes, then
-        # release the original chunks (clean) or only the block message
-        # (blocked) -- moderating the whole response *before* any content
-        # reaches the client. Only safe for allow/block guardrails: on
-        # release the original chunks are replayed as-is, so a
-        # content-rewriting guardrail (e.g. PII masking) would leak
-        # unredacted content. Guarded below via mask_response_content.
-        buffer_until_moderated: object = _streaming_setting(
+        # Withhold every chunk until end-of-stream moderation passes, then release the chunks
+        # (with the guardrail's rewrite written into them) or only the block message.
+        buffer_until_moderated: Final = _streaming_setting(
             "streaming_buffer_until_moderated", buffer_until_moderated_default
         )
         release_on_scan: Final = _streaming_setting("streaming_buffer_release_on_scan", False)
-
-        if (
-            buffer_until_moderated
-            and guardrail_to_apply is not None
-            and getattr(guardrail_to_apply, "mask_response_content", False)
-        ):
-            verbose_proxy_logger.warning(
-                "UnifiedLLMGuardrails: streaming_buffer_until_moderated is disabled for %s "
-                "because mask_response_content=True -- buffered replay would release "
-                "unredacted original chunks instead of the moderated output.",
-                guardrail_to_apply.guardrail_name,
-            )
-            buffer_until_moderated = False
 
         if buffer_until_moderated and not release_on_scan:
             end_of_stream_only = True
@@ -1476,19 +1510,25 @@ class UnifiedLLMGuardrails(CustomLogger):
                     return
 
                 try:
-                    with anyio.CancelScope(shield=chunks_yielded):
-                        if pending_scan is not None:
-                            pending_scan.result()  # a failed background scan raises into the handlers below
-                        await endpoint_translation.process_output_streaming_response(
-                            responses_so_far=responses_so_far,
-                            guardrail_to_apply=guardrail_to_apply,
-                            litellm_logging_obj=request_data.get("litellm_logging_obj"),
-                            user_api_key_dict=user_api_key_dict,
-                            request_data=request_data,
-                        )
-                    # Moderation passed: release the withheld original chunks.
-                    if buffered_items is not None:
-                        for buffered_item in buffered_items:
+                    if pending_scan is not None:
+                        pending_scan.result()  # a failed background scan raises into the handlers below
+                    released_items: Final = await _scan_ended_stream(
+                        endpoint_translation,
+                        guardrail_to_apply=guardrail_to_apply,
+                        responses_so_far=responses_so_far,
+                        user_api_key_dict=user_api_key_dict,
+                        request_data=request_data,
+                        buffered_items=buffered_items,
+                        deliver_rewrites=bool(
+                            buffer_until_moderated
+                            and end_of_stream_only
+                            and not responses_yielded
+                            and endpoint_translation.delivers_ended_stream_rewrites
+                        ),
+                        shield=chunks_yielded,
+                    )
+                    if released_items is not None:
+                        for buffered_item in released_items:
                             yield buffered_item
                     for pending_item in pending_end_of_stream_items:
                         responses_yielded.append(pending_item)

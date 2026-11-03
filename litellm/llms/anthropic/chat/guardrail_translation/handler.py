@@ -519,6 +519,26 @@ def _rewritten_event(event: Mapping[str, object], rewrite_event: _SSEEventRewrit
     return {**event, rewrite.section: {**section, rewrite.field: rewrite.value}}
 
 
+def _ended_stream_tool_calls(
+    returned_tool_calls: Sequence[object] | None,
+    *,
+    streamed_tool_calls: Sequence[object],
+    expected_count: int,
+    guardrail_name: str,
+) -> Sequence[object]:
+    """A guardrail that adds or drops a tool call on an ended stream cannot be written back, block for block."""
+    if returned_tool_calls is None:
+        return streamed_tool_calls
+    if len(returned_tool_calls) != expected_count:
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        raise UndeliverableStreamRewrite(
+            guardrail_name,
+            f"the guardrail returned {len(returned_tool_calls)} tool calls for a stream that carried {expected_count}",
+        )
+    return returned_tool_calls
+
+
 def _tool_call_shapes(tool_calls: Sequence[object]) -> tuple[_ToolCallShape, ...]:
     """The guardrail-visible shape of each tool call, whether the guardrail handed
     back the ``ChatCompletionMessageToolCall`` objects it was given or plain dicts."""
@@ -1611,10 +1631,12 @@ class AnthropicMessagesHandler(BaseTranslation):
                         pre_guardrail_tool_calls=pre_guardrail_tool_calls,
                         post_guardrail_tool_calls=_with_query_rewrites(
                             _tool_call_shapes(
-                                returned_tool_calls
-                                if isinstance(returned_tool_calls, list)
-                                and len(returned_tool_calls) == len(pre_guardrail_tool_calls)
-                                else tool_calls_list or ()
+                                _ended_stream_tool_calls(
+                                    returned_tool_calls,
+                                    streamed_tool_calls=tool_calls_list or (),
+                                    expected_count=len(pre_guardrail_tool_calls),
+                                    guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
+                                )
                             ),
                             tool_call_blocks,
                             _query_rewrites(
