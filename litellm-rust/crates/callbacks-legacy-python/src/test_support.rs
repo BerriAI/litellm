@@ -65,6 +65,12 @@ FAKES = {
     'post_call': lambda logger, original_response, api_key, additional_args: logger.post_call(
         original_response, api_key, additional_args
     ),
+    'record_response': lambda logger, status, headers, body: logger.model_call_details.update(
+        response_headers=dict(headers)
+    ),
+    'record_api_window': lambda logger, start, end: logger.model_call_details.update(
+        llm_api_duration_ms=(end - start) * 1000
+    ),
     'defers_async_logging': lambda logger: bool(getattr(logger, '_defer_async_logging', False)),
     'defer_success': lambda logger, pending: setattr(logger, '_native_pending_logging', pending),
     'sync_success_for_async_call': lambda logger, response, start, end: logger.handle_sync_success_callbacks_for_async_calls(
@@ -85,6 +91,7 @@ FAKES = {
     ),
     'after_deployment_failure': lambda kwargs, error, call_type: kwargs['logger'].hook('failure', error, call_type),
     'stream_opened': lambda logger, head: logger.record('stream_opened', head),
+    'stamp_stream_head': lambda head, logger, kwargs, start, end: logger.record('stamp_stream_head', head),
     'stream_success': lambda logger, url_route, endpoint_type, request_body, chunks, start, end, first_chunk: logger.record(
         'stream_success', list(chunks)
     ),

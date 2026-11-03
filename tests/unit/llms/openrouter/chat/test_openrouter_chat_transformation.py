@@ -11,7 +11,7 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openrouter.chat.transformation import (
     OpenRouterChatCompletionStreamingHandler,
@@ -742,7 +742,11 @@ def test_openrouter_completion_with_non_object_usage_raises_api_connection_error
 
 
 @respx.mock
-def test_openrouter_streaming_completion_assembles_text_and_finish_reason() -> None:
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("requested_model", ["openrouter/openai/gpt-4o-mini", "openrouter/auto"])
+async def test_openrouter_streaming_completion_assembles_text_and_finish_reason(
+    async_stream: bool, requested_model: str
+) -> None:
     chunks: Final = (
         {
             "id": "gen-stream-model",
@@ -785,14 +789,20 @@ def test_openrouter_streaming_completion_assembles_text_and_finish_reason() -> N
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "How does a case reach the Supreme Court?"},
     ]
-    stream: Final = litellm.completion(
-        model="openrouter/openai/gpt-4o-mini",
+    kwargs: Final = dict(
+        model=requested_model,
         messages=messages,
         stream=True,
         max_tokens=50,
         api_key="test-openrouter-key",
     )
-    stream_chunks: Final = tuple(stream)
+    client: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+    try:
+        stream: Final = await litellm.acompletion(**kwargs, client=client) if async_stream else litellm.completion(**kwargs)
+        stream_chunks: Final = tuple([chunk async for chunk in stream]) if async_stream else tuple(stream)
+    finally:
+        await client.client.aclose()
+    assert {chunk.model for chunk in stream_chunks} == {chunks[0]["model"]}
     assert stream_chunks[0].choices[0].delta.role == "assistant"
     assert tuple(
         chunk.choices[0].finish_reason for chunk in stream_chunks if chunk.choices[0].finish_reason is not None
@@ -802,6 +812,7 @@ def test_openrouter_streaming_completion_assembles_text_and_finish_reason() -> N
     ) == "The Supreme Court hears federal cases."
     assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
     assert assembled is not None
+    assert assembled.model == chunks[0]["model"]
     assert assembled.choices[0].message.content == "The Supreme Court hears federal cases."
     assert assembled.choices[0].finish_reason == "stop"
 

@@ -1,4 +1,5 @@
 import copy
+import itertools
 import json
 import logging
 from collections.abc import Iterator
@@ -40,6 +41,7 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
     VertexAIAnthropicConfig,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.types.utils import ChatCompletionToolCallChunk, ModelResponse, ServerToolUse, Usage
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
@@ -4421,6 +4423,184 @@ def test_transform_request_includes_cache_control():
     assert result["cache_control"] == {"type": "ephemeral"}
 
 
+def _anthropic_body(messages: list, litellm_params: dict | None = None, tools: list | None = None) -> dict:
+    return AnthropicConfig().transform_request(
+        model="claude-sonnet-5-5",
+        messages=messages,
+        optional_params={"max_tokens": 100, **({"tools": tools} if tools else {})},
+        litellm_params=litellm_params or {},
+        headers={},
+    )
+
+
+def test_transform_request_carries_prompt_cache_breakpoint_to_cache_control():
+    body: Final = _anthropic_body(
+        [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are terse.", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                    {
+                        "type": "text",
+                        "text": "Bye",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                    },
+                ],
+            },
+        ]
+    )
+
+    assert body["system"] == [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]
+    assert body["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "Bye", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "marker, expected_block",
+    [
+        ({"mode": "explicit", "ttl": "30m"}, {"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}}),
+        ({"mode": "implicit"}, {"type": "text", "text": "Hello"}),
+    ],
+)
+def test_transform_request_prompt_cache_breakpoint_without_claude_equivalent(marker, expected_block):
+    messages: Final = [{"role": "user", "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": marker}]}]
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        _anthropic_body(copy.deepcopy(messages))
+
+    body: Final = _anthropic_body(messages, litellm_params={"drop_params": True})
+    assert body["messages"] == [{"role": "user", "content": [expected_block]}]
+
+
+def test_transform_request_names_the_marker_ttl_rule_for_a_ttl_only_claude_takes():
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}]}
+    ]
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="optional ttl of '30m' or '12h'"):
+        _anthropic_body(messages)
+
+
+def test_transform_request_keeps_the_first_and_last_prompt_cache_breakpoints_within_the_cap():
+    client_marked_part: Final = {"type": "text", "text": "part 0", "cache_control": {"type": "ephemeral"}}
+    marked_parts: Final = [
+        {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+        for index in range(1, 5)
+    ]
+    messages: Final = [{"role": "user", "content": [client_marked_part, *marked_parts]}]
+    tools: Final = [{"name": "lookup", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}}]
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="at most 4 cache breakpoints"):
+        _anthropic_body(copy.deepcopy(messages), tools=copy.deepcopy(tools))
+
+    body: Final = _anthropic_body(messages, litellm_params={"drop_params": True}, tools=tools)
+    assert [part.get("cache_control") for part in body["messages"][0]["content"]] == [
+        {"type": "ephemeral"},
+        {"type": "ephemeral"},
+        None,
+        None,
+        {"type": "ephemeral"},
+    ]
+    assert body["tools"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_transform_request_counts_a_cache_marked_tool_search_tool_toward_the_cap():
+    config: Final = AnthropicConfig()
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            "max_tokens": 100,
+            "tools": [
+                {
+                    "type": "tool_search_tool_regex_20251119",
+                    "name": "tool_search_tool_regex",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        optional_params={},
+        model="claude-sonnet-5-5",
+        drop_params=False,
+    )
+    marked_turns: Final = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": f"turn {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        }
+        for index in range(4)
+    ]
+
+    def body(litellm_params: dict) -> dict:
+        return config.transform_request(
+            model="claude-sonnet-5-5",
+            messages=copy.deepcopy(marked_turns),
+            optional_params=copy.deepcopy(optional_params),
+            litellm_params=litellm_params,
+            headers={},
+        )
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="this request has 5"):
+        body({})
+
+    capped: Final = body({"drop_params": True})
+    assert capped["tools"][0]["cache_control"] == {"type": "ephemeral"}
+    sent_parts: Final = itertools.chain.from_iterable(message["content"] for message in capped["messages"])
+    assert [part.get("cache_control") for part in sent_parts] == [
+        {"type": "ephemeral"},
+        {"type": "ephemeral"},
+        None,
+        {"type": "ephemeral"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "unsent_marks",
+    [
+        pytest.param(
+            [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Noted.", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+                }
+            ],
+            id="assistant_part",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Also this.", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+            id="message_level",
+        ),
+    ],
+)
+def test_transform_request_caps_only_the_marks_claude_receives(unsent_marks: list[dict]):
+    marked_parts: Final = [
+        {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}} for index in range(4)
+    ]
+
+    body: Final = _anthropic_body(
+        [{"role": "user", "content": marked_parts}, *unsent_marks, {"role": "user", "content": "Go on."}]
+    )
+
+    sent_marks: Final = [
+        part.get("cache_control")
+        for part in itertools.chain.from_iterable(message["content"] for message in body["messages"])
+        if isinstance(part, dict)
+    ]
+    assert sent_marks.count({"type": "ephemeral"}) == 4
+
+
 def test_compaction_block_empty_list_not_added():
     """
     Test that empty compaction_blocks list is not added to provider_specific_fields.
@@ -6788,6 +6968,34 @@ def test_eager_input_streaming_not_set_on_computer_use_tool():
     assert "eager_input_streaming" not in mapped_tool
 
 
+def _computer_tool_with_defer_loading_and_allowed_callers(tool_type: str) -> dict[str, object]:
+    return {
+        "type": tool_type,
+        "function": {"name": "computer", "parameters": {"display_width_px": 1024, "display_height_px": 768}},
+        "defer_loading": True,
+        "allowed_callers": ["code_execution_20250825"],
+    }
+
+
+@pytest.mark.parametrize("tool_type", ["computer_20241022", "computer_20250124"])
+def test_legacy_computer_tools_drop_defer_loading_and_allowed_callers(tool_type: str):
+    mapped_tool, _ = AnthropicConfig().map_tool_helper(_computer_tool_with_defer_loading_and_allowed_callers(tool_type))
+
+    assert mapped_tool["type"] == tool_type
+    assert "defer_loading" not in mapped_tool
+    assert "allowed_callers" not in mapped_tool
+
+
+def test_computer_20251124_keeps_defer_loading_and_allowed_callers():
+    mapped_tool, _ = AnthropicConfig().map_tool_helper(
+        _computer_tool_with_defer_loading_and_allowed_callers("computer_20251124")
+    )
+
+    assert mapped_tool["type"] == "computer_20251124"
+    assert mapped_tool["defer_loading"] is True
+    assert mapped_tool["allowed_callers"] == ["code_execution_20250825"]
+
+
 def test_eager_input_streaming_reaches_anthropic_request_tools():
     result = AnthropicConfig().map_openai_params(
         non_default_params={"tools": [_eager_chat_tool(eager_input_streaming=True)], "stream": True},
@@ -7520,10 +7728,10 @@ def test_process_anthropic_headers_with_no_matching_headers():
 @pytest.mark.parametrize(
     "computer_tool_used, prompt_caching_set, expected_beta_header",
     [
-        (True, False, True),
-        (False, True, False),
-        (True, True, True),
-        (False, False, False),
+        ("computer_20250124", False, True),
+        (None, True, False),
+        ("computer_20250124", True, True),
+        (None, False, False),
     ],
 )
 def test_anthropic_beta_header(computer_tool_used, prompt_caching_set, expected_beta_header):
@@ -9233,6 +9441,7 @@ async def test_litellm_anthropic_prompt_caching_system(
     }
 
 
+@pytest.mark.usefixtures("local_beta_headers_config")
 def test_completion_forwards_caller_anthropic_beta_header_with_computer_tool(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
         return_value=httpx.Response(
@@ -9271,7 +9480,7 @@ def test_completion_forwards_caller_anthropic_beta_header_with_computer_tool(res
     sent_betas: Final = frozenset(
         beta.strip() for beta in route.calls.last.request.headers["anthropic-beta"].split(",")
     )
-    assert sent_betas == frozenset({"computer-use-2025-01-24"})
+    assert sent_betas == frozenset({"computer-use-2024-10-22", "computer-use-2025-01-24"})
     assert json.loads(route.calls.last.request.content)["tools"] == [
         {
             "type": "computer_20241022",
@@ -9281,6 +9490,69 @@ def test_completion_forwards_caller_anthropic_beta_header_with_computer_tool(res
             "display_number": 1,
         }
     ]
+
+
+# Tool-to-beta pairs from Anthropic's computer use docs; api.anthropic.com answered 400 to
+# computer_20251124 without computer-use-2025-11-24 and 200 with it on 2026-10-31
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("tool_type", "expected_beta"),
+    [
+        ("computer_20241022", "computer-use-2024-10-22"),
+        ("computer_20250124", "computer-use-2025-01-24"),
+        ("computer_20251124", "computer-use-2025-11-24"),
+    ],
+)
+def test_completion_adds_the_beta_matching_the_computer_tool_version(
+    respx_mock: respx.MockRouter, tool_type: str, expected_beta: str
+):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=_anthropic_message_body([{"type": "text", "text": "hi"}], "end_turn"))
+    )
+
+    litellm.completion(
+        model="anthropic/claude-opus-5",
+        api_key="mock_api_key",
+        messages=[{"role": "user", "content": "Say hi"}],
+        tools=[
+            {
+                "type": tool_type,
+                "function": {
+                    "name": "computer",
+                    "parameters": {"display_height_px": 768, "display_width_px": 1024},
+                },
+            }
+        ],
+    )
+
+    sent_betas: Final = frozenset(
+        beta.strip() for beta in route.calls.last.request.headers["anthropic-beta"].split(",")
+    )
+    assert sent_betas == frozenset({expected_beta})
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_completion_sends_no_computer_use_beta_for_an_unknown_computer_tool_version(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=_anthropic_message_body([{"type": "text", "text": "hi"}], "end_turn"))
+    )
+
+    litellm.completion(
+        model="anthropic/claude-opus-5",
+        api_key="mock_api_key",
+        messages=[{"role": "user", "content": "Say hi"}],
+        tools=[
+            {
+                "type": "computer_20991231",
+                "function": {
+                    "name": "computer",
+                    "parameters": {"display_height_px": 768, "display_width_px": 1024},
+                },
+            }
+        ],
+    )
+
+    assert "anthropic-beta" not in route.calls.last.request.headers
 
 
 def _anthropic_message_body(content: list[dict[str, object]], stop_reason: str) -> dict[str, object]:
@@ -9920,6 +10192,160 @@ def test_transform_request_tool_config_point_without_tools_drops_the_key():
     assert "cache_control_injection_points" not in data
     assert "tools" not in data
     assert litellm_params["metadata"] == {}
+
+
+_INPUT_TRANSFORMATIONS: Final = [{"type": "thinking_block_binding", "count": 2}]
+
+
+def _input_transformations_response() -> AnthropicMessagesResponse:
+    return AnthropicMessagesResponse(
+        id="msg_input_transformations",
+        type="message",
+        role="assistant",
+        model="claude-sonnet-4-6",
+        content=[{"type": "text", "text": "ok"}],
+        stop_reason="end_turn",
+        stop_sequence=None,
+        usage={"input_tokens": 12, "output_tokens": 3},
+        input_transformations=_INPUT_TRANSFORMATIONS,
+    )
+
+
+def test_chat_response_surfaces_input_transformations_in_provider_specific_fields() -> None:
+    result: Final = AnthropicConfig().transform_response(
+        model="claude-sonnet-4-6",
+        raw_response=httpx.Response(200, json=_input_transformations_response()),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.choices[0].message.provider_specific_fields["input_transformations"] == _INPUT_TRANSFORMATIONS
+
+
+def test_chat_response_without_input_transformations_adds_no_key() -> None:
+    completion_response: Final = {
+        key: value for key, value in _input_transformations_response().items() if key != "input_transformations"
+    }
+    result: Final = AnthropicConfig().transform_response(
+        model="claude-sonnet-4-6",
+        raw_response=httpx.Response(200, json=completion_response),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert "input_transformations" not in result.choices[0].message.provider_specific_fields
+
+
+def test_json_mode_chat_response_keeps_input_transformations() -> None:
+    completion_response: Final = {
+        **_input_transformations_response(),
+        "content": [{"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": 42}}],
+        "stop_reason": "tool_use",
+    }
+    result: Final = AnthropicConfig().transform_response(
+        model="claude-sonnet-4-6",
+        raw_response=httpx.Response(200, json=completion_response),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+        json_mode=True,
+    )
+
+    assert json.loads(result.choices[0].message.content) == {"answer": 42}
+    assert result.choices[0].message.provider_specific_fields["input_transformations"] == _INPUT_TRANSFORMATIONS
+
+
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_FUNCTION_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+_ROUTES_WITHOUT_THE_MCP_CONNECTOR: Final = (
+    pytest.param(AmazonAnthropicClaudeConfig, "bedrock", id="bedrock_invoke"),
+    pytest.param(VertexAIAnthropicConfig, "vertex_ai", id="vertex_ai"),
+)
+
+
+@pytest.mark.parametrize("config_class", [AnthropicConfig, AzureAnthropicConfig, BedrockClaudePlatformConfig])
+def test_routes_with_the_mcp_connector_send_a_hosted_mcp_tool_as_an_mcp_server(monkeypatch, config_class):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={"tools": [_WEATHER_FUNCTION_TOOL, _HOSTED_MCP_TOOL]},
+        optional_params={},
+        model="claude-haiku-5-5",
+        drop_params=False,
+    )
+    assert [server["url"] for server in mapped["mcp_servers"]] == [_HOSTED_MCP_TOOL["server_url"]]
+    assert [tool["name"] for tool in mapped["tools"]] == ["get_weather"]
+
+
+@pytest.mark.parametrize(("config_class", "route"), _ROUTES_WITHOUT_THE_MCP_CONNECTOR)
+def test_a_hosted_mcp_tool_answers_400_on_claude_routes_without_the_mcp_connector(monkeypatch, config_class, route):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        config_class().map_openai_params(
+            non_default_params={"tools": [_WEATHER_FUNCTION_TOOL, _HOSTED_MCP_TOOL]},
+            optional_params={},
+            model="claude-haiku-5-5",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert f"claude-haiku-5-5 on {route} " in str(raised.value)
+    assert "`deepwiki`" in str(raised.value)
+
+
+@pytest.mark.parametrize(("config_class", "route"), _ROUTES_WITHOUT_THE_MCP_CONNECTOR)
+def test_claude_routes_without_the_mcp_connector_drop_a_hosted_mcp_tool_under_drop_params(
+    monkeypatch, caplog, config_class, route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with caplog.at_level("WARNING"):
+        mapped: Final = config_class().map_openai_params(
+            non_default_params={"tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL]},
+            optional_params={},
+            model="claude-haiku-5-5",
+            drop_params=True,
+        )
+    assert [tool["name"] for tool in mapped["tools"]] == ["get_weather"]
+    assert "mcp_servers" not in mapped
+    assert any(
+        "`deepwiki`" in record.getMessage() and f" on {route} (" in record.getMessage() for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize(("config_class", "route"), _ROUTES_WITHOUT_THE_MCP_CONNECTOR)
+def test_claude_routes_without_the_mcp_connector_send_no_tools_when_drop_params_drops_every_one(
+    monkeypatch, config_class, route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={"tools": [_HOSTED_MCP_TOOL], "tool_choice": "required"},
+        optional_params={},
+        model="claude-haiku-5-5",
+        drop_params=True,
+    )
+    assert "tools" not in mapped
+    assert "mcp_servers" not in mapped
+    assert "tool_choice" not in mapped
 
 
 _KEPT_SEARCH_CALL: Final = {

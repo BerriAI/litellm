@@ -7952,6 +7952,7 @@ GPT_5_6_STREAM_USAGE_IN_EMPTY_CHOICES_CHUNK: Final = CostTrackingTestCase(
         frames=(
             'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":null}',
             'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[{"index":0,"delta":{"content":"scripted answer"},"finish_reason":null}],"usage":null}',
+            'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null}',
             'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[],"usage":{"prompt_tokens":1840,"completion_tokens":412,"total_tokens":2252}}',
             "data: [DONE]",
         ),

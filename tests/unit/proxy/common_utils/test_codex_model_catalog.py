@@ -1,9 +1,12 @@
 import json
+from collections.abc import Mapping
 from types import MappingProxyType
+from typing import Final, Literal
 
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy.common_utils.codex_model_catalog import (
     CODEX_CATALOG_BYTE_LIMIT,
     CodexCatalogRow,
@@ -231,6 +234,140 @@ def test_alias_with_deployment_defaults_caps_codexs_window_at_its_listed_max_inp
     body = codex_models_response_json((alias,), stock=stock, instructions=_PROMPT, alias_defaults="deployment")
 
     assert json.loads(body.json)["models"][0]["context_window"] == expected
+
+
+_WIDE_STOCK = MappingProxyType(
+    {
+        "gpt-6-sol": _stock("gpt-6-sol").model_copy(update={"context_window": 272000, "max_context_window": 872000}),
+        "gpt-5.5": _stock("gpt-5.5").model_copy(update={"context_window": 272000}),
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ((500000,), 500000),
+        ((100000,), 100000),
+        ((1050000,), 872000),
+        ((600000, 400000), 400000),
+        ((600000, None), 272000),
+        ((100000, None), 100000),
+        ((None,), 272000),
+        ((), 272000),
+        ((0,), 272000),
+        ((-5, 400000), 272000),
+        ((0, 100000), 100000),
+    ],
+)
+@pytest.mark.parametrize("alias_defaults", ["codex", "deployment"])
+def test_a_known_model_and_its_alias_take_the_smallest_window_any_deployment_takes(
+    configured: tuple[int | None, ...], expected: int, alias_defaults: Literal["codex", "deployment"]
+) -> None:
+    rows: Final = (
+        _row("gpt-6-sol", max_input_tokens=1050000, configured_max_input_tokens=configured),
+        _row(
+            "sol-1m",
+            upstream_model="openai/gpt-6-sol",
+            max_input_tokens=1050000,
+            configured_max_input_tokens=configured,
+        ),
+    )
+
+    body: Final = codex_models_response_json(
+        rows, stock=_WIDE_STOCK, instructions=_PROMPT, alias_defaults=alias_defaults
+    )
+
+    assert {entry["slug"]: entry["context_window"] for entry in json.loads(body.json)["models"]} == {
+        "gpt-6-sol": expected,
+        "sol-1m": expected,
+    }
+
+
+def test_a_configured_window_goes_past_codexs_own_when_the_stock_entry_sets_no_ceiling() -> None:
+    (entry,) = json.loads(
+        codex_models_response_json(
+            (_row("gpt-5.5", configured_max_input_tokens=(1050000,)),), stock=_WIDE_STOCK, instructions=_PROMPT
+        ).json
+    )["models"]
+
+    assert entry["context_window"] == 1050000
+
+
+def test_a_deployment_without_a_limit_keeps_a_windowless_stock_entry_as_codex_ships_it() -> None:
+    windowless: Final = MappingProxyType({"gpt-5.5": _stock("gpt-5.5").model_copy(update={"context_window": None})})
+
+    (entry,) = json.loads(
+        codex_models_response_json(
+            (_row("gpt-5.5", configured_max_input_tokens=(1050000, None)),), stock=windowless, instructions=_PROMPT
+        ).json
+    )["models"]
+
+    assert entry["context_window"] is None
+
+
+def test_model_list_body_sizes_a_known_models_window_off_the_deployments_the_key_team_routes_to() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"max_input_tokens": 922000},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://team-2.example"},
+                "model_info": {"team_id": "team-2", "max_input_tokens": 400000},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://team-3.example"},
+                "model_info": {"team_id": "team-3"},
+            },
+        ],
+        model_group_alias={"astra-1m": "gpt-6-astra"},
+    )
+    listing: Final = tuple(
+        {"id": name, "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"}
+        for name in ("gpt-6-astra", "astra-1m")
+    )
+    entries: Final = (("gpt-6-astra", "gpt-6-astra"), ("astra-1m", "astra-1m"))
+    stock: Final = bundled_codex_models()["gpt-6-astra"]
+    assert stock.context_window is not None and stock.max_context_window is not None
+    assert stock.context_window < 400000 < stock.max_context_window < 922000
+
+    def windows(team_id: str) -> dict[str, int | None]:
+        models: Final = json.loads(codex_model_list_body(listing, entries, router, team_id))["models"]
+        return {entry["slug"]: entry["context_window"] for entry in models}
+
+    assert windows("team-1") == {"gpt-6-astra": stock.max_context_window, "astra-1m": stock.max_context_window}
+    assert windows("team-2") == {"gpt-6-astra": 400000, "astra-1m": 400000}
+    assert windows("team-3") == {"gpt-6-astra": stock.context_window, "astra-1m": stock.context_window}
+
+
+def test_model_list_body_skips_a_limit_a_saved_model_info_response_copied_from_the_cost_map() -> None:
+    catalog_limit: Final = GetModelCostMap.loaded_model_cost_map()["gpt-6-astra"]["max_input_tokens"]
+    stock: Final = bundled_codex_models()["gpt-6-astra"]
+    assert isinstance(catalog_limit, int) and stock.max_context_window is not None
+    assert stock.context_window is not None and stock.context_window < 600000 < stock.max_context_window
+
+    def window(model_info: Mapping[str, object]) -> int | None:
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-6-astra",
+                    "litellm_params": {"model": "openai/gpt-6-astra"},
+                    "model_info": dict(model_info),
+                }
+            ]
+        )
+        listing: Final = ({"id": "gpt-6-astra", "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"},)
+        (entry,) = json.loads(codex_model_list_body(listing, (("gpt-6-astra", "gpt-6-astra"),), router))["models"]
+        return entry["context_window"]
+
+    assert window({"key": "gpt-6-astra", "max_input_tokens": catalog_limit}) == stock.context_window
+    assert window({"key": "gpt-6-astra", "max_input_tokens": 600000}) == 600000
+    assert window({"max_input_tokens": catalog_limit}) == min(catalog_limit, stock.max_context_window)
 
 
 def test_alias_with_deployment_defaults_drops_codexs_tier_and_upgrade_while_the_native_name_keeps_them():
@@ -599,9 +736,14 @@ def test_catalog_rows_read_the_router_by_each_entry_lookup_id():
                 "model_name_team-1_c0ffee"
             ).supported_reasoning_efforts,
             search_tool_support=(None, None),
+            configured_max_input_tokens=(None, None),
         ),
         CodexCatalogRow(
-            id="plain", upstream_model="openai/some-unmapped-model", service_tiers=(None,), search_tool_support=(None,)
+            id="plain",
+            upstream_model="openai/some-unmapped-model",
+            service_tiers=(None,),
+            search_tool_support=(None,),
+            configured_max_input_tokens=(None,),
         ),
     )
 
@@ -631,6 +773,7 @@ def test_catalog_rows_read_an_alias_off_its_target_under_the_alias_name():
         service_tiers=(["ultrafast"],),
         supported_reasoning_efforts=router.get_model_group_info("gpt-6-astra").supported_reasoning_efforts,
         search_tool_support=(None,),
+        configured_max_input_tokens=(None,),
     )
     (entry,) = json.loads(codex_model_list_body(listing, (("gpt-6", "gpt-6"),), router))["models"]
     assert (entry["slug"], entry["display_name"], [tier["id"] for tier in entry["service_tiers"]]) == (
