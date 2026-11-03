@@ -570,6 +570,7 @@ def _catalog_row(
 
 
 OPENAI_API_HOST: Final = "api.openai.com"
+OPENAI_HOST_SUFFIX: Final = "openai.com"
 
 
 def _is_openai_origin(api_base: object) -> bool:
@@ -581,7 +582,8 @@ def _is_openai_origin(api_base: object) -> bool:
     resolved: Final = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
     if not resolved:
         return True
-    return isinstance(resolved, str) and urlparse(resolved).hostname == OPENAI_API_HOST
+    host: Final = urlparse(resolved).hostname if isinstance(resolved, str) else None
+    return host is not None and (host == OPENAI_API_HOST or host.endswith(f".{OPENAI_HOST_SUFFIX}"))
 
 
 def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
