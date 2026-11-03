@@ -277,7 +277,12 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
         **BEDROCK_CONVERSE_MESSAGES_RESPONSE,
         "id": ANY,
         "model": "bedrock/converse/us.anthropic.claude-haiku-5-5",
-        "usage": {"input_tokens": 4, "output_tokens": 297, "cache_creation_input_tokens": 853},
+        "usage": {
+            "input_tokens": 4,
+            "output_tokens": 297,
+            "cache_creation_input_tokens": 853,
+            "output_tokens_details": {"thinking_tokens": 147},
+        },
         "content": [
             {
                 "type": "thinking",
@@ -403,7 +408,12 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
         **BEDROCK_CONVERSE_MESSAGES_RESPONSE,
         "id": ANY,
         "model": "bedrock/converse/us.anthropic.claude-sonnet-5-5",
-        "usage": {"input_tokens": 4, "output_tokens": 430, "cache_creation_input_tokens": 853},
+        "usage": {
+            "input_tokens": 4,
+            "output_tokens": 430,
+            "cache_creation_input_tokens": 853,
+            "output_tokens_details": {"thinking_tokens": 155},
+        },
         "content": [
             {
                 "type": "thinking",
@@ -504,7 +514,12 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
         **BEDROCK_CONVERSE_MESSAGES_RESPONSE,
         "id": ANY,
         "model": "bedrock/converse/us.anthropic.claude-opus-5-5",
-        "usage": {"input_tokens": 4, "output_tokens": 190, "cache_creation_input_tokens": 853},
+        "usage": {
+            "input_tokens": 4,
+            "output_tokens": 190,
+            "cache_creation_input_tokens": 853,
+            "output_tokens_details": {"thinking_tokens": 35},
+        },
         "content": [
             {
                 "type": "thinking",

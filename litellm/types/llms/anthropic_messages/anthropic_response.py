@@ -64,6 +64,10 @@ AnthropicResponseContentBlock: TypeAlias = (
 )
 
 
+class AnthropicOutputTokensDetails(TypedDict, total=False):
+    thinking_tokens: ReadOnly[int]
+
+
 class AnthropicUsage(TypedDict, total=False):
     """
     Input and output tokens used in the request
@@ -83,6 +87,8 @@ class AnthropicUsage(TypedDict, total=False):
     Server-side tool usage (e.g. web search request counts)
     """
     server_tool_use: NotRequired[ReadOnly[ServerToolUsage]]
+
+    output_tokens_details: NotRequired[ReadOnly[AnthropicOutputTokensDetails]]
 
 
 class AnthropicMessagesResponse(TypedDict, total=False):
