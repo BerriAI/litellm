@@ -12,7 +12,7 @@ import asyncio
 import itertools
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Final
@@ -497,7 +497,7 @@ class DualCache(BaseCache):
         batch: Final = None if self.redis_cache is None else active_request_redis_batch(self.redis_cache)
         return None if batch is None else await self._set_on_batch(batch, key, value, ttl)
 
-    async def async_delete_cache_pre_call(self, key: str) -> BatchResult[None] | None:
+    async def async_delete_cache_pre_call(self, key: str) -> Awaitable[None] | None:
         """Memory now, the Redis DEL on the request's pipeline; None when no pipeline is open, so the caller
         takes its direct path."""
         batch: Final = None if self.redis_cache is None else active_request_redis_batch(self.redis_cache)

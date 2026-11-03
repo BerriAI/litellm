@@ -5,8 +5,8 @@ Verifies that _init_cache attaches Redis to user_api_key_cache only when
 the flag is explicitly set to True, and leaves it in-memory-only otherwise.
 """
 
-from contextlib import ExitStack, contextmanager
 import json
+from contextlib import ExitStack, contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,7 +15,10 @@ import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.caching.caching import RedisCache
 from litellm.caching.dual_cache import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.native_settings import NativeRedisSettings
 from litellm.redis.stores.spend_counters import SpendCounterStore
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 # ---------------------------------------------------------------------------
@@ -33,6 +36,9 @@ class _FakeRedisCache(RedisCache):
     def __init__(self):  # super().__init__ skipped intentionally
         self._store = {}
         self.default_ttl = 60
+        self.native_settings = NativeRedisSettings(
+            redis_kwargs={"host": "127.0.0.1", "port": 1, "socket_timeout": 0.2}, namespace=None, default_ttl=60
+        )
 
     def set_cache(self, key, value, **kwargs):  # type: ignore[override]
         # Enforce Redis JSON-serializable payload contract.
@@ -51,7 +57,7 @@ def _spend_counter_store() -> SpendCounterStore:
 
 
 @contextmanager
-def _patched_init_cache(litellm_settings: dict, cache_params: dict):
+def _patched_init_cache(litellm_settings: dict, cache_params: dict, user_cache: DualCache | None = None):
     """
     Context manager that:
     1. Replaces the module-level globals with fresh DualCache instances.
@@ -68,7 +74,7 @@ def _patched_init_cache(litellm_settings: dict, cache_params: dict):
     mock_litellm_cache = MagicMock()
     mock_litellm_cache.cache = fake_redis
 
-    fresh_user_cache = DualCache()
+    fresh_user_cache = DualCache() if user_cache is None else user_cache
     fresh_spend_store = _spend_counter_store()
     fresh_cli_sso_cache = DualCache()
     fresh_config_cache = DualCache()
@@ -97,6 +103,42 @@ def _patched_init_cache(litellm_settings: dict, cache_params: dict):
 
 
 class TestRedisAuthCacheFlag:
+    @pytest.mark.asyncio
+    async def test_flag_true_moves_the_whole_auth_keyspace_onto_the_native_store(self):
+        store = FakeAuthCache()
+        with _patched_init_cache(
+            litellm_settings={"enable_redis_auth_cache": True},
+            cache_params={"type": "redis", "host": "localhost", "port": 6379},
+            user_cache=UserApiKeyCache(
+                default_in_memory_ttl=60, auth_cache_handle=store.factory, redis_client=lambda _: None
+            ),
+        ) as (user_cache, _, _cli_sso_cache):
+            assert isinstance(user_cache, UserApiKeyCache)
+            await user_cache.async_set_cache("team_id:t1", {"team_id": "t1"})
+            assert await user_cache.async_get_cache("team_id:t1") == {"team_id": "t1"}
+
+            assert user_cache.redis_cache is None, "redis-py must never read or write the auth keyspace"
+            assert isinstance(user_cache.redis_connection, _FakeRedisCache)
+            assert store.redis == {"team_id:t1": {"team_id": "t1"}}
+            assert [settings.memory_ttl for settings in store.settings] == [60]
+
+    @pytest.mark.asyncio
+    async def test_flag_false_keeps_the_auth_cache_in_python_memory_only(self):
+        store = FakeAuthCache()
+        with _patched_init_cache(
+            litellm_settings={"enable_redis_auth_cache": False},
+            cache_params={"type": "redis", "host": "localhost", "port": 6379},
+            user_cache=UserApiKeyCache(
+                default_in_memory_ttl=60, auth_cache_handle=store.factory, redis_client=lambda _: None
+            ),
+        ) as (user_cache, _, _cli_sso_cache):
+            assert isinstance(user_cache, UserApiKeyCache)
+            await user_cache.async_set_cache("team_id:t1", {"team_id": "t1"})
+
+            assert not user_cache.has_redis and user_cache.redis_connection is None
+            assert user_cache.in_memory_cache.get_cache("team_id:t1") == {"team_id": "t1"}
+            assert store.settings == [] and store.redis == {}
+
     def test_flag_true_attaches_redis_to_user_api_key_cache(self):
         """When enable_redis_auth_cache=True, user_api_key_cache.redis_cache must be set."""
         with _patched_init_cache(

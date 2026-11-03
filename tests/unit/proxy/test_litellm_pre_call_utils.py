@@ -17,6 +17,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
@@ -10219,7 +10220,6 @@ class TestResolveUserProviderCredentials:
         )
 
     def _env(self, monkeypatch):
-        from litellm.caching.dual_cache import DualCache
 
         monkeypatch.setattr(
             litellm,
@@ -10239,7 +10239,7 @@ class TestResolveUserProviderCredentials:
         prisma_client.db.litellm_userprovidercredentials = table
         prisma_client.writer_db = prisma_client.db
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
-        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
         return table
 
     @pytest.mark.asyncio
@@ -11057,7 +11057,6 @@ class TestResolveUserProviderCredentials:
 
 
 def _per_user_env(monkeypatch, credential_names=("copilot-cred",)):
-    from litellm.caching.dual_cache import DualCache
 
     monkeypatch.setattr(
         litellm,
@@ -11077,7 +11076,7 @@ def _per_user_env(monkeypatch, credential_names=("copilot-cred",)):
     prisma_client.db.litellm_userprovidercredentials = table
     prisma_client.writer_db = prisma_client.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-master")
     return table
 
@@ -11221,7 +11220,6 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
     request header. Per-user token resolution is bound to the key-authenticated identity,
     so a header naming user B still loads only user A's connections."""
     from litellm import Router
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.credential_endpoints import user_provider_credentials as upc
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
@@ -11242,7 +11240,7 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
         ]
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
 
     request_mock = MagicMock(spec=Request)
     request_mock.url = MagicMock()
@@ -11277,7 +11275,6 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
 async def test_per_user_token_resolution_uses_key_identity_without_header_mapping(monkeypatch):
     """Control: with no user_header_mappings configured the key's user_id is used as before."""
     from litellm import Router
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.credential_endpoints import user_provider_credentials as upc
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
@@ -11298,7 +11295,7 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
         ]
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
 
     request_mock = MagicMock(spec=Request)
     request_mock.url = MagicMock()

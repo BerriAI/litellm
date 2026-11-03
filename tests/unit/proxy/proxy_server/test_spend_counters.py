@@ -28,20 +28,12 @@ from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
-from fakeredis import FakeAsyncRedis, FakeServer
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.trace import StatusCode
 
 import litellm
 import litellm.proxy.proxy_server as ps
-from litellm._service_logger import ServiceLogging
 from litellm._internal_context import current_service_target
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache, RedisCircuitBreaker
 from litellm.constants import GLOBAL_PROXY_SPEND_CACHE_KEY
-from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.tag import LiteLLM_TagTable
 from litellm.models.team import LiteLLM_TeamTable, LiteLLM_TeamTableCachedObj
@@ -53,6 +45,7 @@ from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_tea
 
 from .conftest import normalize
 from litellm.rust_bridge._native import NativeRedisStoreError
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 
@@ -1531,46 +1524,31 @@ async def test_update_cache_never_brings_back_a_global_proxy_spend_a_budget_rese
     assert cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY) is None
 
 
-class _FakeRedisRunningIncrementIfPresent(FakeAsyncRedis):
-    def __init__(self, server: FakeServer, after_increment: Callable[[], object] = lambda: None) -> None:
-        super().__init__(server=server)
+class _SharedSpend(FakeAuthCache):
+    """The shared auth cache's Redis as the global spend scalar sees it; ``after_increment`` runs once Redis applied
+    an increment, before its reply reaches the caller, and an increment equal to ``held`` waits for ``released``."""
+
+    def __init__(
+        self,
+        total: float | None,
+        after_increment: Callable[[], object] = lambda: None,
+        held: float | None = None,
+        applied: asyncio.Event | None = None,
+        released: asyncio.Event | None = None,
+    ) -> None:
+        super().__init__(redis={} if total is None else {GLOBAL_PROXY_SPEND_CACHE_KEY: total})
         self._after_increment: Final = after_increment
-
-    async def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> bytes | None:
-        key, increment = keys_and_args
-        if not await self.exists(key):
-            return None
-        total: Final = await self.incrbyfloat(key, increment)
-        self._after_increment()
-        return str(total).encode()
-
-
-class _RedisCacheOnClient(RedisCache):
-    def __init__(self, client: FakeAsyncRedis) -> None:
-        self._injected_client: Final = client
-        self.namespace = None
-        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=5, recovery_timeout=30)
-        self.service_logger_obj = ServiceLogging()
-        self.default_ttl = None
-
-    def init_async_client(self) -> FakeAsyncRedis:
-        return self._injected_client
-
-
-class _FakeRedisHoldingOneReply(FakeAsyncRedis):
-    def __init__(self, server: FakeServer, held_increment: float, applied: asyncio.Event, released: asyncio.Event) -> None:
-        super().__init__(server=server)
-        self._held_increment: Final = held_increment
+        self._held: Final = held
         self._applied: Final = applied
         self._released: Final = released
 
-    async def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> bytes | None:
-        key, increment = keys_and_args
-        total: Final = await self.incrbyfloat(key, increment)
-        if float(increment) == self._held_increment:
+    async def increment_if_present(self, key: str, amount: float) -> float | None:
+        total: Final = await super().increment_if_present(key, amount)
+        self._after_increment()
+        if amount == self._held and self._applied is not None and self._released is not None:
             self._applied.set()
             await self._released.wait()
-        return str(total).encode()
+        return total
 
 
 _SharedGlobalSpendOutcome = Literal["peers_added_spend", "reset_elsewhere", "reset_while_redis_answers", "redis_down"]
@@ -1592,14 +1570,12 @@ async def test_update_cache_moves_this_workers_global_proxy_spend_to_the_shared_
 ) -> None:
     def _reset_this_worker() -> None:
         if outcome == "reset_while_redis_answers":
-            cache.in_memory_cache.delete_cache(GLOBAL_PROXY_SPEND_CACHE_KEY)
+            cache.delete_local(GLOBAL_PROXY_SPEND_CACHE_KEY)
 
-    server: Final = FakeServer()
-    redis: Final = _FakeRedisRunningIncrementIfPresent(server, after_increment=_reset_this_worker)
-    if shared_total is not None:
-        await redis.set(GLOBAL_PROXY_SPEND_CACHE_KEY, shared_total)
-    server.connected = outcome != "redis_down"
-    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=_RedisCacheOnClient(redis))
+    redis: Final = _SharedSpend(shared_total, after_increment=_reset_this_worker)
+    if outcome == "redis_down":
+        redis.fail = ConnectionError("redis down")
+    cache, _ = shared_cache(redis)
     cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0, local_only=True)
 
     await ps.update_cache(
@@ -1620,12 +1596,9 @@ async def test_update_cache_moves_this_workers_global_proxy_spend_to_the_shared_
 async def test_update_cache_keeps_the_newest_global_proxy_spend_when_redis_replies_out_of_order() -> None:
     held_increment_applied: Final = asyncio.Event()
     held_reply_released: Final = asyncio.Event()
-    server: Final = FakeServer()
-    redis: Final = _FakeRedisHoldingOneReply(
-        server, held_increment=0.25, applied=held_increment_applied, released=held_reply_released
+    cache, _ = shared_cache(
+        _SharedSpend(10.0, held=0.25, applied=held_increment_applied, released=held_reply_released)
     )
-    await redis.set(GLOBAL_PROXY_SPEND_CACHE_KEY, 10.0)
-    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=_RedisCacheOnClient(redis))
     cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0, local_only=True)
 
     async def _request(response_cost: float) -> None:
@@ -1652,11 +1625,8 @@ async def test_update_cache_keeps_the_newest_global_proxy_spend_when_redis_repli
 @pytest.mark.usefixtures("proxy_max_budget")
 async def test_update_cache_adds_the_global_spend_scalar_in_redis_as_spend_counters() -> None:
     target_during_increment: Final = MagicMock()
-    redis: Final = _FakeRedisRunningIncrementIfPresent(
-        FakeServer(), after_increment=lambda: target_during_increment(current_service_target())
-    )
-    await redis.set(GLOBAL_PROXY_SPEND_CACHE_KEY, 10.0)
-    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=_RedisCacheOnClient(redis))
+    redis: Final = _SharedSpend(10.0, after_increment=lambda: target_during_increment(current_service_target()))
+    cache, _ = shared_cache(redis)
 
     await ps.update_cache(
         token=None,
@@ -1669,51 +1639,8 @@ async def test_update_cache_adds_the_global_spend_scalar_in_redis_as_spend_count
     )
 
     assert target_during_increment.call_args_list == [call("spend_counters")]
-    assert float(await redis.get(GLOBAL_PROXY_SPEND_CACHE_KEY)) == 12.0
+    assert redis.redis[GLOBAL_PROXY_SPEND_CACHE_KEY] == 12.0
     assert current_service_target() is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("proxy_max_budget")
-@pytest.mark.parametrize(("redis_up", "expected_status"), [(True, StatusCode.OK), (False, StatusCode.ERROR)])
-async def test_update_cache_traces_the_global_spend_redis_call_under_the_request_span(
-    monkeypatch: pytest.MonkeyPatch, redis_up: bool, expected_status: StatusCode
-) -> None:
-    exporter: Final = InMemorySpanExporter()
-    provider: Final = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    monkeypatch.setattr(
-        litellm,
-        "service_callback",
-        [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter), tracer_provider=provider)],
-    )
-    server: Final = FakeServer()
-    redis: Final = _FakeRedisRunningIncrementIfPresent(server)
-    await redis.set(GLOBAL_PROXY_SPEND_CACHE_KEY, 10.0)
-    server.connected = redis_up
-    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=_RedisCacheOnClient(redis))
-    request_span: Final = provider.get_tracer("test").start_span("request")
-
-    await ps.update_cache(
-        token=None,
-        user_id=None,
-        end_user_id=None,
-        team_id=None,
-        response_cost=2.0,
-        parent_otel_span=request_span,
-        cache=cache,
-    )
-    await _drain_spend_cache_writes()
-    request_span.end()
-
-    redis_spans: Final = tuple(
-        (span.attributes.get("call_type"), span.status.status_code, span.parent.span_id)
-        for span in exporter.get_finished_spans()
-        if span.name == "redis" and span.attributes is not None and span.parent is not None
-    )
-    assert redis_spans == (
-        ("async_increment_if_present", expected_status, request_span.get_span_context().span_id),
-    )
 
 
 class _UnwritableKeyUserApiKeyCache(UserApiKeyCache):

@@ -106,6 +106,7 @@ from litellm.llms.base_llm.managed_resources.utils import encode_unified_id, gen
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from tests._master_key import MASTER_KEY
 from litellm.redis.stores.spend_counters import SpendCounterStore
+from tests.unit.redis.stores.auth_cache_double import shared_cache
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 
@@ -6975,7 +6976,7 @@ async def test_team_update_not_shadowed_by_internal_usage_cache_lit_4391():
 
     team_id = "team-lit-4391"
     shared_redis = _SharedFakeRedis()
-    user_api_key_cache = UserApiKeyCache(redis_cache=shared_redis)
+    user_api_key_cache, auth_store = shared_cache(connection=shared_redis)
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.internal_usage_cache.dual_cache = DualCache(
         redis_cache=shared_redis,
@@ -7016,12 +7017,13 @@ async def test_team_update_not_shadowed_by_internal_usage_cache_lit_4391():
         f"refreshed it. Got models={refreshed.models if refreshed else None}"
     )
 
-    redis_copy = await shared_redis.async_get_cache(f"team_id:{team_id}")
-    assert redis_copy is not None and redis_copy["models"] == ["model-a", "model-b"], (
+    redis_copy = auth_store.redis.get(f"team_id:{team_id}")
+    assert isinstance(redis_copy, dict) and redis_copy["models"] == ["model-a", "model-b"], (
         "The shared Redis lost the refreshed team object — the internal-cache "
         "invalidation must run BEFORE the fresh write, not after. "
         f"Got: {redis_copy}"
     )
+    assert f"team_id:{team_id}" not in shared_redis._store, "redis-py never touches the auth cache keyspace"
 
 
 class _CountingFakeRedis(_SharedFakeRedis):
@@ -8195,7 +8197,6 @@ async def test_get_team_member_default_budget_caches_json_safe_payload():
     must be dumped to ISO strings before the write, and the read side must give back a model.
     """
     from litellm.proxy.auth.auth_checks import get_team_member_default_budget
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     budget_row = MagicMock()
     budget_row.dict = lambda: {
@@ -8208,20 +8209,7 @@ async def test_get_team_member_default_budget_caches_json_safe_payload():
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
 
-    class _JsonOnlyRedis:
-        """Stands in for RedisCache, which serializes with a bare json.dumps()."""
-
-        def __init__(self):
-            self.writes = []
-
-        async def async_set_cache(self, key, value, **kwargs):
-            self.writes.append((key, json.dumps(value)))
-
-        async def async_get_cache(self, key, **kwargs):
-            return None
-
-    redis_cache = _JsonOnlyRedis()
-    cache = UserApiKeyCache(redis_cache=redis_cache)
+    cache, auth_store = shared_cache()
 
     budget = await get_team_member_default_budget(
         budget_id="tm-budget-1",
@@ -8231,9 +8219,10 @@ async def test_get_team_member_default_budget_caches_json_safe_payload():
 
     assert isinstance(budget, LiteLLM_BudgetTable)
     assert budget.max_budget == 25.0
-    assert len(redis_cache.writes) == 1
-    written_key, written_payload = redis_cache.writes[0]
-    assert written_key == "team_member_default_budget:tm-budget-1"
+    assert [command[:2] for command in auth_store.commands if command[0] == "SET"] == [
+        ("SET", "team_member_default_budget:tm-budget-1")
+    ]
+    written_payload = json.dumps(auth_store.redis["team_member_default_budget:tm-budget-1"])
     assert json.loads(written_payload)["max_budget"] == 25.0
 
     cached = await get_team_member_default_budget(

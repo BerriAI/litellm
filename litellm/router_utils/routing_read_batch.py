@@ -35,10 +35,15 @@ class RoutingPrefetch:
     @staticmethod
     @renamed_router_param("litellm_router_instance")
     def arm(ctx: "RoutingContext", usage_selector: LowestTPMLoggingHandler_v2 | None, deployments: list) -> None:
-        routing_prefetch.arm_cooldowns(ctx.health().cooldowns.cooldown_store, ctx.registry().names(kind="ids"))
+        RoutingPrefetch.arm_cooldowns(ctx)
         read: Final = _selector_read(usage_selector, deployments)
         if read is not None:
             routing_prefetch.arm(read)
+
+    @staticmethod
+    def arm_cooldowns(ctx: "RoutingContext") -> None:
+        """The cooldown read routing takes later, declared on the request's native pre-call batch now."""
+        routing_prefetch.arm_cooldowns(ctx.health().cooldowns.cooldown_store, ctx.registry().names(kind="ids"))
 
     @staticmethod
     def armed() -> bool:

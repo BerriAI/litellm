@@ -498,6 +498,7 @@ class RequestRedisBatches:
         "_native",
         "_native_factory",
         "_native_flush_hooks",
+        "_native_misses",
         "_post_call",
         "post_call_deadline",
         "prefetched",
@@ -514,6 +515,7 @@ class RequestRedisBatches:
         self._native_factory: Final = native_factory
         self._native: NativeRequestRedis | None = None
         self._native_flush_hooks: Final[list[Callable[[], None]]] = []  # mutable-ok: append-only registry
+        self._native_misses: frozenset[str] = frozenset()
         self._deadline: asyncio.TimerHandle | None = None
         self._deadline_flush: asyncio.Task[None] | None = None
         # Reads declared early for a consumer that runs later in the request, keyed by consumer name.
@@ -557,6 +559,16 @@ class RequestRedisBatches:
     def add_native_flush_hook(self, hook: Callable[[], None]) -> None:
         """Called before every native pre-call flush so late readers can declare into the same trip."""
         self._native_flush_hooks.append(hook)
+
+    def note_native_misses(self, keys: Sequence[str]) -> None:
+        """Keys a native pre-call read found absent (or a native DEL removed), like ``RedisBatch.read_as_missing``."""
+        self._native_misses = self._native_misses | frozenset(keys)
+
+    def forget_native_miss(self, key: str) -> None:
+        self._native_misses = self._native_misses - frozenset((key,))
+
+    def native_read_as_missing(self, key: str) -> bool:
+        return key in self._native_misses
 
     async def flush_native_pre(self) -> None:
         for hook in self._native_flush_hooks:

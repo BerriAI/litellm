@@ -6,7 +6,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
@@ -21,7 +22,6 @@ from litellm.caching.redis_batch import active_request_redis_batches, request_re
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import cache_team_object
 from litellm.proxy.auth.auth_object_prefetch import _CacheEntry, _write_back, prefetch_identity_keys
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     CHECK_AND_INCREMENT_BY_N_SCRIPT,
     PROXY_MaxParallelRequestsHandler_v3,
@@ -29,14 +29,22 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitUnverifiableError,
 )
 from litellm.proxy.utils import InternalUsageCache
+from litellm.redis.stores.router_cooldowns import ActiveCooldowns, RouterCooldownStore
 from litellm.router_api import RoutingContext
-from litellm.router_utils.routing_prefetch import ArmedRead, TierRead
+from litellm.router_utils.routing_prefetch import ArmedRead, TierRead, arm_cooldowns, read_cooldowns
 from litellm.router_utils.routing_read_batch import (
     ROUTER_USAGE_TARGET,
     RoutingPrefetch,
 )
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
-from .test_redis_batch import FakeClient, FakeNativePending, FakeNatives, FakeRedisCache, replies
+from .test_redis_batch import (
+    FakeClient,
+    FakeNativePending,
+    FakeNativeRequest,
+    FakeNatives,
+    FakeRedisCache,
+)
 
 
 def _cooldown_key(model_id: str) -> str:
@@ -73,6 +81,11 @@ def _refunds(limiter: PROXY_MaxParallelRequestsHandler_v3) -> list[tuple[str, fl
     refund_script = limiter.window_guarded_token_increment_script
     assert isinstance(refund_script, AsyncMock)
     return [(call.kwargs["keys"][1], call.kwargs["args"][1]) for call in refund_script.await_args_list]
+
+
+def _declared_before_the_first_flush(natives: FakeNatives) -> list[str]:
+    events: Final = natives.built[0].events
+    return events[: events.index("flush_pre")]
 
 
 def _lua_ok_replies(command: tuple[Any, ...]) -> Any:
@@ -764,125 +777,144 @@ def _user_entry() -> tuple[_CacheEntry, LiteLLM_UserTable]:
 
 
 @pytest.mark.asyncio
-async def test_auth_write_back_rides_the_next_round_trip_and_the_scope_drains_what_nobody_awaited():
-    client = FakeClient(_lua_ok_replies)
-    redis_cache = FakeRedisCache(client)
-    cache = UserApiKeyCache(redis_cache=redis_cache)
-    with request_redis_batch_scope() as request:
+async def test_auth_write_back_rides_the_native_pre_call_batch_and_the_scope_drains_what_nobody_awaited():
+    cache, fake = shared_cache()
+    natives: Final = FakeNatives()
+    with request_redis_batch_scope(native_factory=natives) as request:  # pyright: ignore[reportArgumentType]  # test double
         await _write_back([_user_entry()], cache)
-        assert client.pipelines == []  # not sent yet: the SET waits for the next round trip
-        await request.batch(redis_cache).mget(["spend:key:k1"])
-        assert len(client.pipelines) == 1
-        kinds = [c[0] for c in client.pipelines[0].commands]
-        assert kinds == ["MGET", "SET"] or kinds == ["SET", "MGET"]
-        set_command = next(c for c in client.pipelines[0].commands if c[0] == "SET")
-        assert set_command[1] == "user-1" and set_command[3] == 42
-        assert json.loads(set_command[2])["user_id"] == "user-1"
-        assert cache.in_memory_cache.get_cache("user-1") is not None
-
-        await _write_back([_user_entry()], cache)
-        assert len(client.pipelines) == 1
+        assert cache.get_local("user-1")["user_id"] == "user-1"
+        assert natives.built[0].events == ["declare write_back (('user-1', 42),)"]
         await request.flush_all()
-    assert len(client.pipelines) == 2
-    assert [c[0] for c in client.pipelines[1].commands] == ["SET"]
+    assert natives.built[0].events[-1] == "flush_pre"
+    assert fake.commands == []
 
 
 @pytest.mark.asyncio
 async def test_auth_write_back_outside_a_scope_writes_through_as_before():
-    redis_cache = FakeRedisCache(FakeClient(_lua_ok_replies))
-    cache = UserApiKeyCache(redis_cache=redis_cache)
+    cache, fake = shared_cache()
     await _write_back([_user_entry()], cache)
-    assert [(op[0], [(key, ttl) for key, _value, ttl in op[1]]) for op in redis_cache.alone] == [
-        ("SET_PIPELINE", [("user-1", 42)])
-    ]
+    assert fake.commands == [("WRITE_BACK", (("user-1", 42),))]
 
 
 @pytest.mark.asyncio
-async def test_a_key_the_request_mget_read_as_absent_is_not_read_again_by_a_per_key_get():
-    client = FakeClient(_lua_ok_replies)
-    redis_cache = FakeRedisCache(client)
-    cache = UserApiKeyCache(redis_cache=redis_cache)
-    with request_redis_batch_scope() as request:
-        assert await request.batch(redis_cache).mget(["absent-key"]) == {"absent-key": None}
+async def test_a_key_the_request_read_as_absent_is_not_read_again_by_a_per_key_get():
+    cache, fake = shared_cache()
+    with request_redis_batch_scope(native_factory=FakeNatives()) as request:  # pyright: ignore[reportArgumentType]  # test double
+        await prefetch_identity_keys(["absent-key"], cache)
         assert await cache.async_get_cache("absent-key") is None
-        assert redis_cache.alone == [] and len(client.pipelines) == 1
         await cache.async_set_cache("absent-key", {"v": 1}, ttl=5)
+        assert await cache.async_get_cache("absent-key") == {"v": 1}
         await request.flush_all()
-    assert [c[:2] for c in client.pipelines[1].commands] == [("SET", "absent-key")]
+    assert fake.commands == []
 
 
 @pytest.mark.asyncio
 async def test_management_object_writes_inside_a_request_ride_its_pipeline_and_write_through_outside():
-    client = FakeClient(_lua_ok_replies)
-    redis_cache = FakeRedisCache(client)
-    cache = UserApiKeyCache(redis_cache=redis_cache)
-    with request_redis_batch_scope() as request:
+    cache, fake = shared_cache()
+    natives: Final = FakeNatives()
+    with request_redis_batch_scope(native_factory=natives) as request:  # pyright: ignore[reportArgumentType]  # test double
         await cache.async_set_cache("team_id:t1", {"team_id": "t1"}, ttl=60)
         await cache.async_set_cache("hashed-key-object", {"token": "hashed-key-object"}, ttl=60)
-        assert client.pipelines == []
-        assert cache.in_memory_cache.get_cache("team_id:t1") == {"team_id": "t1"}
+        assert cache.get_local("team_id:t1") == {"team_id": "t1"}
         assert await cache.async_get_cache("hashed-key-object") == {"token": "hashed-key-object"}
         await request.flush_all()
-    assert sorted((c[0], c[1], c[3]) for c in client.pipelines[0].commands) == [
-        ("SET", "hashed-key-object", 60),
-        ("SET", "team_id:t1", 60),
+    assert natives.built[0].events == [
+        "declare set team_id:t1 ttl=60.0",
+        "declare set hashed-key-object ttl=60.0",
+        "flush_pre",
     ]
     await cache.async_set_cache("team_id:t2", {"team_id": "t2"}, ttl=60)
-    assert len(client.pipelines) == 1
-    assert redis_cache.alone == [("SET", "team_id:t2", {"team_id": "t2"})]
+    assert fake.commands == [("SET", "team_id:t2", 60.0)]
 
 
 @pytest.mark.asyncio
 async def test_a_team_refresh_inside_a_request_sends_its_set_and_alias_del_in_one_pipeline_before_returning():
-    client = FakeClient(_lua_ok_replies)
-    redis_cache = FakeRedisCache(client)
-    cache = UserApiKeyCache(redis_cache=redis_cache)
+    redis_cache = FakeRedisCache(FakeClient(_lua_ok_replies))
+    cache, fake = shared_cache(connection=redis_cache)
     usage_cache = DualCache(redis_cache=redis_cache)
     usage_cache.in_memory_cache.set_cache("team_id:t1", "stale team")
     usage_cache.in_memory_cache.set_cache("team_alias:alpha", "stale alias")
-    cache.in_memory_cache.set_cache("team_alias:alpha", "stale alias")
+    cache.set_local("team_alias:alpha", "stale alias", None)
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.internal_usage_cache = InternalUsageCache(dual_cache=usage_cache)
     team = LiteLLM_TeamTableCachedObj(team_id="t1", team_alias="alpha")
-    with request_redis_batch_scope() as request:
+    natives: Final = FakeNatives()
+    with request_redis_batch_scope(native_factory=natives) as request:  # pyright: ignore[reportArgumentType]  # test double
         await cache_team_object("t1", team, cache, proxy_logging_obj)
-        assert [c[:2] for c in client.pipelines[0].commands] == [("SET", "team_id:t1"), ("DEL", "team_alias:alpha")], (
-            "the alias DEL must reach Redis before the refresh returns, or another request can refill memory from it"
-        )
-        assert redis_cache.alone == []
+        assert natives.built[0].events == [
+            "declare set team_id:t1 ttl=60.0",
+            "declare del team_alias:alpha",
+            "flush_pre",
+        ], "the alias DEL must reach Redis before the refresh returns, or another request can refill memory from it"
         assert usage_cache.in_memory_cache.get_cache("team_id:t1") is None
         assert usage_cache.in_memory_cache.get_cache("team_alias:alpha") is None
-        assert cache.in_memory_cache.get_cache("team_alias:alpha") is None
-        assert cache.in_memory_cache.get_cache("team_id:t1")["team_id"] == "t1"
+        assert cache.get_local("team_alias:alpha") is None
+        assert cache.get_local("team_id:t1")["team_id"] == "t1"
         await request.flush_all()
-    assert len(client.pipelines) == 1 and redis_cache.alone == []
+    assert fake.commands == [] and redis_cache.alone == []
 
 
 @pytest.mark.asyncio
-async def test_a_pipelined_management_write_without_a_ttl_expires_in_redis_like_the_direct_path():
-    client = FakeClient(_lua_ok_replies)
-    redis_cache = FakeRedisCache(client)
-    cache = UserApiKeyCache(redis_cache=redis_cache)
+async def test_a_changed_default_in_memory_ttl_reaches_the_native_store():
+    cache, fake = shared_cache()
     cache.update_cache_ttl(default_in_memory_ttl=5, default_redis_ttl=None)
-    with request_redis_batch_scope() as request:
-        await cache.async_set_cache("team_id:t1", {"team_id": "t1"})
-        await request.flush_all()
-    assert [(c[0], c[1], c[3]) for c in client.pipelines[0].commands] == [("SET", "team_id:t1", 5)]
+    assert [settings.memory_ttl for settings in fake.settings] == [None, 5]
 
 
 @pytest.mark.asyncio
-async def test_identity_prefetch_is_one_mget_after_which_hits_and_misses_alike_cost_no_read():
-    client = FakeClient(replies)
-    redis_cache = FakeRedisCache(client)
-    cache = UserApiKeyCache(redis_cache=redis_cache)
-    with request_redis_batch_scope():
+async def test_identity_prefetch_is_one_read_after_which_hits_and_misses_alike_cost_no_read():
+    cache, fake = shared_cache(FakeAuthCache(redis={"key-hit": {"k": "key-hit"}}))
+    natives: Final = FakeNatives()
+    with request_redis_batch_scope(native_factory=natives):  # pyright: ignore[reportArgumentType]  # test double
         await prefetch_identity_keys(["key-hit", "end_user_id:eu-miss", "key-hit"], cache)
-        assert [c[0] for c in client.pipelines[0].commands] == ["MGET"]
-        assert sorted(client.pipelines[0].commands[0][1:]) == ["end_user_id:eu-miss", "key-hit"]
         assert await cache.async_get_cache("key-hit") == {"k": "key-hit"}
         assert await cache.async_get_cache("end_user_id:eu-miss") is None
-    assert len(client.pipelines) == 1 and redis_cache.alone == []
-    assert cache.in_memory_cache.get_cache("end_user_id:eu-miss") is None
+    assert natives.built[0].events == ["declare auth_cache end_user_id:eu-miss,key-hit", "flush_pre"]
+    assert fake.commands == []
+    assert cache.get_local("end_user_id:eu-miss") is None
+
+
+@dataclass
+class _FakeCooldownsHandle:
+    """A connected cooldown store whose ``declare_active`` lands on the request's fake native batch."""
+
+    def declare_active(
+        self, request: FakeNativeRequest, model_ids: Sequence[str]
+    ) -> FakeNativePending[ActiveCooldowns]:
+        request.events.append("declare cooldowns")
+        return FakeNativePending(request, lambda: ())
+
+
+@pytest.mark.asyncio
+async def test_the_auth_prefetch_and_the_armed_cooldown_read_go_out_in_one_native_pipeline():
+    cache, _fake = shared_cache(FakeAuthCache(redis={"key-hit": {"k": "key-hit"}}))
+    cooldowns: Final = RouterCooldownStore(
+        FakeRedisCache(FakeClient(_lua_ok_replies)), handle=lambda _c: _FakeCooldownsHandle()
+    )  # pyright: ignore[reportArgumentType]  # test double
+    natives: Final = FakeNatives()
+
+    with request_redis_batch_scope(native_factory=natives) as request:  # pyright: ignore[reportArgumentType]  # test double
+        await prefetch_identity_keys(["key-hit"], cache, before_read=lambda: arm_cooldowns(cooldowns, ["dep-a"]))
+        arm_cooldowns(cooldowns, ["dep-a"])
+        active = await read_cooldowns(cooldowns, ["dep-a"], None)
+        await request.flush_all()
+
+    assert active == ()
+    assert len(natives.built) == 1
+    assert _declared_before_the_first_flush(natives) == ["declare cooldowns", "declare auth_cache key-hit"]
+    assert not [event for event in natives.built[0].events[2:] if event.startswith("declare")]
+
+
+@pytest.mark.asyncio
+async def test_a_prefetch_served_from_memory_arms_no_early_cooldown_read():
+    cache, _fake = shared_cache()
+    cache.set_local("key-hit", {"k": "key-hit"}, None)
+    armed: Final[list[str]] = []  # mutable-ok: records the arming callback
+
+    with request_redis_batch_scope(native_factory=FakeNatives()):  # pyright: ignore[reportArgumentType]  # test double
+        await prefetch_identity_keys(["key-hit"], cache, before_read=lambda: armed.append("armed"))
+
+    assert armed == []
 
 
 @pytest.mark.asyncio

@@ -190,7 +190,7 @@ def evict_local(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache"
 
 
 def _drop_from_memory(cache_key: str, user_api_key_cache: "UserApiKeyCache") -> None:
-    user_api_key_cache.delete_from_memory(cache_key)
+    user_api_key_cache.delete_local(cache_key)
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)

@@ -188,7 +188,13 @@ from litellm.redis.stores.spend_counters import (
 from litellm.repositories.table_repositories import JWTKeyMappingRepository, TeamMembershipRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
-from litellm.router_api import fallbacks_disabled, references_provider_scoped_resource, request_fallback_chain
+from litellm.router_api import (
+    RoutingContext,
+    fallbacks_disabled,
+    references_provider_scoped_resource,
+    request_fallback_chain,
+)
+from litellm.router_utils.routing_read_batch import RoutingPrefetch
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
@@ -2651,6 +2657,7 @@ async def user_api_key_auth_builder(
             await prefetch_identity_keys(
                 _identity_cache_keys(api_key, end_user_id=end_user_id, key_is_resolved=valid_token is not None),
                 user_api_key_cache=user_api_key_cache,
+                before_read=arm_routing_cooldowns,
             )
         if end_user_id:
             try:
@@ -4303,7 +4310,18 @@ async def _prefetch_referenced_auth_objects(
         refs=AuthObjectRefs.from_token(valid_token),
         user_api_key_cache=user_api_key_cache,
         prisma_client=prisma_client,
+        before_read=arm_routing_cooldowns,
     )
+
+
+def arm_routing_cooldowns() -> None:
+    """Declares the cooldown read routing takes later into the auth prefetch's native round trip, so a request whose
+    auth objects come from Redis pays one round trip for both. Armed only when a prefetch reads Redis, so a request
+    served from memory, or denied, reads no cooldowns early."""
+    from litellm.proxy.proxy_server import llm_router  # noqa: PLC0415  # runtime global
+
+    if llm_router is not None:
+        RoutingPrefetch.arm_cooldowns(RoutingContext(llm_router))
 
 
 def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Request | None = None) -> None:

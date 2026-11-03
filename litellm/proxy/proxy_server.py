@@ -4435,15 +4435,9 @@ def _add_spend_to_locally_cached_object(
     )
 
 
-async def _add_spend_to_shared_global_proxy_spend(
-    cache: UserApiKeyCache, response_cost: float, parent_otel_span: Span | None
-) -> float | None:
-    if cache.redis_cache is None:
-        return None
+async def _add_spend_to_shared_global_proxy_spend(cache: UserApiKeyCache, response_cost: float) -> float | None:
     try:
-        return await cache.redis_cache.async_increment_if_present(
-            key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=response_cost, parent_otel_span=parent_otel_span
-        )
+        return await cache.increment_if_present(GLOBAL_PROXY_SPEND_CACHE_KEY, response_cost)
     except Exception as e:
         verbose_proxy_logger.warning(
             "Spend tracking - failed to add spend to the global proxy spend in Redis. "
@@ -4454,11 +4448,9 @@ async def _add_spend_to_shared_global_proxy_spend(
         return None
 
 
-async def _add_spend_to_global_proxy_spend(
-    cache: UserApiKeyCache, response_cost: float, parent_otel_span: Span | None
-) -> None:
+async def _add_spend_to_global_proxy_spend(cache: UserApiKeyCache, response_cost: float) -> None:
     local_before: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
-    shared_total: Final = await _add_spend_to_shared_global_proxy_spend(cache, response_cost, parent_otel_span)
+    shared_total: Final = await _add_spend_to_shared_global_proxy_spend(cache, response_cost)
     local_total: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
     if not isinstance(local_total, (int, float)):
         return
@@ -4574,7 +4566,7 @@ async def update_cache(
     if litellm.max_budget <= 0:
         return
     with service_target(SPEND_COUNTERS_TARGET):
-        await _add_spend_to_global_proxy_spend(target, response_cost, parent_otel_span)
+        await _add_spend_to_global_proxy_spend(target, response_cost)
 
 
 def run_ollama_serve():

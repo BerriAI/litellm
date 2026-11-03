@@ -3198,7 +3198,7 @@ async def cache_team_object(
     usage_cache: Final = None if proxy_logging_obj is None else proxy_logging_obj.internal_usage_cache.dual_cache
     # On a shared Redis the write below replaces the team entry and the alias DEL below removes the alias entry
     # for both caches, so the usage cache only has its own memory to clear.
-    redis_shared: Final = usage_cache is not None and usage_cache.redis_cache is user_api_key_cache.redis_cache
+    redis_shared: Final = usage_cache is not None and usage_cache.redis_cache is user_api_key_cache.redis_connection
 
     await _invalidate_usage_cache_entry(usage_cache, key, redis_shared=redis_shared, stale="team object")
 

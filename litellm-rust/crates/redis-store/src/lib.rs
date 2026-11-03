@@ -1,3 +1,4 @@
+pub mod auth_cache;
 mod codec;
 mod error;
 mod number;

@@ -1,7 +1,7 @@
 import datetime
 import hashlib
-import json
 from typing import Any, Final
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -18,6 +18,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     is_user_key_cache_key,
 )
 from litellm.proxy.proxy_server import UserAPIKeyCacheTTLEnum
+from litellm.rust_bridge._native import NativeAuthCache
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
 HASHED_TOKEN = hashlib.sha256(b"sk-lit7563-hot-key").hexdigest()
 
@@ -45,70 +47,6 @@ class _ManualClock:
         self.seconds += seconds
 
 
-class FakeRedisCache(RedisCache):
-    """
-    In-memory fake that enforces the UserApiKeyCache Redis payload contract.
-
-    For user_api_key_cache entries we expect Redis to store a JSON object (dict)
-    produced by `CacheCodec.serialize(..., model_type=...)`.
-
-    This fake:
-    - raises TypeError if the value is not a dict
-    - raises TypeError if the dict is not JSON-serializable
-
-    Records the ``ttl`` kwarg DualCache forwards on each Redis write for tests.
-    """
-
-    def __init__(self):  # noqa: super().__init__ skipped intentionally
-        self._store: dict[str, str] = {}
-        self.last_ttl: Any = None
-
-    def set_cache(self, key: str, value: Any, **kwargs):  # type: ignore[override]
-        if not isinstance(value, dict):
-            raise TypeError("FakeRedisCache only accepts dict payloads")
-        self.last_ttl = kwargs.get("ttl")
-        self._store[key] = json.dumps(value)
-        return True
-
-    def get_cache(self, key: str, **kwargs):  # type: ignore[override]
-        raw = self._store.get(key)
-        if raw is None:
-            return None
-        return json.loads(raw)
-
-    async def async_set_cache(self, key: str, value: Any, **kwargs):  # type: ignore[override]
-        if not isinstance(value, dict):
-            raise TypeError("FakeRedisCache only accepts dict payloads")
-        self.last_ttl = kwargs.get("ttl")
-        self._store[key] = json.dumps(value)
-        return True
-
-    async def async_get_cache(self, key: str, **kwargs):  # type: ignore[override]
-        raw = self._store.get(key)
-        if raw is None:
-            return None
-        return json.loads(raw)
-
-    def delete_cache(self, key: str):  # type: ignore[override]
-        self._store.pop(key, None)
-
-    async def async_delete_cache(self, key: str):  # type: ignore[override]
-        self._store.pop(key, None)
-
-    async def delete_cache_keys(self, keys):  # type: ignore[override]
-        for key in keys:
-            self._store.pop(key, None)
-
-
-class PartitionFailingRedisCache(FakeRedisCache):
-    """Fails the batch delete for the key-object partition and no other."""
-
-    async def delete_cache_keys(self, keys):  # type: ignore[override]
-        if any(is_user_key_cache_key(key) for key in keys):
-            raise ConnectionError("redis unavailable")
-        await super().delete_cache_keys(keys)
-
-
 def _make_key_obj(token: str = "tok") -> UserAPIKeyAuth:
     # Minimal object (UserAPIKeyAuth inherits token from base view).
     return UserAPIKeyAuth(token=token)
@@ -128,7 +66,6 @@ class TestUserApiKeyCache:
         mem = CapturingInMemoryCache()
         cache = UserApiKeyCache(
             in_memory_cache=mem,
-            redis_cache=FakeRedisCache(),
             default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value,
         )
         await cache.async_set_cache(
@@ -145,126 +82,137 @@ class TestUserApiKeyCache:
         mem = CapturingInMemoryCache()
         cache = UserApiKeyCache(
             in_memory_cache=mem,
-            redis_cache=FakeRedisCache(),
             default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value,
         )
         cache.set_cache("sk", _make_key_obj("s"), model_type=UserAPIKeyAuth)
         assert mem.last_ttl == UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 
     @pytest.mark.asyncio
-    async def test_async_set_forwards_default_in_memory_ttl_to_redis_layer(self):
-        """
-        DualCache injects missing ``ttl`` from ``default_in_memory_ttl`` into kwargs
-        before calling ``redis_cache.async_set_cache`` — Redis should receive the same
-        TTL as memory (matches proxy defaults: enum 60s).
-        """
-        fake = FakeRedisCache()
-        cache = UserApiKeyCache(
-            redis_cache=fake,
-            default_in_memory_ttl=60,
-        )
+    async def test_the_shared_store_gets_default_in_memory_ttl_and_writes_without_a_ttl(self):
+        """The native store applies ``default_in_memory_ttl`` to a write that names no TTL, in memory and Redis,
+        as DualCache does; the Rust side pins the resulting Redis TTL."""
+        cache, fake = shared_cache(default_in_memory_ttl=60)
 
-        await cache.async_set_cache(
-            key="ttl-key",
-            value=_make_key_obj("ttl-tok"),
-            model_type=UserAPIKeyAuth,
-        )
+        await cache.async_set_cache(key="ttl-key", value=_make_key_obj("ttl-tok"), model_type=UserAPIKeyAuth)
 
-        assert fake.last_ttl == 60
+        assert [settings.memory_ttl for settings in fake.settings] == [60]
+        assert fake.commands == [("SET", "ttl-key", None)]
 
     @pytest.mark.asyncio
     async def test_async_set_explicit_ttl_override_reaches_redis(self):
-        fake = FakeRedisCache()
-        cache = UserApiKeyCache(
-            redis_cache=fake,
-            default_in_memory_ttl=60,
-        )
+        cache, fake = shared_cache(default_in_memory_ttl=60)
 
-        await cache.async_set_cache(
-            key="k",
-            value=_make_key_obj("x"),
-            model_type=UserAPIKeyAuth,
-            ttl=900,
-        )
+        await cache.async_set_cache(key="k", value=_make_key_obj("x"), model_type=UserAPIKeyAuth, ttl=900)
 
-        assert fake.last_ttl == 900
+        assert fake.commands == [("SET", "k", 900)]
 
-    def test_sync_set_forwards_default_in_memory_ttl_to_redis_layer(self):
-        fake = FakeRedisCache()
-        cache = UserApiKeyCache(
-            redis_cache=fake,
-            default_in_memory_ttl=45,
-        )
-        cache.set_cache(
-            "sk",
-            _make_key_obj("sync"),
-            model_type=UserAPIKeyAuth,
-        )
-        assert fake.last_ttl == 45
+    def test_sync_set_writes_through_the_shared_store_as_str(self):
+        cache, fake = shared_cache(default_in_memory_ttl=45)
+
+        cache.set_cache("sk", _make_key_obj("sync"), model_type=UserAPIKeyAuth, ttl=45)
+
+        assert fake.commands == [("SET_STR", "sk", 45)]
+        assert fake.redis["sk"]["token"] == "sync"
 
     @pytest.mark.asyncio
     async def test_async_set_typed_stores_serialized_payload_in_memory_and_redis(self):
-        cache = UserApiKeyCache(redis_cache=FakeRedisCache())
+        cache, fake = shared_cache()
         obj = _make_key_obj("abc")
 
         await cache.async_set_cache("k", obj, model_type=UserAPIKeyAuth)
 
-        # In-memory hit should still be raw dict (not BaseModel) because wrapper
-        # stores the serialized payload into both layers.
-        raw = await cache.in_memory_cache.async_get_cache("k")  # type: ignore[union-attr]
+        raw = cache.get_local("k")
         assert isinstance(raw, dict)
         assert raw["token"] == "abc"
-
-        # Redis should also hold the same serialized dict
-        redis_raw = await cache.redis_cache.async_get_cache("k")  # type: ignore[union-attr]
-        assert redis_raw == raw
+        assert fake.redis["k"] == raw
+        assert cache.in_memory_cache.get_cache("k") is None, "redis-py's DualCache tier is never written"
 
     @pytest.mark.asyncio
     async def test_async_get_typed_returns_model_on_valid_hit(self):
-        cache = UserApiKeyCache(redis_cache=FakeRedisCache())
-        await cache.async_set_cache("k", {"token": "abc"}, model_type=UserAPIKeyAuth)
+        cache, fake = shared_cache(FakeAuthCache(redis={"k": {"token": "abc"}}))
 
         value = await cache.async_get_cache("k", model_type=UserAPIKeyAuth)
         assert value is not None
         assert isinstance(value, UserAPIKeyAuth)
         assert value.token == "abc"
+        assert fake.commands == [("GET", "k")]
 
     @pytest.mark.asyncio
     async def test_async_get_typed_returns_none_on_validation_failure_after_hit(self):
-        cache = UserApiKeyCache(redis_cache=FakeRedisCache())
-
-        # Bypass UserApiKeyCache.serialize: CacheCodec rejects non-dict cached values
-        # for dict-based models (deserialize returns None).
-        await cache.in_memory_cache.async_set_cache(key="k", value="invalid-payload-not-a-dict")
+        cache, _fake = shared_cache()
+        cache.set_local("k", "invalid-payload-not-a-dict", None)
 
         value = await cache.async_get_cache("k", model_type=UserAPIKeyAuth)
         assert value is None
 
-    def test_fake_redis_cache_rejects_non_json_serializable_values(self):
-        fake = FakeRedisCache()
+    @pytest.mark.asyncio
+    async def test_a_failed_shared_read_is_a_miss_and_a_failed_write_keeps_the_request_going(self):
+        cache, fake = shared_cache(FakeAuthCache(fail=ConnectionError("redis down")))
 
-        class NotSerializable:
-            pass
+        assert await cache.async_get_cache("team_id:t1") is None
+        await cache.async_set_cache("team_id:t1", {"team_id": "t1"}, ttl=5)
+        assert cache.get_cache("team_id:t2") is None
 
-        with pytest.raises(TypeError):
-            fake.set_cache("k", NotSerializable())
+        assert [command[0] for command in fake.commands] == ["GET", "SET", "GET"]
+        assert cache.get_local("team_id:t1") == {"team_id": "t1"}
 
-        with pytest.raises(TypeError):
-            fake.set_cache("k2", {"ok": NotSerializable()})
+    @pytest.mark.asyncio
+    async def test_a_value_the_bridge_refuses_is_logged_not_raised(self):
+        cache = UserApiKeyCache(
+            redis_cache=MagicMock(spec=RedisCache),
+            auth_cache_handle=lambda _c, _s, _t: _refusing(),
+            redis_client=lambda _: None,
+        )
+
+        await cache.async_set_cache("team_id:t1", {"team_id": "t1"})
+        cache.set_cache("team_id:t1", {"team_id": "t1"})
 
     @pytest.mark.asyncio
     async def test_a_model_holding_a_datetime_is_cached_as_its_json_dump(self):
-        cache = UserApiKeyCache()
+        cache = UserApiKeyCache(
+            redis_cache=MagicMock(spec=RedisCache),
+            auth_cache_handle=lambda _c, _s, _t: NativeAuthCache(None),
+            redis_client=lambda _: None,
+        )
         key_obj = UserAPIKeyAuth(token="abc", expires=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc))
 
-        await cache.async_set_cache("k", key_obj, model_type=UserAPIKeyAuth)
+        await cache.async_set_cache("k", key_obj, model_type=UserAPIKeyAuth, local_only=True)
 
-        stored = cache.get_cache("k", local_only=True)
-        assert stored == key_obj.model_dump(mode="json")
-        assert json.loads(json.dumps(stored)) == stored
+        assert cache.get_local("k") == key_obj.model_dump(mode="json")
         cached = await cache.async_get_cache("k", model_type=UserAPIKeyAuth)
         assert cached is not None
         assert cached.model_dump(mode="json") == key_obj.model_dump(mode="json")
+
+    @pytest.mark.asyncio
+    async def test_keyspace_operations_redis_py_cannot_reach_are_refused_once_shared(self):
+        cache, _fake = shared_cache()
+
+        with pytest.raises(NotImplementedError):
+            await cache.async_increment_cache("team_id:t1", 1)
+        with pytest.raises(NotImplementedError):
+            await cache.async_batch_get_cache(["team_id:t1"])
+        assert cache.redis_cache is None
+
+    @pytest.mark.asyncio
+    async def test_global_spend_increments_only_an_entry_redis_still_holds(self):
+        cache, fake = shared_cache(FakeAuthCache(redis={"litellm-proxy-budget:spend": 1.5}))
+        memory_only = UserApiKeyCache()
+
+        assert await cache.increment_if_present("litellm-proxy-budget:spend", 2.0) == 3.5
+        assert await cache.increment_if_present("absent", 2.0) is None
+        assert await memory_only.increment_if_present("litellm-proxy-budget:spend", 2.0) is None
+        assert [command[:2] for command in fake.commands] == [
+            ("INCRBYFLOAT_IF_PRESENT", "litellm-proxy-budget:spend"),
+            ("INCRBYFLOAT_IF_PRESENT", "absent"),
+        ]
+
+
+def _refusing() -> FakeAuthCache:
+    class Refusing(FakeAuthCache):
+        def set_local(self, key: str, value: object, ttl_seconds: float | None = None) -> None:
+            raise TypeError("not a plain data value")
+
+    return Refusing()
 
 
 class TestUserKeyObjectPartition:
@@ -311,19 +259,16 @@ class TestUserKeyObjectPartition:
         assert key_obj.token == HASHED_TOKEN
 
     @pytest.mark.asyncio
-    async def test_redis_hit_backfills_key_object_partition_with_configured_ttl(self):
-        redis = FakeRedisCache()
-        writer = UserApiKeyCache(redis_cache=redis, default_in_memory_ttl=30)
+    async def test_redis_hit_backfills_this_workers_shared_memory(self):
+        writer, fake = shared_cache(default_in_memory_ttl=30)
         await writer.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
+        fake.flush_local()
 
-        key_partition = CapturingInMemoryCache()
-        reader = UserApiKeyCache(redis_cache=redis, default_in_memory_ttl=30, key_object_in_memory_cache=key_partition)
-        key_obj = await reader.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth)
+        key_obj = await writer.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth)
 
         assert key_obj is not None
         assert key_obj.token == HASHED_TOKEN
-        assert key_partition.last_ttl == 30
-        assert HASHED_TOKEN not in reader.in_memory_cache.cache_dict
+        assert writer.get_local(HASHED_TOKEN)["token"] == HASHED_TOKEN
 
     @pytest.mark.asyncio
     async def test_update_cache_ttl_applies_to_key_object_partition(self):
@@ -336,80 +281,65 @@ class TestUserKeyObjectPartition:
         assert key_partition.last_ttl == 7
 
     @pytest.mark.asyncio
-    async def test_attach_redis_cache_applies_to_key_object_partition(self):
-        redis = FakeRedisCache()
-        cache = UserApiKeyCache()
-        cache.attach_redis_cache(redis)
+    async def test_attach_redis_cache_moves_both_partitions_onto_the_shared_store(self):
+        fake = FakeAuthCache()
+        cache = UserApiKeyCache(auth_cache_handle=fake.factory, redis_client=lambda _: None)
+        cache.set_cache(end_user_cache_key("before"), {"user_id": "before"})
+        assert not cache.has_redis
 
+        cache.attach_redis_cache(MagicMock(spec=RedisCache))
         await cache.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
+        await cache.async_set_cache(end_user_cache_key("u1"), {"user_id": "u1"})
 
-        other_worker = UserApiKeyCache(redis_cache=redis)
-        key_obj = await other_worker.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth)
-        assert key_obj is not None
-        assert key_obj.token == HASHED_TOKEN
+        assert cache.has_redis
+        assert set(fake.redis) == {HASHED_TOKEN, end_user_cache_key("u1")}
+        assert HASHED_TOKEN not in cache.key_object_cache.in_memory_cache.cache_dict
 
     @pytest.mark.asyncio
-    async def test_delete_removes_key_object_from_partition_and_redis(self):
-        redis = FakeRedisCache()
-        cache = UserApiKeyCache(redis_cache=redis)
+    async def test_delete_removes_key_object_from_memory_and_redis(self):
+        cache, fake = shared_cache()
         await cache.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
-        assert await cache.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth) is not None
 
         cache.delete_cache(HASHED_TOKEN)
 
-        assert await cache.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth) is None
-        assert await redis.async_get_cache(HASHED_TOKEN) is None
+        assert cache.get_local(HASHED_TOKEN) is None
+        assert HASHED_TOKEN not in fake.redis
 
     @pytest.mark.asyncio
-    async def test_async_delete_removes_key_object_from_partition_and_redis(self):
-        redis = FakeRedisCache()
-        cache = UserApiKeyCache(redis_cache=redis)
+    async def test_async_delete_removes_key_object_from_memory_and_redis(self):
+        cache, fake = shared_cache()
         await cache.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
 
         await cache.async_delete_cache(HASHED_TOKEN)
 
         assert await cache.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth) is None
-        assert await redis.async_get_cache(HASHED_TOKEN) is None
+        assert HASHED_TOKEN not in fake.redis
 
     @pytest.mark.asyncio
-    async def test_batch_delete_routes_each_key_to_its_partition(self):
-        """A batch delete has to clear the same partition the single delete does.
-
-        ``DualCache``'s batch delete only knows about the main in-memory cache, so
-        inheriting it unchanged leaves a key object sitting in ``key_object_cache``
-        with its pre-reset spend, and the next request is authorized against that
-        stale copy until the local entry expires.
-        """
-        redis = FakeRedisCache()
-        cache = UserApiKeyCache(redis_cache=redis)
+    async def test_batch_delete_clears_every_key_in_one_round_trip(self):
+        cache, fake = shared_cache()
         await cache.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
         await cache.async_set_cache(end_user_cache_key("u1"), {"user_id": "u1"})
 
         await cache.async_delete_cache_keys([HASHED_TOKEN, end_user_cache_key("u1")])
 
-        assert await cache.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth) is None
-        assert await cache.async_get_cache(end_user_cache_key("u1")) is None
-        assert await redis.async_get_cache(HASHED_TOKEN) is None
-        assert await redis.async_get_cache(end_user_cache_key("u1")) is None
+        assert cache.get_local(HASHED_TOKEN) is None
+        assert cache.get_local(end_user_cache_key("u1")) is None
+        assert fake.redis == {}
+        assert fake.commands[-1] == ("DEL", (HASHED_TOKEN, end_user_cache_key("u1")))
 
     @pytest.mark.asyncio
-    async def test_batch_delete_clears_the_other_partition_when_one_fails(self):
-        """One partition failing must not cost the other its deletions.
-
-        A caller batching these has already committed the rows they cache, so a
-        partition that is skipped keeps authorizing against pre-reset spend until
-        the entry expires. The failure is still raised for the caller to report.
-        """
-        redis = PartitionFailingRedisCache()
-        cache = UserApiKeyCache(redis_cache=redis)
-        await cache.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
+    async def test_a_failed_batch_delete_still_clears_memory_and_raises(self):
+        """A caller batching these has already committed the rows they cache, so memory is dropped first and the
+        Redis failure is still raised for the caller to report."""
+        cache, fake = shared_cache()
         await cache.async_set_cache(end_user_cache_key("u1"), {"user_id": "u1"})
+        fake.fail = ConnectionError("redis unavailable")
 
         with pytest.raises(ConnectionError):
             await cache.async_delete_cache_keys([HASHED_TOKEN, end_user_cache_key("u1")])
 
-        assert await cache.async_get_cache(end_user_cache_key("u1")) is None
-        assert await redis.async_get_cache(end_user_cache_key("u1")) is None
+        assert cache.get_local(end_user_cache_key("u1")) is None
 
     @pytest.mark.asyncio
     async def test_pipeline_write_routes_each_entry_to_its_partition(self):
@@ -436,10 +366,21 @@ class TestUserKeyObjectPartition:
         assert cache.get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth) is None
         assert cache.get_cache(end_user_cache_key("u1")) is None
 
-    def test_in_memory_cache_for_routes_by_key(self):
-        cache = UserApiKeyCache()
-        assert cache.in_memory_cache_for(HASHED_TOKEN) is cache.key_object_cache.in_memory_cache
-        assert cache.in_memory_cache_for(end_user_cache_key("u1")) is cache.in_memory_cache
+    def test_local_access_routes_by_key_without_redis(self):
+        cache = UserApiKeyCache(default_in_memory_ttl=60)
+        cache.set_local(HASHED_TOKEN, {"token": HASHED_TOKEN}, None)
+        cache.set_local(end_user_cache_key("u1"), {"user_id": "u1"}, 5)
+
+        assert cache.key_object_cache.in_memory_cache.get_cache(HASHED_TOKEN) == {"token": HASHED_TOKEN}
+        assert cache.in_memory_cache.get_cache(end_user_cache_key("u1")) == {"user_id": "u1"}
+        cache.delete_local(HASHED_TOKEN)
+        assert cache.get_local(HASHED_TOKEN) is None
+
+    def test_a_resized_memory_tier_reaches_the_shared_store(self):
+        cache, fake = shared_cache()
+        cache.update_in_memory_max_size(500)
+
+        assert [settings.memory_entries for settings in fake.settings] == [200, 500]
 
     def test_update_in_memory_max_size_applies_to_key_object_partition(self):
         cache = UserApiKeyCache(
@@ -522,7 +463,6 @@ class TestManagementObjectTTL:
         mem = CapturingInMemoryCache()
         cache = UserApiKeyCache(
             in_memory_cache=mem,
-            redis_cache=FakeRedisCache(),
             default_in_memory_ttl=300,
         )
         assert get_management_object_ttl(cache) != (DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL)

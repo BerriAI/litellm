@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     budget_windows_absent_cache_key,
 )
 from litellm.redis.stores.spend_counters import SpendCounterStore
+from tests.unit.redis.stores.auth_cache_double import shared_cache
 
 
 class _RecordingRedisClient(Redis):
@@ -269,6 +270,29 @@ async def test_subscriber_evicts_a_user_whose_id_looks_like_a_no_window_marker_a
 
     assert cache.get_cache(user_id) is None
     assert cache.budget_windows_absent_cache.get_cache(key=user_id) is None
+
+
+@pytest.mark.asyncio
+async def test_subscriber_drops_the_shared_auth_cache_copy_so_the_next_read_refills_from_redis() -> None:
+    """With enable_redis_auth_cache the keyspace's memory tier is native; the Python subscriber forwards each
+    eviction broadcast to it, and the next read takes the other worker's write from Redis."""
+    cache, store = shared_cache()
+    await cache.async_set_cache("team_id:t-1", {"team_id": "t-1", "models": ["old"]})
+    store.redis["team_id:t-1"] = {"team_id": "t-1", "models": ["new"]}
+
+    pubsub = _QueuePubSub(initial_messages=[_invalidation_message("team_id:t-1")])
+    subscriber = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
+        user_api_key_cache=cache,
+    )
+    subscriber.start()
+    try:
+        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
+    finally:
+        await subscriber.stop()
+
+    assert cache.get_local("team_id:t-1") is None
+    assert await cache.async_get_cache("team_id:t-1") == {"team_id": "t-1", "models": ["new"]}
 
 
 @pytest.mark.asyncio

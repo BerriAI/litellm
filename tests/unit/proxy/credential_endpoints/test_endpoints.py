@@ -1810,7 +1810,7 @@ def test_update_credential_purges_connections_when_github_host_changes(monkeypat
         redis_cache: Final = MagicMock()
         redis_cache.async_set_cache = AsyncMock(side_effect=set_cache)
         redis_cache.async_get_cache = AsyncMock(side_effect=get_cache)
-        monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache(redis_cache=redis_cache))
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", shared_cache(connection=redis_cache)[0])
 
         session_key: Final = _session_cache_key("user-a", "copilot", "github.com")
         _SESSION_CACHE.set_cache(
@@ -2063,7 +2063,8 @@ def test_update_credential_still_accepts_a_body_without_credential_values(creden
 
 from contextlib import contextmanager as _ctx
 
-from litellm.caching.dual_cache import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from tests.unit.redis.stores.auth_cache_double import shared_cache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.credential_endpoints import user_provider_credentials as upc
 
@@ -2159,7 +2160,7 @@ def _patch_user_connection_env(monkeypatch, credentials, rows=()):
     prisma_client.db.litellm_userprovidercredentials = table
     prisma_client.writer_db = prisma_client.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
-    cache = DualCache()
+    cache = UserApiKeyCache()
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     return table
 
@@ -2417,7 +2418,7 @@ def test_deleting_the_credential_purges_user_connections(monkeypatch, credential
     prisma_client.writer_db = prisma_client.db
     prisma_client.db.litellm_credentialstable.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
 
     response = _delete_credential("copilot-cred")
     assert response.status_code == 200, response.text
@@ -2882,10 +2883,9 @@ def test_user_connection_poll_valid_handle_works_with_a_fresh_cache(monkeypatch)
         start = _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
         assert start.status_code == 200, start.text
         # simulate a different worker: swap in a brand new empty cache
-        from litellm.caching.dual_cache import DualCache
         from litellm.proxy import proxy_server
 
-        monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
         poll = _call_as(
             "POST",
             "/credentials/copilot-cred/user_connection/poll",
@@ -2910,7 +2910,7 @@ def test_delete_user_connection_fails_closed_when_the_tombstone_write_fails(monk
         async_get_cache=AsyncMock(return_value=None),
         async_delete_cache=AsyncMock(return_value=None),
     )
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache(redis_cache=failing_redis))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", shared_cache(connection=failing_redis)[0])
 
     response = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_as_user())
     assert response.status_code == 503, response.text
@@ -2932,7 +2932,7 @@ def test_delete_user_connection_fails_when_the_tombstone_write_silently_noops(mo
         async_get_cache=AsyncMock(side_effect=lambda key: store.get(key)),
         async_delete_cache=AsyncMock(return_value=None),
     )
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache(redis_cache=silent_redis))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", shared_cache(connection=silent_redis)[0])
 
     response = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_as_user())
     assert response.status_code == 503, response.text
@@ -2953,7 +2953,7 @@ def test_user_connection_poll_reports_503_when_the_cache_overwrite_cannot_land(m
         async_get_cache=AsyncMock(return_value="stale-value"),
         async_delete_cache=AsyncMock(return_value=None),
     )
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache(redis_cache=stale_redis))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", shared_cache(connection=stale_redis)[0])
 
     with _github_http(
         {
