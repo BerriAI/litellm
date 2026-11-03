@@ -106,9 +106,9 @@ class CodexHarness:
 
 
 def _mcp_server_table(name: str, server: McpServer) -> str:
-    env: Final = ", ".join(f"{key} = {json.dumps(value)}" for key, value in server.env.items())
+    env: Final = ", ".join(f"{json.dumps(key)} = {json.dumps(value)}" for key, value in server.env.items())
     return (
-        f"\n[mcp_servers.{name}]\n"
+        f"\n[mcp_servers.{json.dumps(name)}]\n"
         f"command = {json.dumps(server.command)}\n"
         f"args = {json.dumps(server.args)}\n"
         f"env = {{ {env} }}\n"

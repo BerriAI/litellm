@@ -18,10 +18,10 @@ MCP_SERVER: Final = Path(__file__).with_name("mcp_server.py")
 class TestCodexMcpTool:
     def test_calls_a_local_mcp_tool_again_on_a_resumed_turn(self, codex: CodexHarness, setup: ModelSetup) -> None:
         secret: Final = codex.home / "secret.txt"
-        codex.add_mcp_server(
-            "vault", McpServer(command=sys.executable, args=(str(MCP_SERVER),), env={"SECRET_FILE": str(secret)})
-        )
+        vault: Final = McpServer(command=sys.executable, args=(str(MCP_SERVER),), env={"SECRET_FILE": str(secret)})
+        codex.add_mcp_server("vault", vault)
         workspace: Final = codex.new_workspace(files={})
+
         first_marker: Final = unique_marker()
         _ = secret.write_text(first_marker)
         first: Final = codex.exec(
@@ -30,6 +30,7 @@ class TestCodexMcpTool:
             cwd=workspace,
         )
         assert first.thread_id is not None, first
+        assert any(first_marker in call.output for call in first.mcp_calls), first
         assert first_marker in first.answer, first
 
         second_marker: Final = unique_marker()
@@ -40,4 +41,5 @@ class TestCodexMcpTool:
             model=setup.model,
             cwd=workspace,
         )
+        assert any(second_marker in call.output for call in second.mcp_calls), second
         assert second_marker in second.answer, second
