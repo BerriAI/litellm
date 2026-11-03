@@ -1052,3 +1052,32 @@ async def test_provider_config_changes_invalidate_cached_inventory_without_datab
     assert (await manager.get_all_mcp_servers_unfiltered())[0].allowed_tools == []
     await manager.load_servers_from_config({})
     assert await manager.get_all_mcp_servers_unfiltered() == []
+
+
+@pytest.mark.asyncio
+async def test_provider_permission_identifiers_and_groups_follow_config_reload(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server import mcp_server_manager
+    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    manager: Final = mcp_server_manager.MCPServerManager()
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    config: Final = {"native_name": {
+        "server_id": "native-id", "alias": "native_alias", "execution_mode": "provider",
+        "url": "https://native.example/mcp", "allowed_tools": ["search"],
+        "access_groups": ["research"], "allow_all_keys": True,
+    }}
+    await manager.load_servers_from_config(config)
+    async with manager.catalog.operation():
+        assert manager.get_all_mcp_server_ids() == {"native-id"}
+        assert manager.get_allow_all_keys_server_ids() == ["native-id"]
+        assert manager.expand_permission_list(["native_name", "native_alias"]) == ["native-id"]
+        assert manager.expand_tool_permissions({"native_alias": ["search"]}) == {"native-id": ["search"]}
+        assert await MCPRequestHandler.get_mcp_servers_from_access_groups(["research"]) == ["native-id"]
+        assert await manager.catalog.list() == {}
+        await manager.load_servers_from_config({})
+        assert manager.get_all_mcp_server_ids() == {"native-id"}
+    assert manager.get_all_mcp_server_ids() == set()
+    assert manager.get_allow_all_keys_server_ids() == []
+    assert await MCPRequestHandler.get_mcp_servers_from_access_groups(["research"]) == []

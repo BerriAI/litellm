@@ -325,6 +325,11 @@ async def _resolve_mcp_server_identifiers_to_ids(
             if identifier == registry_key or _mcp_server_identifier_matches(server, identifier):
                 resolved[identifier].add(server_id)
 
+    for server in global_mcp_server_manager.catalog.config_registrations.values():
+        for identifier in identifiers:
+            if _mcp_server_identifier_matches(server, identifier):
+                resolved[identifier].add(server.server_id)
+
     return resolved
 
 
@@ -491,7 +496,7 @@ def _get_all_mcp_server_ids() -> set[str]:
         global_mcp_server_manager,
     )
 
-    return set(global_mcp_server_manager.get_registry().keys())
+    return global_mcp_server_manager.get_all_mcp_server_ids()
 
 
 async def _existing_object_permission_mcp_servers(

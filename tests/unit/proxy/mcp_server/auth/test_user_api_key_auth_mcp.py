@@ -9759,7 +9759,7 @@ class TestAdmittedSubjectPerTeamOrgCap:
 
             # registry may be a list of bare server_ids (MagicMock servers) OR a dict of
             # {server_id: server_obj} for tests that need real alias/name resolution (config servers).
-            reg = registry if isinstance(registry, dict) else {s: MagicMock() for s in registry}
+            reg = registry if isinstance(registry, dict) else {s: MagicMock(server_id=s) for s in registry}
             cms.append(patch.object(global_mcp_server_manager, "get_registry", return_value=reg))
         with contextlib.ExitStack() as es:
             for cm in cms:
@@ -13252,3 +13252,48 @@ async def test_admin_dashboard_session_keeps_the_whole_mcp_registry(
     assert set(await global_mcp_server_manager.get_allowed_mcp_servers(dashboard_session)) == set(
         global_mcp_server_manager.get_registry()
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key_tools,team_tools,use_toolset,expected", [
+    (["search", "fetch"], ["search"], False, ["search"]),
+    (["fetch"], ["search"], False, []),
+    (None, ["search"], False, ["search"]),
+    ([], None, False, []),
+    (None, ["search"], True, ["search"]),
+])
+async def test_provider_tool_grants_use_existing_key_team_and_toolset_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+    key_tools: list[str] | None, team_tools: list[str] | None, use_toolset: bool, expected: list[str],
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server import mcp_server_manager
+
+    manager: Final = mcp_server_manager.MCPServerManager()
+    cache: Final = DualCache()
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    await manager.load_servers_from_config({"native_name": {
+        "server_id": "native-id", "alias": "native_alias", "execution_mode": "provider",
+        "url": "https://native.example/mcp", "allowed_tools": ["search", "fetch"],
+    }})
+    team: Final = LiteLLM_TeamTable(
+        team_id="native-team", object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="native-team-grant", mcp_servers=["native_name"],
+            mcp_tool_permissions={"native_name": team_tools} if team_tools is not None else {},
+        ),
+    )
+    await cache.async_set_cache(key="team_id:native-team", value=team)
+    await cache.async_set_cache(key="toolset_perms:native-set", value={"native-id": ["search"]})
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace())
+    auth: Final = UserAPIKeyAuth(
+        team_id="native-team", object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="native-key-grant",
+            mcp_servers=[] if use_toolset else ["native_alias"],
+            mcp_tool_permissions={"native_alias": key_tools} if key_tools is not None else {},
+            mcp_toolsets=["native-set"] if use_toolset else [],
+        ),
+    )
+    assert await MCPRequestHandler.get_allowed_tools_for_server("native-id", auth) == expected
+    assert manager.get_registry() == {}

@@ -3643,11 +3643,15 @@ class MCPServerManager:
         Get all MCP server IDs
         """
         all_servers: Final = list(self.get_registry().values())
-        return {server.server_id for server in all_servers}
+        return {server.server_id for server in all_servers} | self.catalog.provider_registrations().keys()
 
     def get_allow_all_keys_server_ids(self) -> list[str]:
         """Return server IDs that bypass per-key restrictions."""
-        return [server.server_id for server in self.get_registry().values() if server.allow_all_keys is True]
+        return [server.server_id for server in self.get_registry().values() if server.allow_all_keys is True] + [
+            server.server_id
+            for server in self.catalog.provider_registrations().values()
+            if server.allow_all_keys is True
+        ]
 
     @staticmethod
     def get_byom_submitted_servers_cache_key(user_id: str) -> str:
@@ -3848,7 +3852,7 @@ class MCPServerManager:
                 else access or await MCPRequestHandler.get_mcp_server_access(user_api_key_auth)
             )
             resolved_server_ids: Final = (
-                set(self.get_registry().keys()) if admin_unscoped else set(resolved_access.server_ids)
+                self.get_all_mcp_server_ids() if admin_unscoped else set(resolved_access.server_ids)
             )
             combined_servers: Final = set(resolved_server_ids)
             verbose_logger.debug("Allowed MCP Servers for user api key auth: %s", combined_servers)
@@ -7529,6 +7533,7 @@ class MCPServerManager:
         if not identifiers:
             return []
         registry: Final = self.get_registry()
+        providers: Final = self.catalog.provider_registrations()
         expanded: Final[set[str]] = set()
         for identifier in identifiers:
             if identifier in registry:
@@ -7539,6 +7544,11 @@ class MCPServerManager:
                 for server_id, server in registry.items()
                 if server.alias == identifier or server.server_name == identifier or server.name == identifier
             ]
+            matches.extend(
+                server.server_id
+                for server in providers.values()
+                if identifier in (server.server_id, server.server_name, server.alias)
+            )
             if matches:
                 expanded.update(matches)
             else:
@@ -7863,10 +7873,14 @@ class MCPServerManager:
         allowed_server_ids: Final = await self.get_allowed_mcp_servers(user_api_key_auth)
 
         list_mcp_servers: Final[list[LiteLLM_MCPServerTable]] = []
+        providers: Final = self.catalog.provider_registrations()
 
         for server_id in allowed_server_ids:
             server = self.get_mcp_server_by_id(server_id)
             if not server:
+                if server_id in providers:
+                    list_mcp_servers.append(providers[server_id])
+                    continue
                 verbose_logger.warning("MCP Server %s not found in registry", server_id)
                 continue
 
