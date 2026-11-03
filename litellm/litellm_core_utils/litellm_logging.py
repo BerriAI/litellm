@@ -19,9 +19,11 @@ from datetime import datetime as dt_object
 from enum import Enum
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, TypeVar, cast
 
 from httpx import Response, Timeout
+from openai import AsyncStream as OpenAIAsyncStream
+from openai import Stream as OpenAIStream
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
@@ -97,6 +99,7 @@ from litellm.litellm_core_utils.hidden_params import (
     get_hidden_params,
     served_from_cache,
     set_hidden_param,
+    set_hidden_params,
 )
 from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
@@ -122,6 +125,7 @@ from litellm.litellm_core_utils.llm_cost_calc.zero_cost_diagnostic import (
     diagnose_zero_cost,
     zero_cost_warning,
 )
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import LiteLLMResponseObjectHandler
 from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages,
     truncate_base64_in_messages_async,
@@ -142,7 +146,7 @@ from litellm.litellm_core_utils.served_output_texts import (
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
-from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
 from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
@@ -298,6 +302,11 @@ class _EnterpriseAlertingLoggers(NamedTuple):
     resend_email: type[CustomLogger]
     sendgrid_email: type[CustomLogger]
     smtp_email: type[CustomLogger]
+
+
+class BridgedChatRequest(NamedTuple):
+    optional_params: Mapping[str, object]
+    litellm_params: Mapping[str, object]
 
 
 @functools.cache
@@ -580,6 +589,7 @@ _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 _SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 _REDACTED_RESULT: Final = TypeAdapter(object)
+_LoggedResponse: Final = TypeVar("_LoggedResponse")
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
 
@@ -872,6 +882,8 @@ class Logging(LiteLLMLoggingBaseClass):
         # The model the proxy shows the client on streamed chunks. The logged streamed response carries it
         # once that response is priced, the same way a non-streamed response is logged
         self.client_facing_stream_model: str | None = None
+        self.client_facing_response_id: str | None = None
+        self.bridged_chat_request: BridgedChatRequest | None = None
         self.zero_cost_warned: bool = False
         self.llm_caching_handler: LLMCachingHandler | None = None
 
@@ -918,6 +930,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # post_call guardrails have run; the @client decorator then stores the
         # enqueue closure here instead of firing it immediately.
         self.defer_async_logging: bool = False
+        self.drops_stream_token_ids: bool = False
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
         self._async_success_enqueued: bool = False
@@ -2128,6 +2141,9 @@ class Logging(LiteLLMLoggingBaseClass):
         if resolved_cache_hit is True:
             return 0.0
 
+        if isinstance(result, (OpenAIStream, OpenAIAsyncStream)):
+            return None
+
         if is_unbilled_non_inference_call(
             self.call_type, StandardLoggingPayloadSetup.merge_litellm_metadata(self.litellm_params), result
         ):
@@ -3228,6 +3244,40 @@ class Logging(LiteLLMLoggingBaseClass):
             return response
         return response.model_copy(update={"model": model})
 
+    def _as_served_chat_response(self, response: _LoggedResponse) -> _LoggedResponse | ModelResponse:
+        request: Final = self.bridged_chat_request
+        if request is None or not isinstance(response, ResponsesAPIResponse):
+            return response
+        return self._bridged_chat_response(response, request)
+
+    def _as_served_response(
+        self, response: _LoggedResponse
+    ) -> _LoggedResponse | ModelResponse | TextCompletionResponse:
+        request: Final = self.bridged_chat_request
+        if request is None or not isinstance(response, ResponsesAPIResponse):
+            return response
+        served: Final = self._bridged_chat_response(response, request)
+        if self.call_type not in (CallTypes.text_completion.value, CallTypes.atext_completion.value):  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
+            return served
+        return self._as_text_completion_priced_as_chat(served)
+
+    def _as_text_completion_priced_as_chat(self, served: ModelResponse) -> TextCompletionResponse:
+        text_completion: Final = LiteLLMResponseObjectHandler.convert_chat_to_text_completion(
+            served, TextCompletionResponse()
+        )
+        set_hidden_params(text_completion, dict(get_hidden_params(served) or {}))
+        return text_completion
+
+    def _bridged_chat_response(self, response: ResponsesAPIResponse, request: BridgedChatRequest) -> ModelResponse:
+        translated: Final = self._translate_responses_api_response_to_model_response(response, request)
+        served: Final = translated.model_copy(
+            update={
+                "id": ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response.id)
+            }
+        )
+        set_hidden_params(served, {**(get_hidden_params(translated) or {}), **(get_hidden_params(response) or {})})
+        return served
+
     def _with_continued_response_id(
         self,
         response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
@@ -3236,6 +3286,23 @@ class Logging(LiteLLMLoggingBaseClass):
         if not isinstance(response_id, str) or getattr(response, "id", None) == response_id:
             return response
         return response.model_copy(update={"id": response_id})
+
+    def _with_client_facing_response_id(
+        self,
+        response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
+    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse:
+        response_id: Final = self.client_facing_response_id
+        if response_id is None or getattr(response, "id", None) == response_id:
+            return response
+        return response.model_copy(update={"id": response_id})
+
+    def _client_facing_streaming_response(
+        self,
+        response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
+    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse:
+        return self._with_client_facing_response_id(
+            self._with_continued_response_id(self._with_client_facing_stream_model(response))
+        )
 
     def _success_handler_helper_fn(
         self,
@@ -3292,6 +3359,8 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
             result = self.normalize_endpoint_logging_result(result)
+            if self.stream is not True:
+                result = self._as_served_response(result)  # rebind-ok: bridged chat calls log the served response
 
             logging_result: Final = self.normalize_logging_result(result=result)
             if cache_hit is None and _served_from_cache_at_no_charge(logging_result):
@@ -3606,6 +3675,7 @@ class Logging(LiteLLMLoggingBaseClass):
         verbose_logger.debug("Logging Details LiteLLM-Success Call: Cache_hit=%s", cache_hit)
         if not self.should_run_logging(event_type="sync_success"):  # prevent double logging
             return
+        provider_transcription: Final = result if isinstance(result, TranscriptionResponse) else None
         start_time, end_time, result, request_logging_payload = self.prepare_success_logging(
             start_time=start_time,
             end_time=end_time,
@@ -3620,7 +3690,12 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: (
-                ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | None
+                ModelResponse
+                | TextCompletionResponse
+                | ResponsesAPIResponse
+                | InteractionsAPIResponse
+                | TranscriptionResponse
+                | None
             ) = None
             if "complete_streaming_response" in self.model_call_details and not for_async_request:
                 return  # break out of this.
@@ -3636,19 +3711,21 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.model_call_details["complete_streaming_response"] = complete_streaming_response
                 self._surface_response_headers_from_result(complete_streaming_response)
                 self.model_call_details["response_cost"] = self.response_cost_calculator(
-                    result=complete_streaming_response
+                    result=complete_streaming_response if provider_transcription is None else provider_transcription
                 )
                 self._add_continued_partial_spend(complete_streaming_response)
                 self._merge_hidden_params_from_response_into_metadata(complete_streaming_response)
-                logged_streaming_response: Final = self._with_continued_response_id(
-                    self._with_client_facing_stream_model(complete_streaming_response)
+                logged_streaming_response: Final = self._client_facing_streaming_response(
+                    self._as_served_chat_response(complete_streaming_response)
                 )
                 self.model_call_details["complete_streaming_response"] = logged_streaming_response
                 self.capture_usage_before_logging(logged_streaming_response, start_time, end_time)
                 ## STANDARDIZED LOGGING PAYLOAD
                 if not for_async_request:
                     self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
-                        logged_streaming_response, start_time, end_time
+                        logged_streaming_response if provider_transcription is None else provider_transcription,
+                        start_time,
+                        end_time,
                     )
                     standard_logging_payload: Final[StandardLoggingPayload | None] = self.model_call_details.get(
                         "standard_logging_object"
@@ -4175,6 +4252,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 kwargs=self.model_call_details, messages=self.model_call_details.get("messages")
             )
         )
+        provider_transcription: Final = result if isinstance(result, TranscriptionResponse) else None
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -4194,9 +4272,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ## BUILD COMPLETE STREAMED RESPONSE
         if "async_complete_streaming_response" in self.model_call_details:
             return  # break out of this.
-        complete_streaming_response: Final[
-            ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | None
-        ] = self._get_assembled_streaming_response(
+        complete_streaming_response: Final = self._get_assembled_streaming_response(
             result=result,
             start_time=start_time,
             end_time=end_time,
@@ -4218,7 +4294,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     get_base_model_from_metadata(model_call_details=self.model_call_details)
                     # base_model defaults to None if not set on model_info
                     self.model_call_details["response_cost"] = self.response_cost_calculator(
-                        result=complete_streaming_response
+                        result=complete_streaming_response if provider_transcription is None else provider_transcription
                     )
 
                 verbose_logger.debug("Model=%s; cost=%s", self.model, self.model_call_details["response_cost"])
@@ -4239,15 +4315,17 @@ class Logging(LiteLLMLoggingBaseClass):
 
             await self._prepare_baseline_cache_estimate(complete_streaming_response)
 
-            logged_streaming_response: Final = self._with_continued_response_id(
-                self._with_client_facing_stream_model(complete_streaming_response)
+            logged_streaming_response: Final = self._client_facing_streaming_response(
+                self._as_served_chat_response(complete_streaming_response)
             )
             self.model_call_details["async_complete_streaming_response"] = logged_streaming_response
 
             ## STANDARDIZED LOGGING PAYLOAD
             try:
                 self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
-                    logged_streaming_response, start_time, end_time
+                    logged_streaming_response if provider_transcription is None else provider_transcription,
+                    start_time,
+                    end_time,
                 )
             except Exception:  # noqa: BLE001  # payload build must never block later callbacks (slot release)
                 verbose_logger.exception(
@@ -5117,10 +5195,17 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         is_async: bool,
         streaming_chunks: list[object],
-    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | None:
+    ) -> (
+        ModelResponse
+        | TextCompletionResponse
+        | ResponsesAPIResponse
+        | InteractionsAPIResponse
+        | TranscriptionResponse
+        | None
+    ):
         if self.stream is not True:
             return None
-        if isinstance(result, ModelResponse) or isinstance(result, TextCompletionResponse):
+        if isinstance(result, (ModelResponse, TextCompletionResponse, TranscriptionResponse)):
             return result
         elif isinstance(
             result,
@@ -5190,6 +5275,13 @@ class Logging(LiteLLMLoggingBaseClass):
         The Anthropic shape served to the caller has no field for reasoning tokens, so the spend
         row is built from this response rather than re-parsed from the served body."""
         self.bridged_model_response = response
+
+    def record_bridged_chat_request(
+        self, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> None:
+        self.bridged_chat_request = BridgedChatRequest(
+            MappingProxyType(dict(optional_params)), MappingProxyType(dict(litellm_params))
+        )
 
     def record_bridged_responses_api_response(self, response: ResponsesAPIResponse) -> None:
         self.record_bridged_model_response(self._translate_responses_api_response_to_model_response(response))
@@ -5262,6 +5354,9 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             result = result.response
         if isinstance(result, ResponsesAPIResponse):
+            bridged_request: Final = self.bridged_chat_request
+            if bridged_request is not None:
+                return self._bridged_chat_response(result, bridged_request)
             return self._translate_responses_api_response_to_model_response(result)
 
         raw_body: Final[object] = result
@@ -5313,7 +5408,9 @@ class Logging(LiteLLMLoggingBaseClass):
         set_response_cost_in_hidden_params(result, reported_cost)
         return result
 
-    def _translate_responses_api_response_to_model_response(self, result: ResponsesAPIResponse) -> ModelResponse:
+    def _translate_responses_api_response_to_model_response(
+        self, result: ResponsesAPIResponse, request: BridgedChatRequest | None = None
+    ) -> ModelResponse:
         """
         Convert a Responses API response into a ModelResponse for spend_logs.
 
@@ -5336,8 +5433,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 logging_obj=self,
                 request_data={},
                 messages=[],
-                optional_params={},
-                litellm_params={},
+                optional_params={} if request is None else dict(request.optional_params),
+                litellm_params={} if request is None else dict(request.litellm_params),
                 encoding=litellm.encoding,
             )
             translated.id = served_id or translated.id

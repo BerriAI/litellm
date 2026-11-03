@@ -1668,7 +1668,7 @@ _BOTH_FOUNDRY_BETAS: Final = ("context-1m-2025-08-07,context-management-2025-06-
         pytest.param(
             None,
             {"anthropic-beta": "context-1m-2025-08-07"},
-            "claude-code-20250219",
+            "mcp-servers-2025-12-04",
             ("context-1m-2025-08-07",),
             id="unsupported-client-beta-is-dropped-and-deployment-beta-kept",
         ),
@@ -6241,6 +6241,142 @@ async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
             await client.close()
         else:
             client.client.close()
+
+
+_BETA_THE_TABLE_DOES_NOT_LIST: Final = "not-in-the-beta-table-2099-01-01"
+
+
+def _anthropic_messages_logging_obj():
+    from datetime import datetime, timezone
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    return Logging(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="foundry-beta-row",
+        function_id="foundry-beta-row",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "messages_config", "foundry_api_base", "forwarded_betas"),
+    [
+        pytest.param(
+            "anthropic",
+            "anthropic",
+            "https://my-resource.services.ai.azure.com/anthropic",
+            f"thinking-binding-controls-2026-08-01,{_BETA_THE_TABLE_DOES_NOT_LIST}",
+            id="anthropic-drops-what-the-azure-ai-row-rejects",
+        ),
+        pytest.param(
+            "anthropic",
+            "anthropic",
+            "https://my-resource.cognitiveservices.azure.com/anthropic",
+            f"thinking-binding-controls-2026-08-01,{_BETA_THE_TABLE_DOES_NOT_LIST}",
+            id="anthropic-on-a-cognitiveservices-host",
+        ),
+        pytest.param(
+            "azure_ai",
+            "azure_ai",
+            "https://my-resource.services.ai.azure.com/anthropic",
+            "thinking-binding-controls-2026-08-01",
+            id="azure-ai-keeps-dropping-unlisted-betas",
+        ),
+        pytest.param(
+            "openai",
+            "pass_through",
+            "https://my-resource.services.ai.azure.com/anthropic",
+            f"advisor-tool-2026-03-01,thinking-binding-controls-2026-08-01,{_BETA_THE_TABLE_DOES_NOT_LIST}",
+            id="messages-pass-through-forwards-as-sent",
+        ),
+    ],
+)
+async def test_async_anthropic_messages_handler_picks_the_beta_row_by_deployment_on_a_foundry_api_base(
+    monkeypatch: pytest.MonkeyPatch,
+    custom_llm_provider: str,
+    messages_config: str,
+    foundry_api_base: str,
+    forwarded_betas: str,
+) -> None:
+    from litellm import anthropic_beta_headers_manager
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+    from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
+    from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
+
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    assert _BETA_THE_TABLE_DOES_NOT_LIST not in anthropic_beta_headers_manager._load_beta_headers_config()["azure_ai"]
+    configs: Final = {
+        "anthropic": AnthropicMessagesConfig,
+        "azure_ai": AzureAnthropicMessagesConfig,
+        "pass_through": OpenAILikeAnthropicMessagesConfig,
+    }
+    upstream: Final = _AnthropicMessagesUpstream()
+
+    await BaseLLMHTTPHandler().async_anthropic_messages_handler(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_provider_config=configs[messages_config](),
+        anthropic_messages_optional_request_params={"max_tokens": 8},
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=GenericLiteLLMParams(api_base=foundry_api_base),
+        logging_obj=_anthropic_messages_logging_obj(),
+        api_key="sk-test",
+        api_base=foundry_api_base,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream.respond)),
+        kwargs={
+            "extra_headers": {
+                "anthropic-beta": (
+                    f"advisor-tool-2026-03-01,thinking-binding-controls-2026-08-01,{_BETA_THE_TABLE_DOES_NOT_LIST}"
+                )
+            }
+        },
+    )
+
+    assert set(",".join(upstream.anthropic_beta).split(",")) == set(forwarded_betas.split(","))
+
+
+@pytest.mark.asyncio
+async def test_first_foundry_request_with_betas_fetches_the_beta_table_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm import anthropic_beta_headers_manager, anthropic_beta_headers_url
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    monkeypatch.delenv("LITELLM_OFFLINE_MODE", raising=False)
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    bundled_table: Final = anthropic_beta_headers_manager.GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
+    foundry_api_base: Final = "https://my-resource.services.ai.azure.com/anthropic"
+    upstream: Final = _AnthropicMessagesUpstream()
+
+    with respx.mock(assert_all_called=True) as router:
+        table_route: Final = router.get(anthropic_beta_headers_url).mock(
+            side_effect=lambda request: httpx.Response(
+                200, json=bundled_table, headers={"x-fetch-thread": str(threading.get_ident())}
+            )
+        )
+        await BaseLLMHTTPHandler().async_anthropic_messages_handler(
+            model="claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_provider_config=AnthropicMessagesConfig(),
+            anthropic_messages_optional_request_params={"max_tokens": 8},
+            custom_llm_provider="anthropic",
+            litellm_params=GenericLiteLLMParams(api_base=foundry_api_base),
+            logging_obj=_anthropic_messages_logging_obj(),
+            api_key="sk-test",
+            api_base=foundry_api_base,
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream.respond)),
+            kwargs={"extra_headers": {"anthropic-beta": "advisor-tool-2026-03-01,compact-2026-01-12"}},
+        )
+
+    assert table_route.calls.last.response.headers["x-fetch-thread"] != str(threading.get_ident())
+    assert upstream.anthropic_beta == ("compact-2026-01-12",)
 
 
 @pytest.mark.asyncio

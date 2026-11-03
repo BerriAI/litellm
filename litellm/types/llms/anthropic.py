@@ -660,6 +660,7 @@ class MessageChunk(TypedDict, total=False):
     stop_sequence: str | None
     usage: UsageDelta
     safeguard_results: ReadOnly[Sequence[SafeguardResult]]
+    input_transformations: ReadOnly[Sequence[Mapping[str, object]]]
 
 
 class MessageStartBlock(TypedDict):
@@ -849,6 +850,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     ADVISOR_TOOL_2026_03_01 = "advisor-tool-2026-03-01"
     PER_TURN_CONTROL_2026_07_01 = "per-turn-control-2026-07-01"
     DANGEROUS_TOOL_USE_2026_09_03 = "dangerous-tool-use-2026-09-03"
+    MCP_CLIENT_2025_04_04 = "mcp-client-2025-04-04"
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)

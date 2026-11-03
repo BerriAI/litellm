@@ -13,7 +13,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_parent_otel_span_from_kwargs
 from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
@@ -53,9 +53,16 @@ def _response_total_tokens(kwargs: Mapping[str, object], response_obj: object) -
 _CONNECTION_SCOPED_CALL_TYPES: Final = frozenset({CallTypes.aresponses_websocket.value})
 
 
+def _is_websocket_passthrough_row(kwargs: Mapping[str, object]) -> bool:
+    passthrough_payload: Final = as_str_mapping(kwargs.get("passthrough_logging_payload"))
+    return passthrough_payload is not None and passthrough_payload.get("request_method") == "WEBSOCKET"
+
+
 def _slots_released(kwargs: Mapping[str, object]) -> int:
     """A websocket turn callback releases nothing; the socket's slot is released once at disconnect."""
-    return 0 if kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES else 1
+    if kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES or _is_websocket_passthrough_row(kwargs):
+        return 0
+    return 1
 
 
 class CacheObject(TypedDict):
