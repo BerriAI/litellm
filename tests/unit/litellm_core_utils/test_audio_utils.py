@@ -340,6 +340,33 @@ class TestCalculateRequestDuration:
             wav_header
         ), "File position should be restored to original position"
 
+    def test_pathlib_path_inside_tuple(self, tmp_path):
+        """
+        Regression test: calculate_request_duration must read PathLike content
+        inside a (filename, content[, content_type]) tuple.
+
+        A transcription upload may be supplied as (filename, pathlib.Path(...))
+        or (filename, pathlib.Path(...), content_type). The duration reader used
+        to ignore PathLike tuple contents and silently return None, even though
+        the upload machinery accepts them.
+        """
+        import wave
+
+        wav_path = tmp_path / "sample.wav"
+        with wave.open(str(wav_path), "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(8000)
+            # 2 seconds of 16-bit mono audio at 8 kHz.
+            audio.writeframes(b"\0" * 32000)
+
+        # Same file in three accepted shapes must all report ~2.0s.
+        assert calculate_request_duration(wav_path) == pytest.approx(2.0)
+        assert calculate_request_duration((str(wav_path), wav_path)) == pytest.approx(2.0)
+        assert calculate_request_duration(
+            (str(wav_path), wav_path, "audio/wav")
+        ) == pytest.approx(2.0)
+
 
 class TestGetAudioFileContentHash:
     """Test the get_audio_file_content_hash function for cache key generation"""

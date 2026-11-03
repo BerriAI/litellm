@@ -311,6 +311,13 @@ def calculate_request_duration(file: FileTypes) -> float | None:
                 content: Final = file[1]
                 if isinstance(content, bytes):
                     file_content = content
+                elif isinstance(content, os.PathLike):
+                    # pathlib.Path (or any PathLike) inside a (filename, content)
+                    # tuple: read the bytes from disk, mirroring the bare-Path
+                    # branch above. Without this the duration reader silently
+                    # returns None for `(filename, Path(...))` uploads.
+                    with open(str(content), "rb") as file_handle:
+                        file_content = file_handle.read()
                 elif hasattr(content, "read") and not isinstance(content, (str, os.PathLike)):
                     # File-like object in tuple
                     current_pos: Final = getattr(content, "tell", lambda: None)()
