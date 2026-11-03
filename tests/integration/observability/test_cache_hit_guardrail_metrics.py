@@ -409,6 +409,7 @@ def test_cache_hit_post_call_reject_keeps_deployment_labels_anthropic(gateway: G
         sdk: Final = anthropic.Anthropic(
             base_url=str(rig.candidate.client.base_url),
             api_key=rig.candidate.key,
+            auth_token=rig.candidate.key,
             http_client=httpx.Client(trust_env=False, timeout=15),
         )
         sdk.messages.create(model=rig.model_name, max_tokens=16, messages=[{"role": "user", "content": text}])
