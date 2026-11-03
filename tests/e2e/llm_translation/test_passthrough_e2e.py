@@ -5,7 +5,7 @@ and verifies the proxy still logged a costed SpendLogs row
 (call_type="pass_through_endpoint"), correlated by the id the caller was served:
 the x-litellm-call-id header on gemini, the `msg_...` message id on anthropic.
 
-Covered: gemini ("gemini-2.5-flash") + anthropic ("claude-haiku-4-5"), streaming +
+Covered: gemini ("gemini-3.8-flash") + anthropic ("claude-haiku-4-5"), streaming +
 non-streaming, plus native tool calls. See LLM_TRANSLATION_COVERAGE_MATRIX.md.
 
 A passthrough call returning non-2xx fails hard (never a skip); once it returns
@@ -32,7 +32,7 @@ from passthrough_client import (
     completed_responses_object,
 )
 
-GEMINI_MODEL: Final = "gemini-2.5-flash"
+GEMINI_MODEL: Final = "gemini-3.8-flash"
 ANTHROPIC_PASSTHROUGH_MODEL: Final = "claude-haiku-4-5"
 EMBEDDING_MODEL = "text-embedding-3-small"
 REALTIME_MODEL = "gpt-realtime-2"
@@ -291,7 +291,7 @@ class TestPassthroughModelAllowlist:
 
         result = client.anthropic_message(key, ANTHROPIC_PASSTHROUGH_MODEL, f"say hi {unique_marker()}")
         assert result.status_code == 403, (
-            "a key restricted to gemini-2.5-flash must be denied a claude passthrough call, "
+            "a key restricted to gemini-3.8-flash must be denied a claude passthrough call, "
             f"got {result.status_code}: {result.body[:300]}"
         )
 
