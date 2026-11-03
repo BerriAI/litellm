@@ -51,6 +51,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
 
     server_id: str
     is_config: bool = Field(default=False, description="Whether this server is defined in config and is read-only.")
+    enabled: bool = True
     server_name: str | None = None
     alias: str | None = None
     description: str | None = None

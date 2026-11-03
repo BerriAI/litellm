@@ -5,8 +5,12 @@ import pytest
 
 from litellm.proxy.mcp_server.db import (
     approve_mcp_server,
+    get_disabled_config_server_ids,
     get_mcp_servers_by_team,
+    get_runtime_mcp_server_rows,
     reject_mcp_server,
+    set_config_mcp_server_override,
+    set_mcp_server_enabled,
 )
 
 
@@ -68,3 +72,87 @@ async def test_reject_mcp_server_raises_value_error_when_row_missing():
             touched_by="admin",
             review_notes="spam",
         )
+
+
+def _prisma_client_for_runtime_rows() -> MagicMock:
+    prisma_client = MagicMock()
+    prisma_client.writer_db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    return prisma_client
+
+
+@pytest.mark.asyncio
+async def test_get_runtime_rows_excludes_disabled():
+    prisma_client = _prisma_client_for_runtime_rows()
+
+    await get_runtime_mcp_server_rows(prisma_client)
+
+    where = prisma_client.writer_db.litellm_mcpservertable.find_many.call_args.kwargs["where"]
+    assert where == {
+        "AND": [
+            {"OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]},
+            {"OR": [{"enabled": None}, {"enabled": True}]},
+        ]
+    }
+    assert {"enabled": False} not in where["AND"][1]["OR"]
+
+
+@pytest.mark.asyncio
+async def test_get_runtime_rows_includes_null_enabled_legacy():
+    prisma_client = _prisma_client_for_runtime_rows()
+
+    await get_runtime_mcp_server_rows(prisma_client)
+
+    where = prisma_client.writer_db.litellm_mcpservertable.find_many.call_args.kwargs["where"]
+    enabled_gate = where["AND"][1]["OR"]
+    assert {"enabled": None} in enabled_gate
+    assert {"enabled": True} in enabled_gate
+
+
+@pytest.mark.asyncio
+async def test_set_mcp_server_enabled_roundtrip():
+    prisma_client = MagicMock()
+    existing = SimpleNamespace()
+    row = MagicMock()
+    row.model_dump.return_value = {"server_id": "s1", "transport": "http", "enabled": False}
+    prisma_client.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    prisma_client.db.litellm_mcpservertable.update = AsyncMock(return_value=row)
+
+    result = await set_mcp_server_enabled(prisma_client, "s1", False, touched_by="admin")
+
+    assert result is not None
+    assert result.server_id == "s1"
+    assert result.enabled is False
+    kwargs = prisma_client.db.litellm_mcpservertable.update.call_args.kwargs
+    assert kwargs["where"] == {"server_id": "s1"}
+    assert kwargs["data"] == {"enabled": False, "updated_by": "admin"}
+
+
+@pytest.mark.asyncio
+async def test_set_mcp_server_enabled_returns_none_when_row_missing():
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_mcpservertable.update = AsyncMock(return_value=None)
+
+    assert await set_mcp_server_enabled(prisma_client, "gone", True, touched_by="admin") is None
+    prisma_client.db.litellm_mcpservertable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_config_override_upsert_and_query():
+    prisma_client = MagicMock()
+    table = prisma_client.writer_db.litellm_mcpserverstateoverride
+    table.upsert = AsyncMock()
+    table.find_many = AsyncMock(return_value=[SimpleNamespace(server_id="a"), SimpleNamespace(server_id="b")])
+
+    await set_config_mcp_server_override(prisma_client, "a", False, touched_by="admin")
+
+    table.upsert.assert_awaited_once_with(
+        where={"server_id": "a"},
+        data={
+            "create": {"server_id": "a", "enabled": False, "updated_by": "admin"},
+            "update": {"enabled": False, "updated_by": "admin"},
+        },
+    )
+
+    assert await get_disabled_config_server_ids(prisma_client) == {"a", "b"}
+    table.find_many.assert_awaited_once_with(where={"enabled": False})

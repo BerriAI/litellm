@@ -885,7 +885,11 @@ async def get_runtime_mcp_server_rows(
     prisma_client: PrismaClient,
 ) -> Sequence["prisma_db_models.LiteLLM_MCPServerTable"]:
     where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {
-        "OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]
+        "AND": [
+            {"OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]},
+            # NULL (legacy rows) and true are enabled; only an explicit false is gated out.
+            {"OR": [{"enabled": None}, {"enabled": True}]},
+        ]
     }
     return await MCPServerRepository(prisma_client, use_writer=True).table.find_many(where=where)
 
@@ -2374,6 +2378,60 @@ async def set_mcp_server_pinned_tools(
     table: Final = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
     decrypt_global_env_var_values(table.env_vars)
     return table
+
+
+async def set_mcp_server_enabled(
+    prisma_client: PrismaClient,
+    server_id: str,
+    enabled: bool,
+    touched_by: str,
+) -> LiteLLM_MCPServerTable | None:
+    """Set the DB row's ``enabled`` flag; ``None`` if there is no such row."""
+    if await _db_find_mcp_server_row(prisma_client, server_id) is None:
+        return None
+    updated: Final = await _db_update_mcp_server_row(
+        prisma_client,
+        server_id,
+        {"enabled": enabled, "updated_by": touched_by},
+    )
+    table: Final = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
+    decrypt_global_env_var_values(table.env_vars)
+    return table
+
+
+class _MCPServerStateOverrideRepository(PrismaTableRepository["prisma_db_models.LiteLLM_MCPServerStateOverride"]):
+    table_name = "litellm_mcpserverstateoverride"
+
+
+def _server_state_override_actions(
+    prisma_client: PrismaClient,
+) -> "TableActions[prisma_db_models.LiteLLM_MCPServerStateOverride]":
+    return _MCPServerStateOverrideRepository(prisma_client, use_writer=True).table
+
+
+async def set_config_mcp_server_override(
+    prisma_client: PrismaClient,
+    server_id: str,
+    enabled: bool,
+    touched_by: str,
+) -> None:
+    """Upsert the enabled override for a config-defined (non-DB) MCP server."""
+    await _server_state_override_actions(prisma_client).upsert(
+        where={"server_id": server_id},
+        data={
+            "create": {"server_id": server_id, "enabled": enabled, "updated_by": touched_by},
+            "update": {"enabled": enabled, "updated_by": touched_by},
+        },
+    )
+
+
+async def get_disabled_config_server_ids(prisma_client: PrismaClient) -> set[str]:
+    rows: Final = await _server_state_override_actions(prisma_client).find_many(where={"enabled": False})
+    return {row.server_id for row in rows}
+
+
+async def delete_config_mcp_server_override(prisma_client: PrismaClient, server_id: str) -> None:
+    await _server_state_override_actions(prisma_client).delete(where={"server_id": server_id})
 
 
 async def reject_mcp_server(
