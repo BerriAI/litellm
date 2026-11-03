@@ -2765,6 +2765,22 @@ def test_vertex_uplift_invalid_multiplier_defaults_to_one():
     )
 
 
+@pytest.mark.parametrize(
+    "model_info, data_residency",
+    [
+        ({"fedramp_uplift_multiplier": "not-a-number"}, "fedramp"),
+        ({}, "fedramp"),
+        ({"fedramp_uplift_multiplier": 1.1}, "us"),
+        ({"fedramp_uplift_multiplier": 1.1}, None),
+    ],
+)
+def test_fedramp_uplift_defaults_to_one(model_info, data_residency):
+    """A malformed or missing FedRAMP multiplier, or a non-FedRAMP host, bills base pricing and never raises."""
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_fedramp_uplift_multiplier
+
+    assert get_fedramp_uplift_multiplier(model_info, data_residency) == 1.0
+
+
 def test_service_tier_suffixes_constant_in_sync_with_enum():
     from litellm.litellm_core_utils.llm_cost_calc.utils import _SERVICE_TIER_SUFFIXES
     from litellm.types.utils import ServiceTier
