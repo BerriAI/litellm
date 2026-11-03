@@ -87,29 +87,10 @@ def test_body_is_exactly_codex_models_response():
     assert [entry["slug"] for entry in body["models"]] == ["gpt-6-astra"]
 
 
-def test_unknown_model_entry_carries_every_field_codex_deserializes_without_a_default():
-    """Codex 0.166.0 `codex-rs/protocol/src/openai_models.rs` ModelInfo, the fields with no
-    `#[serde(default)]`, read on 2026-11-02; `base_instructions` because its `ModelsResponse`
-    decoder rejects an entry with neither it nor `model_messages.instructions_template`."""
+def test_unknown_model_entry_takes_its_slug_window_and_prompt_from_the_row():
+    """The fields every Codex release decodes are pinned in test_codex_model_translation.py."""
     (entry,) = _models(_row("gpt-6-astra"))
 
-    assert entry.keys() >= {
-        "slug",
-        "display_name",
-        "description",
-        "supported_reasoning_levels",
-        "shell_type",
-        "visibility",
-        "supported_in_api",
-        "priority",
-        "availability_nux",
-        "upgrade",
-        "support_verbosity",
-        "default_verbosity",
-        "apply_patch_tool_type",
-        "truncation_policy",
-        "experimental_supported_tools",
-    }
     assert (entry["slug"], entry["display_name"], entry["visibility"], entry["supported_in_api"]) == (
         "gpt-6-astra",
         "gpt-6-astra",
@@ -722,6 +703,7 @@ def test_catalog_rows_read_the_router_by_each_entry_lookup_id():
             mode="chat",
             max_input_tokens=7,
             upstream_model="openai/gpt-5.5",
+            upstream_provider="openai",
             display_name="Team 5.5",
             service_tiers=(["ultrafast"], None),
             supported_reasoning_efforts=router.get_model_group_info(
@@ -733,6 +715,7 @@ def test_catalog_rows_read_the_router_by_each_entry_lookup_id():
         CodexCatalogRow(
             id="plain",
             upstream_model="openai/some-unmapped-model",
+            upstream_provider="openai",
             service_tiers=(None,),
             search_tool_support=(None,),
             configured_max_input_tokens=(None,),
@@ -766,6 +749,7 @@ def test_catalog_rows_read_an_alias_off_its_target_under_the_alias_name():
         mode="chat",
         max_input_tokens=9,
         upstream_model="openai/gpt-6-astra",
+        upstream_provider="openai",
         service_tiers=(["ultrafast"],),
         supported_reasoning_efforts=router.get_model_group_info("gpt-6-astra").supported_reasoning_efforts,
         search_tool_support=(None,),
@@ -974,6 +958,41 @@ def test_a_model_codex_knows_keeps_codexs_entry_under_any_provider_prefix(upstre
     assert entry["supported_reasoning_levels"] == stock["supported_reasoning_levels"]
 
 
+@pytest.mark.parametrize("model", ["us.openai.{slug}", "converse/global.openai.{slug}"])
+def test_a_bedrock_deployment_naming_its_provider_apart_from_the_model_keeps_codexs_entry(model: str) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-model",
+                "litellm_params": {
+                    "model": model.format(slug=_SOL_SLUG),
+                    "custom_llm_provider": "bedrock",
+                    "aws_region_name": "us-east-1",
+                },
+            }
+        ]
+    )
+
+    entry: Final = _served(router, "team-model")["team-model"]
+
+    assert entry["model_messages"] == bundled_codex_models()[_SOL_SLUG].model_dump(mode="json")["model_messages"]
+
+
+def test_an_upstream_with_no_provider_prefix_matches_only_by_its_own_name() -> None:
+    (unknown, known) = json.loads(
+        codex_models_response_json(
+            (
+                _row("first", upstream_model=f"us.openai.{_SOL_SLUG}"),
+                _row("second", upstream_model=_SOL_SLUG),
+            ),
+            instructions=_PROMPT,
+        ).json
+    )["models"]
+
+    assert "model_messages" not in unknown and unknown["base_instructions"] == _PROMPT
+    assert known["model_messages"] == bundled_codex_models()[_SOL_SLUG].model_dump(mode="json")["model_messages"]
+
+
 @pytest.mark.parametrize(
     "upstream",
     ["bedrock/us.openai.{slug}-mini", "bedrock/us.meta.{slug}x", "bedrock_mantle/openai.{slug}.1", "{slug}-0"],
@@ -1002,7 +1021,9 @@ def _listing(*names: str, max_input_tokens: int | None = None) -> tuple[dict[str
     )
 
 
-def _served(router: litellm.Router, *names: str, team_id: str | None = None, **listing: int) -> dict[str, dict]:
+def _served(
+    router: litellm.Router, *names: str, team_id: str | None = None, **listing: int
+) -> dict[str, Mapping[str, object]]:
     body: Final = codex_model_list_body(
         _listing(*names, **listing), tuple((name, name) for name in names), router, team_id, client_version="0.166.0"
     )
@@ -1077,20 +1098,20 @@ def test_a_claude_like_deployment_gets_codexs_coding_setup() -> None:
                 supports_reasoning=True,
             ),
             _vllm("plain", "h12"),
+            _vllm("no-reasoning", "h12b", supports_reasoning=False),
         ]
     )
 
-    served: Final = _served(router, "claude-like", "plain")
+    served: Final = _served(router, "claude-like", "plain", "no-reasoning")
 
     claude_like: Final = served["claude-like"]
     assert claude_like["apply_patch_tool_type"] == "freeform"
     assert claude_like["truncation_policy"] == {"mode": "tokens", "limit": 10000}
     assert claude_like["supports_reasoning_summary_parameter"] is True
     assert claude_like["context_window"] == 1_000_000
-    assert (served["plain"]["apply_patch_tool_type"], served["plain"]["supports_reasoning_summary_parameter"]) == (
-        None,
-        False,
-    )
+    assert served["plain"]["apply_patch_tool_type"] is None
+    assert "supports_reasoning_summary_parameter" not in served["plain"]
+    assert served["no-reasoning"]["supports_reasoning_summary_parameter"] is False
 
 
 def test_capabilities_are_read_only_off_the_deployments_the_key_team_routes_to() -> None:
@@ -1112,7 +1133,8 @@ def _tier_fields(entry: Mapping[str, object]) -> tuple[object, object, object]:
 def test_codexs_own_tiers_stay_only_when_every_deployment_behind_the_name_prices_them() -> None:
     stock: Final = bundled_codex_models()[_SOL_SLUG].model_dump(mode="json")
     assert stock["service_tiers"] and stock["additional_speed_tiers"] and stock["default_service_tier"]
-    priority_price: Final = {"input_cost_per_token_priority": 1e-05}
+    token_price: Final = {"input_cost_per_token": 1e-06}
+    priority_price: Final = {**token_price, "input_cost_per_token_priority": 1e-05}
 
     def upstream(host: str) -> dict[str, str]:
         return {"model": f"hosted_vllm/{_SOL_SLUG}", "api_base": f"https://{host}.example/v1"}
@@ -1122,7 +1144,9 @@ def test_codexs_own_tiers_stay_only_when_every_deployment_behind_the_name_prices
             {"model_name": "all-priced", "litellm_params": upstream("a"), "model_info": priority_price},
             {"model_name": "all-priced", "litellm_params": upstream("b"), "model_info": priority_price},
             {"model_name": "half-priced", "litellm_params": upstream("c"), "model_info": priority_price},
-            {"model_name": "half-priced", "litellm_params": upstream("d")},
+            {"model_name": "half-priced", "litellm_params": upstream("d"), "model_info": token_price},
+            {"model_name": "priced-and-unknown", "litellm_params": upstream("f"), "model_info": priority_price},
+            {"model_name": "priced-and-unknown", "litellm_params": {"model": "azure/prod-sol-eastus"}},
             {
                 "model_name": "configured",
                 "litellm_params": upstream("e"),
@@ -1131,13 +1155,54 @@ def test_codexs_own_tiers_stay_only_when_every_deployment_behind_the_name_prices
         ]
     )
 
-    served: Final = _served(router, "all-priced", "half-priced", "configured")
+    served: Final = _served(router, "all-priced", "half-priced", "priced-and-unknown", "configured")
 
     assert _tier_fields(served["all-priced"]) == _tier_fields(stock)
+    assert _tier_fields(served["priced-and-unknown"]) == _tier_fields(stock)
     assert _tier_fields(served["half-priced"]) == ([], [], None)
     assert served["half-priced"]["model_messages"] == stock["model_messages"]
     assert [tier["id"] for tier in served["configured"]["service_tiers"]] == ["priority"]
 
+
+def _tiered_stock(default_service_tier: str) -> Mapping[str, CodexStockModel]:
+    tiers: Final = (
+        CodexServiceTier(id="priority", name="Fast", description="faster"),
+        CodexServiceTier(id="flex", name="Flex", description="cheaper"),
+    )
+    return MappingProxyType(
+        {
+            "tiered": CodexStockModel(
+                slug="tiered",
+                display_name="Tiered",
+                priority=0,
+                visibility="list",
+                service_tiers=tiers,
+                default_service_tier=default_service_tier,
+            )
+        }
+    )
+
+
+@pytest.mark.parametrize(("default_tier", "kept_default"), [("priority", "priority"), ("flex", None)])
+def test_dropping_one_stock_tier_keeps_the_default_only_while_it_is_still_offered(default_tier, kept_default) -> None:
+    priority_and_flex: Final = CodexDeploymentCapabilities(
+        prices_tokens=True,
+        priced_service_tier_keys=frozenset(
+            get_service_tier_cost_key("input_cost_per_token", tier) for tier in ("priority", "flex")
+        ),
+    )
+    priority_only: Final = CodexDeploymentCapabilities(
+        prices_tokens=True,
+        priced_service_tier_keys=frozenset({get_service_tier_cost_key("input_cost_per_token", "priority")}),
+    )
+    row: Final = _row("tiered", deployment_capabilities=(priority_and_flex, priority_only))
+
+    (entry,) = json.loads(
+        codex_models_response_json((row,), stock=_tiered_stock(default_tier), instructions=_PROMPT).json
+    )["models"]
+
+    assert [tier["id"] for tier in entry["service_tiers"]] == ["priority"]
+    assert entry["default_service_tier"] == kept_default
 
 
 def test_model_info_that_does_not_validate_declares_no_capability_but_keeps_its_prices() -> None:

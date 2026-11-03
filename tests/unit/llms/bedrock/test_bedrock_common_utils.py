@@ -9,7 +9,7 @@ from litellm.llms.bedrock.common_utils import(
     NativeOutputFallback,
     bedrock_native_output_is_opt_in,
     bedrock_strict_tools_fallback,
-    bedrock_vendor_model_name,
+    bedrock_model_name_without_provider,
     deployment_model_info,
     extract_model_name_from_bedrock_arn,
     get_bedrock_base_model,
@@ -312,12 +312,15 @@ def test_legacy_mantle_route_prefix_stripped_for_cost_lookup():
         ("us-east-1/openai.gpt-6.1-sol", "gpt-6.1-sol"),
         ("openai.gpt-5.5", "gpt-5.5"),
         ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.meta.llama4-scout-17b", "llama4-scout-17b"),
+        ("us.deepseek.r1-v1:0", "r1-v1:0"),
+        ("moonshotai.kimi-k2-thinking", "kimi-k2-thinking"),
+        ("bedrock/qwen.qwen3-32b-v1:0", "qwen3-32b-v1:0"),
         ("gpt-5.5", "gpt-5.5"),
-        ("unknownvendor.some-model", "unknownvendor.some-model"),
+        ("arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123", "abc123"),
     ],
 )
-def test_bedrock_vendor_model_name_strips_routing_region_and_vendor_prefixes_only(model, expected):
-    assert bedrock_vendor_model_name(model) == expected
+def test_bedrock_model_name_without_provider_strips_routing_region_and_provider_prefixes_only(model, expected):
+    assert bedrock_model_name_without_provider(model) == expected
 
 
 def test_output_config_effort_normalization_uses_model_info_ceiling(monkeypatch):

@@ -137,6 +137,7 @@ from litellm.litellm_core_utils.deployment_pricing import deployment_pricing_mod
 from litellm.litellm_core_utils.get_litellm_params import SUPPLEMENTAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
+    declared_provider,
     inferred_provider,
     is_registered_custom_provider,
     resolve_model_and_provider_for_metadata,
@@ -784,6 +785,16 @@ def _operator_max_input_tokens(deployment: Mapping[str, object]) -> int | None:
     if catalog_entry is not None and "max_input_tokens" in echoed_cost_map_fields(model_info, catalog_entry):
         return None
     return coerce_token_limit(model_info.get("max_input_tokens"))
+
+
+def _deployment_params(deployment: DeploymentTypedDict) -> Mapping[str, object]:
+    return deployment["litellm_params"]
+
+
+def _model_info_key(deployment: DeploymentTypedDict) -> tuple[str, str] | None:
+    deployment_id: Final = _configured_model_info(deployment).get("id")
+    model: Final = _deployment_params(deployment).get("model")
+    return (deployment_id, model) if isinstance(deployment_id, str) and isinstance(model, str) else None
 
 
 def _search_tool_support(deployment: DeploymentTypedDict) -> bool | None:
@@ -12753,15 +12764,10 @@ class PythonCore(DeprecatedRouterMembers):
 
         Returns an empty tuple for wildcard-expanded or unknown names.
         """
-        return tuple(
-            self._core_cached_deployment_model_info(deployment_id, model)
-            if isinstance(deployment_id := _configured_model_info(deployment).get("id"), str)
-            and isinstance(
-                model := _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"]).get("model"), str
-            )
-            else None
-            for deployment in self._routable_deployments(model_name, team_id)
+        keys: Final = tuple(
+            _model_info_key(deployment) for deployment in self._routable_deployments(model_name, team_id)
         )
+        return tuple(None if key is None else self._core_cached_deployment_model_info(*key) for key in keys)
 
     def _core_get_routable_upstream_model(self, model_name: str, team_id: str | None = None) -> str | None:
         """
@@ -12773,6 +12779,25 @@ class PythonCore(DeprecatedRouterMembers):
         """
         deployment: Final = next(iter(self._routable_deployments(model_name, team_id)), None)
         return deployment["litellm_params"].get("model") if deployment is not None else None
+
+    def _core_get_routable_upstream_provider(self, model_name: str, team_id: str | None = None) -> str | None:
+        """
+        Return the provider the deployment _core_get_routable_upstream_model
+        reads declares: its `litellm_params.custom_llm_provider`, else the
+        `provider/` prefix of its `litellm_params.model`.
+
+        Returns None when that deployment declares neither, and wherever
+        _core_get_routable_upstream_model returns None.
+        """
+        deployment: Final = next(iter(self._routable_deployments(model_name, team_id)), None)
+        if deployment is None:
+            return None
+        params: Final = _deployment_params(deployment)
+        model: Final = params.get("model")
+        provider: Final = params.get("custom_llm_provider")
+        return declared_provider(
+            model if isinstance(model, str) else None, provider if isinstance(provider, str) else None
+        )
 
     def _core_get_credential_deployment(self, model_id: str, team_id: str | None = None) -> Deployment | None:
         """

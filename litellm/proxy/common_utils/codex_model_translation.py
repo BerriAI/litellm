@@ -26,12 +26,16 @@ CodexInputModality: TypeAlias = Literal["text", "image"]
 
 _TEXT_ONLY: Final[tuple[CodexInputModality, ...]] = ("text",)
 _TEXT_AND_IMAGE: Final[tuple[CodexInputModality, ...]] = ("text", "image")
-_TIER_PRICE_BASE_KEY: Final = "input_cost_per_token"
-TIER_PRICE_KEYS: Final = tuple(f"{_TIER_PRICE_BASE_KEY}{suffix}" for suffix in SERVICE_TIER_COST_KEY_SUFFIXES)
+TOKEN_PRICE_KEY: Final = "input_cost_per_token"
+TIER_PRICE_KEYS: Final = tuple(f"{TOKEN_PRICE_KEY}{suffix}" for suffix in SERVICE_TIER_COST_KEY_SUFFIXES)
 _FIRST_CODEX_WITH_CUSTOM_EFFORTS: Final = Version("0.138.0")
 _EFFORTS_EVERY_CODEX_PARSES: Final = frozenset({"none", "minimal", "low", "medium", "high", "xhigh"})
 _PREFERRED_DEFAULT_EFFORT: Final = "medium"
 _CODEX_UNSET_EFFORT: Final = "none"
+
+
+def _unset(value: object) -> bool:
+    return value is None
 
 
 class CodexServiceTier(LiteLLMBaseModel):
@@ -75,7 +79,7 @@ class CodexFallbackModel(LiteLLMBaseModel):
     slug: str
     display_name: str
     description: NoneType = None
-    default_reasoning_level: str | None = Field(default=None, exclude_if=lambda level: level is None)
+    default_reasoning_level: str | None = Field(default=None, exclude_if=_unset)
     supported_reasoning_levels: tuple[CodexFallbackReasoningLevel, ...] = ()
     shell_type: Literal["unified_exec"] = "unified_exec"
     visibility: Literal["list"] = "list"
@@ -85,7 +89,7 @@ class CodexFallbackModel(LiteLLMBaseModel):
     availability_nux: NoneType = None
     upgrade: NoneType = None
     support_verbosity: Literal[False] = False
-    supports_reasoning_summary_parameter: bool = False
+    supports_reasoning_summary_parameter: bool | None = Field(default=None, exclude_if=_unset)
     supports_reasoning_summaries: bool = False
     supports_parallel_tool_calls: bool = False
     default_verbosity: NoneType = None
@@ -101,7 +105,8 @@ class CodexFallbackModel(LiteLLMBaseModel):
 
 class CodexDeploymentCapabilities(LiteLLMBaseModel):
     """What one deployment's model info says about the capabilities a Codex entry describes, None where
-    it says nothing, and the input price keys of the service tiers it has a price for."""
+    it says nothing, whether it has a token price at all, and the input price keys of the service tiers it
+    has a price for."""
 
     model_config = ConfigDict(frozen=True, extra="ignore")
 
@@ -110,14 +115,19 @@ class CodexDeploymentCapabilities(LiteLLMBaseModel):
     supports_function_calling: bool | None = None
     supports_parallel_function_calling: bool | None = None
     supports_reasoning: bool | None = None
+    prices_tokens: bool = False
     priced_service_tier_keys: frozenset[str] = frozenset()
 
 
-def every_deployment_prices(tier_id: str, deployments: Sequence[CodexDeploymentCapabilities]) -> bool:
-    """Whether every deployment has a price for `tier_id`, the way cost tracking prices a request sent at
-    that tier; a tier cost tracking has no price key for is priced by none."""
-    price_key: Final = get_service_tier_cost_key(_TIER_PRICE_BASE_KEY, tier_id)
-    return all(price_key in deployment.priced_service_tier_keys for deployment in deployments)
+def no_priced_deployment_lacks_tier(tier_id: str, deployments: Sequence[CodexDeploymentCapabilities]) -> bool:
+    """Whether every deployment that has a token price also has one for `tier_id`, the way cost tracking
+    prices a request sent at that tier. A deployment with no token price at all (a subscription upstream,
+    a deployment name the cost map does not know) says nothing about tiers, so it does not vote, and a tier
+    cost tracking has no price key for is lacked by every deployment that prices tokens."""
+    price_key: Final = get_service_tier_cost_key(TOKEN_PRICE_KEY, tier_id)
+    return all(
+        price_key in deployment.priced_service_tier_keys for deployment in deployments if deployment.prices_tokens
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,12 +215,12 @@ def codex_fallback_entry(
 ) -> CodexFallbackModel:
     """Codex's entry for a model it does not know, from the capabilities its deployments share.
 
-    A capability no deployment declares keeps Codex's own default for an unknown model, except the two
-    that send something a model may reject: the `reasoning.summary` parameter goes out only to a model
-    that reasons, and the freeform `apply_patch` tool only to one that calls tools.
+    A capability no deployment declares keeps Codex's own default for an unknown model, except the freeform
+    `apply_patch` tool, which goes out only to a model that calls tools: `supports_reasoning_summary_parameter`
+    is left out, which Codex reads as true, and the fields only Codex before 0.150.0 reads keep the false
+    it requires.
     """
     levels, default_level = codex_reasoning_levels(reasoning_efforts, client_version)
-    reasons: Final = capabilities.supports_reasoning is True
     return CodexFallbackModel(
         slug=slug,
         display_name=display_name,
@@ -218,8 +228,8 @@ def codex_fallback_entry(
         supported_reasoning_levels=levels,
         priority=priority,
         service_tiers=service_tiers,
-        supports_reasoning_summary_parameter=reasons,
-        supports_reasoning_summaries=reasons,
+        supports_reasoning_summary_parameter=capabilities.supports_reasoning,
+        supports_reasoning_summaries=capabilities.supports_reasoning is True,
         supports_parallel_tool_calls=capabilities.supports_parallel_function_calling is True,
         apply_patch_tool_type="freeform" if capabilities.supports_function_calling is True else None,
         input_modalities=_TEXT_ONLY if capabilities.supports_vision is False else _TEXT_AND_IMAGE,

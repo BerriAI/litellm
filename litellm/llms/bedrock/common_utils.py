@@ -13,7 +13,7 @@ import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
 from typing_extensions import (
     ReadOnly,
@@ -32,7 +32,6 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
-from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.common_utils import schema_property_count
@@ -1491,12 +1490,17 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
-def bedrock_vendor_model_name(model: str) -> str:
-    """The name the model's vendor publishes it under, without Bedrock's routing, region and vendor
-    prefixes: ``bedrock/us.openai.gpt-6.1-sol`` and ``us-east-1/openai.gpt-6.1-sol`` are ``gpt-6.1-sol``."""
+def bedrock_model_name_without_provider(model: str) -> str:
+    """The model id without Bedrock's routing and region prefixes and without its provider namespace.
+
+    A Bedrock foundation model id is ``<provider>.<model>`` with a one-word provider (``anthropic.``,
+    ``deepseek.``, ``moonshotai.``), so a base model whose first dot-separated part is one word drops it:
+    ``bedrock/us.openai.gpt-6.1-sol`` and ``us-east-1/openai.gpt-6.1-sol`` are ``gpt-6.1-sol``,
+    ``us.deepseek.r1-v1:0`` is ``r1-v1:0``. Any other base model, such as ``gpt-5.5`` or an imported model's
+    ARN id, is returned as is."""
     base: Final = get_bedrock_base_model(model)
-    vendor, separator, name = base.partition(".")
-    return name if separator and vendor in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL) else base
+    provider, separator, name = base.partition(".")
+    return name if separator and provider.isalnum() else base
 
 
 def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | None) -> bool:

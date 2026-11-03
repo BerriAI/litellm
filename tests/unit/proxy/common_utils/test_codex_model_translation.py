@@ -1,5 +1,4 @@
 import json
-from itertools import product
 from typing import Final
 
 import pytest
@@ -11,11 +10,12 @@ from litellm.proxy.common_utils.codex_model_translation import (
     CodexServiceTier,
     codex_fallback_entry,
     combined_capabilities,
-    every_deployment_prices,
+    no_priced_deployment_lacks_tier,
 )
 
 _PROMPT: Final = "base prompt"
 _SILENT: Final = CodexDeploymentCapabilities()
+_ABSENT: Final = object()
 
 
 def _entry(capabilities: CodexCapabilities, **kwargs: object) -> dict[str, object]:
@@ -42,21 +42,21 @@ def test_a_model_that_calls_tools_and_reasons_gets_codexs_own_coding_setup():
 
 
 @pytest.mark.parametrize(
-    ("flag", "field", "when_true", "otherwise"),
+    ("flag", "field", "by_value"),
     [
-        ("supports_function_calling", "apply_patch_tool_type", "freeform", None),
-        ("supports_reasoning", "supports_reasoning_summary_parameter", True, False),
-        ("supports_reasoning", "supports_reasoning_summaries", True, False),
-        ("supports_parallel_function_calling", "supports_parallel_tool_calls", True, False),
+        ("supports_function_calling", "apply_patch_tool_type", {True: "freeform", False: None, None: None}),
+        ("supports_reasoning", "supports_reasoning_summary_parameter", {True: True, False: False, None: _ABSENT}),
+        ("supports_reasoning", "supports_reasoning_summaries", {True: True, False: False, None: False}),
+        ("supports_parallel_function_calling", "supports_parallel_tool_calls", {True: True, False: False, None: False}),
     ],
 )
 @pytest.mark.parametrize("value", [True, False, None])
-def test_a_feature_that_sends_something_upstream_is_on_only_when_every_deployment_declares_it(
-    flag, field, when_true, otherwise, value
-):
+def test_each_codex_feature_follows_what_the_deployments_declare(flag, field, by_value, value):
+    """A missing `supports_reasoning_summary_parameter` is Codex's own default (true, `default_true` in
+    `codex-rs/protocol/src/openai_models.rs` at rust-v0.166.0), so a model nobody describes keeps it."""
     entry: Final = _entry(CodexCapabilities(**{flag: value}))
 
-    assert entry[field] == (when_true if value is True else otherwise)
+    assert entry.get(field, _ABSENT) == by_value[value]
 
 
 @pytest.mark.parametrize(
@@ -124,23 +124,22 @@ _CODEX_MODALITIES: Final = {"text", "image"}
 _CODEX_TRUNCATION_MODES: Final = {"bytes", "tokens"}
 
 
-@pytest.mark.parametrize(
-    "flags", list(product((True, False, None), repeat=4)), ids=lambda flags: "-".join(map(str, flags))
-)
-def test_every_entry_carries_the_fields_and_enum_values_every_supported_codex_decodes(flags):
+@pytest.mark.parametrize("described", [True, False], ids=["described", "undescribed"])
+def test_every_entry_carries_the_fields_and_enum_values_every_supported_codex_decodes(described):
     """`codex-rs/protocol/src/openai_models.rs` ModelInfo at rust-v0.140.0 and rust-v0.166.0, the fields with
     no `#[serde(default)]` and the variants of InputModality, ConfigShellToolType, ModelVisibility,
     ApplyPatchToolType and TruncationMode in both, read on 2026-11-02. Codex rejects the whole catalog when
     one entry does not decode."""
-    vision, tools, parallel, reasoning = flags
     entry: Final = _entry(
         CodexCapabilities(
             context_window=128_000,
-            supports_vision=vision,
-            supports_function_calling=tools,
-            supports_parallel_function_calling=parallel,
-            supports_reasoning=reasoning,
+            supports_vision=False,
+            supports_function_calling=True,
+            supports_parallel_function_calling=True,
+            supports_reasoning=True,
         )
+        if described
+        else CodexCapabilities()
     )
 
     assert entry.keys() >= _REQUIRED_SINCE_CODEX_0_140
@@ -198,21 +197,28 @@ def test_the_window_is_the_smallest_any_deployment_declares(windows, listed, exp
 
 def _priced(*tier_ids: str) -> CodexDeploymentCapabilities:
     return CodexDeploymentCapabilities(
-        priced_service_tier_keys=frozenset(get_service_tier_cost_key("input_cost_per_token", tier) for tier in tier_ids)
+        prices_tokens=True,
+        priced_service_tier_keys=frozenset(
+            get_service_tier_cost_key("input_cost_per_token", tier) for tier in tier_ids
+        ),
     )
 
 
 @pytest.mark.parametrize(
-    ("deployments", "tier", "priced"),
+    ("deployments", "tier", "kept"),
     [
         ((_priced("priority"), _priced("priority", "flex")), "priority", True),
         ((_priced("priority"), _priced("flex")), "priority", False),
-        ((_priced("priority"), _SILENT), "priority", False),
+        ((_priced("priority"), _priced()), "priority", False),
+        ((_priced("priority"), _SILENT), "priority", True),
+        ((_SILENT, _SILENT), "priority", True),
         ((_priced("priority"),), "fast", True),
         ((_priced("flex"),), "fast", False),
         ((_priced("priority", "flex"),), "made-up-tier", False),
         ((), "priority", True),
     ],
 )
-def test_a_tier_is_priced_only_when_every_deployment_prices_it_the_way_cost_tracking_does(deployments, tier, priced):
-    assert every_deployment_prices(tier, deployments) is priced
+def test_a_tier_stays_unless_a_deployment_that_prices_tokens_has_no_price_for_it(deployments, tier, kept):
+    """A deployment with no token price at all (a subscription upstream, a deployment name the cost map does
+    not know) says nothing about which tiers its upstream sells, so it does not vote."""
+    assert no_priced_deployment_lacks_tier(tier, deployments) is kept

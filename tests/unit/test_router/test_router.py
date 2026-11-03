@@ -13950,6 +13950,27 @@ def test_upstream_model_and_service_tiers_are_read_off_the_deployments_the_team_
     assert router.get_configured_service_tiers(model_name, team_id) == service_tiers
 
 
+@pytest.mark.parametrize(
+    ("litellm_params", "provider"),
+    [
+        ({"model": "us.openai.gpt-6.1-sol", "custom_llm_provider": "bedrock"}, "bedrock"),
+        ({"model": "bedrock_mantle/openai.gpt-6.1-sol"}, "bedrock_mantle"),
+        ({"model": "gpt-6.1-sol"}, None),
+    ],
+)
+def test_the_upstream_provider_is_the_one_the_routable_deployment_declares(litellm_params, provider):
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "sol", "litellm_params": litellm_params, "model_info": {"team_id": "team-1"}},
+            {"model_name": "sol", "litellm_params": {"model": "azure/sol-deployment"}, "model_info": {"team_id": "t2"}},
+        ]
+    )
+
+    assert router.registry().resolve("sol", kind="upstream_provider", team_id="team-1") == provider
+    assert router.registry().resolve("sol", kind="upstream_provider", team_id="t2") == "azure"
+    assert router.registry().resolve("not-a-real-model", kind="upstream_provider") is None
+
+
 def test_get_configured_display_name_treats_malformed_values_as_absent():
     malformed = ["", "   ", 12345, ["Kimi K3"], {"name": "Kimi K3"}, True]
     router = litellm.Router(

@@ -657,6 +657,11 @@ FORWARDS = [
         (("gpt",), {"team_id": "t"}),
     ),
     (
+        lambda r: r.registry().resolve("gpt", kind="upstream_provider", team_id="t"),
+        "_core_get_routable_upstream_provider",
+        (("gpt",), {"team_id": "t"}),
+    ),
+    (
         lambda r: r.registry().resolve("gpt", kind="search_tool_support", team_id="t"),
         "_core_get_search_tool_support",
         (("gpt",), {"team_id": "t"}),

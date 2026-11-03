@@ -6,8 +6,8 @@ feature on) and decodes the body as its own ``ModelsResponse``, ``{"models": [Mo
 never the OpenAI list shape. Codex then ignores its own bundled catalog, so this body is all it knows
 about the provider's models. It is built from the rows ``/v1/models`` already lists: a model Codex
 knows, by its id or by the upstream model its deployments call once the provider's own prefixes are
-stripped, keeps Codex's own entry for it, minus any service tier some deployment behind it has no
-price for; any other model gets an entry translated from the capabilities its deployments' model info
+stripped, keeps Codex's own entry for it, minus any service tier some deployment behind it prices tokens
+but not that tier for; any other model gets an entry translated from the capabilities its deployments' model info
 declares (see ``codex_model_translation``). ``model_info.service_tiers`` becomes the entry's
 ``service_tiers``, which Codex turns into slash commands (``/ultrafast``) that send ``service_tier``
 upstream. A ``model_info.max_input_tokens`` the operator sets replaces a known model's
@@ -35,16 +35,18 @@ from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.bedrock.common_utils import bedrock_vendor_model_name
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider
+from litellm.llms.bedrock.common_utils import bedrock_model_name_without_provider
 from litellm.proxy.common_utils.codex_model_translation import (
     TIER_PRICE_KEYS,
+    TOKEN_PRICE_KEY,
     CodexDeploymentCapabilities,
     CodexFallbackModel,
     CodexServiceTier,
     TierId,
     codex_fallback_entry,
     combined_capabilities,
-    every_deployment_prices,
+    no_priced_deployment_lacks_tier,
 )
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
@@ -122,7 +124,8 @@ CodexAliasDefaults: TypeAlias = Literal["codex", "deployment"]
 @dataclass(frozen=True, slots=True)
 class CodexCatalogRow:
     """What the catalog needs to know about one listed model: its public id, the listing's mode and
-    input limit, the upstream model behind it, the reasoning effort its deployments pin, and the
+    input limit, the upstream model behind it and the provider its deployment declares, the reasoning
+    effort its deployments pin, and the
     `model_info` values the operator set; `service_tiers` holds one raw `model_info.service_tiers`
     value per deployment behind the id, None where a deployment sets none, and
     `configured_max_input_tokens` one `model_info.max_input_tokens` per deployment the same way.
@@ -133,6 +136,7 @@ class CodexCatalogRow:
     mode: str | None = None
     max_input_tokens: int | None = None
     upstream_model: str | None = None
+    upstream_provider: str | None = None
     reasoning_effort: str | None = None
     display_name: str | None = None
     service_tiers: tuple[object, ...] = ()
@@ -242,36 +246,44 @@ def _codex_can_drive(model_id: str, mode: str | None) -> bool:
     return "*" not in model_id and (mode is None or mode in CODEX_CHAT_MODES)
 
 
-_VENDOR_MODEL_NAMES: Final[Mapping[str, Callable[[str], str]]] = MappingProxyType(
-    {"bedrock": bedrock_vendor_model_name, "bedrock_mantle": bedrock_vendor_model_name}
+_PROVIDER_MODEL_NAMES: Final[Mapping[str, Callable[[str], str]]] = MappingProxyType(
+    {"bedrock": bedrock_model_name_without_provider, "bedrock_mantle": bedrock_model_name_without_provider}
 )
 
 
-def _vendor_model_name(upstream_model: str) -> str:
-    provider, _, model = upstream_model.partition("/")
-    name_for: Final = _VENDOR_MODEL_NAMES.get(provider)
+def _provider_model_name(upstream_model: str, upstream_provider: str | None) -> str:
+    """The upstream model without the prefixes its provider adds, the provider being the one the deployment
+    declares in `custom_llm_provider`, else the model's `provider/` prefix."""
+    provider: Final = declared_provider(upstream_model, upstream_provider)
+    if provider is None:
+        return upstream_model
+    model: Final = upstream_model.removeprefix(f"{provider}/")
+    name_for: Final = _PROVIDER_MODEL_NAMES.get(provider)
     return model if name_for is None else name_for(model)
 
 
 def _stock_for(row: CodexCatalogRow, stock: Mapping[str, CodexStockModel]) -> CodexStockModel | None:
     """Codex's entry for the row's id, else for its upstream model as written, else for that model's name
-    once the provider's own prefixes are stripped (`bedrock/us.openai.gpt-6.1-sol` is `gpt-6.1-sol`)."""
+    once its provider's own prefixes are stripped (`bedrock/us.openai.gpt-6.1-sol` is `gpt-6.1-sol`)."""
     names: Final = (
         (row.id,)
         if row.upstream_model is None
-        else (row.id, row.upstream_model, _vendor_model_name(row.upstream_model))
+        else (row.id, row.upstream_model, _provider_model_name(row.upstream_model, row.upstream_provider))
     )
     return next((stock[name] for name in names if name in stock), None)
 
 
 def _priced_tiers(row: CodexCatalogRow, stock_model: CodexStockModel) -> Mapping[str, object]:
-    """Codex's own tiers for the model without the ones some deployment behind the row has no price for,
-    or nothing when every deployment prices them all. Sending a tier the upstream does not sell fails the
-    request, and the cost map prices a tier for exactly the models that sell it."""
+    """Codex's own tiers for the model without the ones some deployment behind the row prices tokens but not
+    that tier for, or nothing when none is dropped. Sending a tier the upstream does not sell fails the
+    request, and the cost map prices a tier for exactly the models that sell it, while a deployment it has no
+    token price for at all says nothing either way."""
     deployments: Final = row.deployment_capabilities
-    tiers: Final = tuple(tier for tier in stock_model.service_tiers if every_deployment_prices(tier.id, deployments))
+    tiers: Final = tuple(
+        tier for tier in stock_model.service_tiers if no_priced_deployment_lacks_tier(tier.id, deployments)
+    )
     speed_tiers: Final = tuple(
-        tier for tier in stock_model.additional_speed_tiers if every_deployment_prices(tier, deployments)
+        tier for tier in stock_model.additional_speed_tiers if no_priced_deployment_lacks_tier(tier, deployments)
     )
     if tiers == stock_model.service_tiers and speed_tiers == stock_model.additional_speed_tiers:
         return _NO_UPDATE
@@ -457,8 +469,8 @@ def codex_models_response_json(
     `max_context_window`. A row listed under another name than the Codex model its `upstream_model` names (an alias) takes that model's
     entry; `alias_defaults="deployment"` drops the defaults Codex picks for that model in favor of
     what the alias's deployments pin, while `"codex"` keeps them, as Codex would use them for the
-    model's own name. Codex's own service tiers stay on a known model's entry only when every deployment
-    behind the row prices them, and only while the operator configures none. `client_version` is the
+    model's own name. Codex's own service tiers stay on a known model's entry only when no deployment
+    behind the row prices tokens without pricing them, and only while the operator configures none. `client_version` is the
     requesting Codex's version, which decides the reasoning levels a fallback entry may offer; None counts
     as a version too old for custom levels.
     """
@@ -492,14 +504,17 @@ def deployment_capabilities(model_info: Mapping[str, object] | None, model_id: s
     Model info that does not validate declares nothing, logged, so one bad value never fails the listing."""
     if model_info is None:
         return CodexDeploymentCapabilities()
+    prices_tokens: Final = model_info.get(TOKEN_PRICE_KEY) is not None
     priced: Final = frozenset(key for key in TIER_PRICE_KEYS if model_info.get(key) is not None)
     try:
-        return CodexDeploymentCapabilities.model_validate({**model_info, "priced_service_tier_keys": priced})
+        return CodexDeploymentCapabilities.model_validate(
+            {**model_info, "prices_tokens": prices_tokens, "priced_service_tier_keys": priced}
+        )
     except ValidationError as e:
         verbose_proxy_logger.warning(
             "model info of a deployment of %s declares no capability to Codex: %s", model_id, e.errors()[0]["msg"]
         )
-        return CodexDeploymentCapabilities(priced_service_tier_keys=priced)
+        return CodexDeploymentCapabilities(prices_tokens=prices_tokens, priced_service_tier_keys=priced)
 
 
 def _deployment_capabilities(
@@ -522,6 +537,9 @@ def _catalog_row(
         mode=row.get("mode"),
         max_input_tokens=row.get("max_input_tokens"),
         upstream_model=registry.resolve(lookup_id, kind="upstream", team_id=team_id) if registry is not None else None,
+        upstream_provider=(
+            registry.resolve(lookup_id, kind="upstream_provider", team_id=team_id) if registry is not None else None
+        ),
         display_name=registry.group(label_id, field="display_name") if registry is not None else None,
         service_tiers=registry.group(lookup_id, field="service_tiers", team_id=team_id) if registry is not None else (),
         supported_reasoning_efforts=_group_reasoning_efforts(row, lookup_id, registry, team_id),
