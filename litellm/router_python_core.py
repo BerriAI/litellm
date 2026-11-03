@@ -14934,12 +14934,14 @@ class PythonCore(DeprecatedRouterMembers):
             count_tokens: Final = self._host.invoke("token_counter")
             return max(count_tokens(model=tokenizer_model, text=item) for item in items)
         if all(isinstance(item, int) and not isinstance(item, bool) for item in items):
-            return len(items)
-        try:
-            token_id_batch: Final = _EMBEDDING_TOKEN_ID_BATCH_ADAPTER.validate_python(items, strict=True)
-        except ValidationError:
-            return None
-        return max(len(token_ids) for token_ids in token_id_batch)
+            longest_token_ids = len(items)
+        else:
+            try:
+                token_id_batch: Final = _EMBEDDING_TOKEN_ID_BATCH_ADAPTER.validate_python(items, strict=True)
+            except ValidationError:
+                return None
+            longest_token_ids = max(len(token_ids) for token_ids in token_id_batch)
+        return 0 if self._host.dynamic().disable_token_counter else longest_token_ids
 
     def _deployment_max_input_tokens(self, model: str, deployment: Mapping[str, object]) -> int | None:
         """The deployment's declared context window, or None when it declares none or cannot be resolved."""

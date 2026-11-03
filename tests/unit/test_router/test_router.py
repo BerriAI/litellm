@@ -8872,12 +8872,14 @@ def _embedding_router(max_input_tokens: int) -> litellm.Router:
         pytest.param(list(range(10)), id="token-ids-at-the-limit"),
     ],
 )
-async def test_aembedding_accepts_a_batch_whose_inputs_each_fit_the_context_window(embedding_input):
+async def test_aembedding_accepts_a_batch_whose_inputs_each_fit_the_context_window(embedding_input, caplog):
     router: Final = _embedding_router(max_input_tokens=10)
 
-    response: Final = await router.aembedding(model="embed", input=embedding_input)
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Router"):
+        response: Final = await router.aembedding(model="embed", input=embedding_input)
 
     assert response.data
+    assert "failed to count tokens" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -8901,6 +8903,24 @@ def test_embedding_rejects_a_batch_with_one_input_over_the_context_window():
 
     with pytest.raises(litellm.ContextWindowExceededError):
         router.embedding(model="embed", input=["one", " ".join(["word"] * 20)])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "embedding_input",
+    [
+        pytest.param(["one", " ".join(["word"] * 20)], id="texts"),
+        pytest.param(list(range(11)), id="token-ids"),
+        pytest.param([[1], list(range(11))], id="token-id-lists"),
+    ],
+)
+async def test_aembedding_skips_the_context_window_check_when_token_counting_is_disabled(embedding_input, monkeypatch):
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    router: Final = _embedding_router(max_input_tokens=10)
+
+    response: Final = await router.aembedding(model="embed", input=embedding_input)
+
+    assert response.data
 
 
 @pytest.mark.asyncio

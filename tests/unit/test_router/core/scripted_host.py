@@ -160,6 +160,7 @@ def dynamic_config(**changes: object) -> RouterDynamicConfig:  # kwargs-ok: Rout
         context_window_fallbacks=None,
         content_policy_fallbacks=None,
         drop_params=None,
+        disable_token_counter=False,
         provider_list=litellm.provider_list,
         expose_router_debug_in_errors=False,
         redact_user_api_key_info=None,
