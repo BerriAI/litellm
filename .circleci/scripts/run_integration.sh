@@ -128,8 +128,6 @@ fi
 sudo iptables -L integration_only -n -v -x > "$results/egress-guard.txt"
 awk '$3 == "REJECT" && $1 > 0 { rejected=1 } END { exit !rejected }' "$results/egress-guard.txt"
 
-export UV_OFFLINE=true
-
 if [ "$mode" = parity ]; then
   export INTEGRATION_WORKERS=1
 else
@@ -257,6 +255,7 @@ elif [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
 fi
 
 env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
+  UV_OFFLINE=true UV_CACHE_DIR="$(uv cache dir)" \
   INTEGRATION_RUN_ID="$integration_identity" \
   DATABASE_URL="$DATABASE_URL" \
   "${shared_services[@]}" "${worker_coverage[@]}" \
