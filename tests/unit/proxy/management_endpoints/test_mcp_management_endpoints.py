@@ -9202,8 +9202,21 @@ def _mock_mcp_resolution_prisma_client(
     )
 
     def matches_server_filter(name: str, condition: object) -> bool:
+        if name == "AND" and isinstance(condition, list):
+            return all(
+                matches_server_filter(sub_name, sub_condition)
+                for clause in condition
+                if isinstance(clause, Mapping)
+                for sub_name, sub_condition in clause.items()
+            )
         if name == "OR" and condition == [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]:
             return server.approval_status in (None, "active", "approved")
+        if name == "OR" and condition == [{"approval_status": None}, {"approval_status": {"not": "draft"}}]:
+            # Admin unfiltered listing query (get_all_mcp_servers): every non-draft row.
+            return server.approval_status != "draft"
+        if name == "OR" and condition == [{"enabled": None}, {"enabled": True}]:
+            # Runtime gate: NULL/legacy and True are enabled; only explicit False is filtered out.
+            return getattr(server, "enabled", True) is not False
         if name == "submitted_by":
             return server.submitted_by == condition
         if name == "server_id":
@@ -9778,8 +9791,13 @@ class TestMCPServerResolutionCharacterization:
         existing_find_many: Final = prisma.db.litellm_mcpservertable.find_many
 
         async def current_rows(**kwargs: object) -> list[LiteLLM_MCPServerTable]:
-            if kwargs.get("where") == {"OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]}:
+            where: Final = kwargs.get("where")
+            if where == {"OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]}:
                 return [hidden] if eligible else []
+            if where == {"OR": [{"approval_status": None}, {"approval_status": {"not": "draft"}}]}:
+                # Admin unfiltered listing query (get_all_mcp_servers): every non-draft row of the
+                # server under test; get_all_mcp_servers_unfiltered then applies its own approval scope.
+                return [hidden] if hidden.approval_status != "draft" else []
             return await existing_find_many(**kwargs)
 
         prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=current_rows)

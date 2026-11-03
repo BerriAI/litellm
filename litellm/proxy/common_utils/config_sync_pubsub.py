@@ -63,6 +63,7 @@ _CONFIG_SYNCED_TABLE_NAMES: Final[frozenset[str]] = frozenset(
         "litellm_managedvectorstorestable",
         "litellm_managedvectorstoreindextable",
         "litellm_mcpservertable",
+        "litellm_mcpserverstateoverride",
         "litellm_agentstable",
         "litellm_prompttable",
         "litellm_searchtoolstable",

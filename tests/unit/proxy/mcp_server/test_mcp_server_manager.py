@@ -21900,3 +21900,198 @@ def test_id_jag_listed_tool_metadata_is_isolated_between_identity_assertions() -
     manager.record_listed_tools(server, (first,), callers[0])
     manager.record_listed_tools(server, (second,), callers[1])
     assert tuple(manager.get_listed_tool(server, "list_notes", caller) for caller in callers) == (first, second, None)
+
+
+class TestMCPEnableDisableManager:
+    """Task 3: admin enable/disable gate, caller-facing hiding, admin listing, live toggle."""
+
+    @staticmethod
+    async def _load_config_server(manager, *, server_name="flaky_tools", allowed_tools=None):
+        config = {
+            server_name: {
+                "transport": MCPTransport.http,
+                "url": "https://flaky.example.com/mcp",
+                "auth_type": "none",
+            }
+        }
+        if allowed_tools is not None:
+            config[server_name]["allowed_tools"] = allowed_tools
+        # Suppress the startup tool-name mapping task; it would network-call the (fake) upstream
+        # URL and leave a pending task that hangs teardown (the reason config_only_mcp_manager_factory
+        # overrides it). We only need the server resident in config_mcp_servers.
+        with patch.object(manager, "initialize_tool_name_to_mcp_server_name_mapping", lambda: None):
+            await manager.load_servers_from_config(config)
+        return next(iter(manager.config_mcp_servers.keys()))
+
+    @pytest.mark.asyncio
+    async def test_disabled_db_server_absent_after_full_reload(self, monkeypatch):
+        """Review Focus: a full reload must not re-admit a disabled DB server, and the
+        per-row add/update paths honor the enabled flag for instant toggles."""
+        from litellm.proxy import proxy_server
+
+        manager = MCPServerManager()
+        stamp = datetime.now()
+        enabled_row = LiteLLM_MCPServerTable(
+            server_id="db-flaky",
+            alias="db_flaky",
+            server_name="db_flaky",
+            url="https://flaky.example.com/mcp",
+            transport=MCPTransport.http,
+            enabled=True,
+            created_at=stamp,
+            updated_at=stamp,
+        )
+        await manager.add_server(enabled_row)
+        assert "db-flaky" in manager.get_filtered_registry()
+
+        # A disabled row must not be admitted by the per-row path (instant toggle).
+        disabled_row = enabled_row.model_copy(update={"enabled": False})
+        await manager.update_server(disabled_row)
+        assert "db-flaky" not in manager.get_filtered_registry()
+
+        # Re-admit it, then confirm a full reload whose (enabled-gated) query no longer
+        # returns the row does not re-admit it.
+        await manager.add_server(enabled_row)
+        assert "db-flaky" in manager.get_filtered_registry()
+
+        monkeypatch.setattr(proxy_server, "prisma_client", None, raising=False)
+        with (
+            patch(
+                "litellm.proxy.mcp_server.db.get_runtime_mcp_server_rows",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+        ):
+            await manager.reload_servers_from_database()
+
+        assert "db-flaky" not in manager.get_filtered_registry()
+        assert "db-flaky" not in manager.registry
+
+    @pytest.mark.asyncio
+    async def test_disabled_config_server_hidden_from_caller_registry(self):
+        """A disabled config server is absent from the caller-facing registry and from the
+        operations tool-listing resolution path, but still present in the raw registry."""
+        from litellm.proxy.mcp_server import operations
+        from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+        manager = global_mcp_server_manager
+        server_id = await self._load_config_server(manager)
+        assert server_id in manager.get_filtered_registry()
+
+        manager._disabled_config_server_ids.add(server_id)
+        try:
+            # Caller-facing registry excludes it; raw registry keeps it for admin code.
+            assert server_id not in manager.get_filtered_registry()
+            assert server_id in manager.get_registry()
+
+            # The operations tool-listing / call resolution path excludes it too.
+            with patch.object(
+                manager, "get_allowed_mcp_servers", new=AsyncMock(return_value=[server_id])
+            ):
+                allowed = await operations._get_allowed_mcp_servers(
+                    user_api_key_auth=None, mcp_servers=None
+                )
+            assert all(s.server_id != server_id for s in allowed)
+        finally:
+            manager._disabled_config_server_ids.discard(server_id)
+
+    @pytest.mark.asyncio
+    async def test_disabled_server_shown_in_admin_unfiltered_with_flag(self, monkeypatch):
+        """Admin unfiltered listing shows disabled servers (DB and config) with enabled=False."""
+        from litellm.proxy import proxy_server
+
+        manager = MCPServerManager()
+        config_id = await self._load_config_server(manager)
+        manager._disabled_config_server_ids.add(config_id)
+
+        disabled_db_row = LiteLLM_MCPServerTable(
+            server_id="db-disabled",
+            alias="db_disabled",
+            server_name="db_disabled",
+            url="https://db.example.com/mcp",
+            transport=MCPTransport.http,
+            enabled=False,
+        )
+        monkeypatch.setattr(proxy_server, "prisma_client", MagicMock(), raising=False)
+        with patch(
+            "litellm.proxy.mcp_server.db.get_all_mcp_servers",
+            new=AsyncMock(return_value=[disabled_db_row]),
+        ):
+            listing = await manager.get_all_mcp_servers_unfiltered()
+
+        by_id = {s.server_id: s for s in listing}
+        assert by_id["db-disabled"].enabled is False
+        assert by_id[config_id].enabled is False
+
+    @pytest.mark.asyncio
+    async def test_reenable_config_server_restores_registry(self, monkeypatch):
+        """Flipping a config server back on restores it to the caller-facing registry."""
+        from litellm.proxy import proxy_server
+
+        manager = MCPServerManager()
+        server_id = await self._load_config_server(manager)
+        manager._disabled_config_server_ids.add(server_id)
+        assert server_id not in manager.get_filtered_registry()
+
+        monkeypatch.setattr(proxy_server, "prisma_client", MagicMock(), raising=False)
+        with (
+            patch(
+                "litellm.proxy.mcp_server.db.set_mcp_server_enabled",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.mcp_server.db.set_config_mcp_server_override",
+                new=AsyncMock(return_value=None),
+            ) as override,
+        ):
+            result = await manager.set_server_enabled(server_id, True, "admin-user")
+
+        assert result is not None
+        assert result.enabled is True
+        override.assert_awaited_once()
+        assert server_id not in manager._disabled_config_server_ids
+        assert server_id in manager.get_filtered_registry()
+
+    @pytest.mark.asyncio
+    async def test_reenable_preserves_allowed_tools_access(self, monkeypatch):
+        """Review Focus: disabling then re-enabling a config server preserves its
+        allowed_tools grant (config untouched), so key access resolves again."""
+        from litellm.proxy import proxy_server
+
+        manager = MCPServerManager()
+        server_id = await self._load_config_server(manager, allowed_tools=["safe_tool"])
+        assert manager.config_mcp_servers[server_id].allowed_tools == ["safe_tool"]
+
+        monkeypatch.setattr(proxy_server, "prisma_client", MagicMock(), raising=False)
+        with (
+            patch(
+                "litellm.proxy.mcp_server.db.set_mcp_server_enabled",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.mcp_server.db.set_config_mcp_server_override",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            await manager.set_server_enabled(server_id, False, "admin-user")
+            assert server_id not in manager.get_filtered_registry()
+            # allowed_tools config survives the disable (server stays resident).
+            assert manager.config_mcp_servers[server_id].allowed_tools == ["safe_tool"]
+
+            await manager.set_server_enabled(server_id, True, "admin-user")
+
+        assert server_id in manager.get_filtered_registry()
+        assert manager.config_mcp_servers[server_id].allowed_tools == ["safe_tool"]
+
+    def test_effective_enabled_resolution(self):
+        """DB row -> its enabled (None/True legacy = enabled); config id -> not in disabled set."""
+        manager = MCPServerManager()
+        assert manager.effective_enabled("any", is_db_row_enabled=True) is True
+        assert manager.effective_enabled("any", is_db_row_enabled=False) is False
+        assert manager.effective_enabled("legacy", is_db_row_enabled=None) is True
+        manager._disabled_config_server_ids.add("cfg-off")
+        assert manager.effective_enabled("cfg-off", is_db_row_enabled=None) is False
+        assert manager.effective_enabled("cfg-on", is_db_row_enabled=None) is True
