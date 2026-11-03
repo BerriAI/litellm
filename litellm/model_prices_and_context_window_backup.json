@@ -73102,7 +73102,8 @@
         "max_input_tokens": 65536,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://docs.typesafe.ai/models"
+        "source": "https://docs.typesafe.ai/models",
+        "supports_box_questions": true
     },
     "typesafe/jev-preview": {
         "input_cost_per_token": 4.2e-08,
