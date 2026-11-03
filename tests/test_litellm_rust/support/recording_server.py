@@ -25,6 +25,7 @@ class ResponseSpec:
     status: int = 200
     headers: dict[str, str] = field(default_factory=dict)
     delay: float = 0
+    chunk_delay: float = 0
     events: tuple[tuple[str, object], ...] = ()
 
     def payloads(self) -> tuple[bytes, ...]:
@@ -89,7 +90,9 @@ def recording_service() -> Iterator[RecordingServer]:
                 self.send_header(name, value)
             self.end_headers()
             try:
-                for payload in payloads:
+                for index, payload in enumerate(payloads):
+                    if index and response.chunk_delay:
+                        time.sleep(response.chunk_delay)
                     self.wfile.write(payload)
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
