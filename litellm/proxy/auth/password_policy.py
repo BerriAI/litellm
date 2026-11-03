@@ -145,9 +145,13 @@ async def _is_password_breached(password: str, client: AsyncHTTPHandler) -> bool
 
 
 def is_breach_check_enabled(general_settings: Mapping[str, object]) -> bool:
-    if openssl_enforces_fips():
+    enabled: Final = (
+        not is_offline_mode() and general_settings.get("password_policy_check_breached_passwords", True) is not False
+    )
+    if enabled and openssl_enforces_fips():
+        verbose_proxy_logger.warning("FIPS mode skips the breached password check because its lookup needs SHA-1.")
         return False
-    return not is_offline_mode() and general_settings.get("password_policy_check_breached_passwords", True) is not False
+    return enabled
 
 
 async def is_password_breached(

@@ -239,14 +239,14 @@ def test_fips_hash_is_pbkdf2_sha256_at_600k_salted_by_openssl(monkeypatch: pytes
 
 @pytest.mark.usefixtures("fips_openssl")
 def test_fips_hash_salts_every_row_and_verifies() -> None:
-    first, second = hash_password(PASSWORD), hash_password(PASSWORD)
-    assert first != second
+    first: Final = hash_password(PASSWORD)
+    assert first != hash_password(PASSWORD)
     assert verify_password(PASSWORD, first)
 
 
 @pytest.mark.usefixtures("fips_openssl")
 def test_fips_verify_needs_the_right_password_of_at_least_eight_characters() -> None:
-    outcome = {
+    outcome: Final = {
         "right": verify_password(PASSWORD, PBKDF2_ROW),
         "wrong": verify_password("Seed-Lamp-4-Rivet", PBKDF2_ROW),
         "lone_surrogate": verify_password("\ud800" + PASSWORD, PBKDF2_ROW),
@@ -307,7 +307,7 @@ def test_standard_mode_verifies_the_rows_it_always_did(row: str, verifies: bool)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fips_openssl")
 async def test_fips_boot_migration_writes_no_row() -> None:
-    pc = MagicMock()
+    pc: Final = MagicMock()
     pc.db.litellm_usertable.find_many = AsyncMock(
         return_value=[_make_user("plaintext-user", PASSWORD), _make_user("fips-user", PBKDF2_ROW)]
     )
@@ -316,6 +316,20 @@ async def test_fips_boot_migration_writes_no_row() -> None:
     await migrate_passwords_to_scrypt_async(pc)
 
     pc.db.litellm_usertable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_standard_boot_migration_hashes_a_plaintext_row_but_not_a_pbkdf2_row() -> None:
+    pc: Final = MagicMock()
+    pc.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[_make_user("plaintext-user", "pbkdf2:plaintext"), _make_user("fips-user", PBKDF2_ROW)]
+    )
+    pc.db.litellm_usertable.update = AsyncMock()
+
+    await migrate_passwords_to_scrypt_async(pc)
+
+    updated: Final = pc.db.litellm_usertable.update.await_args_list
+    assert [update.kwargs["where"]["user_id"] for update in updated] == ["plaintext-user"]
 
 
 def _on_event_loop() -> bool:
@@ -329,13 +343,14 @@ async def test_password_kdf_runs_on_the_event_loop_in_standard_mode() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fips_openssl")
-async def test_password_kdfs_leave_the_event_loop_and_never_overlap_in_fips_mode() -> None:
-    second_started: Final = threading.Event()
+async def test_password_kdfs_leave_the_event_loop_on_a_single_thread_in_fips_mode() -> None:
+    release_first: Final = threading.Event()
+    first_kdf: Final = asyncio.ensure_future(run_off_loop_if_fips(lambda: release_first.wait(timeout=5)))
+    second_kdf: Final = asyncio.ensure_future(run_off_loop_if_fips(_on_event_loop))
+    await asyncio.sleep(0)
+    kdf_threads: Final = [thread for thread in threading.enumerate() if thread.name.startswith("fips-password-kdf")]
+    release_first.set()
 
-    def first() -> tuple[bool, bool]:
-        return _on_event_loop(), second_started.wait(timeout=0.2)
-
-    (first_on_event_loop, overlapped), _ = await asyncio.gather(
-        run_off_loop_if_fips(first), run_off_loop_if_fips(second_started.set)
-    )
-    assert (first_on_event_loop, overlapped) == (False, False)
+    assert len(kdf_threads) == 1
+    assert await first_kdf is True
+    assert await second_kdf is False

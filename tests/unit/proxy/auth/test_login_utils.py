@@ -2386,14 +2386,14 @@ _SCRYPT_ROW: Final = "scrypt:AAECAwQFBgcICQoLDA0OD7hIwlM/k8ytnffjFDt6AuO+BvqtmZv
 async def test_login_rehash_rewrites_only_a_legacy_row(stored: str, schemes_written: list[str]) -> None:
     from litellm.proxy.auth.login_utils import _rehash_password_if_needed
 
-    prisma = MagicMock()
+    prisma: Final = MagicMock()
     prisma.db.litellm_usertable.update = AsyncMock()
     with patch(  # test-quality-ok: the rehash reads proxy_server's prisma_client global; no injection seam
         "litellm.proxy.proxy_server.prisma_client", prisma
     ):
         await _rehash_password_if_needed("u-1", _PBKDF2_PASSWORD, stored)
 
-    updates = prisma.db.litellm_usertable.update.await_args_list
+    updates: Final = prisma.db.litellm_usertable.update.await_args_list
     assert [update.kwargs["data"]["password"].split(":")[0] for update in updates] == schemes_written
 
 
@@ -2405,7 +2405,7 @@ async def test_fips_login_runs_one_pbkdf2_off_the_event_loop_and_writes_no_row(
     from litellm.proxy.auth.login_utils import authenticate_user
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
-    repository = _known_user("user@corp.com")
+    repository: Final = _known_user("user@corp.com")
     repository.return_value.table.find_first.return_value.password = _PBKDF2_ROW
     repository.return_value.table.update = AsyncMock()
     with (
@@ -2419,7 +2419,7 @@ async def test_fips_login_runs_one_pbkdf2_off_the_event_loop_and_writes_no_row(
             "litellm.proxy.auth.login_utils.generate_key_helper_fn", new=AsyncMock(return_value={"token": "sk-ui"})
         ),
     ):
-        result = await authenticate_user(
+        result: Final = await authenticate_user(
             username="user@corp.com",
             password=_PBKDF2_PASSWORD,
             master_key="sk-master",
@@ -2436,9 +2436,9 @@ async def test_fips_login_runs_one_pbkdf2_off_the_event_loop_and_writes_no_row(
 async def _login_whose_user_gets_blocked_during_the_row_lookup(monkeypatch: pytest.MonkeyPatch, row: str):
     from litellm.proxy.auth.login_utils import authenticate_user
 
-    throttle = _throttle(user_limit=1)
-    repository = _known_user()
-    user = repository.return_value.table.find_first.return_value
+    throttle: Final = _throttle(user_limit=1)
+    repository: Final = _known_user()
+    user: Final = repository.return_value.table.find_first.return_value
     user.password = row
 
     async def block_the_user_then_return_the_row(**_: object) -> MagicMock:
@@ -2491,13 +2491,13 @@ async def test_fips_burst_of_wrong_passwords_stops_deriving_once_its_user_is_blo
     from litellm.proxy.auth.login_utils import authenticate_user
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
-    repository = _known_user()
+    repository: Final = _known_user()
     repository.return_value.table.find_first.return_value.password = _PBKDF2_ROW
-    throttle = _throttle(user_limit=1)
+    throttle: Final = _throttle(user_limit=1)
     with patch(  # test-quality-ok: the user lookup is the database boundary
         "litellm.proxy.auth.login_utils.UserRepository", repository
     ):
-        refusals = await asyncio.gather(
+        refusals: Final = await asyncio.gather(
             *(
                 authenticate_user(
                     username="known@example.com",
@@ -2520,6 +2520,6 @@ async def test_fips_burst_of_wrong_passwords_stops_deriving_once_its_user_is_blo
 async def test_standard_login_past_the_throttle_keeps_its_answer_when_its_user_gets_blocked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result = await _login_whose_user_gets_blocked_during_the_row_lookup(monkeypatch, _SCRYPT_ROW)
+    result: Final = await _login_whose_user_gets_blocked_during_the_row_lookup(monkeypatch, _SCRYPT_ROW)
 
     assert result.key == "sk-ui"

@@ -497,7 +497,9 @@ async def test_change_password_requires_db():
 async def test_fips_password_change_runs_both_pbkdf2_off_the_event_loop(pbkdf2_on_event_loop: list[bool]) -> None:
     from litellm.proxy._types import ChangePasswordRequest
 
-    prisma = _make_prisma(_make_user_row("pbkdf2:AAECAwQFBgcICQoLDA0OD+uxhNqRo/3ZFLEaKARqFBT+N3Kqek/SGM/5AvocSN0T"))
+    prisma: Final = _make_prisma(
+        _make_user_row("pbkdf2:AAECAwQFBgcICQoLDA0OD+uxhNqRo/3ZFLEaKARqFBT+N3Kqek/SGM/5AvocSN0T")
+    )
 
     with (
         patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam

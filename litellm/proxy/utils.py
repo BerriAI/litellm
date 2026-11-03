@@ -8403,6 +8403,10 @@ def hash_token(token: str):
     return hashed_token
 
 
+def _is_pbkdf2_row(stored: str) -> bool:
+    return re.fullmatch(r"pbkdf2:[A-Za-z0-9+/]{64}", stored) is not None
+
+
 def hash_password(password: str) -> str:
     """Hash a password using scrypt with a random salt, or PBKDF2 in FIPS mode."""
     import base64
@@ -8425,7 +8429,7 @@ def verify_password(password: str, stored: str) -> bool:
     import secrets
 
     if openssl_enforces_fips():
-        if re.fullmatch(r"pbkdf2:[A-Za-z0-9+/]{64}", stored) is None:
+        if not _is_pbkdf2_row(stored):
             verbose_proxy_logger.error("FIPS mode refuses a non-PBKDF2 password row. Reset it with /user/update.")
             return False
         if len(password) < MIN_ALLOWED_LENGTH:
@@ -8477,7 +8481,10 @@ async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
     plaintext_users: Final = [
         (u.user_id, u.password)
         for u in all_with_pw
-        if u.password and not u.password.startswith("scrypt:") and not _is_sha256_hex(u.password)
+        if u.password
+        and not u.password.startswith("scrypt:")
+        and not _is_sha256_hex(u.password)
+        and not _is_pbkdf2_row(u.password)
     ]
     if not plaintext_users:
         return "No plaintext passwords found"
