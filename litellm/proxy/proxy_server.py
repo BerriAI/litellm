@@ -15259,7 +15259,12 @@ def _provider_error_after_failed_estimate(
     return provider_failure.to_proxy_exception()
 
 
-async def _estimate_or_provider_error(estimate: Awaitable[int], provider_failure: ProviderCountFailure) -> int:
+_EstimateT = TypeVar("_EstimateT", int, int | None)
+
+
+async def _estimate_or_provider_error(
+    estimate: Awaitable[_EstimateT], provider_failure: ProviderCountFailure
+) -> _EstimateT:
     try:
         return await estimate
     except BaseException as e:
@@ -15413,6 +15418,22 @@ async def _tokenizer_or_provider_error(
     raise _provider_error_after_failed_estimate(provider_failure, tokenizer) from tokenizer
 
 
+def _tokenizer_count(
+    template_model: str,
+    prompt: str | None,
+    messages: Sequence[AllMessageValues] | None,
+    tools: list[ChatCompletionToolParam] | None,
+    tokenizer: SelectTokenizerResponse,
+) -> Awaitable[int]:
+    return offload_token_count(litellm.token_counter)(
+        model=template_model,
+        text=prompt,
+        messages=messages,
+        tools=tools,
+        custom_tokenizer=tokenizer,
+    )
+
+
 async def _local_token_estimate(
     model: str,
     template_model: str,
@@ -15427,13 +15448,7 @@ async def _local_token_estimate(
         if provider_failure is None
         else await _tokenizer_or_provider_error(model, custom_tokenizer, provider_failure)
     )
-    count: Final = offload_token_count(litellm.token_counter)(
-        model=template_model,
-        text=prompt,
-        messages=messages,
-        tools=tools,
-        custom_tokenizer=tokenizer,
-    )
+    count: Final = _tokenizer_count(template_model, prompt, messages, tools, tokenizer)
     total_tokens: Final = await (
         count if provider_failure is None else _estimate_or_provider_error(count, provider_failure)
     )
@@ -15492,10 +15507,9 @@ async def _kimi_k3_local_tokens(
     encoding: Final = await _KIMI_K3_ENCODINGS.encoding(TOKENIZER_LOAD_WAIT_SECONDS)
     if encoding is None:
         raise unavailable.to_proxy_exception()
-    counted: Final = await _estimate_or_provider_error(
-        count_messages(encoding) if prompt is None else offload_token_count(kimi_k3_text_tokens)(encoding, prompt),
-        unreadable,
-    )
+    if prompt is not None:
+        return await _estimate_or_provider_error(offload_token_count(kimi_k3_text_tokens)(encoding, prompt), unreadable)
+    counted: Final = await _estimate_or_provider_error(count_messages(encoding), unreadable)
     if counted is None:
         raise unreadable.to_proxy_exception()
     return counted
@@ -15521,10 +15535,7 @@ async def _local_tokenizer_tokens(
     if selected is None:
         raise unavailable.to_proxy_exception()
     total_tokens: Final = await _estimate_or_provider_error(
-        offload_token_count(litellm.token_counter)(
-            model=template_model, text=prompt, messages=messages, tools=tools, custom_tokenizer=selected
-        ),
-        unreadable,
+        _tokenizer_count(template_model, prompt, messages, tools, selected), unreadable
     )
     return _LocalTokenEstimate(total_tokens=total_tokens, tokenizer_type=selected["type"])
 

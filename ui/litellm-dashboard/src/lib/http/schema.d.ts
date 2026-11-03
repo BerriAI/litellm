@@ -47732,6 +47732,11 @@ export interface components {
              * @enum {string}
              */
             litellm_count_source?: "provider" | "token_count_model" | "local_estimate";
+            /**
+             * Litellm Count Tokenizer
+             * @enum {string}
+             */
+            litellm_count_tokenizer?: "openai" | "llama3" | "deepseek" | "cohere" | "kimi_k3";
             /** Prompttokensdetails */
             promptTokensDetails: components["schemas"]["PromptTokensDetails"][];
             /** Totaltokens */
@@ -47762,6 +47767,8 @@ export interface components {
         TokenCountResponse: {
             /** Count Source */
             count_source?: ("provider" | "token_count_model" | "local_estimate") | null;
+            /** Count Tokenizer */
+            count_tokenizer?: ("openai" | "llama3" | "deepseek" | "cohere" | "kimi_k3") | null;
             /**
              * Error
              * @default false
