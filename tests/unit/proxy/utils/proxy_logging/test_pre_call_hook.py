@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,6 +16,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 from litellm.types.utils import CallTypesLiteral
 
 
@@ -1014,3 +1015,39 @@ def test_request_has_pre_call_guardrails_reads_pipelines_from_both_metadata_buck
     monkeypatch.setattr(litellm, "callbacks", [])
 
     assert proxy_logging.request_has_pre_call_guardrails(request_data) is expected
+
+
+@pytest.mark.parametrize(
+    ("pipelines", "scanned"),
+    [
+        ([("policy", GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="g")]))], False),
+        ([("policy", GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="g")]))], True),
+        (
+            [
+                ("after", GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="g")])),
+                ("before", GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="g")])),
+            ],
+            True,
+        ),
+        (["p1"], True),
+        (5, True),
+        ([], False),
+    ],
+    ids=["post-call", "pre-call", "both", "unresolved-entry", "non-list", "empty"],
+)
+def test_only_a_pipeline_running_before_the_provider_scans_the_request(proxy_logging, monkeypatch, pipelines, scanned):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    request_data: Final = {"metadata": {"_guardrail_pipelines": pipelines}}
+
+    assert proxy_logging.request_is_scanned_before_the_provider(request_data) is scanned
+    assert proxy_logging.request_has_pre_call_guardrails(request_data) is bool(pipelines)
+
+
+def test_a_pre_call_guardrail_scans_the_request_beside_a_post_call_pipeline(proxy_logging, monkeypatch):
+    guardrail: Final = CustomGuardrail(guardrail_name="g", default_on=True, event_hook=GuardrailEventHooks.pre_call)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    pipeline: Final = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="other")])
+
+    assert proxy_logging.request_is_scanned_before_the_provider(
+        {"metadata": {"_guardrail_pipelines": [("p", pipeline)]}}
+    )

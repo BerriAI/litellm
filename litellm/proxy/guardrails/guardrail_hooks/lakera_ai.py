@@ -235,7 +235,8 @@ class lakeraAI_Moderation(CustomGuardrail):
                 }
             )
         elif "input" in data and isinstance(data["input"], list):
-            text = "\n".join(filter(None, map(_input_item_text, data["input"])))
+            item_texts: Final = tuple(map(_input_item_text, _CONTENT_PARTS.validate_python(data["input"])))
+            text = "\n".join(item_texts) if any(item_texts) else ""
             if not text:
                 verbose_proxy_logger.debug("Skipping lakera prompt injection, input has no text")
                 return

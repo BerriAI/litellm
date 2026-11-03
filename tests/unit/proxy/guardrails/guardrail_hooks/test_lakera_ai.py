@@ -55,3 +55,11 @@ async def test_a_pass_through_body_with_no_messages_or_input_sends_nothing() -> 
 @pytest.mark.asyncio
 async def test_a_native_body_with_no_messages_or_input_still_reaches_lakera() -> None:
     assert await _sent_to_lakera({"prompt": "hello"}, call_type="text_completion") == ("",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("strings", "text"), [(["a", "", "b"], "a\n\nb"), (["a", ""], "a\n")])
+async def test_empty_strings_of_a_list_input_keep_their_place(strings: list[object], text: str) -> None:
+    sent: Final = await _sent_to_lakera({"input": strings})
+
+    assert [json.loads(body)["input"] for body in sent] == [text]
