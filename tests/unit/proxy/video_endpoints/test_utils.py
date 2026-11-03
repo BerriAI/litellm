@@ -28,6 +28,7 @@ from litellm.proxy.video_endpoints.utils import (
     fallback_requested_model,
     get_custom_provider_from_data,
     routable_model_name,
+    resolve_video_request_model,
     video_model_group,
     video_reference_to_id,
 )
@@ -38,6 +39,58 @@ from litellm.types.videos.utils import (
     encode_character_id_with_provider,
     encode_video_id_with_provider,
 )
+
+# =========================================================================== #
+# resolve_video_request_model
+# =========================================================================== #
+
+
+def _router_with_one_deployment(model_name: str, model_info_id: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": "azure/sora-2", "api_key": "key"},
+                "model_info": {"id": model_info_id},
+            }
+        ]
+    )
+
+
+def test_resolve_video_request_model__router_hit_uses_the_ids_provider():
+    router: Final = _router_with_one_deployment("azure-sora", "deployment-123")
+
+    assert (
+        resolve_video_request_model(
+            decoded={"model_id": "deployment-123", "custom_llm_provider": "azure"},
+            query_model="ignored",
+            llm_router=router,
+        )
+        == "azure-sora"
+    )
+
+
+def test_resolve_video_request_model__keeps_decoded_id_when_router_misses():
+    assert (
+        resolve_video_request_model(
+            decoded={"model_id": "grok-imagine-video-1.5", "custom_llm_provider": "xai"},
+            query_model=None,
+            llm_router=Router(),
+        )
+        == "grok-imagine-video-1.5"
+    )
+
+
+def test_resolve_video_request_model__query_model_on_plain_id():
+    assert (
+        resolve_video_request_model(
+            decoded={},
+            query_model="grok-imagine-video-1.5",
+            llm_router=None,
+        )
+        == "grok-imagine-video-1.5"
+    )
+
 
 # =========================================================================== #
 # extract_model_from_target_model_names
