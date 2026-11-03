@@ -47,6 +47,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
     is_ptu_cost_attribution_enabled,
 )
 from litellm.proxy.utils import CONFIG_PARAMS_TARGET, invalidate_config_param
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -1188,8 +1189,8 @@ async def _validate_default_access_groups_exist(access_group_ids: Sequence[str])
             detail={"error": "Database not connected. Please connect a database."},
         )
 
-    existing_groups: Final = await AccessGroupRepository(prisma_client).table.find_many(
-        where={"access_group_id": {"in": list(dict.fromkeys(access_group_ids))}}
+    existing_groups: Final = await find_many_in(
+        AccessGroupRepository(prisma_client).table, "access_group_id", dict.fromkeys(access_group_ids)
     )
     existing_ids: Final = {group.access_group_id for group in existing_groups}
     missing_ids: Final = tuple(dict.fromkeys(ag_id for ag_id in access_group_ids if ag_id not in existing_ids))
