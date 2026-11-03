@@ -234,9 +234,9 @@ class StreamedRoundBilling:
         restore_headers: RestoresHeaders,
         logged_output: Sequence[object] | None = None,
     ) -> ResponsesAPIResponse:
-        """Charge the last round. `logged_output`, when given, is the output the row logs in place of the provider's,
-        for a round that ran some of its calls on the gateway and handed the others back, so a later request that
-        continues it replays each ran call with its result."""
+        """Charge the last round. `logged_output`, when given, is the output the client saw, which the row logs in
+        place of the provider's for a turn that ran calls on the gateway, so a later request that continues it finds
+        each listing and each ran call with its result."""
         parked: Final = self._take_parked()
         self._banked = None
         if self._billed is None or self._billed.rounds == 1:

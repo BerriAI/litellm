@@ -4624,10 +4624,9 @@ def _streamed_answer_round_from(chat_id: str) -> httpx.Response:
     )
 
 
-@pytest.mark.asyncio
-async def test_a_streamed_turn_that_runs_a_tool_keeps_one_response_id_that_a_follow_up_continues_from(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-):
+async def _streamed_turn_running_a_tool(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, server: _ScriptedMCPServer
+) -> tuple[tuple[ResponsesAPIStreamingResponse, ...], respx.Route, StandardLoggingPayload]:
     _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
     _deepwiki_registered(monkeypatch)
     provider: Final = _serve_responses(
@@ -4640,42 +4639,34 @@ async def test_a_streamed_turn_that_runs_a_tool_keeps_one_response_id_that_a_fol
         ),
         _DEEPSEEK_URL,
     )
-    server: Final = _ScriptedMCPServer()
     recorder: Final = _RoundRecorder()
-
     stream: Final = await litellm.aresponses(
         model=_DEEPSEEK_MODEL,
         input="Ask DeepWiki what LiteLLM is",
         tools=[dict(_GITMCP_TOOL)],
         direct_client_factory=server.client_for,
         stream=True,
-        litellm_logging_obj=_rounds_logging_obj(recorder, "one-id-stream"),
+        litellm_logging_obj=_rounds_logging_obj(recorder, "streamed-tool-turn"),
         **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
     )
     events: Final = tuple([event async for event in stream])
-    response_id: Final = events[0].response.id
-
     assert _event_type(events[-1]) == "response.completed"
-    assert {event.response.id for event in events if getattr(event, "response", None) is not None} == {response_id}
     assert [call.name for call in server.calls] == ["ask_question"]
     await _settle(lambda: len(recorder.logged) > 0)
-    assert [row["id"] for row in recorder.logged] == [response_id]
+    assert len(recorder.logged) == 1
+    return events, provider, recorder.logged[0]
 
-    _proxy_database(
-        monkeypatch,
-        SimpleNamespace(
-            db=_SpendLogs(
-                (
-                    {
-                        "request_id": recorder.logged[0]["id"],
-                        "session_id": "one-id-session",
-                        "proxy_server_request": {"input": "Ask DeepWiki what LiteLLM is"},
-                        "response": recorder.logged[0]["response"],
-                    },
-                )
-            )
-        ),
-    )
+
+async def _follow_up_from_stored_row(
+    monkeypatch: pytest.MonkeyPatch, server: _ScriptedMCPServer, response_id: str, row: StandardLoggingPayload
+) -> ResponsesAPIResponse:
+    stored_turn: Final = {
+        "request_id": row["id"],
+        "session_id": "streamed-tool-session",
+        "proxy_server_request": {"input": "Ask DeepWiki what LiteLLM is"},
+        "response": row["response"],
+    }
+    _proxy_database(monkeypatch, SimpleNamespace(db=_SpendLogs((stored_turn,))))
     follow_up: Final = await litellm.aresponses(
         model=_DEEPSEEK_MODEL,
         input="Who maintains it?",
@@ -4684,14 +4675,51 @@ async def test_a_streamed_turn_that_runs_a_tool_keeps_one_response_id_that_a_fol
         direct_client_factory=server.client_for,
         **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
     )
-
     assert isinstance(follow_up, ResponsesAPIResponse)
+    return follow_up
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_turn_that_runs_a_tool_keeps_one_response_id_that_a_follow_up_continues_from(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    server: Final = _ScriptedMCPServer()
+    events, provider, row = await _streamed_turn_running_a_tool(respx_mock, monkeypatch, server)
+    response_id: Final = events[0].response.id
+
+    assert {event.response.id for event in events if getattr(event, "response", None) is not None} == {response_id}
+    assert row["id"] == response_id
+
+    await _follow_up_from_stored_row(monkeypatch, server, response_id, row)
+
     replayed: Final = _sent_body(provider, 2)["messages"]
     assert [(message["role"], message.get("content")) for message in replayed] == [
         ("user", "Ask DeepWiki what LiteLLM is"),
         ("assistant", _ASK_ANSWER),
         ("user", "Who maintains it?"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_turn_that_runs_a_tool_stores_every_item_it_streamed_so_a_follow_up_lists_nothing_again(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    server: Final = _ScriptedMCPServer()
+    events, _, row = await _streamed_turn_running_a_tool(respx_mock, monkeypatch, server)
+    streamed: Final = tuple(_item(item) for item in events[-1].response.output)
+    stored: Final = tuple(_item(item) for item in row["response"].get("output", ()))
+
+    assert _output_summary(stored) == (
+        ("mcp_list_tools", "gitmcp", None),
+        ("mcp_call", "gitmcp", "ask_question"),
+        ("message", None, None),
+    )
+    assert [_item_key(item) for item in stored] == [_item_key(item) for item in streamed]
+    assert (stored[1]["arguments"], stored[1]["output"]) == (json.dumps(_ASK_ARGUMENTS), _ASK_OUTPUT)
+
+    follow_up: Final = await _follow_up_from_stored_row(monkeypatch, server, events[0].response.id, row)
+
+    assert _output_types(follow_up.output) == ("message",)
 
 
 @pytest.mark.asyncio
