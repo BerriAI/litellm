@@ -1,0 +1,52 @@
+suite: Rust forwarding gateway
+templates:
+  - deployment.yaml
+  - configmap-litellm.yaml
+tests:
+  - it: leaves the image default in place when unset
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_RUST
+          any: true
+  - it: turns forwarding off explicitly
+    template: deployment.yaml
+    set:
+      rustGateway.enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_RUST
+            value: "false"
+  - it: enables forwarding without changing command or probes
+    template: deployment.yaml
+    set:
+      rustGateway.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_RUST
+            value: "true"
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: http
+  - it: respects an explicit environment override
+    template: deployment.yaml
+    set:
+      rustGateway.enabled: true
+      envVars.LITELLM_RUST: "false"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_RUST
+            value: "false"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_RUST
+            value: "true"
