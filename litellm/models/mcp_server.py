@@ -11,10 +11,11 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Literal
 
-from pydantic import Field, ValidationInfo, field_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
+from typing_extensions import Self
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
-from litellm.types.mcp import MCPAuthType, MCPCredentials, MCPTransportType
+from litellm.types.mcp import MCPAuthType, MCPCredentials, MCPExecutionMode, MCPTransportType
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, PinnedMCPTool, parse_pinned_tools
 
 
@@ -56,7 +57,8 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     description: str | None = None
     url: str | None = None
     spec_path: str | None = None
-    transport: MCPTransportType
+    execution_mode: MCPExecutionMode = MCPExecutionMode.litellm
+    transport: MCPTransportType | None
     auth_type: MCPAuthType | None = None
     credentials: MCPCredentials | None = None
     instructions: str | None = None
@@ -120,6 +122,14 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     submitted_at: datetime | None = None
     reviewed_at: datetime | None = None
     review_notes: str | None = None
+
+    @model_validator(mode="after")
+    def validate_execution_transport(self) -> Self:
+        if self.execution_mode == MCPExecutionMode.provider and self.transport is not None:
+            raise ValueError("Provider-executed MCP registrations require transport=null")
+        if self.execution_mode == MCPExecutionMode.litellm and self.transport is None:
+            raise ValueError("LiteLLM-executed MCP registrations require a transport")
+        return self
 
     @field_validator("pinned_tools", mode="before")
     @classmethod

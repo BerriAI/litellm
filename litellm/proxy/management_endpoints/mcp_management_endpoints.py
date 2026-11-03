@@ -3181,7 +3181,7 @@ if MCP_AVAILABLE:
             raise HTTPException(
                 status_code=503, detail="Cannot validate MCP configuration while stored state is unavailable"
             )
-        if stored is None:
+        if stored is None or stored.transport is None:
             return
         effective_transport: Final = payload.transport if "transport" in fields_set else stored.transport
         effective_info: Final = payload.mcp_info if "mcp_info" in fields_set else stored.mcp_info

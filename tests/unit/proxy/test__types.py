@@ -50,6 +50,20 @@ SERVER_ONLY_MARKERS = (
 )
 
 
+@pytest.mark.parametrize("request_type", [NewMCPServerRequest, UpdateMCPServerRequest])
+def test_gateway_management_requests_do_not_ignore_provider_execution_mode(
+    request_type: type[NewMCPServerRequest] | type[UpdateMCPServerRequest],
+) -> None:
+    with pytest.raises(ValidationError, match="execution_mode"):
+        request_type(server_id="docs", url="https://docs.example/mcp", execution_mode="provider")
+
+
+@pytest.mark.parametrize("mode", ["litellm", "provider", None])
+def test_update_requests_cannot_replace_a_registrations_execution_mode(mode: str | None) -> None:
+    with pytest.raises(ValidationError, match="execution_mode is immutable"):
+        UpdateMCPServerRequest(server_id="docs", execution_mode=mode)
+
+
 def _server_only_marker_value(marker: str, value: str) -> str | tuple[str, ...]:
     return (value,) if marker == "mcp_session_resource_server_ids" else value
 
