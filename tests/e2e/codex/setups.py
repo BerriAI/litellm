@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from typing import Final, Literal
 
 import pytest
@@ -17,7 +18,7 @@ GPT_ON_BEDROCK_RUNTIME: Final = "bedrock/us.openai.gpt-6.1-sol"
 GPT_ON_AZURE_OPENAI: Final = "azure/gpt-6.1-sol"
 GPT_ON_OPENAI: Final = "openai/gpt-6.1-sol"
 CLAUDE_ON_BEDROCK: Final = "bedrock/us.anthropic.claude-sonnet-5-5"
-_BEDROCK_REGION: Final = "us-east-1"
+BEDROCK_REGION: Final = "us-east-1"
 
 type SetupId = Literal["bedrock_mantle", "bedrock_runtime", "azure_openai", "openai", "claude_bedrock"]
 
@@ -49,14 +50,14 @@ def _drives(provider: Provider, model: str) -> pytest.MarkDecorator:
 SETUPS: Final = (
     pytest.param(
         Deployment(
-            LiteLLMParamsBody(model=GPT_ON_BEDROCK_MANTLE, aws_region_name=_BEDROCK_REGION), RateBucket.BEDROCK_MANTLE
+            LiteLLMParamsBody(model=GPT_ON_BEDROCK_MANTLE, aws_region_name=BEDROCK_REGION), RateBucket.BEDROCK_MANTLE
         ),
         id="bedrock_mantle",
         marks=_drives(Provider.BEDROCK_MANTLE, GPT_ON_BEDROCK_MANTLE),
     ),
     pytest.param(
         Deployment(
-            LiteLLMParamsBody(model=GPT_ON_BEDROCK_RUNTIME, aws_region_name=_BEDROCK_REGION),
+            LiteLLMParamsBody(model=GPT_ON_BEDROCK_RUNTIME, aws_region_name=BEDROCK_REGION),
             RateBucket.BEDROCK_CONVERSE,
         ),
         id="bedrock_runtime",
@@ -79,7 +80,7 @@ SETUPS: Final = (
     ),
     pytest.param(
         Deployment(
-            LiteLLMParamsBody(model=CLAUDE_ON_BEDROCK, aws_region_name=_BEDROCK_REGION), RateBucket.BEDROCK_CONVERSE
+            LiteLLMParamsBody(model=CLAUDE_ON_BEDROCK, aws_region_name=BEDROCK_REGION), RateBucket.BEDROCK_CONVERSE
         ),
         id="claude_bedrock",
         marks=_drives(Provider.BEDROCK, CLAUDE_ON_BEDROCK),
@@ -93,4 +94,34 @@ def with_expected_failure(setup_id: SetupId, *, reason: str) -> tuple[ParameterS
         if setup.id == setup_id
         else setup
         for setup in SETUPS
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ExtraModel:
+    provider: Provider
+    litellm_params: LiteLLMParamsBody
+
+
+def also_driving(setups: tuple[ParameterSet, ...], extra: Mapping[str, ExtraModel]) -> tuple[ParameterSet, ...]:
+    return tuple(_also_driving(setup, extra) for setup in setups)
+
+
+def _also_driving(setup: ParameterSet, extra: Mapping[str, ExtraModel]) -> ParameterSet:
+    deployment: Final = setup.values[0]
+    assert isinstance(deployment, Deployment)
+    added: Final = extra[deployment.litellm_params.model]
+    return pytest.param(*setup.values, id=setup.id, marks=tuple(_widened(mark, added) for mark in setup.marks))
+
+
+def _widened(mark: pytest.MarkDecorator | pytest.Mark, added: ExtraModel) -> pytest.MarkDecorator | pytest.Mark:
+    subject: Final = mark.args[0] if mark.name == "meta" and mark.args else None
+    if not isinstance(subject, Subject):
+        return mark
+    return meta(
+        replace(
+            subject,
+            providers=(*subject.providers, added.provider),
+            models=(*subject.models, added.litellm_params.model),
+        )
     )

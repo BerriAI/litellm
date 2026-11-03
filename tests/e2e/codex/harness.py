@@ -7,11 +7,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from itertools import chain
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 from cli_harness.lockdown import isolated_home, locked_down_env
 from cli_harness.rate_limiter import RateBucket, RateLimiter
-from codex.rollout import Compaction, rollout_compactions
+from codex.rollout import Compaction, rollout_compactions, rollout_turn_models
 from codex.run import CodexRun, codex_run
 from e2e_metadata import step
 
@@ -19,6 +19,7 @@ CODEX_CLI: Final = "codex"
 EXEC_TIMEOUT_SECONDS: Final = 600.0
 _API_KEY_ENV: Final = "LITELLM_API_KEY"
 _PROVIDER: Final = "litellm"
+type ReasoningEffort = Literal["low", "medium", "high"]
 _CONFIG_TOML: Final = """\
 model_provider = "{provider}"
 approval_policy = "never"
@@ -58,22 +59,43 @@ class CodexHarness:
         return workspace
 
     @step('Run Codex on {model} through the proxy with the prompt "{prompt}"')
-    def exec(self, prompt: str, *, model: str, cwd: Path, compact_after_tokens: int | None = None) -> CodexRun:
-        return self._run(("exec",), (*_compaction_flags(compact_after_tokens), "--model", model, "--", prompt), cwd)
+    def exec(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        cwd: Path,
+        compact_after_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+    ) -> CodexRun:
+        return self._run(("exec",), (*_turn_flags(model, compact_after_tokens, reasoning_effort), "--", prompt), cwd)
 
     @step('Resume Codex thread {thread_id} on {model} through the proxy with the prompt "{prompt}"')
     def resume(
-        self, thread_id: str, prompt: str, *, model: str, cwd: Path, compact_after_tokens: int | None = None
+        self,
+        thread_id: str,
+        prompt: str,
+        *,
+        model: str,
+        cwd: Path,
+        compact_after_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
     ) -> CodexRun:
         return self._run(
             ("exec", "resume"),
-            (*_compaction_flags(compact_after_tokens), "--model", model, "--", thread_id, prompt),
+            (*_turn_flags(model, compact_after_tokens, reasoning_effort), "--", thread_id, prompt),
             cwd,
         )
 
     def compactions(self, thread_id: str) -> tuple[Compaction, ...]:
-        rollouts: Final = sorted(self.codex_home.glob(f"sessions/**/rollout-*-{thread_id}.jsonl"))
-        return tuple(chain.from_iterable(rollout_compactions(rollout.read_text()) for rollout in rollouts))
+        return tuple(chain.from_iterable(rollout_compactions(rollout) for rollout in self._rollouts(thread_id)))
+
+    def turn_models(self, thread_id: str) -> tuple[str, ...]:
+        return tuple(chain.from_iterable(rollout_turn_models(rollout) for rollout in self._rollouts(thread_id)))
+
+    def _rollouts(self, thread_id: str) -> tuple[str, ...]:
+        paths: Final = sorted(self.codex_home.glob(f"sessions/**/rollout-*-{thread_id}.jsonl"))
+        return tuple(path.read_text() for path in paths)
 
     def _run(self, subcommand: tuple[str, ...], args: tuple[str, ...], cwd: Path) -> CodexRun:
         _ = self.limiter.acquire(self.rate_bucket)
@@ -105,6 +127,16 @@ def _compaction_flags(after_tokens: int | None) -> tuple[str, ...]:
                 "--config",
                 f"model_auto_compact_token_limit={after_tokens}",
             )
+
+
+def _turn_flags(
+    model: str, compact_after_tokens: int | None, reasoning_effort: ReasoningEffort | None
+) -> tuple[str, ...]:
+    return (*_compaction_flags(compact_after_tokens), *_reasoning_flags(reasoning_effort), "--model", model)
+
+
+def _reasoning_flags(effort: ReasoningEffort | None) -> tuple[str, ...]:
+    return () if effort is None else ("--config", f'model_reasoning_effort="{effort}"')
 
 
 @step("Give Codex a fresh empty home whose config sends every request to the proxy")
