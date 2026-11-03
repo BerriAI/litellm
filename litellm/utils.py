@@ -10949,8 +10949,14 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_video_config(
         model: str | None,
-        provider: LlmProviders,
+        provider: LlmProviders | str,
     ) -> BaseVideoConfig | None:
+        if not isinstance(provider, LlmProviders):
+            if provider in litellm._custom_providers:
+                return ProviderConfigManager.get_custom_provider_video_config(provider)
+            if provider not in LlmProvidersSet:
+                return None
+            return ProviderConfigManager.get_provider_video_config(model=model, provider=LlmProviders(provider))
         if LlmProviders.OPENAI == provider:
             from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 
@@ -11000,6 +11006,20 @@ class ProviderConfigManager:
 
             return VolcEngineVideoConfig()
         return None
+
+    @staticmethod
+    def get_custom_provider_video_config(provider: str) -> BaseVideoConfig | None:
+        """The `BaseVideoConfig` registered for `provider` in `litellm.custom_provider_map`, if its handler is one."""
+        from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+
+        return next(
+            (
+                item["custom_handler"]
+                for item in litellm.custom_provider_map
+                if item["provider"] == provider and isinstance(item["custom_handler"], BaseVideoConfig)
+            ),
+            None,
+        )
 
     @staticmethod
     def get_provider_container_config(
