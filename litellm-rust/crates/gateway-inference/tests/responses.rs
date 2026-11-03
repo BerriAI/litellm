@@ -116,3 +116,32 @@ async fn responses_authorize_the_public_model_before_provider_execution() {
     assert_eq!(response.status(), 403);
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
+
+const RESPONSE_CREATED: &str = "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"response-1\",\"model\":\"test-model\",\"output\":[]}}\n\n";
+
+#[rstest]
+#[tokio::test]
+async fn a_stream_that_fails_after_opening_ends_with_the_responses_error_event() {
+    let base = support::truncating_upstream(RESPONSE_CREATED).await;
+    let response = support::post(
+        support::app("openai/test-model", &base),
+        "/v1/responses",
+        json!({"model": "public/model", "input": "hello", "stream": true}),
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    let body = to_bytes(response.into_body(), 4096).await.unwrap();
+    let text = std::str::from_utf8(&body).unwrap();
+    let frame = text
+        .strip_prefix(RESPONSE_CREATED)
+        .and_then(|rest| rest.strip_prefix("event: error\ndata: "))
+        .unwrap_or_else(|| panic!("the delivered event then one error frame, got {text:?}"));
+    let error: serde_json::Value = serde_json::from_str(frame.trim_end()).unwrap();
+    assert_eq!(error["type"], "error");
+    assert_eq!(error["code"], "500");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty())
+    );
+}

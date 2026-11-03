@@ -74,7 +74,7 @@ impl FakeSearch {
             "FT.CREATE" => {
                 let name = text(1);
                 if state.indexes.contains_key(&name) {
-                    return Err(error("Index already exists"));
+                    return Err(server_error("Index already exists"));
                 }
                 let position = |token: &str| args.iter().position(|arg| arg == token.as_bytes());
                 let prefix = args[position("PREFIX").unwrap() + 2].clone();
@@ -94,7 +94,7 @@ impl FakeSearch {
                 let index = state
                     .indexes
                     .get(&text(1))
-                    .ok_or_else(|| error("Unknown index name"))?;
+                    .ok_or_else(|| server_error("Unknown index name"))?;
                 Ok(index_info(index))
             }
             "FT.DROPINDEX" => {
@@ -118,7 +118,7 @@ impl FakeSearch {
                 let index = state
                     .indexes
                     .get(&text(1))
-                    .ok_or_else(|| error("no such index"))?;
+                    .ok_or_else(|| server_error("no such index"))?;
                 let query = text(2);
                 let tag = query_tag(&query);
                 let params = args.iter().position(|arg| arg == b"PARAMS").unwrap();
@@ -155,7 +155,7 @@ impl FakeSearch {
                 ]))
             }
             "PING" => Ok(redis::Value::SimpleString("PONG".into())),
-            _ => Err(error("unsupported command")),
+            _ => Err(server_error("unsupported command")),
         }
     }
 }
@@ -192,8 +192,11 @@ impl redis::ConnectionLike for FakeSearch {
     }
 }
 
-fn error(message: &'static str) -> redis::RedisError {
-    redis::RedisError::from((redis::ErrorKind::Extension, message))
+pub fn server_error(reply: &str) -> redis::RedisError {
+    redis::parse_redis_value(format!("-{reply}\r\n").as_bytes())
+        .expect("error reply")
+        .extract_error()
+        .expect_err("server error")
 }
 
 fn bulk(bytes: &[u8]) -> redis::Value {

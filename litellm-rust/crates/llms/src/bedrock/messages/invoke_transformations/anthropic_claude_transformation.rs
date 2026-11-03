@@ -1,3 +1,4 @@
+use litellm_core_utils::decline::Decline;
 use std::convert::Infallible;
 
 use crate::{
@@ -6,7 +7,9 @@ use crate::{
 };
 use futures_util::StreamExt;
 use litellm_auth::AwsParams;
-use litellm_auth::{CredentialPlacement, SecretValue};
+use litellm_auth::CredentialPlacement;
+use litellm_secret_value::SecretValue;
+
 use litellm_auth_aws::{
     AwsCredentialSource, bedrock_model_id_and_region,
     constants::{
@@ -130,9 +133,9 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         _request: MessagesRequest,
         _context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        Err(Error::Unsupported(
+        Err(Error::Declined(Decline::new(
             "Bedrock invoke messages request shaping",
-        ))
+        )))
     }
 
     fn secret_names(&self) -> &'static [&'static str] {

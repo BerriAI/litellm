@@ -281,7 +281,7 @@ SERVER_TOOLS: Final = [
 ]
 
 
-async def _workspace_request_body(**request_params: object) -> dict[str, object]:
+async def _workspace_request(max_tokens: int = 64, **request_params: object) -> httpx.Request:
     received: Final[list[httpx.Request]] = []  # mutable-ok: the fake workspace records what litellm sent
 
     def workspace_answers(request: httpx.Request) -> httpx.Response:
@@ -303,7 +303,7 @@ async def _workspace_request_body(**request_params: object) -> dict[str, object]
     upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(workspace_answers))
     try:
         await litellm.anthropic.messages.acreate(
-            max_tokens=64,
+            max_tokens=max_tokens,
             messages=USER_TURN,
             model=f"databricks/{CLAUDE_MODEL}",
             api_key=DATABRICKS_API_KEY,
@@ -314,7 +314,30 @@ async def _workspace_request_body(**request_params: object) -> dict[str, object]
     finally:
         await upstream.close()
     assert len(received) == 1
-    return json.loads(received[0].content)
+    return received[0]
+
+
+async def _workspace_request_body(**request_params: object) -> dict[str, object]:
+    return json.loads((await _workspace_request(**request_params)).content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [True, False])
+async def test_bound_thinking_with_display_updates_reaches_the_workspace_with_both_betas(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch, local_beta_headers_config: None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    thinking: Final = {
+        "type": "enabled",
+        "budget_tokens": 1024,
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+    request: Final = await _workspace_request(max_tokens=4096, thinking=thinking, drop_params=drop_params)
+    assert json.loads(request.content)["thinking"] == thinking
+    assert {"thinking-binding-controls-2026-08-01", "thinking-display-updates-2026-08-18"} <= set(
+        request.headers["anthropic-beta"].split(",")
+    )
 
 
 @pytest.mark.asyncio

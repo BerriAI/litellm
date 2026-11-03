@@ -42,7 +42,7 @@ _MESSAGES_ROWS: Final = (
     Row("ollama_chat/llama3.1", "/ol", "/api/chat"),
 )
 _EMBEDDING_ROWS: Final = (
-    Row("ollama/nomic-embed-text", "/ol", "/api/embed", keyed=False),
+    Row("ollama/nomic-embed-text", "/ol", "/api/embed"),
     Row("jina_ai/jina-embeddings-v3", "/jn/v1", "/embeddings"),
     Row("voyage/voyage-3", "/vy/v1", "/embeddings"),
     Row("voyage/voyage-multimodal-3", "/vy/v1", "/multimodalembeddings"),
@@ -65,6 +65,7 @@ _FULL_ROUTE_EMBEDDING_ROWS: Final = (
     Row("jina_ai/jina-embeddings-v3", "/jn/v1/embeddings", ""),
     Row("voyage/voyage-3", "/vy/v1/embeddings", ""),
     Row("perplexity/pplx-embed-v1-0.6b", "/px/v1/embeddings", ""),
+    Row("ollama/nomic-embed-text", "/ol/api/embed", ""),
 )
 
 

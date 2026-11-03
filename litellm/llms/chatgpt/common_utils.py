@@ -3,6 +3,7 @@ Constants and helpers for ChatGPT subscription OAuth.
 """
 
 import base64
+import hashlib
 import json
 import os
 import platform
@@ -17,6 +18,7 @@ import httpx
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+from litellm.litellm_core_utils.provider_affinity import get_caller_litellm_session_id, get_requested_session_id
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import ProviderSpecificHeader
 
@@ -395,22 +397,31 @@ def _normalize_litellm_params(litellm_params: object) -> Mapping[str, object]:
         return MappingProxyType({})
 
 
+def _prompt_cache_session_id(prompt_cache_key: object) -> str | None:
+    if not isinstance(prompt_cache_key, str) or not prompt_cache_key:
+        return None
+    return (
+        prompt_cache_key
+        if _safe_header_value(prompt_cache_key.strip()) == prompt_cache_key
+        else hashlib.sha256(prompt_cache_key.encode("utf-8", "surrogatepass")).hexdigest()
+    )
+
+
 def get_chatgpt_session_id(litellm_params: object) -> str | None:
     params: Final = _normalize_litellm_params(litellm_params)
-    for key in ("litellm_session_id", "session_id"):
-        value = params.get(key)
-        if value:
-            return str(value)
-    metadata: Final = _normalize_litellm_params(params.get("metadata"))
-    if metadata:
-        value = metadata.get("session_id")
-        if value:
-            return str(value)
-    for key in ("litellm_trace_id", "litellm_call_id"):
-        value = params.get(key)
-        if value:
-            return str(value)
-    return None
+    return (
+        get_caller_litellm_session_id(params)
+        or get_requested_session_id(params)
+        or _prompt_cache_session_id(params.get("prompt_cache_key"))
+        or next(
+            (
+                str(value)
+                for key in ("litellm_session_id", "litellm_trace_id", "litellm_call_id")
+                if (value := params.get(key))
+            ),
+            None,
+        )
+    )
 
 
 def ensure_chatgpt_session_id(litellm_params: object) -> str:
