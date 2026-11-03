@@ -8,8 +8,9 @@ from typing import Final
 from typing_extensions import assert_never
 
 from litellm import constants
-from litellm.constants import PTU_SENTINEL_API_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
+from litellm.constants import CALLBACK_CONFIG_METADATA_SLOTS, PTU_SENTINEL_API_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.repositories.daily_activity_buckets import UNATTRIBUTED_API_KEY, UNKNOWN_MODEL_GROUP
+from litellm.types.proxy.management_endpoints.scim_v2 import SCIM_DIRECTORY_METADATA_KEYS
 from litellm.types.repositories.daily_activity import DailyActivityScope, DailyActivityTable, ExportType
 
 _API_KEY_ROLLED_UP_BIT: Final = 32
@@ -447,11 +448,16 @@ def build_cache_leakage_keys_sql(scope: DailyActivityScope, *, limit: int) -> Sq
 
 
 def build_export_sql(
-    scope: DailyActivityScope, *, export_type: ExportType, after: ExportCursor | None, batch_size: int
+    scope: DailyActivityScope,
+    *,
+    export_type: ExportType,
+    after: ExportCursor | None,
+    batch_size: int,
+    include_metadata: bool = False,
 ) -> SqlQuery:
     _bounded_limit(batch_size)
     where_clause, where_params = build_where_clause(scope)
-    group_key, output_key, user_fields, type_joins = _export_grouping(export_type)
+    group_key, output_key, user_fields, type_joins = _export_grouping(export_type, include_metadata=include_metadata)
     grouping_keys: Final = (
         f"scoped.date, COALESCE(scoped.\"{scope.entity_id_field}\", '')",
         *((group_key,) if export_type is not ExportType.DAILY else ()),
@@ -520,18 +526,26 @@ def build_export_sql(
     )
 
 
-_EMPTY_METADATA_FIELDS: Final = ", '{}'::jsonb AS key_metadata, '{}'::jsonb AS user_metadata"
-_USER_METADATA_FIELD: Final = (
-    "COALESCE(MIN(CASE WHEN jsonb_typeof(u.metadata) = 'object' THEN u.metadata::text END), '{}')::jsonb "
-    "AS user_metadata"
-)
-_KEY_METADATA_FIELD: Final = (
-    "COALESCE(MIN(CASE WHEN jsonb_typeof(COALESCE(vt.metadata, dvt.metadata)) = 'object' "
-    "THEN COALESCE(vt.metadata, dvt.metadata)::text END), '{}')::jsonb AS key_metadata"
+def _metadata_object_field(expression: str, redacted_keys: frozenset[str], alias: str) -> str:
+    redacted: Final = " - ".join((expression, *(f"'{key}'" for key in sorted(redacted_keys))))
+    return (
+        f"COALESCE(MIN(CASE WHEN jsonb_typeof({expression}) = 'object' THEN ({redacted})::text END), '{{}}')::jsonb "
+        f"AS {alias}"
+    )
+
+
+_EMPTY_KEY_METADATA_FIELD: Final = "'{}'::jsonb AS key_metadata"
+_EMPTY_USER_METADATA_FIELD: Final = "'{}'::jsonb AS user_metadata"
+_EMPTY_METADATA_FIELDS: Final = f", {_EMPTY_KEY_METADATA_FIELD}, {_EMPTY_USER_METADATA_FIELD}"
+_USER_METADATA_FIELD: Final = _metadata_object_field("u.metadata", SCIM_DIRECTORY_METADATA_KEYS, "user_metadata")
+_KEY_METADATA_FIELD: Final = _metadata_object_field(
+    "COALESCE(vt.metadata, dvt.metadata)", CALLBACK_CONFIG_METADATA_SLOTS, "key_metadata"
 )
 
 
-def _export_grouping(export_type: ExportType) -> tuple[str, str, str, tuple[str, ...]]:
+def _export_grouping(export_type: ExportType, *, include_metadata: bool) -> tuple[str, str, str, tuple[str, ...]]:
+    key_metadata: Final = _KEY_METADATA_FIELD if include_metadata else _EMPTY_KEY_METADATA_FIELD
+    user_metadata: Final = _USER_METADATA_FIELD if include_metadata else _EMPTY_USER_METADATA_FIELD
     if export_type is ExportType.DAILY:
         return (
             "''",
@@ -545,10 +559,8 @@ def _export_grouping(export_type: ExportType) -> tuple[str, str, str, tuple[str,
             _API_KEY_EXPR,
             "MAX(CASE WHEN scoped.api_key = '' THEN 'Unattributed' "
             "ELSE COALESCE(vt.key_alias, dvt.key_alias) END) AS key_alias, "
-            "MAX(COALESCE(vt.user_id, dvt.user_id)) AS user_id, MAX(u.user_email) AS user_email, "
-            + _KEY_METADATA_FIELD
-            + ", "
-            + _USER_METADATA_FIELD,
+            f"MAX(COALESCE(vt.user_id, dvt.user_id)) AS user_id, MAX(u.user_email) AS user_email, "
+            f"{key_metadata}, {user_metadata}",
             (
                 "LEFT JOIN \"LiteLLM_VerificationToken\" vt ON vt.token = scoped.api_key AND scoped.api_key <> ''",
                 """LEFT JOIN LATERAL (
@@ -573,7 +585,7 @@ def _export_grouping(export_type: ExportType) -> tuple[str, str, str, tuple[str,
             "COALESCE(vt.user_id, dvt.user_id, '')",
             "NULL::text",
             "NULL::text AS key_alias, MAX(COALESCE(vt.user_id, dvt.user_id)) AS user_id, "
-            "MAX(u.user_email) AS user_email, '{}'::jsonb AS key_metadata, " + _USER_METADATA_FIELD,
+            f"MAX(u.user_email) AS user_email, {_EMPTY_KEY_METADATA_FIELD}, {user_metadata}",
             (
                 'LEFT JOIN "LiteLLM_VerificationToken" vt ON vt.token = scoped.api_key',
                 """LEFT JOIN LATERAL (

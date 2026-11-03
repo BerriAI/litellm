@@ -171,7 +171,16 @@ def seed_daily_activity_fixture(connection: psycopg.Connection, *, schema: str, 
                 "INSERT INTO {} (token, key_alias, team_id, user_id, metadata, models) VALUES (%s, %s, %s, %s, %s, %s)"
             ).format(verification_token_table),
             (
-                ("key-a", "alias-a", "team-1", "user-1", '{"tags": ["blue", "gold"]}', []),
+                (
+                    "key-a",
+                    "alias-a",
+                    "team-1",
+                    "user-1",
+                    '{"tags": ["blue", "gold"], "cost_center": "cc-1", '
+                    '"logging": [{"callback_name": "langfuse", "callback_vars": {"langfuse_secret_key": "sk"}}], '
+                    '"callback_settings": {"otel": {"headers": "x"}}, "secret_manager_settings": {"vault": "v"}}',
+                    [],
+                ),
                 ("key-b", "alias-b", "team-1", "user-1", '{"tags": []}', []),
                 ("key-c", "alias-c", "team-1", "user-1", '{"tags": []}', []),
                 ("key-cache", "alias-cache", "team-1", "user-1", '{"tags": []}', []),
@@ -201,7 +210,13 @@ def seed_daily_activity_fixture(connection: psycopg.Connection, *, schema: str, 
             sql.SQL("INSERT INTO {} (user_id, user_email, models, metadata) VALUES (%s, %s, %s, %s)").format(
                 user_table
             ),
-            ("user-1", "user@example.com", [], '{"department": "research"}'),
+            (
+                "user-1",
+                "user@example.com",
+                [],
+                '{"department": "research", "scim_enterprise": {"employeeNumber": "E-1"}, '
+                '"scim_entitlements": ["ent"], "scim_roles": ["role"]}',
+            ),
         )
         cursor.execute(
             sql.SQL("INSERT INTO {} (team_id, team_alias, admins, members, models) VALUES (%s, %s, %s, %s, %s)").format(

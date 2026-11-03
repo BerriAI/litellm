@@ -451,32 +451,50 @@ def test_export_uses_latest_deleted_key_metadata(export_type: ExportType) -> Non
     assert "COALESCE(vt.user_id, dvt.user_id)" in query.sql
 
 
+_REDACTED_KEY_METADATA: Final = (
+    "THEN (COALESCE(vt.metadata, dvt.metadata) - 'callback_settings' - 'logging' - 'secret_manager_settings')"
+    "::text END), '{}')::jsonb AS key_metadata"
+)
+_REDACTED_USER_METADATA: Final = (
+    "THEN (u.metadata - 'scim_enterprise' - 'scim_entitlements' - 'scim_roles')::text END), '{}')::jsonb "
+    "AS user_metadata"
+)
+_EMPTY_KEY_METADATA: Final = "'{}'::jsonb AS key_metadata"
+_EMPTY_USER_METADATA: Final = "'{}'::jsonb AS user_metadata"
+
+
 @pytest.mark.parametrize(
     ("export_type", "key_metadata", "user_metadata"),
     [
-        (
-            ExportType.DAILY_WITH_KEYS,
-            "THEN COALESCE(vt.metadata, dvt.metadata)::text END), '{}')::jsonb AS key_metadata",
-            "THEN u.metadata::text END), '{}')::jsonb AS user_metadata",
-        ),
-        (
-            ExportType.DAILY_WITH_USERS,
-            "'{}'::jsonb AS key_metadata",
-            "THEN u.metadata::text END), '{}')::jsonb AS user_metadata",
-        ),
-        (ExportType.DAILY, "'{}'::jsonb AS key_metadata", "'{}'::jsonb AS user_metadata"),
-        (ExportType.DAILY_WITH_MODELS, "'{}'::jsonb AS key_metadata", "'{}'::jsonb AS user_metadata"),
+        (ExportType.DAILY_WITH_KEYS, _REDACTED_KEY_METADATA, _REDACTED_USER_METADATA),
+        (ExportType.DAILY_WITH_USERS, _EMPTY_KEY_METADATA, _REDACTED_USER_METADATA),
+        (ExportType.DAILY, _EMPTY_KEY_METADATA, _EMPTY_USER_METADATA),
+        (ExportType.DAILY_WITH_MODELS, _EMPTY_KEY_METADATA, _EMPTY_USER_METADATA),
     ],
 )
-def test_export_selects_stored_key_and_user_metadata_objects(
+def test_export_selects_redacted_key_and_user_metadata_objects_for_admin_view(
     export_type: ExportType, key_metadata: str, user_metadata: str
 ) -> None:
-    query = build_export_sql(_scope(entity_ids=None), export_type=export_type, after=None, batch_size=2)
+    query = build_export_sql(
+        _scope(entity_ids=None), export_type=export_type, after=None, batch_size=2, include_metadata=True
+    )
 
     assert key_metadata in query.sql
     assert user_metadata in query.sql
     if export_type is ExportType.DAILY_WITH_KEYS:
         assert "SELECT key_alias, user_id, metadata" in query.sql
+
+
+@pytest.mark.parametrize("export_type", tuple(ExportType))
+def test_export_without_metadata_selects_empty_objects_and_never_reads_metadata_columns(
+    export_type: ExportType,
+) -> None:
+    query = build_export_sql(_scope(entity_ids=None), export_type=export_type, after=None, batch_size=2)
+
+    assert _EMPTY_KEY_METADATA in query.sql
+    assert _EMPTY_USER_METADATA in query.sql
+    assert "u.metadata" not in query.sql
+    assert "vt.metadata" not in query.sql
 
 
 @pytest.mark.parametrize("export_type", tuple(ExportType))

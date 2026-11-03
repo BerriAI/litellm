@@ -258,12 +258,22 @@ class DailyActivityRepository:
         query: Final = build_cache_leakage_keys_sql(scope, limit=limit)
         return _KEY_SPEND_ADAPTER.validate_python(await self._query(query))
 
-    async def export_rows(self, scope: DailyActivityScope, *, export_type: ExportType) -> AsyncIterator[ExportRow]:
+    async def export_rows(
+        self, scope: DailyActivityScope, *, export_type: ExportType, include_metadata: bool = False
+    ) -> AsyncIterator[ExportRow]:
         batch_size: Final = constants.USAGE_EXPORT_BATCH_SIZE
         cursor: ExportCursor | None = None  # rebind-ok: each page advances the export keyset cursor
         while True:
             batch: tuple[ExportRow, ...] = _EXPORT_ADAPTER.validate_python(
-                await self._query(build_export_sql(scope, export_type=export_type, after=cursor, batch_size=batch_size))
+                await self._query(
+                    build_export_sql(
+                        scope,
+                        export_type=export_type,
+                        after=cursor,
+                        batch_size=batch_size,
+                        include_metadata=include_metadata,
+                    )
+                )
             )
             for row in batch:
                 yield row

@@ -260,6 +260,7 @@ class _FakeRepository:
         self.user_page_call: tuple[DailyActivityScope, int, int] | None = None
         self.user_metadata = AsyncMock(side_effect=self._user_metadata)
         self.export_rows_error: Exception | None = None
+        self.export_rows_include_metadata: bool | None = None
 
     def _matching_rows(self, scope: DailyActivityScope) -> tuple[_Activity, ...]:
         return tuple(
@@ -369,7 +370,10 @@ class _FakeRepository:
             for key in api_keys
         }
 
-    async def export_rows(self, scope: DailyActivityScope, *, export_type: ExportType) -> AsyncIterator[ExportRow]:
+    async def export_rows(
+        self, scope: DailyActivityScope, *, export_type: ExportType, include_metadata: bool = False
+    ) -> AsyncIterator[ExportRow]:
+        self.export_rows_include_metadata = include_metadata
         if self.export_rows_error is not None:
             raise self.export_rows_error
         for row in self._matching_rows(scope):
@@ -391,8 +395,8 @@ class _FakeRepository:
                 failed_requests=row.failed_requests,
                 cache_read_input_tokens=row.cache_read_input_tokens,
                 cache_creation_input_tokens=row.cache_creation_input_tokens,
-                key_metadata={"cost_center": "=finance", "tier": 2},
-                user_metadata={"department": "research"},
+                key_metadata={"cost_center": "=finance", "tier": 2} if include_metadata else {},
+                user_metadata={"department": "research"} if include_metadata else {},
             )
 
 
@@ -1188,6 +1192,39 @@ def test_export_routes_stream_json_arrays(
     assert records[0]["entity_alias"] == "=entity"
     assert records[0]["key_metadata"] == {"cost_center": "=finance", "tier": 2}
     assert records[0]["user_metadata"] == {"department": "research"}
+
+
+@pytest.mark.parametrize(
+    ("role", "expects_metadata"),
+    [
+        (LitellmUserRoles.PROXY_ADMIN, True),
+        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, True),
+        (LitellmUserRoles.INTERNAL_USER, False),
+    ],
+)
+def test_export_metadata_objects_only_for_callers_with_admin_view(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    role: LitellmUserRoles,
+    expects_metadata: bool,
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        "/user/daily/activity/export",
+        params={
+            **_entity_params("user_id", "user-a"),
+            "export_type": ExportType.DAILY_WITH_KEYS.value,
+            "format": "json",
+        },
+        headers={"x-user-role": role.value, "x-user-id": "user-a"},
+    )
+    assert response.status_code == 200, response.text
+    assert repository.export_rows_include_metadata is expects_metadata
+    records: Final = response.json()
+    assert records, response.text
+    expected_key: Final = {"cost_center": "=finance", "tier": 2} if expects_metadata else {}
+    expected_user: Final = {"department": "research"} if expects_metadata else {}
+    assert all(record["key_metadata"] == expected_key for record in records), response.text
+    assert all(record["user_metadata"] == expected_user for record in records), response.text
 
 
 def test_export_first_row_error_returns_json_error_before_streaming(

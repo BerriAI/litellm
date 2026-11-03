@@ -4,7 +4,8 @@ A customer charging usage back by cost center keeps that cost center in the
 virtual key's metadata and the owner's user metadata. Before LIT-8524 the
 Usage page export only carried the key alias, user id and email, so every
 exported row needed a /key/info and /user/info round trip to recover the
-metadata. The export now joins both objects onto each daily_with_keys row.
+metadata. The export now joins both objects onto each daily_with_keys row for
+callers with admin view, and returns {} for everyone else.
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ class UsageExportParams(BaseModel):
     start_date: str
     end_date: str
     api_key: str
+    user_id: str | None = None
     export_type: str = "daily_with_keys"
     format: str = "json"
 
@@ -149,4 +151,22 @@ class TestUsageExportMetadata:
             assert row.key_metadata.tag == f"cost-center-{marker}", f"key metadata not exported: {row.key_metadata}"
             assert row.user_metadata.department == f"research-{marker}", (
                 f"user metadata not exported: {row.user_metadata}"
+            )
+
+        own_view: Final = client.proxy.transport.probe(
+            EXPORT_ROUTE,
+            params=UsageExportParams(
+                start_date=(started - timedelta(days=1)).strftime("%Y-%m-%d"),
+                end_date=end.strftime("%Y-%m-%d"),
+                api_key=token,
+                user_id=user_id,
+            ),
+            headers=client.proxy.transport.bearer(record.key),
+        )
+        assert own_view.status_code == 200, f"{EXPORT_ROUTE} answered {own_view.status_code}: {own_view.body}"
+        own_rows: Final = _EXPORT_ROWS.validate_json(own_view.body)
+        assert own_rows, f"{EXPORT_ROUTE} returned no rows for the key's own user: {own_view.body}"
+        for row in own_rows:
+            assert (row.key_metadata, row.user_metadata) == (UsageExportKeyMetadata(), UsageExportUserMetadata()), (
+                f"a caller without admin view got metadata objects: {row}"
             )

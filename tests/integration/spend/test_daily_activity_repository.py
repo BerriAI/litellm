@@ -219,7 +219,12 @@ async def test_repository_queries_and_exports_seeded_daily_activity(monkeypatch:
         assert tuple(row.api_key for row in leakage_keys) == ("key-cache", "key-c")
 
         exports: Final = tuple(
-            [row async for row in repository.export_rows(team_scope, export_type=ExportType.DAILY_WITH_KEYS)]
+            [
+                row
+                async for row in repository.export_rows(
+                    team_scope, export_type=ExportType.DAILY_WITH_KEYS, include_metadata=True
+                )
+            ]
         )
         assert tuple(row.api_key for row in exports) == (
             "key-a",
@@ -239,10 +244,20 @@ async def test_repository_queries_and_exports_seeded_daily_activity(monkeypatch:
         assert deleted_key_export.key_metadata == {"tags": ["archived"]}
         assert deleted_key_export.user_metadata == {"department": "research"}
         active_key_export: Final = next(row for row in exports if row.api_key == "key-a")
-        assert active_key_export.key_metadata == {"tags": ["blue", "gold"]}
+        assert active_key_export.key_metadata == {"tags": ["blue", "gold"], "cost_center": "cc-1"}
         assert active_key_export.user_metadata == {"department": "research"}
+        unprivileged_exports: Final = tuple(
+            [row async for row in repository.export_rows(team_scope, export_type=ExportType.DAILY_WITH_KEYS)]
+        )
+        assert tuple(row.api_key for row in unprivileged_exports) == tuple(row.api_key for row in exports)
+        assert all((row.key_metadata, row.user_metadata) == ({}, {}) for row in unprivileged_exports)
         user_exports: Final = tuple(
-            [row async for row in repository.export_rows(team_scope, export_type=ExportType.DAILY_WITH_USERS)]
+            [
+                row
+                async for row in repository.export_rows(
+                    team_scope, export_type=ExportType.DAILY_WITH_USERS, include_metadata=True
+                )
+            ]
         )
         assert len(user_exports) == 1
         assert (user_exports[0].user_id, user_exports[0].user_email, user_exports[0].spend) == (
@@ -253,7 +268,10 @@ async def test_repository_queries_and_exports_seeded_daily_activity(monkeypatch:
         assert user_exports[0].user_metadata == {"department": "research"}
         assert user_exports[0].key_metadata == {}
         daily_export: Final = tuple(
-            [row async for row in repository.export_rows(team_scope, export_type=ExportType.DAILY)]
+            [
+                row
+                async for row in repository.export_rows(team_scope, export_type=ExportType.DAILY, include_metadata=True)
+            ]
         )
         assert len(daily_export) == 1
         assert daily_export[0].spend == 1273.0
