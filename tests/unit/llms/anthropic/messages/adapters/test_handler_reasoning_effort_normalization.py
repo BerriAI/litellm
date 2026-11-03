@@ -388,7 +388,7 @@ _RESPONSE: Final = {
             "id": "msg_1",
             "status": "completed",
             "role": "assistant",
-            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            "content": [{"type": "output_text", "text": "ok", "annotations": ()}],
         }
     ],
     "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
@@ -633,10 +633,12 @@ def _chat_completion_kwargs(
     return completion_kwargs
 
 
-def _lowest_accepted_level(model: str, *, drop_params: bool) -> str | None:
+def _lowest_accepted_level(model: str, *, drop_params: bool, between_tools: bool) -> str | None:
     levels: Final = model_reasoning_efforts(model, "openai")
     if levels is not None:
         return levels[0] if levels else None
+    if between_tools:
+        return None
     drops_unconfirmed_off: Final = (
         drop_params and supports_reasoning(model, "openai") and not supports_none_reasoning_effort(model, "openai")
     )
@@ -676,7 +678,9 @@ class TestAnOpenAIChatRouteRequestGetsTheResponsesBridgeThinkingControls:
             drop_params=drop_params,
         )
 
-        assert sent.get("reasoning_effort") == _lowest_accepted_level(model, drop_params=drop_params)
+        assert sent.get("reasoning_effort") == _lowest_accepted_level(
+            model, drop_params=drop_params, between_tools=thinking["type"] == "between_tools"
+        )
 
     @pytest.mark.parametrize("model", [*OPENAI_CHAT_TARGETS, "openai/gpt-4.1", "openai/o3"])
     def test_a_bare_output_effort_is_the_tier_when_the_model_reasons_unasked(
@@ -817,3 +821,22 @@ class TestDisabledOnAnOffMapOpenAIDeployment:
         )
 
         assert sent["reasoning"] == {"effort": "none"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "uses_chat_route, reasoning_key", [(True, "reasoning_effort"), (False, "reasoning")], ids=["chat-route", "responses-bridge"]
+    )
+    async def test_a_first_turn_between_tools_leaves_reasoning_to_the_model(
+        self, respx_mock: respx.MockRouter, local_model_cost_map: None, uses_chat_route: bool, reasoning_key: str
+    ) -> None:
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            {**_OFF_MAP_OPENAI_DEPLOYMENT, "model": "openai/vendor/off-map-hybrid-reasoner"},
+            {},
+            rf"https://compatible\.example\.test/v1/{'chat/completions' if uses_chat_route else 'responses'}",
+            _CHAT_COMPLETION if uses_chat_route else _RESPONSE,
+            thinking={"type": "between_tools"},
+            stop_sequences=["STOP"] if uses_chat_route else None,
+        )
+
+        assert reasoning_key not in sent

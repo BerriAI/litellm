@@ -270,13 +270,16 @@ def _reasoning_for_target(
     custom_llm_provider: str | None,
     deployment_model_info: object,
     drop_params: bool,
+    between_tools: bool,
 ) -> object:
     reasoning_params: Final = as_str_mapping(reasoning)
     effort: Final = reasoning_params.get("effort") if reasoning_params is not None else None
     if reasoning_params is None or not isinstance(effort, str):
         return reasoning
     if effort == REASONING_EFFORT_OFF:
-        off_level: Final = reasoning_off_level(model, custom_llm_provider, drop_params=drop_params)
+        off_level: Final = reasoning_off_level(
+            model, custom_llm_provider, drop_params=drop_params, between_tools=between_tools
+        )
         if off_level is None or _responses_api_refuses_reasoning_effort(model, custom_llm_provider):
             return None
         return {**reasoning_params, "effort": off_level}
@@ -463,6 +466,7 @@ def _build_responses_kwargs(
             custom_llm_provider=provider,
             deployment_model_info=forwarded_kwargs.get("model_info"),
             drop_params=drop_params,
+            between_tools=thinking is not None and thinking.get("type") == "between_tools",
         )
         if _maps_reasoning(thinking, model, provider, forwarded_kwargs)
         else None

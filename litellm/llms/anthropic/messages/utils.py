@@ -259,11 +259,13 @@ def _lowest_tier_instead_of_off(levels: tuple[str, ...] | None) -> str | None:
     return next((tier for tier in _LOWEST_REASONING_TIERS if tier in levels), None)
 
 
-def reasoning_off_level(model: str, custom_llm_provider: str | None, *, drop_params: bool) -> str | None:
+def reasoning_off_level(
+    model: str, custom_llm_provider: str | None, *, drop_params: bool, between_tools: bool
+) -> str | None:
     from litellm.utils import supports_none_reasoning_effort, supports_reasoning
 
     levels: Final = model_reasoning_efforts(model, custom_llm_provider)
-    if levels == ():
+    if levels == () or (between_tools and levels is None):
         return None
     lowest_tier: Final = _lowest_tier_instead_of_off(levels)
     if lowest_tier is not None:

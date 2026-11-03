@@ -152,6 +152,10 @@ OFF_THINKING: Final = [{"type": "disabled"}, {"type": "between_tools"}]
 OFF_THINKING_IDS: Final = ["disabled", "between_tools-first-turn"]
 
 
+def _leaves_reasoning_to_the_model(model: str, thinking: dict[str, object]) -> bool:
+    return thinking["type"] == "between_tools" and model_reasoning_efforts(model, "openai") is None
+
+
 def _lowest_listed_off_switch(model: str) -> str:
     levels: Final = model_reasoning_efforts(model, "openai") or ()
     return next((level for level in ("none", "minimal", "low") if level in levels), "none")
@@ -172,7 +176,10 @@ def test_build_responses_kwargs_turns_reasoning_off_at_the_lowest_level_the_mode
 
     map_row: Final = litellm.model_cost.get(model)
     never_reasons: Final = map_row is not None and not map_row.get("supports_reasoning")
-    assert responses_kwargs.get("reasoning") == (None if never_reasons else {"effort": _lowest_listed_off_switch(model)})
+    sends_no_reasoning: Final = never_reasons or _leaves_reasoning_to_the_model(model, thinking)
+    assert responses_kwargs.get("reasoning") == (
+        None if sends_no_reasoning else {"effort": _lowest_listed_off_switch(model)}
+    )
 
 
 @pytest.mark.parametrize("thinking", OFF_THINKING, ids=OFF_THINKING_IDS)
@@ -192,7 +199,10 @@ def test_build_responses_kwargs_under_drop_params_keeps_a_listed_lower_tier_and_
     map_row: Final = litellm.model_cost.get(model)
     confirms_none: Final = map_row is not None and map_row.get("supports_none_reasoning_effort") is True
     keeps_none: Final = map_row is None or (bool(map_row.get("supports_reasoning")) and confirms_none)
-    assert responses_kwargs.get("reasoning") == ({"effort": off_switch} if off_switch != "none" or keeps_none else None)
+    sends_off_switch: Final = (off_switch != "none" or keeps_none) and not _leaves_reasoning_to_the_model(
+        model, thinking
+    )
+    assert responses_kwargs.get("reasoning") == ({"effort": off_switch} if sends_off_switch else None)
 
 
 @pytest.mark.parametrize("model", ["gpt-5.4-mini", "gpt-5.1", "gpt-6-luna", "gpt-bridge-unmapped"])

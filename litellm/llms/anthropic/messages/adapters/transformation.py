@@ -1234,6 +1234,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 return
 
         thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
+        is_between_tools: Final = isinstance(thinking_type, str) and thinking_type == "between_tools"
         declared_effort: Final = output_effort if thinking_type == "adaptive" else None
         if is_claude_target and not declared_effort:
             return
@@ -1241,7 +1242,7 @@ class LiteLLMAnthropicMessagesAdapter:
         mirrors_responses_bridge: Final = custom_llm_provider in RESPONSES_API_PROVIDERS
         reasoning_effort: Final = declared_effort or (
             self._between_tools_reasoning_effort(anthropic_message_request, output_effort)
-            if thinking_type == "between_tools" and mirrors_responses_bridge
+            if is_between_tools and mirrors_responses_bridge
             else self.translate_anthropic_thinking_to_reasoning_effort(
                 cast(AnthropicThinkingParam, thinking),
                 model=model,
@@ -1264,7 +1265,12 @@ class LiteLLMAnthropicMessagesAdapter:
             )
         )
         target_effort: Final = (
-            reasoning_off_level(model, custom_llm_provider, drop_params=drop_params)
+            reasoning_off_level(
+                model,
+                custom_llm_provider,
+                drop_params=drop_params,
+                between_tools=is_between_tools,
+            )
             if mirrors_responses_bridge and effort_sent == REASONING_EFFORT_OFF
             else effort_sent
         )
