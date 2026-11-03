@@ -73,7 +73,10 @@ async def test_new_user_returns_conflict_when_id_is_taken_after_duplicate_check(
     table: Final = SimpleNamespace(
         find_first=AsyncMock(return_value=None),
         count=AsyncMock(return_value=0),
-        create=AsyncMock(side_effect=UniqueViolationError({}, message="Unique constraint failed on user_id")),
+        create=AsyncMock(side_effect=UniqueViolationError(
+            {"user_facing_error": {"meta": {"target": ["user_id"]}}},
+            message="Unique constraint failed on user_id",
+        )),
         upsert=AsyncMock(return_value=LiteLLM_UserTable(user_id="employee-42")),
     )
     mocker.patch("prisma.Prisma", return_value=SimpleNamespace(litellm_usertable=table))

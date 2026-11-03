@@ -18,8 +18,10 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
+from prisma.errors import UniqueViolationError
 
 from litellm._service_logger import ServiceTypes
 from litellm.models.user import LiteLLM_UserTable
@@ -190,6 +192,48 @@ async def test_insert_data_team_serializes_members(prisma_client: PrismaClient) 
     assert result.team_id == "t1"
     assert create_payload["members_with_roles"] == json.dumps(data["members_with_roles"])
     assert create_payload["team_id"] == "t1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        ({"target": ["user_id"]}, "User with id requested-user already exists"),
+        ({"target": ["sso_user_id"]}, "User with this sso_user_id already exists"),
+        (None, "User conflicts with an existing unique value"),
+        ({"target": ["unknown_field"]}, "User conflicts with an existing unique value"),
+    ],
+)
+async def test_user_conflict_names_constraint_and_does_not_retry(
+    prisma_client: PrismaClient,
+    metadata: Mapping[str, object] | None,
+    message: str,
+) -> None:
+    create: Final = AsyncMock(side_effect=UniqueViolationError({"user_facing_error": {"meta": metadata}}))
+    prisma_client.db.litellm_usertable.create = create
+    with pytest.raises(HTTPException) as error:
+        await prisma_client.insert_data(
+            data={"user_id": "requested-user", "sso_user_id": "sso-subject"},
+            table_name="user", allow_existing_user=False,
+        )
+    assert error.value.status_code == 409
+    assert error.value.detail == {"error": message}
+    assert create.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_user_insert_still_retries_transient_connection_failure(
+    prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row: Final = LiteLLM_UserTable(user_id="requested-user")
+    create: Final = AsyncMock(side_effect=[httpx.ConnectError("connection unavailable"), row])
+    prisma_client.db.litellm_usertable.create = create
+    monkeypatch.setattr("asyncio.sleep", AsyncMock())
+    result: Final = await prisma_client.insert_data(
+        data={"user_id": row.user_id}, table_name="user", allow_existing_user=False
+    )
+    assert result is row
+    assert create.await_count == 2
 
 
 @pytest.mark.asyncio
