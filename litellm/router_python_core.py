@@ -142,6 +142,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     is_registered_custom_provider,
     resolve_model_and_provider_for_metadata,
 )
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
 )
@@ -476,6 +477,7 @@ from litellm.types.router import (
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
+    COST_MAP_LOOKUP_KEY,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
@@ -487,6 +489,7 @@ from litellm.types.utils import (
     StandardLoggingRoutingDecision,
     Usage,
     all_litellm_params,
+    echoed_cost_map_fields,
     is_server_derived_pricing_key,
     shared_backend_model_info,
 )
@@ -545,6 +548,7 @@ if TYPE_CHECKING:
         ResponseAPIUsage,
         ResponseIncompleteEvent,
         ResponsesAPIResponse,
+        ResponsesAPIStreamingResponse,
     )
 
     Span = _Span
@@ -770,6 +774,17 @@ def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object]
 
 def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, object]:
     return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
+
+
+def _operator_max_input_tokens(deployment: Mapping[str, object]) -> int | None:
+    model_info: Final = _configured_model_info(deployment)
+    catalog_key: Final = model_info.get(COST_MAP_LOOKUP_KEY)
+    catalog_entry: Final = (
+        GetModelCostMap.loaded_model_cost_map().get(catalog_key) if isinstance(catalog_key, str) else None
+    )
+    if catalog_entry is not None and "max_input_tokens" in echoed_cost_map_fields(model_info, catalog_entry):
+        return None
+    return coerce_token_limit(model_info.get("max_input_tokens"))
 
 
 def _search_tool_support(deployment: DeploymentTypedDict) -> bool | None:
@@ -4388,12 +4403,13 @@ class PythonCore(DeprecatedRouterMembers):
 
             fallback_headers_adopted: bool = False
 
-            def __init__(self, async_generator: AsyncGenerator):
+            def __init__(self, async_generator: "AsyncGenerator[ResponsesAPIStreamingResponse, None]"):
                 import time
                 from datetime import datetime
 
                 self._async_generator = async_generator
                 self._billing_source: object = source_iterator
+                self._last_sequence_number = -1
                 # Mirror every attribute BaseResponsesAPIStreamingIterator.__init__
                 # would have set. The wrapper bypasses super().__init__ (it has no
                 # httpx.Response of its own and no provider config to drive), so
@@ -4500,7 +4516,16 @@ class PythonCore(DeprecatedRouterMembers):
                 if self.completed_response is None and getattr(chunk, "type", None) in _RESPONSES_TERMINAL_EVENT_TYPES:
                     self.completed_response = chunk
                 self._yielded_first_chunk = True
-                return chunk
+                sequence_number: Final = getattr(chunk, "sequence_number", None)
+                if not isinstance(sequence_number, int):
+                    return chunk
+                if not self.fallback_headers_adopted:
+                    self._last_sequence_number = max(self._last_sequence_number, sequence_number)
+                    return chunk
+                self._last_sequence_number = max(self._last_sequence_number + 1, sequence_number)
+                if self._last_sequence_number == sequence_number:
+                    return chunk
+                return chunk.model_copy(update={"sequence_number": self._last_sequence_number})
 
             async def aclose(self):
                 # async generators always expose aclose — no defensive check needed.
@@ -4562,7 +4587,9 @@ class PythonCore(DeprecatedRouterMembers):
                                 exc,
                             )
 
-        wrapper: Final = FallbackResponsesStreamWrapper(stream_with_fallbacks())
+        wrapper: Final = FallbackResponsesStreamWrapper(
+            stream_with_fallbacks()  # pyright: ignore[reportArgumentType]  # relays response events typed as object
+        )
         return wrapper
 
     def _aresponses_background_stream_can_release(
@@ -12688,6 +12715,24 @@ class PythonCore(DeprecatedRouterMembers):
             for deployment in self._routable_deployments(model_name, team_id)
         )
 
+    def _core_get_configured_max_input_tokens(
+        self, model_name: str, team_id: str | None = None
+    ) -> tuple[int | None, ...]:
+        """
+        Return the max_input_tokens each deployment a request from team_id to
+        model_name can route to (see _routable_deployments) sets in its own
+        model_info, in model_list order, None for a deployment that sets none
+        or a malformed one. Unlike get_model_listing_info, neither the cost map
+        nor a discovered limit is read, so only an operator's own value counts,
+        and a value a saved /model/info response copied from the cost map is
+        skipped too.
+
+        Returns an empty tuple for wildcard-expanded or unknown names.
+        """
+        return tuple(
+            _operator_max_input_tokens(deployment) for deployment in self._routable_deployments(model_name, team_id)
+        )
+
     def _core_get_search_tool_support(self, model_name: str, team_id: str | None = None) -> tuple[bool | None, ...]:
         """
         Whether each deployment a request from team_id to model_name can route
@@ -13210,6 +13255,7 @@ class PythonCore(DeprecatedRouterMembers):
                         "providers": [llm_provider],
                         "description": model_group_description,
                         **model_info,
+                        "supports_continuation": model_info.get("supports_continuation") is True,
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
                         "supported_endpoints": None,
@@ -13277,6 +13323,8 @@ class PythonCore(DeprecatedRouterMembers):
                     and model_info["supports_url_context"] is True
                 ):
                     model_group_info.supports_url_context = True
+                if model_info.get("supports_continuation") is True:
+                    model_group_info.supports_continuation = True
 
                 if model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True:
                     model_group_info.supports_reasoning = True

@@ -285,6 +285,9 @@ NOVA_2_URL: Final = "wss://api.deepgram.com/v1/listen?model=nova-2"
     [
         pytest.param(NOVA_3_URL, (), True, id="streaming entry present"),
         pytest.param(f"{NOVA_3_URL}&language=multi", (), True, id="multilingual entry present"),
+        pytest.param(
+            "wss://api.deepgram.com/v1/listen?model=nova-3-medical", (), True, id="medical streaming entry present"
+        ),
         pytest.param(NOVA_2_URL, (), False, id="only the pre-recorded entry"),
         pytest.param(f"{NOVA_2_URL}&language=multi", ("deepgram/streaming/nova-2",), False, id="needs multilingual"),
         pytest.param("wss://api.deepgram.com/v1/listen?model=nova-99-unmapped", (), False, id="nothing priced"),
@@ -295,7 +298,8 @@ NOVA_2_URL: Final = "wss://api.deepgram.com/v1/listen?model=nova-2"
 def test_deepgram_listen_is_priced(
     monkeypatch: pytest.MonkeyPatch, upstream_url: str, extra_rows: tuple[str, ...], expected: bool
 ):
-    """The bundled map prices only nova-3 for streaming; nova-2 has a pre-recorded row, which must never count."""
+    """The bundled map prices nova-3 and nova-3-medical for streaming; nova-2 has only a pre-recorded row, which must
+    never count."""
     monkeypatch.delitem(litellm.model_cost, "deepgram/streaming/nova-2", raising=False)
     assert "deepgram/nova-2" in litellm.model_cost
     for row in extra_rows:
