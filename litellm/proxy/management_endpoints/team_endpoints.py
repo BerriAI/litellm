@@ -49,6 +49,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     UI_TEAM_ID,
     BlockTeamRequest,
+    BudgetLimitEntry,
     BudgetNewRequest,
     CommonProxyErrors,
     DeleteTeamRequest,
@@ -2750,7 +2751,7 @@ async def update_team(
             )
 
         # Check budget_duration and budget_reset_at
-        _set_budget_reset_at(data, updated_kv)
+        _set_budget_reset_at(data, updated_kv, existing_team.budget_limits)
 
         _team_member_fields_in_request: Final = {
             field
@@ -2978,7 +2979,11 @@ async def patch_team(
         raise handle_exception_on_proxy(e)
 
 
-def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
+def _set_budget_reset_at(
+    data: UpdateTeamRequest,
+    updated_kv: dict,
+    existing_budget_limits: Sequence[BudgetLimitEntry] | None = None,
+) -> None:
     """Set budget_reset_at in updated_kv if budget_duration is provided."""
     if data.budget_duration is not None:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
@@ -2991,12 +2996,35 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
     if data.budget_limits is not None and len(data.budget_limits) > 0:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
-        initialized_windows: Final = []
-        for window in data.budget_limits:
-            w = window if isinstance(window, dict) else window.model_dump()
-            w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
-            initialized_windows.append(w)
+        initialized_windows: Final = [
+            _team_window_with_reset_at(window, existing_budget_limits or ()) for window in data.budget_limits
+        ]
         updated_kv["budget_limits"] = json.dumps(initialized_windows)
+
+
+def _team_window_with_reset_at(
+    window: BudgetLimitEntry, existing_budget_limits: Sequence[BudgetLimitEntry]
+) -> dict[str, object]:
+    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+    now: Final = datetime.now(timezone.utc)
+    open_reset_at: Final = next(
+        (
+            stored_window.reset_at
+            for stored_window in existing_budget_limits
+            if stored_window.budget_duration == window.budget_duration
+            and stored_window.reset_at is not None
+            and (
+                stored_window.reset_at
+                if stored_window.reset_at.tzinfo is not None
+                else stored_window.reset_at.replace(tzinfo=timezone.utc)
+            )
+            > now
+        ),
+        None,
+    )
+    reset_at: Final = open_reset_at or get_budget_reset_time(budget_duration=window.budget_duration)
+    return {**window.model_dump(), "reset_at": reset_at.isoformat()}
 
 
 async def handle_update_object_permission(data_json: dict, existing_team_row: _ObjectPermissionRow) -> dict:

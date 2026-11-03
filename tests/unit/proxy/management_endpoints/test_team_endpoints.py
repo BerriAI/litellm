@@ -13214,6 +13214,47 @@ def test_set_budget_reset_at_sets_value_when_budget_duration_provided():
 
 
 @pytest.mark.asyncio
+async def test_update_team_cap_change_preserves_open_budget_window_reset(
+    disable_audit_logging_for_mocked_team, monkeypatch
+):
+    from datetime import datetime, timezone, tzinfo
+
+    from litellm.models.team import BudgetLimitEntry
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            return datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    stored_reset_at = datetime(2026, 1, 8, tzinfo=timezone.utc)
+    monkeypatch.setattr("litellm.proxy.management_endpoints.team_endpoints.datetime", FrozenDateTime)
+    with ExitStack() as stack:
+        prisma = _wire_update_team(
+            stack,
+            {},
+            [BudgetLimitEntry(budget_duration="7d", max_budget=5, reset_at=stored_reset_at)],
+        )
+        await update_team(
+            data=UpdateTeamRequest(
+                team_id="test_team_id",
+                budget_limits=[{"budget_duration": "7d", "max_budget": 10}],
+            ),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key=MASTER_KEY,
+                user_id="proxy-admin",
+            ),
+        )
+
+    written_window: Final = json.loads(prisma.db.litellm_teamtable.update.call_args.kwargs["data"]["budget_limits"])[0]
+
+    assert written_window["max_budget"] == 10
+    assert written_window["reset_at"] == stored_reset_at.isoformat()
+
+
+@pytest.mark.asyncio
 async def test_clear_team_member_budget_duration_calls_update_budget():
     """
     When team_member_budget_duration is explicitly null and a budget row
@@ -15896,7 +15937,7 @@ def test_team_output_token_estimate_admin_gate_matrix(label, request_body, exist
     )
 
 
-def _wire_update_team(stack, existing_metadata):
+def _wire_update_team(stack, existing_metadata, existing_budget_limits=None):
     """Mock just enough of update_team to reach (or pass) the estimate gate."""
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15918,6 +15959,9 @@ def _wire_update_team(stack, existing_metadata):
         "team_id": "test_team_id",
         "team_alias": "test_team",
         "metadata": existing_metadata,
+        "budget_limits": (
+            [window.model_dump() for window in existing_budget_limits] if existing_budget_limits is not None else None
+        ),
         "members_with_roles": [{"user_id": "team-admin", "role": "admin"}],
     }
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
