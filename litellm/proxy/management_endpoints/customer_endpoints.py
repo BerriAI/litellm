@@ -192,8 +192,9 @@ async def block_user(data: BlockUsers):
                         "create": {"user_id": id, "blocked": True},
                         "update": {"blocked": True},
                     },
+                    include={"litellm_budget_table": True, "object_permission": True},
                 )
-                records.append(record)
+                records.append(_to_customer_response(record))
             await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
         else:
             raise HTTPException(

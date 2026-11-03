@@ -1289,6 +1289,10 @@ def test_customer_block_success_serializes_db_model_instance(mock_prisma_client,
     assert body["blocked_users"][0]["user_id"] == "c1"
     assert body["blocked_users"][0]["blocked"] is True
     assert body["blocked_users"][0]["spend"] == 0.0
+    assert mock_prisma_client.db.litellm_endusertable.upsert.call_args.kwargs["include"] == {
+        "litellm_budget_table": True,
+        "object_permission": True,
+    }
 
 
 def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_client, mock_user_api_key_auth):
