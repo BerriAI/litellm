@@ -14901,14 +14901,19 @@ class PythonCore(DeprecatedRouterMembers):
         if input is not None:
             from openai.types.responses.response_create_params import ResponseInputParam
 
+            from litellm.litellm_core_utils.prompt_templates.common_utils import embedding_input_is_all_media
             from litellm.litellm_core_utils.token_counter import split_embedding_input_tokens
             from litellm.responses.litellm_completion_transformation.transformation import (
                 LiteLLMCompletionResponsesConfig,
             )
 
-            text_input, media_tokens = split_embedding_input_tokens(
-                input, partial(deployment_backend_models, deployments)
-            )
+            backend_models: Final = partial(deployment_backend_models, deployments)
+            text_input, media_tokens = split_embedding_input_tokens(input, backend_models)
+            if media_tokens and embedding_input_is_all_media(input):
+                return max(
+                    split_embedding_input_tokens(item, backend_models)[1]
+                    for item in (input if isinstance(input, list) else (input,))
+                )
             typed_input: Final = cast(  # cast-ok: str | list matches transform input
                 str | ResponseInputParam, text_input
             )

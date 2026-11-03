@@ -8179,13 +8179,13 @@ _EMBEDDING_CONTEXT_WINDOW: Final = 8_192
 _EMBEDDING_IMAGE_INPUT: Final = f"data:image/png;base64,{base64.b64encode(bytes(range(256)) * 1024).decode()}"
 
 
-def _embedding_context_router(backend: str) -> litellm.Router:
+def _embedding_context_router(backend: str, window: int = _EMBEDDING_CONTEXT_WINDOW) -> litellm.Router:
     return litellm.Router(
         model_list=[
             {
                 "model_name": "embedder",
                 "litellm_params": {"model": backend, "api_key": "sk-test"},
-                "model_info": {"max_input_tokens": _EMBEDDING_CONTEXT_WINDOW},
+                "model_info": {"max_input_tokens": window},
             }
         ],
         enable_pre_call_checks=True,
@@ -8205,6 +8205,26 @@ async def test_context_window_pre_call_check_counts_an_embedding_image_as_media_
     assert counted is not None and 0 < counted < _EMBEDDING_CONTEXT_WINDOW
     with pytest.raises(litellm.ContextWindowExceededError):
         router._pre_call_checks(model="embedder", healthy_deployments=deployments, input="word " * 20_000)
+
+
+@pytest.mark.parametrize("shape", ["data_uri", "file_block", "two_data_uris"])
+def test_context_window_pre_call_check_keeps_embedding_pdfs_bounded_by_the_model_input_limit(shape: str):
+    backend: Final = "vertex_ai/gemini-embedding-2"
+    window: Final = litellm.get_model_info(backend)["max_input_tokens"]
+    assert window is not None
+    router: Final = _embedding_context_router(backend, window)
+    pdf: Final = f"data:application/pdf;base64,{base64.b64encode(bytes(window * 8)).decode()}"
+    inputs: Final = {
+        "data_uri": pdf,
+        "file_block": [{"type": "file", "file": {"file_data": pdf}}],
+        "two_data_uris": [pdf, pdf],
+    }
+
+    kept: Final = router._pre_call_checks(
+        model="embedder", healthy_deployments=router.get_model_list(model_name="embedder"), input=inputs[shape]
+    )
+
+    assert len(kept) == 1
 
 
 def test_context_window_pre_call_check_counts_an_embedding_image_as_text_on_a_text_only_backend():
