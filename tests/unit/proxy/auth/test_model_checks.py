@@ -2121,6 +2121,13 @@ _ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
             {f"openai/{_ROUTE_OPENAI_ID}"},
             id="slashless-name-with-more-wildcards-than-its-deployment",
         ),
+        pytest.param(
+            "gemini/*partial-route-9*",
+            "gemini/gemini-*",
+            None,
+            {_ROUTE_GEMINI_ID},
+            id="slashed-name-with-more-wildcards-than-its-deployment",
+        ),
         pytest.param("*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="catch-all-over-partial-deployment"),
         pytest.param("*", "gemini/gemini-partial-route-9*", None, set(), id="catch-all-over-mid-word-deployment"),
         pytest.param("*", "openai/responses/gpt-partial-route-9*", None, set(), id="catch-all-over-mid-word-route"),
@@ -2269,6 +2276,28 @@ def test_slashless_wildcard_over_a_bare_deployment_lists_its_custom_llm_provider
     assert {listed_id: models for listed_id, models in routed_models.items() if models != [listed_id]} == {}
     assert sorted(str(row["model_name"]) for row in model_info_rows) == sorted(v1_models)
     assert [row for row in model_info_rows if row["litellm_params"]["model"] != row["model_name"]] == []
+
+
+@pytest.mark.parametrize(
+    ("model_name", "deployment_model"),
+    [
+        pytest.param("*", "*", id="catch-all-over-a-bare-catch-all"),
+        pytest.param("foo/gpt-*", "gpt-*", id="slashed-name-over-a-bare-deployment"),
+        pytest.param("gpt-*", "openai/gpt-*", id="slashless-name-over-a-provider-prefixed-deployment"),
+    ],
+)
+def test_custom_llm_provider_changes_no_listing_outside_slashless_names_over_bare_deployments(
+    model_name: str, deployment_model: str
+) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    with_provider: Final = get_known_models_from_wildcard(
+        model_name, LiteLLM_Params(model=deployment_model, custom_llm_provider="openai")
+    )
+    without_provider: Final = get_known_models_from_wildcard(model_name, LiteLLM_Params(model=deployment_model))
+
+    assert with_provider == without_provider
 
 
 def test_inference_provider_route_lists_every_id_the_plain_provider_wildcard_lists() -> None:
