@@ -21,9 +21,6 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 )
 from litellm.types.utils import TranscriptionResponse, TranscriptionUsageTokensObject, Usage
 
-TRANSCRIPTION_RAN_UNSTREAMED: Final = "transcription_ran_unstreamed"
-
-
 _STREAM_FLAG: Final = TypeAdapter(bool)
 
 
@@ -69,23 +66,45 @@ def litellm_exception_mapper(call_details: Mapping[str, object]) -> Transcriptio
     return map_exception
 
 
-def guarded_transcription_events(response: TranscriptionResponse) -> tuple[str, ...]:
+def _guarded_transcription_event_payloads(
+    response: TranscriptionResponse,
+) -> tuple[dict[str, object], dict[str, object]]:
     text: Final = response.text or ""
     usage: Final = response.usage
     languages: Final = TranscriptionResponse.detected_languages(getattr(response, "languages", None))
-    done_event: Final = {
-        "type": "transcript.text.done",
-        "text": text,
-        **({} if usage is None else {"usage": usage.model_dump(exclude_none=True)}),
-        **({} if languages is None else {"languages": [language.model_dump() for language in languages]}),
-    }
+    return (
+        {"type": "transcript.text.delta", "delta": text},
+        {
+            "type": "transcript.text.done",
+            "text": text,
+            **({} if usage is None else {"usage": usage.model_dump(exclude_none=True)}),
+            **({} if languages is None else {"languages": [language.model_dump() for language in languages]}),
+        },
+    )
+
+
+def guarded_transcription_events(response: TranscriptionResponse) -> tuple[str, ...]:
     return (
         *(
             f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
-            for event in ({"type": "transcript.text.delta", "delta": text}, done_event)
+            for event in _guarded_transcription_event_payloads(response)
         ),
         TRANSCRIPTION_STREAM_DONE_FRAME,
     )
+
+
+class GuardedTranscriptionReplay:
+    def __init__(self, response: TranscriptionResponse) -> None:
+        self.response: Final = response
+        self._hidden_params: dict[str, object] = response.hidden_params
+
+    def __aiter__(self) -> AsyncIterator[TranscriptionStreamEvent]:
+        return self._events()
+
+    async def _events(self) -> AsyncIterator[TranscriptionStreamEvent]:
+        delta, done = _guarded_transcription_event_payloads(self.response)
+        yield TranscriptionTextDeltaEvent.model_construct(**delta)
+        yield TranscriptionTextDoneEvent.model_construct(**done)
 
 
 class TranscriptionStreamLogging(Protocol):

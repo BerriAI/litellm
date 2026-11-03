@@ -13,6 +13,7 @@ import pytest
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AsyncStream, AzureOpenAI, OpenAI
 
 import litellm
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
     litellm_exception_mapper,
@@ -24,6 +25,7 @@ from litellm.llms.openai.transcriptions.gpt_transformation import (
     OpenAIGPTTranscribeAudioTranscriptionConfig,
 )
 from litellm.llms.openai.transcriptions.handler import OpenAIAudioTranscription
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import TranscriptionResponse
 from litellm.utils import get_optional_params_transcription
 
@@ -680,6 +682,46 @@ async def test_atranscription_stream_bills_the_provider_duration_like_the_unstre
     assert unstreamed_spend.cost > 0
     assert unstreamed_spend.usage
     assert streamed_spend == unstreamed_spend
+
+
+class _TranscriptRedactor(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="transcript-redactor", event_hook=GuardrailEventHooks.post_call)
+
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: object, response: object
+    ) -> None:
+        if isinstance(response, TranscriptionResponse):
+            response.text = "[REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_atranscription_stream_under_a_post_call_guardrail_streams_the_guarded_transcript(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def send_response(request: httpx.Request) -> httpx.Response:
+        return _duration_priced_transcript(streamed=_asks_for_stream(await request.aread()))
+
+    monkeypatch.setattr(litellm, "callbacks", [_TranscriptRedactor()])
+    client: Final = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://example.com/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(send_response)),
+    )
+    stream: Final = await litellm.atranscription(
+        model="openai/gpt-transcribe",
+        file=_one_second_wav(),
+        stream=True,
+        client=client,
+        guardrails=["transcript-redactor"],
+    )
+    events: Final = [(event.type, event.model_dump(exclude={"type"}, exclude_unset=True)) async for event in stream]
+    await client.close()
+
+    assert events == [
+        ("transcript.text.delta", {"delta": "[REDACTED]"}),
+        ("transcript.text.done", {"text": "[REDACTED]", "usage": {"type": "duration", "seconds": 2}}),
+    ]
 
 
 def test_transcription_stream_bills_the_provider_duration_like_the_unstreamed_call(

@@ -1143,14 +1143,12 @@ def _guardrail_view_of_requested_stream(call_kwargs: Mapping[str, object]) -> di
     return guardrail_request_data_with_streaming(call_kwargs, is_streaming=True)
 
 
-def _marked_when_run_unstreamed(result: object, runs_unstreamed: bool) -> object:
-    from litellm.litellm_core_utils.audio_utils.transcription_streaming import TRANSCRIPTION_RAN_UNSTREAMED
+def _replayed_when_run_unstreamed(result: object, runs_unstreamed: bool) -> object:
+    from litellm.litellm_core_utils.audio_utils.transcription_streaming import GuardedTranscriptionReplay
 
     if not runs_unstreamed or not isinstance(result, TranscriptionResponse):
         return result
-    marked: Final = result.model_copy()
-    marked.hidden_params = {**result.hidden_params, TRANSCRIPTION_RAN_UNSTREAMED: True}
-    return marked
+    return GuardedTranscriptionReplay(result)
 
 
 def _is_converted_stream_result(result: object) -> bool:
@@ -2448,7 +2446,7 @@ def client(original_function):
                     if _is_converted_stream_result(_caching_handler_response.cached_result):
                         logging_obj.stream = True
                         logging_obj.model_call_details["stream"] = True
-                    return _marked_when_run_unstreamed(
+                    return _replayed_when_run_unstreamed(
                         _caching_handler_response.cached_result, transcription_runs_unstreamed
                     )
 
@@ -2561,15 +2559,12 @@ def client(original_function):
             # Only run if call_type is a valid value in CallTypes
             _call_type_enum: Final = _CALL_TYPE_ENUM_MAP.get(call_type)
             if _call_type_enum is not None:
-                result = _marked_when_run_unstreamed(
-                    await async_post_call_success_deployment_hook(
-                        request_data=_guardrail_view_of_requested_stream(call_kwargs)
-                        if transcription_runs_unstreamed
-                        else call_kwargs,
-                        response=result,
-                        call_type=_call_type_enum,
-                    ),
-                    transcription_runs_unstreamed,
+                result = await async_post_call_success_deployment_hook(
+                    request_data=_guardrail_view_of_requested_stream(call_kwargs)
+                    if transcription_runs_unstreamed
+                    else call_kwargs,
+                    response=result,
+                    call_type=_call_type_enum,
                 )
 
             ## Add response to cache
@@ -2618,7 +2613,7 @@ def client(original_function):
                 is_litellm_internal_call=_is_litellm_internal_call,
             )
 
-            return result
+            return _replayed_when_run_unstreamed(result, transcription_runs_unstreamed)
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
             # Reuse the timestamp taken right when the deployment call itself failed, before

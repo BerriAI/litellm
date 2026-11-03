@@ -377,8 +377,8 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
 from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
-    TRANSCRIPTION_RAN_UNSTREAMED,
     TRANSCRIPTION_STREAM_DONE_FRAME,
+    GuardedTranscriptionReplay,
     guarded_transcription_events,
     transcription_stream_requested,
 )
@@ -13894,13 +13894,7 @@ async def audio_transcriptions(
         )
         response_headers: Final = {**custom_headers, **(callback_headers or {})}
 
-        ran_unstreamed: Final = (
-            isinstance(response, TranscriptionResponse)
-            and response.hidden_params.get(TRANSCRIPTION_RAN_UNSTREAMED) is True
-        )
-        if transcription_stream_requested(form_data.get("stream")) and (
-            ran_unstreamed or hasattr(response, "__aiter__")
-        ):
+        if transcription_stream_requested(form_data.get("stream")) and hasattr(response, "__aiter__"):
 
             async def transcription_event_stream(
                 stream: AsyncIterator[TranscriptionStreamEvent],
@@ -13930,8 +13924,8 @@ async def audio_transcriptions(
                                 await close_result
 
             return StreamingResponse(
-                guarded_transcription_events(response)
-                if isinstance(response, TranscriptionResponse)
+                guarded_transcription_events(response.response)
+                if isinstance(response, GuardedTranscriptionReplay)
                 else transcription_event_stream(cast(AsyncIterator[TranscriptionStreamEvent], response)),
                 media_type="text/event-stream",
                 headers=response_headers,
