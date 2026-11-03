@@ -10112,12 +10112,19 @@ class ProviderConfigManager:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
-        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI, LlmProviders.EU_JEV):
+        if provider in (
+            LlmProviders.OPENAI,
+            LlmProviders.AZURE,
+            LlmProviders.AZURE_AI,
+            LlmProviders.EU_JEV,
+            LlmProviders.PARALLEL_AI,
+        ):
             configs: Final = {
                 LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
                 LlmProviders.AZURE: litellm.AzureDecisionsConfig,
                 LlmProviders.AZURE_AI: litellm.AzureAIDecisionsConfig,
                 LlmProviders.EU_JEV: litellm.EuJevDecisionsConfig,
+                LlmProviders.PARALLEL_AI: litellm.ParallelAIDecisionsConfig,
             }
             return configs[provider]()
         return None
@@ -10565,12 +10572,14 @@ class ProviderConfigManager:
             from litellm.llms.ollama.common_utils import OllamaModelInfo
 
             return OllamaModelInfo()
-        elif LlmProviders.VLLM == provider or LlmProviders.HOSTED_VLLM == provider:
-            from litellm.llms.vllm.common_utils import (
-                VLLMModelInfo,  # experimental approach, to reduce bloat on __init__.py
-            )
+        elif LlmProviders.VLLM == provider:
+            from litellm.llms.vllm.common_utils import VLLMModelInfo
 
             return VLLMModelInfo()
+        elif LlmProviders.HOSTED_VLLM == provider:
+            from litellm.llms.vllm.common_utils import HostedVLLMModelInfo
+
+            return HostedVLLMModelInfo()
         elif LlmProviders.LEMONADE == provider:
             return litellm.LemonadeChatConfig()
         elif LlmProviders.CLARIFAI == provider:

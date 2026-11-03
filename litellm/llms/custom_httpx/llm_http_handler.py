@@ -37,6 +37,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm._internal_context import internal_sub_call
 from litellm._logging import redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import (
     aload_beta_headers_config,
@@ -6232,12 +6233,13 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
-                model=patch.model or model,
-                input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
-                **optional_params,
-                **kwargs_for_followup,
-            )
+            with internal_sub_call(logging_obj.litellm_call_id):
+                response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
+                    model=patch.model or model,
+                    input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
+                    **optional_params,
+                    **kwargs_for_followup,
+                )
 
             if callback is not None:
                 try:
