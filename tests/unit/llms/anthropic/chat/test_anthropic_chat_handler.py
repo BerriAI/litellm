@@ -4240,3 +4240,47 @@ def test_anthropic_chat_prices_each_server_side_fallback_attempt_at_its_own_mode
     cost: Final = _fallback_chain_cost(message, stream)
 
     assert cost == pytest.approx(sum(_attempt_cost(*attempt) for attempt in billed_attempts))
+
+
+@pytest.mark.parametrize(
+    ("refusal_category", "billed_input_tokens"),
+    [pytest.param("bio", 535 + 412, id="billed_refusal"), pytest.param("cyber", 412, id="unbilled_refusal")],
+)
+@pytest.mark.parametrize(
+    ("deployment_pricing", "priced_as"),
+    [
+        pytest.param({"input_cost_per_token": 1e-3, "output_cost_per_token": 2e-3}, None, id="deployment_prices"),
+        pytest.param({"base_model": "anthropic/claude-haiku-5-5"}, "claude-haiku-5-5", id="base_model"),
+    ],
+)
+def test_anthropic_chat_prices_a_whole_fallback_chain_by_the_deployment_pricing(
+    refusal_category: str,
+    billed_input_tokens: int,
+    deployment_pricing: dict[str, object],
+    priced_as: str | None,
+) -> None:
+    message: Final = _fallback_chain_response(refusal_category, 0, None)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "fable",
+                "litellm_params": {"model": "anthropic/claude-fable-5", "api_key": "test-key", **deployment_pricing},
+            }
+        ]
+    )
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=message)))
+    )
+    try:
+        response: Final = router.completion(
+            model="fable", messages=[{"role": "user", "content": "Hello"}], client=client, max_tokens=300
+        )
+    finally:
+        client.close()
+    expected: Final = (
+        billed_input_tokens * 1e-3 + 264 * 2e-3
+        if priced_as is None
+        else _attempt_cost(priced_as, billed_input_tokens, 264)
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)

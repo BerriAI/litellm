@@ -45,20 +45,32 @@ def cost_per_token(
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    attempts: Final = _billed_fallback_attempts(usage)
-    if attempts is None:
+    iterations: Final = _USAGE_ITERATIONS.validate_python(getattr(usage, "iterations", None) or ())
+    served_by: Final = tuple(attempt for attempt in iterations if attempt.get("type") == "fallback_message")
+    if not served_by:
         return _single_model_cost_per_token(model, usage, service_tier, model_info)
-    costs: Final = tuple(_attempt_cost(attempt, model, usage, service_tier, model_info) for attempt in attempts)
+    # Pricing by any model other than the one that answered means the deployment set its own prices or base_model
+    prices_each_attempt_at_its_model: Final = _attempt_model(served_by[-1], model) == model
+    costs: Final = tuple(
+        _attempt_cost(
+            attempt=attempt,
+            attempt_model=_attempt_model(attempt, model) if prices_each_attempt_at_its_model else model,
+            model=model,
+            usage=usage,
+            service_tier=service_tier,
+            model_info=model_info,
+        )
+        for attempt in _billed_fallback_attempts(iterations, usage)
+    )
     return sum(prompt_cost for prompt_cost, _ in costs), sum(completion_cost for _, completion_cost in costs)
 
 
-def _billed_fallback_attempts(usage: "Usage") -> Sequence[Mapping[str, object]] | None:
-    """The billed entries of a server-side fallback chain's ``usage.iterations``, or None for any other usage.
-    The first ``fallback_refusal_categories`` entries declined, and one that declined before any output is billed
-    only in a billed category."""
-    iterations: Final = _USAGE_ITERATIONS.validate_python(getattr(usage, "iterations", None) or ())
-    if not any(attempt.get("type") == "fallback_message" for attempt in iterations):
-        return None
+def _billed_fallback_attempts(
+    iterations: Sequence[Mapping[str, object]], usage: "Usage"
+) -> Sequence[Mapping[str, object]]:
+    """The billed entries of a server-side fallback chain's ``usage.iterations``. The first
+    ``fallback_refusal_categories`` entries declined, and one that declined before any output is billed only in a
+    billed category."""
     categories: Final = _REFUSAL_CATEGORIES.validate_python(getattr(usage, "fallback_refusal_categories", None) or ())
     return tuple(
         attempt
@@ -85,12 +97,12 @@ def _attempt_model(attempt: Mapping[str, object], default: str) -> str:
 
 def _attempt_cost(
     attempt: Mapping[str, object],
+    attempt_model: str,
     model: str,
     usage: "Usage",
     service_tier: str | None,
     model_info: "ModelInfo | None",
 ) -> tuple[float, float]:
-    attempt_model: Final = _attempt_model(attempt, model)
     return _single_model_cost_per_token(
         model=attempt_model,
         usage=_attempt_usage(attempt, usage),
