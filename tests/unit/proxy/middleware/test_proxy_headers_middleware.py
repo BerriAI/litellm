@@ -56,6 +56,7 @@ def client_for(settings: Callable[[], Mapping[str, object]], peer: str = "10.0.0
                 "allowed": _check_valid_ip(["203.0.113.9"], request, use_x_forwarded_for=True)[0],
                 "peer": get_direct_client_ip(request),
                 "scheme": request.url.scheme,
+                "forwarded_proto": request.headers.get("x-forwarded-proto"),
                 "identity_trusted": identity_trusted,
                 "login_ip": throttle.client_ip,
                 "source_limit": throttle.source_limit,
@@ -162,6 +163,28 @@ def test_mcp_without_forwarding_uses_original_peer_but_ui_cookies_use_resolved_s
 
 
 @pytest.mark.parametrize(
+    "peer,proto,direct_scheme,expected",
+    [
+        ("10.0.0.1", "https, http", "http", "https"),
+        ("10.0.0.1", " HTTPS , http", "http", "https"),
+        ("10.0.0.1", "http, https", "http", "http"),
+        ("10.0.0.1", "invalid, https", "http", "http"),
+        ("192.0.2.1", "https, http", "http", "http"),
+        ("192.0.2.1", "http, https", "https", "https"),
+    ],
+)
+def test_forwarded_protocol_chains_preserve_cookie_security(
+    peer: str, proto: str, direct_scheme: str, expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    client: Final = client_for(lambda: {"trusted_proxy_ranges": ["10.0.0.0/8"]}, peer)
+    result: Final = client.get(f"{direct_scheme}://testserver/", headers={"x-forwarded-proto": proto}).json()
+    assert result["scheme"] == expected
+    assert result["secure_cookie"] is (expected == "https")
+    assert result["forwarded_proto"] == proto
+
+
+@pytest.mark.parametrize(
     "mcp_ranges,expected", [(["10.0.0.0/8"], "https://public.example"), (["192.0.2.0/24"], "http://testserver")]
 )
 def test_mcp_discovery_origin_uses_its_own_trust_policy(
@@ -205,7 +228,8 @@ def test_config_refresh_does_not_reuse_stale_trust() -> None:
     assert client.get("/", headers={"x-forwarded-for": "203.0.113.9"}).json() == {"ip": "10.0.0.1"}
 
 
-def test_websockets_resolve_client_and_scheme_after_lifespan_configuration() -> None:
+@pytest.mark.parametrize("proto", ["https", "https, http"])
+def test_websockets_resolve_client_and_scheme_after_lifespan_configuration(proto: str) -> None:
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
         app.state.proxy_ranges = ["10.0.0.0/8"]
@@ -220,6 +244,6 @@ def test_websockets_resolve_client_and_scheme_after_lifespan_configuration() -> 
     app.add_middleware(TrustedProxyMiddleware, settings=lambda: {"trusted_proxy_ranges": app.state.proxy_ranges})
     with TestClient(app, client=("10.0.0.1", 5555)) as client:
         with client.websocket_connect(
-            "/", headers={"x-forwarded-for": "203.0.113.9", "x-forwarded-proto": "https"}
+            "/", headers={"x-forwarded-for": "203.0.113.9", "x-forwarded-proto": proto}
         ) as ws:
             assert ws.receive_json() == {"client": ["203.0.113.9", 0], "scheme": "wss"}

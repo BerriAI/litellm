@@ -5,6 +5,7 @@ from typing import (
 )
 
 from pydantic import TypeAdapter
+from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn._types import ASGI3Application
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
@@ -63,6 +64,18 @@ class TrustedProxyMiddleware:
             configured=configured,
             via_trusted_proxy=peer in self._middleware.trusted_hosts,
         )
-        resolved_scope: Final = {**scope, "scheme": context.direct_scheme, PROXY_HEADER_CONTEXT: context}
+        forwarded_proto: Final = (
+            Headers(raw=scope.get("headers", [])).get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+        )
+        scheme: Final = (
+            forwarded_proto
+            if context.via_trusted_proxy and forwarded_proto in {"http", "https"}
+            else context.direct_scheme
+        )
+        resolved_scope: Final = {
+            **scope,
+            "scheme": scheme.replace("http", "ws") if scope["type"] == "websocket" else scheme,
+            PROXY_HEADER_CONTEXT: context,
+        }
         handler: Final = cast(ASGIApp, self._middleware)  # cast-ok: equivalent ASGI protocol stubs
         await handler(resolved_scope, receive, send)
