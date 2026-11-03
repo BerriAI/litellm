@@ -7474,13 +7474,14 @@ class _TeamUserSpendDbRow(TypedDict):
     failed_requests: ReadOnly[int]
 
 
+_TEAM_USER_SPEND_STATEMENT_TIMEOUT_SECONDS: Final = 30
+
+
 async def _team_user_spend_rows(
-    prisma_client: PrismaClient, sql: str, params: tuple[str, ...], timeout_seconds: int | None
+    prisma_client: PrismaClient, sql: str, params: tuple[str, ...]
 ) -> Sequence[_TeamUserSpendDbRow]:
-    if timeout_seconds is None:
-        return await prisma_client.db.query_raw(sql, *params)
-    async with prisma_client.db.tx(timeout=timedelta(seconds=timeout_seconds + 5)) as tx:
-        await tx.execute_raw(f"SET LOCAL statement_timeout = {timeout_seconds * 1000}")
+    async with prisma_client.db.tx(timeout=timedelta(seconds=_TEAM_USER_SPEND_STATEMENT_TIMEOUT_SECONDS + 5)) as tx:
+        await tx.execute_raw(f"SET LOCAL statement_timeout = {_TEAM_USER_SPEND_STATEMENT_TIMEOUT_SECONDS * 1000}")
         return await tx.query_raw(sql, *params)
 
 
@@ -7494,14 +7495,6 @@ async def get_team_spend_by_user(
     team_ids: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
-    timeout_seconds: Annotated[
-        int | None,
-        fastapi.Query(
-            ge=1,
-            le=600,
-            description="Cancel the database query after this many seconds and return 503. Unset means no limit.",
-        ),
-    ] = None,
 ) -> TeamUserSpendResponse:
     """
     Spend per user within the given teams, attributed per request from spend logs.
@@ -7547,13 +7540,15 @@ async def get_team_spend_by_user(
                 prisma_client,
                 _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
                 (start_date, end_date, *scoped_team_ids, *user_param),
-                timeout_seconds,
             )
     except Exception as e:
-        if timeout_seconds is not None and PrismaDBExceptionHandler.is_statement_timeout_error(e):
+        if PrismaDBExceptionHandler.is_statement_timeout_error(e):
             raise _daily_activity_error(
                 status_code=503,
-                message=f"Spend per user took longer than {timeout_seconds}s. Pick a shorter date range or fewer teams",
+                message=(
+                    f"Spend per user took longer than {_TEAM_USER_SPEND_STATEMENT_TIMEOUT_SECONDS}s. "
+                    "Pick a shorter date range or fewer teams"
+                ),
             ) from e
         raise
     results: Final = tuple(

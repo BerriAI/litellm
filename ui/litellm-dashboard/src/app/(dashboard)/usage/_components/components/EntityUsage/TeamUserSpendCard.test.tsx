@@ -28,7 +28,7 @@ const renderCard = () => {
 
 describe("TeamUserSpendCard", () => {
   it("shows the server's error instead of an empty table when the request fails", async () => {
-    const timeoutMessage = "Spend per user took longer than 60s. Pick a shorter date range or fewer teams";
+    const timeoutMessage = "Spend per user took longer than 30s. Pick a shorter date range or fewer teams";
     vi.mocked(teamSpendByUserCall).mockRejectedValueOnce(new Error(timeoutMessage));
 
     renderCard();

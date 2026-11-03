@@ -56,15 +56,3 @@ async def test_team_spend_by_user_matrix(actor: Actor, team: str, expected_statu
         body = resp.json()
         assert (body["start_date"], body["end_date"]) == ("2024-01-01", "2024-12-31")
         assert all(row["team_id"] == team_id for row in body["results"])
-
-
-async def test_team_spend_by_user_timeout_seconds_runs_under_a_statement_timeout(gateway_client, actors):
-    headers = {"Authorization": f"Bearer {actors.keys[Actor.PROXY_ADMIN].cleartext}"}
-    query = f"{_DATES}&team_ids={actors.team_alpha_id}"
-
-    resp = await gateway_client.get(f"/team/spend/by_user?{query}&timeout_seconds=60", headers=headers)
-    assert resp.status_code == 200, resp.text
-    assert all(row["team_id"] == actors.team_alpha_id for row in resp.json()["results"])
-
-    too_small = await gateway_client.get(f"/team/spend/by_user?{query}&timeout_seconds=0", headers=headers)
-    assert too_small.status_code == 422, too_small.text

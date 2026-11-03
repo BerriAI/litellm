@@ -17279,6 +17279,28 @@ def _team_spend_by_user_db_row(team_id: str, user_id: str, spend: float, request
     }
 
 
+class _RecordingTransaction:
+    def __init__(self, query_raw: AsyncMock) -> None:
+        self.statements: list[str] = []
+        self.query_raw = query_raw
+
+    async def execute_raw(self, sql: str) -> int:
+        self.statements.append(sql)
+        return 0
+
+    async def __aenter__(self) -> "_RecordingTransaction":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        pass
+
+
+def _team_spend_by_user_query(mock_db_client, query_raw: AsyncMock) -> _RecordingTransaction:
+    transaction = _RecordingTransaction(query_raw)
+    mock_db_client.db.tx = MagicMock(return_value=transaction)
+    return transaction
+
+
 @pytest.mark.asyncio
 async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(mock_db_client):
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
@@ -17287,12 +17309,15 @@ async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(m
     alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
     beta = _team_spend_by_user_team("team-beta", "Team Beta", Member(user_id="alice", role="user"), [])
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha, beta])
-    mock_db_client.db.query_raw = AsyncMock(
-        return_value=[
-            _team_spend_by_user_db_row("team-alpha", "alice", 0.5, 3),
-            _team_spend_by_user_db_row("team-alpha", "bob", 0.25, 2),
-            _team_spend_by_user_db_row("team-beta", "alice", 0.1, 1),
-        ]
+    transaction = _team_spend_by_user_query(
+        mock_db_client,
+        AsyncMock(
+            return_value=[
+                _team_spend_by_user_db_row("team-alpha", "alice", 0.5, 3),
+                _team_spend_by_user_db_row("team-alpha", "bob", 0.25, 2),
+                _team_spend_by_user_db_row("team-beta", "alice", 0.1, 1),
+            ]
+        ),
     )
 
     response = await get_team_spend_by_user(
@@ -17302,7 +17327,8 @@ async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(m
         end_date="2026-09-04",
     )
 
-    sql, *params = mock_db_client.db.query_raw.call_args.args
+    assert transaction.statements == ["SET LOCAL statement_timeout = 30000"]
+    sql, *params = transaction.query_raw.call_args.args
     assert params == ["2026-09-01", "2026-09-04", "team-alpha", "team-beta"]
     assert 'FROM "LiteLLM_SpendLogs" sl' in sql
     assert 'sl."startTime" >= $1::timestamp' in sql
@@ -17329,7 +17355,7 @@ async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_clien
     caller = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
     alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
-    mock_db_client.db.query_raw = AsyncMock(return_value=[])
+    transaction = _team_spend_by_user_query(mock_db_client, AsyncMock(return_value=[]))
     mock_db_client.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=_team_spend_by_user_caller("alice", ["team-alpha"])
     )
@@ -17338,7 +17364,7 @@ async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_clien
         user_api_key_dict=caller, team_ids="team-alpha", start_date="2026-09-01", end_date="2026-09-04"
     )
 
-    sql, *params = mock_db_client.db.query_raw.call_args.args
+    sql, *params = transaction.query_raw.call_args.args
     assert params == ["2026-09-01", "2026-09-04", "team-alpha"]
     assert 'sl."user" = $' not in sql
 
@@ -17351,7 +17377,9 @@ async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_cli
     alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="bob", role="user"), ["/key/info"])
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
     mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
-    mock_db_client.db.query_raw = AsyncMock(return_value=[_team_spend_by_user_db_row("team-alpha", "bob", 0.25, 2)])
+    transaction = _team_spend_by_user_query(
+        mock_db_client, AsyncMock(return_value=[_team_spend_by_user_db_row("team-alpha", "bob", 0.25, 2)])
+    )
     mock_db_client.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=_team_spend_by_user_caller("bob", ["team-alpha"])
     )
@@ -17360,7 +17388,7 @@ async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_cli
         user_api_key_dict=caller, team_ids="team-alpha", start_date="2026-09-01", end_date="2026-09-04"
     )
 
-    sql, *params = mock_db_client.db.query_raw.call_args.args
+    sql, *params = transaction.query_raw.call_args.args
     assert params == ["2026-09-01", "2026-09-04", "team-alpha", "bob"]
     assert "sl.team_id IN ($3)" in sql
     assert 'AND sl."user" = $4' in sql
@@ -17372,7 +17400,7 @@ async def test_get_team_spend_by_user_member_of_other_team_gets_404(mock_db_clie
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
 
     caller = UserAPIKeyAuth(user_id="bob", user_role=LitellmUserRoles.INTERNAL_USER)
-    mock_db_client.db.query_raw = AsyncMock(return_value=[])
+    transaction = _team_spend_by_user_query(mock_db_client, AsyncMock(return_value=[]))
     mock_db_client.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=_team_spend_by_user_caller("bob", ["team-alpha"])
     )
@@ -17383,7 +17411,7 @@ async def test_get_team_spend_by_user_member_of_other_team_gets_404(mock_db_clie
         )
 
     assert exc_info.value.status_code == 404
-    mock_db_client.db.query_raw.assert_not_called()
+    transaction.query_raw.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -17401,7 +17429,7 @@ async def test_get_team_spend_by_user_member_of_other_team_gets_404(mock_db_clie
 async def test_get_team_spend_by_user_rejects_bad_input(mock_db_client, team_ids, start_date, end_date, expected_error):
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
 
-    mock_db_client.db.query_raw = AsyncMock(return_value=[])
+    transaction = _team_spend_by_user_query(mock_db_client, AsyncMock(return_value=[]))
     admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -17411,23 +17439,7 @@ async def test_get_team_spend_by_user_rejects_bad_input(mock_db_client, team_ids
 
     assert exc_info.value.status_code == 400
     assert expected_error in str(exc_info.value.detail)
-    mock_db_client.db.query_raw.assert_not_called()
-
-
-class _RecordingTransaction:
-    def __init__(self, query_raw: AsyncMock) -> None:
-        self.statements: list[str] = []
-        self.query_raw = query_raw
-
-    async def execute_raw(self, sql: str) -> int:
-        self.statements.append(sql)
-        return 0
-
-    async def __aenter__(self) -> "_RecordingTransaction":
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        pass
+    transaction.query_raw.assert_not_called()
 
 
 def _statement_timeout_error() -> DataError:
@@ -17444,43 +17456,13 @@ def _statement_timeout_error() -> DataError:
 
 
 @pytest.mark.asyncio
-async def test_get_team_spend_by_user_timeout_runs_query_under_statement_timeout(mock_db_client):
-    from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
-
-    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
-    alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
-    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
-    mock_db_client.db.query_raw = AsyncMock(return_value=[])
-    transaction = _RecordingTransaction(
-        AsyncMock(return_value=[_team_spend_by_user_db_row("team-alpha", "alice", 0.5, 3)])
-    )
-    mock_db_client.db.tx = MagicMock(return_value=transaction)
-
-    response = await get_team_spend_by_user(
-        user_api_key_dict=admin,
-        team_ids="team-alpha",
-        start_date="2026-09-01",
-        end_date="2026-09-04",
-        timeout_seconds=60,
-    )
-
-    assert transaction.statements == ["SET LOCAL statement_timeout = 60000"]
-    _sql, *params = transaction.query_raw.call_args.args
-    assert params == ["2026-09-01", "2026-09-04", "team-alpha"]
-    mock_db_client.db.query_raw.assert_not_called()
-    assert [(r.user_id, r.spend) for r in response.results] == [("alice", 0.5)]
-
-
-@pytest.mark.asyncio
 async def test_get_team_spend_by_user_statement_timeout_returns_503(mock_db_client):
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
 
     admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
     alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
-    mock_db_client.db.tx = MagicMock(
-        return_value=_RecordingTransaction(AsyncMock(side_effect=_statement_timeout_error()))
-    )
+    _team_spend_by_user_query(mock_db_client, AsyncMock(side_effect=_statement_timeout_error()))
 
     with pytest.raises(HTTPException) as exc_info:
         await get_team_spend_by_user(
@@ -17488,11 +17470,10 @@ async def test_get_team_spend_by_user_statement_timeout_returns_503(mock_db_clie
             team_ids="team-alpha",
             start_date="2026-09-01",
             end_date="2026-09-04",
-            timeout_seconds=60,
         )
 
     assert exc_info.value.status_code == 503
-    assert "longer than 60s" in str(exc_info.value.detail)
+    assert "longer than 30s" in str(exc_info.value.detail)
 
 
 class _TeamRowWithOrganization(LiteLLM_TeamTable):

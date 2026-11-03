@@ -75686,8 +75686,6 @@ export interface operations {
                 team_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
-                /** @description Cancel the database query after this many seconds and return 503. Unset means no limit. */
-                timeout_seconds?: number | null;
             };
             header?: never;
             path?: never;

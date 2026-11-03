@@ -1487,8 +1487,6 @@ export const cacheLeakageKeysCall = (req: DailyActivityRequest, limit?: number):
 
 export type TeamUserSpendResponse = components["schemas"]["TeamUserSpendResponse"];
 
-export const TEAM_SPEND_BY_USER_TIMEOUT_SECONDS = 60;
-
 export const teamSpendByUserCall = async (
   accessToken: string,
   startTime: Date,
@@ -1501,7 +1499,6 @@ export const teamSpendByUserCall = async (
       start_date: formatDate(startTime),
       end_date: formatDate(endTime),
       team_ids: teamIds.join(","),
-      timeout_seconds: TEAM_SPEND_BY_USER_TIMEOUT_SECONDS,
     },
   });
 
