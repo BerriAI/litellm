@@ -1,6 +1,6 @@
 """Support for Azure OpenAI gpt-5 model family."""
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from typing import ClassVar, Final
 
 import litellm
@@ -105,7 +105,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         headers: dict,
     ) -> dict:
         model = model.replace(self.GPT5_SERIES_ROUTE, "")

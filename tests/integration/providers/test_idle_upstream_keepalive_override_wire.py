@@ -27,7 +27,7 @@ pytestmark: Final = pytest.mark.timeout(int(2 * graceful_stop_seconds() + 120 + 
 
 ROWS: Final = (
     Row("override-chat-openai-sdk-sync", openai_deployment, chat_sdk),
-    Row("override-messages-rust-anthropic-sdk-sync", anthropic_deployment, messages_sdk, rust=True),
+    Row("override-messages-anthropic-sdk-sync", anthropic_deployment, messages_sdk),
     Row("override-ocr-mistral-rust-bridge", ocr_deployment, ocr, rust=True),
 )
 
