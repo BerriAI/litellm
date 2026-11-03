@@ -459,6 +459,7 @@ def safe_get(client: _UrlFetcher, url: str, **kwargs: Unpack[_FetchOptions]) -> 
 
     When ``litellm.user_url_validation`` is False, validation is bypassed
     and this function delegates to ``client.get(url, follow_redirects=True)``.
+    ``follow_redirects=False`` returns the first response without following it.
 
     Args:
         client: An httpx.Client (sync).
@@ -486,7 +487,7 @@ def safe_get(client: _UrlFetcher, url: str, **kwargs: Unpack[_FetchOptions]) -> 
             "follow_redirects": False,
         }
         response = fetcher.get(validated_url, **hop_options)
-        if not response.is_redirect:
+        if not response.is_redirect or not kwargs.get("follow_redirects", True):
             return response
         # Resolve the next hop against the ORIGINAL (pre-rewrite) URL so
         # relative Location headers keep the original hostname.
@@ -514,7 +515,7 @@ async def async_safe_get(client: _AsyncUrlFetcher, url: str, **kwargs: Unpack[_A
             "follow_redirects": False,
         }
         response = await fetcher.get(validated_url, **hop_options)
-        if not response.is_redirect:
+        if not response.is_redirect or not kwargs.get("follow_redirects", True):
             return response
         # Resolve the next hop against the ORIGINAL (pre-rewrite) URL so
         # relative Location headers keep the original hostname.

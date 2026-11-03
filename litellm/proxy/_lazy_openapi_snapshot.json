@@ -572,6 +572,18 @@
       "schemas": {
         "DiscoverAgentRequest": {
           "properties": {
+            "api_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The agent's ``litellm_params.api_key``, sent as ``Authorization: Bearer <api_key>``.",
+              "title": "Api Key"
+            },
             "discovery_mode": {
               "$ref": "#/components/schemas/DiscoveryMode",
               "default": "well_known_fallback",
@@ -589,6 +601,21 @@
               ],
               "description": "Mode-specific parameters. ``langgraph_platform`` requires ``{'assistant_id': <id>}``. ``well_known_fallback`` ignores this.",
               "title": "Params"
+            },
+            "static_headers": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The agent's ``static_headers``, combined with ``api_key`` the way the agent's runtime does.",
+              "title": "Static Headers"
             },
             "url": {
               "description": "Base URL of the upstream agent. Behavior depends on ``discovery_mode``: ``well_known_fallback`` (default) tries /.well-known/agent-card.json, /.well-known/agent.json, /agent.json under this URL in order; ``langgraph_platform`` hits ``/.well-known/agent-card.json?assistant_id=<id>`` instead.",

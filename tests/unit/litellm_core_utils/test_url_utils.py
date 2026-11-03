@@ -1,7 +1,8 @@
 import asyncio
 import socket
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from typing import Final
 from urllib.parse import urlsplit
 
 import httpx
@@ -304,6 +305,48 @@ class TestRedirectHostnamePreservation:
         assert "93.184.216.34" in hops[1]["url"]
         # The second hop resolved /redirected relative to the original, not the IP.
         assert hops[1]["url"].endswith("/redirected")
+
+
+def _redirect(url: str) -> httpx.Response:
+    return httpx.Response(
+        302, headers={"Location": "https://elsewhere.example/next"}, request=httpx.Request("GET", url)
+    )
+
+
+class _RedirectingClient:
+    def get(self, url: str, headers: Mapping[str, str] | None = None, follow_redirects: bool = True) -> httpx.Response:
+        return _redirect(url)
+
+
+class _AsyncRedirectingClient:
+    async def get(
+        self, url: str, headers: Mapping[str, str] | None = None, follow_redirects: bool = True
+    ) -> httpx.Response:
+        return _redirect(url)
+
+
+def _public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        url_utils.socket,
+        "getaddrinfo",
+        lambda host, port, *a, **kw: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))],
+    )
+
+
+def test_safe_get_returns_the_redirect_when_told_not_to_follow(monkeypatch: pytest.MonkeyPatch) -> None:
+    _public_dns(monkeypatch)
+    response: Final = url_utils.safe_get(_RedirectingClient(), "https://agent.example/card", follow_redirects=False)
+
+    assert response.status_code == 302
+
+
+def test_async_safe_get_returns_the_redirect_when_told_not_to_follow(monkeypatch: pytest.MonkeyPatch) -> None:
+    _public_dns(monkeypatch)
+    response: Final = asyncio.run(
+        url_utils.async_safe_get(_AsyncRedirectingClient(), "https://agent.example/card", follow_redirects=False)
+    )
+
+    assert response.status_code == 302
 
 
 class TestValidationMasterSwitch:

@@ -9,6 +9,7 @@ admin pick which ones to expose through the proxy. The actual merge into a
 LiteLLM-fronted card happens when the agent is saved via ``POST /v1/agents``.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,6 +22,7 @@ from litellm.proxy.a2a.discovery import (
     AGENT_CARD_WELL_KNOWN_PATHS,
     AgentCardDiscoveryError,
     DiscoveryMode,
+    card_request_headers,
     fetch_well_known_card,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -56,6 +58,14 @@ class DiscoverAgentRequest(LiteLLMBaseModel):
             "Mode-specific parameters. ``langgraph_platform`` requires "
             "``{'assistant_id': <id>}``. ``well_known_fallback`` ignores this."
         ),
+    )
+    api_key: str | None = Field(
+        default=None,
+        description="The agent's ``litellm_params.api_key``, sent as ``Authorization: Bearer <api_key>``.",
+    )
+    static_headers: Mapping[str, str] | None = Field(
+        default=None,
+        description="The agent's ``static_headers``, combined with ``api_key`` the way the agent's runtime does.",
     )
 
 
@@ -100,6 +110,7 @@ async def discover_agent_card(
             request.url,
             discovery_mode=request.discovery_mode,
             params=request.params,
+            credentials=card_request_headers(request.api_key, request.static_headers or {}, request.discovery_mode),
         )
     except AgentCardDiscoveryError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
