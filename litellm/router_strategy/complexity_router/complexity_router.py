@@ -1219,9 +1219,11 @@ def _with_classifier_forecast(
         forecasted_decision: Final[StandardLoggingRoutingDecision] = {
             **with_input,
             "classifier_probabilities": outcome.jev_verdict.probabilities,
-            "classifier_confidence": outcome.jev_verdict.confidence,
         }
-        return forecasted_decision
+        confidence: Final = outcome.jev_verdict.confidence
+        return (
+            forecasted_decision if confidence is None else {**forecasted_decision, "classifier_confidence": confidence}
+        )
     if outcome.llm_v2_forecast is not None:
         return _with_llm_v2_forecast(with_input, outcome.llm_v2_forecast)
     forecast: Final = outcome.capability_forecast
@@ -2468,7 +2470,7 @@ class ComplexityRouter(CustomLogger):
                 score=None,
                 signals=(
                     f"{config.provider}-classifier:{tier_name}",
-                    f"{config.provider}-confidence={answer.confidence:.6f}",
+                    *(() if answer.confidence is None else (f"{config.provider}-confidence={answer.confidence:.6f}",)),
                     *(
                         f"tier-probability:{label}={probability:.6f}"
                         for label, probability in answer.probabilities.items()

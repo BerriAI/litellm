@@ -8,6 +8,7 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm._internal_context import internal_sub_call
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
@@ -204,12 +205,13 @@ async def _execute_chat_completion_agentic_plan(
     )
 
     try:
-        response_followup = await litellm.acompletion(
-            model=full_model_name,
-            messages=patch.messages,
-            **optional_params_for_followup,
-            **kwargs_for_followup,
-        )
+        with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObject) else None):
+            response_followup = await litellm.acompletion(
+                model=full_model_name,
+                messages=patch.messages,
+                **optional_params_for_followup,
+                **kwargs_for_followup,
+            )
         if _post_hook_overridden(callback):
             try:
                 response_followup = await callback.async_post_agentic_loop_response_hook(

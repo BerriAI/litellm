@@ -66,6 +66,8 @@ class Feature(str, Enum):
     """Extra body fields that Python transforms and merges into the provider request."""
     PROVIDER_AFFINITY = "provider_affinity"
     """A provider affinity header that Python validates and populates from the session id."""
+    FOUNDRY_BETA_ROW = "foundry_beta_row"
+    """A Foundry api_base, where Python drops the anthropic-beta values Foundry rejects."""
     PRE_REQUEST_HOOK = "pre_request_hook"
     """A logger overriding async_pre_request_hook, which may rewrite the request."""
     WEBSEARCH_INTERCEPTION = "websearch_interception"
@@ -170,6 +172,7 @@ CHAT_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
 
 MESSAGES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.PROVIDER_AFFINITY,
+    Feature.FOUNDRY_BETA_ROW,
     Feature.SAFEGUARDS_CLASSIFIER,
     Feature.PRE_REQUEST_HOOK,
     Feature.WEBSEARCH_INTERCEPTION,
