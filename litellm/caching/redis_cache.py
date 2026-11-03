@@ -555,7 +555,9 @@ def log_redis_failure(
     if isinstance(exc, RedisCircuitBreakerOpenError):
         logger.debug("%s: %s", message, reason, stacklevel=2)
         return
-    exc_info: Final = (type(exc), Exception(reason), exc.__traceback__) if with_traceback else None
+    exc_info: Final = (
+        (Exception, Exception(f"{type(exc).__name__}: {reason}"), exc.__traceback__) if with_traceback else None
+    )
     if not is_redis_timeout_failure(exc):
         logger.log(level, "%s: %s", message, reason, exc_info=exc_info, stacklevel=2)
         return

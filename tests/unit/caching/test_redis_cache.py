@@ -1784,6 +1784,7 @@ def test_log_redis_failure_redacts_traceback_and_exception_chain(
     assert SENSITIVE_CACHE_KEY not in caplog.text
     assert "private customer message" not in caplog.text
     assert "Traceback (most recent call last)" in caplog.text
+    assert ("RuntimeError" if chained else "ResponseError") in caplog.text
     assert "Redis failed" in caplog.text
 
 
