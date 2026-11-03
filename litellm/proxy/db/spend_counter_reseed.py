@@ -244,9 +244,11 @@ class SpendCounterReseed:
             redis_clean_miss = batched is not None
             if spend_counter_cache.redis_cache is not None and not redis_clean_miss:
                 try:
-                    val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
-                    if val is not None:
-                        return float(val)
+                    redis_val: Final[float | None] = await spend_counter_cache.redis_cache.async_get_cache(
+                        key=counter_key
+                    )
+                    if redis_val is not None:
+                        return float(redis_val)
                     redis_clean_miss = True
                 except Exception:
                     pass
@@ -275,7 +277,9 @@ class SpendCounterReseed:
                     if seeded:
                         current_value = float(db_spend)
                     else:
-                        cached: Final = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
+                        cached: Final[float | None] = await spend_counter_cache.redis_cache.async_get_cache(
+                            key=counter_key
+                        )
                         current_value = float(cached) if cached is not None else float(db_spend)
                     spend_counter_cache.in_memory_cache.set_cache(
                         key=counter_key,
@@ -440,9 +444,11 @@ class SpendCounterReseed:
             redis_clean_miss = batched is not None
             if spend_counter_cache.redis_cache is not None and not redis_clean_miss:
                 try:
-                    val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
-                    if val is not None:
-                        return float(val)
+                    redis_val: Final[float | None] = await spend_counter_cache.redis_cache.async_get_cache(
+                        key=counter_key
+                    )
+                    if redis_val is not None:
+                        return float(redis_val)
                     redis_clean_miss = True
                 except Exception:
                     pass
@@ -470,7 +476,9 @@ class SpendCounterReseed:
                     if seeded:
                         current_value = window_spend
                     else:
-                        current_cached_value = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
+                        current_cached_value: Final[
+                            float | None
+                        ] = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
                         if current_cached_value is None:
                             current_value = await spend_counter_cache.redis_cache.async_increment(
                                 key=counter_key,

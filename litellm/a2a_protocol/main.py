@@ -37,7 +37,6 @@ if TYPE_CHECKING:
     from a2a.client import Client as A2AClientType
     from a2a.client import ClientCallContext as A2ACallContextType
     from a2a.compat.v0_3.types import (
-        AgentCard,
         Message,
         SendMessageRequest,
         SendMessageResponse,
@@ -46,6 +45,7 @@ if TYPE_CHECKING:
         SendStreamingMessageSuccessResponse,
         Task,
     )
+    from a2a.types import AgentCard
     from a2a.types.a2a_pb2 import SendMessageRequest as CoreSendMessageRequest
     from a2a.types.a2a_pb2 import StreamResponse as CoreStreamResponse
 

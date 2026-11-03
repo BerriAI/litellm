@@ -1,6 +1,9 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from typing_extensions import ReadOnly
+from typing_extensions import TypedDict as ExtraItemsTypedDict
+
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.agentic_loop_settings import validated_max_agentic_loops
@@ -37,6 +40,11 @@ else:
     MCPTool = Any
 
 MAX_MCP_TOOL_CALL_ROUNDS: Final = 5
+
+
+class _FollowUpRequest(ExtraItemsTypedDict, total=False, extra_items=object):
+    input: ReadOnly[str | ResponseInputParam]
+    model: ReadOnly[str]
 
 
 def _output_items(response: ResponsesAPIResponse) -> Sequence[object]:
@@ -1035,7 +1043,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     self.max_tool_call_rounds,
                 )
 
-            follow_up_response: Final = await aresponses(**follow_up_params)
+            follow_up_response: Final = await aresponses(**_FollowUpRequest(**follow_up_params))
 
             # Route the follow-up through the same base_iterator machinery as
             # the initial call so its completion is checked for further tool

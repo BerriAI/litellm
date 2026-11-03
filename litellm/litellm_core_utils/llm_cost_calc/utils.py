@@ -2,7 +2,7 @@
 ## Helper utilities for cost_per_token()
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone, tzinfo
 from types import MappingProxyType
@@ -48,8 +48,12 @@ _IMAGE_RESPONSE_CALL_TYPES: Final = frozenset(
     }
 )
 
-# Pre-resolved DataResidency enum values for fast membership checks
-_VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
+_REGIONAL_UPLIFT_MULTIPLIER_GETTERS: Final[Mapping[str, Callable[[ModelInfo], float | None]]] = MappingProxyType(
+    {
+        DataResidency.EU.value: lambda model_info: model_info.get("regional_processing_uplift_multiplier_eu"),
+        DataResidency.US.value: lambda model_info: model_info.get("regional_processing_uplift_multiplier_us"),
+    }
+)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
 
@@ -1347,9 +1351,10 @@ def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | 
     if data_residency is None:
         return 1.0
     residency: Final = data_residency.lower()
-    if residency not in _VALID_DATA_RESIDENCIES:
+    multiplier_getter: Final = _REGIONAL_UPLIFT_MULTIPLIER_GETTERS.get(residency)
+    if multiplier_getter is None:
         return 1.0
-    multiplier: Final = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
+    multiplier: Final = multiplier_getter(model_info)
     if multiplier is None:
         return 1.0
     try:

@@ -7,10 +7,12 @@ https://humanloop.com/
 from typing import Final, cast
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import TypedDict
 
 import litellm
 from litellm.caching import DualCache
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, decoded_json_object, subscript
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -18,6 +20,8 @@ from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams
 
 from .custom_logger import CustomLogger
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class PromptManagementClient(TypedDict):
@@ -79,18 +83,20 @@ class HumanLoopPromptManager(DualCache):
             raise Exception(f"Error getting prompt from Humanloop: {e.response.text}")
 
         json_response: Final = response.json()
-        template_message: Final = json_response["template"]
-        if isinstance(template_message, dict):
-            template_messages = [template_message]
-        elif isinstance(template_message, list):
-            template_messages = template_message
+        decoded_response: Final = _DECODED_JSON.validate_python(json_response)
+        template_message: Final = subscript(decoded_response, "template")
+        template_mapping: Final = as_str_mapping(template_message)
+        template_list: Final = as_object_list(template_message)
+        if template_mapping is not None:
+            template_messages = [template_mapping]
+        elif template_list is not None:
+            template_messages = template_list
         else:
             raise ValueError(f"Invalid template message type: {type(template_message)}")
         template_model: Final = json_response["model"]
-        optional_params: Final = {}
-        for k, v in json_response.items():
-            if k in litellm.OPENAI_CHAT_COMPLETION_PARAMS:
-                optional_params[k] = v
+        optional_params: Final = {
+            k: v for k, v in decoded_json_object(decoded_response).items() if k in litellm.OPENAI_CHAT_COMPLETION_PARAMS
+        }
         return PromptManagementClient(
             prompt_id=humanloop_prompt_id,
             prompt_template=cast(list[AllMessageValues], template_messages),

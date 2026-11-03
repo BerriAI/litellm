@@ -13,7 +13,7 @@ import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from typing_extensions import (
     ReadOnly,
@@ -133,7 +133,7 @@ _BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (*AWS_AUTH_PARAM_KEYS
 def merge_bedrock_aws_request_params(
     litellm_params: Mapping[str, object],
     optional_params: Mapping[str, object],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Merge deployment and request parameters without allowing auth escalation.
 
     Deployment configuration is authoritative for AWS authentication. When a

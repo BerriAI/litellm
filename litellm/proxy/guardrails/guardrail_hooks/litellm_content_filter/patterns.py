@@ -33,6 +33,13 @@ class _PatternsFile(TypedDict):
     patterns: ReadOnly[Sequence[_PatternEntry]]
 
 
+class _CategoryFileSummary(TypedDict, total=False):
+    category_name: ReadOnly[str]
+    display_name: ReadOnly[str]
+    description: ReadOnly[str]
+    default_action: ReadOnly[str]
+
+
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _PatternExtraConfig(TypedDict, total=False):
     keyword_pattern: ReadOnly[str]
@@ -163,7 +170,7 @@ def _category_entry(categories_dir: str, filename: str) -> dict[str, str] | None
     if filename.endswith((".yaml", ".yml")):
         try:
             with open(category_file_path, "r") as f:
-                category_data = yaml.safe_load(f)
+                category_data: Final[_CategoryFileSummary] = yaml.safe_load(f)
         except Exception as e:
             from litellm._logging import verbose_proxy_logger
 

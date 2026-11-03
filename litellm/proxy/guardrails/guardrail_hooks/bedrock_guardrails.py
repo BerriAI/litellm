@@ -1319,12 +1319,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
         if httpx_response.status_code == 200:
-            _json_response: Final = httpx_response.json()
+            raw_json_response: Final = httpx_response.json()
             # check if the response was flagged
             verbose_proxy_logger.debug(
                 "Bedrock AI response : %s",
-                redact_nested_match_and_regex_keys(_json_response),
+                redact_nested_match_and_regex_keys(raw_json_response),
             )
+            _json_response: Final[BedrockGuardrailResponse] = raw_json_response
             bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
             if self._should_raise_guardrail_blocked_exception(bedrock_guardrail_response):
                 self._log_apply_guardrail_attempt(
@@ -1355,7 +1356,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _log_apply_guardrail_attempt(
         self,
         httpx_response: httpx.Response,
-        json_response: dict,  # mutable-ok: raw AWS JSON payload
+        json_response: BedrockGuardrailResponse,
         request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
@@ -1370,7 +1371,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         billed_usages: Final[tuple[BedrockGuardrailUsage, ...]] = tuple(completed_chunk_usages) + (
             (blocking_usage,) if isinstance(blocking_usage, dict) else ()
         )
-        logged_json_response: Final = (
+        logged_json_response: Final[BedrockGuardrailResponse] = (
             {
                 **json_response,
                 "usage": self._sum_usage_counters(billed_usages),
