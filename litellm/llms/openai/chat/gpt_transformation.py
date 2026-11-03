@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    chat_completion_prompt_cache_breakpoints_for_wire,
     drop_non_python_regex_patterns,
     drop_tool_reference_parts_from_tool_messages,
     flatten_combinators_and_drop_non_python_regex_patterns,
@@ -556,9 +557,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         """
         A deployment that reads OpenAI's ``prompt_cache_breakpoint`` (gpt-5.6+ on
         api.openai.com, or one opted in through ``prompt_cache_options`` or the cost
-        map) gets each Anthropic ``cache_control`` mark rewritten in place. Any other
-        endpoint keeps or strips the marks as before, and under drop_params also loses
-        every ``prompt_cache_breakpoint`` it cannot read.
+        map) gets each Anthropic ``cache_control`` mark rewritten in place, and under
+        drop_params each content part's ``prompt_cache_breakpoint`` cut down to what chat
+        completions accepts. Any other endpoint keeps or strips the marks as before, and
+        under drop_params also loses every ``prompt_cache_breakpoint`` it cannot read.
         """
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 
@@ -572,9 +574,15 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 _claude_messages_within_cache_control_cap(model, messages, tools, litellm_params, request_params),
                 tools,
             )
-        drops_breakpoints: Final = not reads_breakpoints and _drops_params(litellm_params)
+        drop_params: Final = _drops_params(litellm_params)
+        drops_breakpoints: Final = not reads_breakpoints and drop_params
         renamed: Final = (
-            [AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages]
+            [
+                AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(
+                    chat_completion_prompt_cache_breakpoints_for_wire(message, drop_params)
+                )
+                for message in messages
+            ]
             if reads_breakpoints
             else [without_prompt_cache_breakpoints(message) for message in messages]
             if drops_breakpoints
