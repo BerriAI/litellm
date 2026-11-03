@@ -847,6 +847,32 @@ def is_stream_stall(exception: BaseException) -> bool:
     return isinstance(exception, litellm.Timeout) and isinstance(exception.__cause__, MidStreamFallbackError)
 
 
+def is_caller_entra_credential_failure(
+    deployment: Deployment | None, model_call_details: Mapping[str, object], exception_status: str | int
+) -> bool:
+    if cast_exception_status_to_int(exception_status) != 401 or deployment is None:
+        return False
+    raw_call_params: Final = model_call_details.get("litellm_params")
+    if not isinstance(raw_call_params, Mapping):
+        return False
+
+    from litellm.llms.azure_ai.common_utils import AZURE_ENTRA_LITELLM_PARAM_KEYS
+
+    call_params: Final = _CREDENTIAL_VALUES_ADAPTER.validate_python(raw_call_params)
+
+    credential_name: Final = deployment.litellm_params.litellm_credential_name
+    configured: Final[tuple[Mapping[str, object], ...]] = (
+        _CREDENTIAL_VALUES_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True)),
+        _CREDENTIAL_VALUES_ADAPTER.validate_python(
+            CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
+        ),
+    )
+    return any(
+        call_params.get(key) is not None and all(call_params.get(key) != values.get(key) for values in configured)
+        for key in AZURE_ENTRA_LITELLM_PARAM_KEYS
+    )
+
+
 def is_caller_scoped_auth_failure(deployment: Deployment | None, exception_status: str | int) -> bool:
     if cast_exception_status_to_int(exception_status) not in (401, 403) or deployment is None:
         return False

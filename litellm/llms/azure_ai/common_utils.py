@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final, Literal
 from urllib.parse import urlparse
@@ -70,6 +70,18 @@ def _resolve_config_secret(value: object) -> str | None:
     return get_secret_str(value) if value.startswith("os.environ/") else value
 
 
+def _agent_entra_token(provider: Callable[[], str], model: str) -> str:
+    from litellm.llms.azure.common_utils import entra_rejection_as_auth_error, entra_rejection_types
+
+    try:
+        return provider()
+    except entra_rejection_types() as error:
+        rejection: Final = entra_rejection_as_auth_error(error)
+        if rejection is None:
+            raise
+        raise litellm.AuthenticationError(message=rejection.message, llm_provider="azure_ai", model=model) from error
+
+
 def get_azure_ai_agent_entra_token(litellm_params: Mapping[str, object]) -> str:
     """Mints the Entra bearer from the agent's own litellm_params, never from process-wide AZURE_* env vars."""
     from litellm.llms.azure.common_utils import (
@@ -88,14 +100,21 @@ def get_azure_ai_agent_entra_token(litellm_params: Mapping[str, object]) -> str:
     azure_username: Final = resolved["azure_username"]
     azure_password: Final = resolved["azure_password"]
     azure_ad_token: Final = resolved["azure_ad_token"]
+    model: Final = str(litellm_params.get("model") or "")
     if tenant_id and client_id and client_secret:
-        return get_azure_ad_token_from_entra_id(
-            tenant_id=tenant_id, client_id=client_id, client_secret=client_secret, scope=scope
-        )()
+        return _agent_entra_token(
+            get_azure_ad_token_from_entra_id(
+                tenant_id=tenant_id, client_id=client_id, client_secret=client_secret, scope=scope
+            ),
+            model,
+        )
     if client_id and azure_username and azure_password:
-        return get_azure_ad_token_from_username_password(
-            client_id=client_id, azure_username=azure_username, azure_password=azure_password, scope=scope
-        )()
+        return _agent_entra_token(
+            get_azure_ad_token_from_username_password(
+                client_id=client_id, azure_username=azure_username, azure_password=azure_password, scope=scope
+            ),
+            model,
+        )
     federated: Final = azure_ad_token is not None and azure_ad_token.startswith("oidc/")
     if azure_ad_token and federated and tenant_id and client_id:
         return get_azure_ad_token_from_oidc(

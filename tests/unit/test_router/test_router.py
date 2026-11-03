@@ -25508,6 +25508,66 @@ async def test_router_caller_entra_credential_rejection_leaves_the_shared_deploy
     assert response.choices[0].message.content == "hi"
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+async def test_router_configured_entra_credential_rejection_cools_down_the_deployment():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "entra-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "tenant_id": "configured-tenant",
+                    "client_id": "configured-client",
+                    "client_secret": "configured-secret",
+                },
+                "model_info": {"id": "configured-deployment"},
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="entra-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(
+                message="Failed to get Azure AD token: AADSTS7000222: The provided client secret keys are expired.",
+                llm_provider="azure",
+                model="gpt-4.1",
+            ),
+        )
+
+    with pytest.raises(litellm.RouterRateLimitError) as excinfo:
+        await router.acompletion(
+            model="entra-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="hi",
+        )
+
+    assert excinfo.value.all_deployments_in_cooldown is True
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+async def test_router_caller_entra_field_keeps_the_shared_deployment():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "shared-model",
+                "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "configured-key"},
+                "model_info": {"id": "shared-deployment"},
+            }
+        ]
+    )
+
+    response: Final = await router.acompletion(
+        model="shared-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hi",
+        client_id="caller-client",
+    )
+
+    assert response._hidden_params["model_id"] == "shared-deployment"
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_router_get_async_openai_model_client():
     router = Router(
         model_list=[

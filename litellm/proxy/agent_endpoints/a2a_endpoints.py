@@ -1202,6 +1202,8 @@ async def invoke_agent_a2a(
             pass
         if isinstance(e, litellm.BadRequestError):
             return _jsonrpc_error(body.get("id"), -32602, e.message, 400)
+        if isinstance(e, litellm.AuthenticationError):
+            return _jsonrpc_error(body.get("id"), -32000, e.message, 401)
         return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {e}", 500)
 
 

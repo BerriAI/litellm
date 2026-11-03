@@ -1269,6 +1269,58 @@ async def test_task_method_failure_hook_uses_enriched_request_data():
 
 
 @pytest.mark.asyncio
+async def test_entra_rejecting_the_agent_credential_returns_401_with_only_the_aadsts_reason():
+    from azure.core.exceptions import ClientAuthenticationError
+
+    app_client_id: Final = "0d08e61f-6184-4980-9cef-a2e9128f4cb2"
+    agent = _make_agent_mock()
+    agent.litellm_params = {"tenant_id": "tenant", "client_id": app_client_id, "client_secret": "wrong-secret"}
+    mock_request = _make_request_mock(
+        "message/send",
+        {"message": {"role": "user", "parts": [{"kind": "text", "text": "Hello"}], "messageId": "msg-1"}},
+    )
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
+    )
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+
+    def rejected_token() -> str:
+        raise ClientAuthenticationError(
+            message="Authentication failed: AADSTS7000215: Invalid client secret provided. Ensure the secret being "
+            f"sent in the request is the client secret value, for a secret added to app '{app_client_id}'."
+        )
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(  # test-quality-ok: same proxy_logging_obj injection the sibling failure-hook tests use
+                "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
+            )
+        )
+        stack.enter_context(
+            patch(  # test-quality-ok: stands in for the Entra token endpoint answering a wrong secret, the shape azure-identity raises
+                "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=rejected_token
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1"),
+        )
+
+    body = json.loads(response.body.decode())
+    assert response.status_code == 401
+    assert "AADSTS7000215" in body["error"]["message"]
+    assert app_client_id not in body["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_agentcore_invalid_context_id_returns_jsonrpc_invalid_params_400():
     from litellm.proxy._types import UserAPIKeyAuth
 

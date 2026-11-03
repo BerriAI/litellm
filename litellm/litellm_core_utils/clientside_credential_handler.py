@@ -11,7 +11,6 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
-import functools
 from collections.abc import MutableMapping
 from typing import Final, cast  # noqa: TID251  # narrows the untyped request dict for mutation
 
@@ -85,18 +84,11 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
 _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE: Final = _admin_config_fields_to_clear_on_base_override()
 
 
-@functools.cache
-def _caller_credential_keys() -> tuple[str, ...]:
-    from litellm.llms.azure_ai.common_utils import AZURE_ENTRA_LITELLM_PARAM_KEYS
-
-    return (*clientside_credential_keys, *sorted(AZURE_ENTRA_LITELLM_PARAM_KEYS))
-
-
 def is_clientside_credential(request_kwargs: dict) -> bool:
     """
     Check if the credential is a clientside credential.
     """
-    return any(key in request_kwargs for key in _caller_credential_keys())
+    return any(key in request_kwargs for key in clientside_credential_keys)
 
 
 def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> dict:
@@ -109,7 +101,7 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
     for generating a unique model_id.
     """
     # update litellm_params with clientside credentials
-    for key in _caller_credential_keys():
+    for key in clientside_credential_keys:
         if key in request_kwargs:
             litellm_params[key] = request_kwargs[key]
 

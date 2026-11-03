@@ -1,10 +1,12 @@
 import asyncio
+import io
 import json
 import os
 import sys
 import threading
 import traceback
 import uuid
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from queue import SimpleQueue
 from typing import Awaitable, Callable, Final, Optional
@@ -14,6 +16,8 @@ from unittest.mock import ANY, MagicMock, patch
 import httpx
 import openai
 import pytest
+import requests
+from azure.core.pipeline.transport import RequestsTransport
 
 import litellm
 from litellm.llms.azure.common_utils import (
@@ -2538,6 +2542,7 @@ def _azure_chat(token_provider: Callable[[], str]) -> object:
         api_version="2025-04-01-preview",
         messages=[{"role": "user", "content": "hi"}],
         azure_ad_token_provider=token_provider,
+        max_retries=0,
     )
 
 
@@ -2615,24 +2620,6 @@ def test_entra_rejecting_the_credential_answers_401_with_only_the_aadsts_reason(
     assert _ENTRA_TRACE_ID not in str(excinfo.value)
 
 
-def test_entra_rejection_without_an_aadsts_code_keeps_only_its_first_sentence(no_azure_api_key):
-    from azure.identity import CredentialUnavailableError
-
-    unavailable: Final = CredentialUnavailableError(
-        message="DefaultAzureCredential failed to retrieve a token from the included credentials.\n"
-        "Attempted credentials:\n\tEnvironmentCredential: EnvironmentCredential authentication unavailable. "
-        f"Environment variables are not fully configured for client {_ENTRA_APP_CLIENT_ID}."
-    )
-
-    with pytest.raises(litellm.AuthenticationError) as excinfo:
-        _azure_chat(_raising_token_provider(unavailable))
-
-    assert excinfo.value.status_code == 401
-    assert "DefaultAzureCredential failed to retrieve a token from the included credentials." in str(excinfo.value)
-    assert "Attempted credentials" not in str(excinfo.value)
-    assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
-
-
 @pytest.mark.parametrize("api_version", ["2025-04-01-preview", "v1"])
 def test_entra_rejecting_an_async_token_provider_answers_401(no_azure_api_key, api_version):
     from azure.core.exceptions import ClientAuthenticationError
@@ -2673,16 +2660,6 @@ def _azure_identity_wrapped_token_provider(inner_error: Exception) -> Callable[[
     return token_provider
 
 
-def test_entra_rejecting_an_unknown_authority_host_still_answers_401(no_azure_api_key):
-    unknown_authority: Final = ValueError("The authority provided, https://login.example.invalid, is not well-known.")
-
-    with pytest.raises(litellm.AuthenticationError) as excinfo:
-        _azure_chat(_azure_identity_wrapped_token_provider(unknown_authority))
-
-    assert excinfo.value.status_code == 401
-    assert "is not well-known" in str(excinfo.value)
-
-
 @pytest.mark.parametrize("call", _AZURE_CALLS.values(), ids=_AZURE_CALLS.keys())
 @pytest.mark.parametrize("failed_leg", ["request", "response"])
 def test_unreachable_entra_endpoint_stays_a_retryable_server_error(no_azure_api_key, call, failed_leg):
@@ -2695,6 +2672,165 @@ def test_unreachable_entra_endpoint_stays_a_retryable_server_error(no_azure_api_
 
     with pytest.raises(openai.APIError) as excinfo:
         call(_azure_identity_wrapped_token_provider(transport_error))
+
+    assert not isinstance(excinfo.value, litellm.AuthenticationError)
+    assert excinfo.value.status_code != 401
+
+
+_ENTRA_TENANT_ID: Final = "5b3e1c7a-2f4d-4e8b-9a61-0c2d7f8e9b14"
+_ENTRA_SCOPE: Final = "https://cognitiveservices.azure.com/.default"
+_ENTRA_OPENID_CONFIGURATION: Final = {
+    "token_endpoint": f"https://login.microsoftonline.com/{_ENTRA_TENANT_ID}/oauth2/v2.0/token",
+    "authorization_endpoint": f"https://login.microsoftonline.com/{_ENTRA_TENANT_ID}/oauth2/v2.0/authorize",
+    "issuer": f"https://login.microsoftonline.com/{_ENTRA_TENANT_ID}/v2.0",
+}
+
+
+class _FakeEntraAdapter(requests.adapters.BaseAdapter):
+    def __init__(self, status_code: int | None, body: Mapping[str, object] | str) -> None:
+        super().__init__()
+        self.status_code: Final = status_code
+        self.body: Final = body
+
+    def send(self, request: requests.PreparedRequest, *args: object, **kwargs: object) -> requests.Response:
+        if "openid-configuration" in str(request.url):
+            return self._answer(request, 200, _ENTRA_OPENID_CONFIGURATION)
+        if self.status_code is None:
+            raise requests.exceptions.ConnectionError("Failed to establish a new connection: Connection refused")
+        return self._answer(request, self.status_code, self.body)
+
+    def close(self) -> None:
+        pass
+
+    @staticmethod
+    def _answer(
+        request: requests.PreparedRequest, status_code: int, body: Mapping[str, object] | str
+    ) -> requests.Response:
+        response: Final = requests.Response()
+        response.status_code = status_code
+        response.raw = io.BytesIO((body if isinstance(body, str) else json.dumps(body)).encode())
+        response.headers = requests.structures.CaseInsensitiveDict(
+            {"Content-Type": "application/json", "Retry-After": "0"}
+        )
+        response.url = str(request.url)
+        response.request = request
+        return response
+
+
+def _entra_answering(status_code: int | None, body: Mapping[str, object] | str = "") -> RequestsTransport:
+    session: Final = requests.Session()
+    session.mount("https://", _FakeEntraAdapter(status_code, body))
+    return RequestsTransport(session=session, session_owner=False)
+
+
+def _entra_error(aadsts_code: str, description: str) -> Mapping[str, object]:
+    return {
+        "error": "invalid_client",
+        "error_description": f"{aadsts_code}: {description} Trace ID: {_ENTRA_TRACE_ID}",
+        "error_codes": [int(aadsts_code.removeprefix("AADSTS"))],
+    }
+
+
+def _real_credential_token_provider(credential_kind: str, entra: RequestsTransport) -> Callable[[], str]:
+    from azure.identity import (
+        ChainedTokenCredential,
+        ClientAssertionCredential,
+        ClientSecretCredential,
+        get_bearer_token_provider,
+    )
+
+    client_secret: Final = ClientSecretCredential(
+        _ENTRA_TENANT_ID, _ENTRA_APP_CLIENT_ID, "wrong-secret", transport=entra, disable_instance_discovery=True
+    )
+    credentials: Final = {
+        "client_secret": client_secret,
+        "default_azure_credential_chain": ChainedTokenCredential(client_secret),
+        "workload_identity": ClientAssertionCredential(
+            _ENTRA_TENANT_ID, _ENTRA_APP_CLIENT_ID, lambda: "federated-token", transport=entra, retry_total=0
+        ),
+    }
+    return get_bearer_token_provider(credentials[credential_kind], _ENTRA_SCOPE)
+
+
+_REAL_CREDENTIAL_REJECTIONS: Final = {
+    "wrong_secret": ("client_secret", "AADSTS7000215", "Invalid client secret provided."),
+    "wrong_secret_through_a_credential_chain": (
+        "default_azure_credential_chain",
+        "AADSTS7000215",
+        "Invalid client secret provided.",
+    ),
+    "unknown_app_through_workload_identity": (
+        "workload_identity",
+        "AADSTS700016",
+        f"Application with identifier '{_ENTRA_APP_CLIENT_ID}' was not found in the directory.",
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("credential_kind", "aadsts_code", "description"),
+    _REAL_CREDENTIAL_REJECTIONS.values(),
+    ids=_REAL_CREDENTIAL_REJECTIONS.keys(),
+)
+def test_entra_rejection_through_a_real_azure_identity_credential_answers_401(
+    no_azure_api_key, credential_kind, aadsts_code, description
+):
+    entra: Final = _entra_answering(401, _entra_error(aadsts_code, description))
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        _azure_chat(_real_credential_token_provider(credential_kind, entra))
+
+    assert excinfo.value.status_code == 401
+    assert aadsts_code in str(excinfo.value)
+    assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
+    assert _ENTRA_TRACE_ID not in str(excinfo.value)
+
+
+_REAL_CREDENTIAL_NON_REJECTIONS: Final = {
+    "unreachable_through_a_credential_chain": ("default_azure_credential_chain", None, ""),
+    "html_503_through_a_credential_chain": (
+        "default_azure_credential_chain",
+        503,
+        "<html><body>Service Unavailable</body></html>",
+    ),
+    "json_503_through_a_credential_chain": (
+        "default_azure_credential_chain",
+        503,
+        _entra_error("AADSTS90033", "A transient error has occurred."),
+    ),
+    "throttled_client_secret": (
+        "client_secret",
+        429,
+        _entra_error("AADSTS50196", "The server terminated an operation because it encountered a client request loop."),
+    ),
+    "throttled_without_a_code_through_a_credential_chain": (
+        "default_azure_credential_chain",
+        429,
+        {"error": "temporarily_unavailable", "error_description": "Too many requests."},
+    ),
+    "json_503_through_workload_identity": (
+        "workload_identity",
+        503,
+        _entra_error("AADSTS90033", "A transient error has occurred."),
+    ),
+    "throttled_workload_identity_naming_a_rejection_code": (
+        "workload_identity",
+        429,
+        _entra_error("AADSTS7000215", "Invalid client secret provided."),
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("credential_kind", "status_code", "body"),
+    _REAL_CREDENTIAL_NON_REJECTIONS.values(),
+    ids=_REAL_CREDENTIAL_NON_REJECTIONS.keys(),
+)
+def test_entra_outage_or_throttle_through_a_real_azure_identity_credential_stays_retryable(
+    no_azure_api_key, credential_kind, status_code, body
+):
+    with pytest.raises(openai.APIError) as excinfo:
+        _azure_chat(_real_credential_token_provider(credential_kind, _entra_answering(status_code, body)))
 
     assert not isinstance(excinfo.value, litellm.AuthenticationError)
     assert excinfo.value.status_code != 401
