@@ -1833,6 +1833,10 @@ async def async_pre_call_deployment_hook(kwargs: Mapping[str, object], call_type
             if result is not None:
                 modified_kwargs = result
 
+    if call_type in (CallTypes.aresponses.value, CallTypes.anthropic_messages.value):
+        from litellm.responses.mcp.request_context import authorize_provider_mcp_request
+
+        await authorize_provider_mcp_request(TypeAdapter(dict[str, object]).validate_python(modified_kwargs), kwargs)
     return _unstreamed_when_post_call_guardrails_apply(modified_kwargs, typed_call_type)
 
 
