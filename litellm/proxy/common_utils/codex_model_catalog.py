@@ -35,10 +35,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider
-from litellm.llms.bedrock.common_utils import bedrock_model_name_without_provider
 from litellm.proxy.common_utils.codex_model_translation import (
-    TIER_PRICE_KEYS,
     TOKEN_PRICE_KEY,
     CodexDeploymentCapabilities,
     CodexFallbackModel,
@@ -47,6 +44,7 @@ from litellm.proxy.common_utils.codex_model_translation import (
     codex_fallback_entry,
     combined_capabilities,
     no_priced_deployment_lacks_tier,
+    tier_price_keys,
 )
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
@@ -246,19 +244,26 @@ def _codex_can_drive(model_id: str, mode: str | None) -> bool:
     return "*" not in model_id and (mode is None or mode in CODEX_CHAT_MODES)
 
 
-_PROVIDER_MODEL_NAMES: Final[Mapping[str, Callable[[str], str]]] = MappingProxyType(
-    {"bedrock": bedrock_model_name_without_provider, "bedrock_mantle": bedrock_model_name_without_provider}
-)
+@cache
+def _provider_model_names() -> Mapping[str, Callable[[str], str]]:
+    """Imported on first use for the same reason as `tier_price_keys`."""
+    from litellm.llms.bedrock.common_utils import bedrock_model_name_without_provider
+
+    return MappingProxyType(
+        {"bedrock": bedrock_model_name_without_provider, "bedrock_mantle": bedrock_model_name_without_provider}
+    )
 
 
 def _provider_model_name(upstream_model: str, upstream_provider: str | None) -> str:
     """The upstream model without the prefixes its provider adds, the provider being the one the deployment
     declares in `custom_llm_provider`, else the model's `provider/` prefix."""
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider
+
     provider: Final = declared_provider(upstream_model, upstream_provider)
     if provider is None:
         return upstream_model
     model: Final = upstream_model.removeprefix(f"{provider}/")
-    name_for: Final = _PROVIDER_MODEL_NAMES.get(provider)
+    name_for: Final = _provider_model_names().get(provider)
     return model if name_for is None else name_for(model)
 
 
@@ -505,7 +510,7 @@ def deployment_capabilities(model_info: Mapping[str, object] | None, model_id: s
     if model_info is None:
         return CodexDeploymentCapabilities()
     prices_tokens: Final = model_info.get(TOKEN_PRICE_KEY) is not None
-    priced: Final = frozenset(key for key in TIER_PRICE_KEYS if model_info.get(key) is not None)
+    priced: Final = frozenset(key for key in tier_price_keys() if model_info.get(key) is not None)
     try:
         return CodexDeploymentCapabilities.model_validate(
             {**model_info, "prices_tokens": prices_tokens, "priced_service_tier_keys": priced}

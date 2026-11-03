@@ -11,13 +11,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from functools import cache
 from types import NoneType
 from typing import Annotated, Final, Literal, TypeAlias
 
 from packaging.version import Version
 from pydantic import ConfigDict, Field, StringConstraints
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES, get_service_tier_cost_key
 from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
@@ -27,7 +27,6 @@ CodexInputModality: TypeAlias = Literal["text", "image"]
 _TEXT_ONLY: Final[tuple[CodexInputModality, ...]] = ("text",)
 _TEXT_AND_IMAGE: Final[tuple[CodexInputModality, ...]] = ("text", "image")
 TOKEN_PRICE_KEY: Final = "input_cost_per_token"
-TIER_PRICE_KEYS: Final = tuple(f"{TOKEN_PRICE_KEY}{suffix}" for suffix in SERVICE_TIER_COST_KEY_SUFFIXES)
 _FIRST_CODEX_WITH_CUSTOM_EFFORTS: Final = Version("0.138.0")
 _EFFORTS_EVERY_CODEX_PARSES: Final = frozenset({"none", "minimal", "low", "medium", "high", "xhigh"})
 _PREFERRED_DEFAULT_EFFORT: Final = "medium"
@@ -119,11 +118,23 @@ class CodexDeploymentCapabilities(LiteLLMBaseModel):
     priced_service_tier_keys: frozenset[str] = frozenset()
 
 
+@cache
+def tier_price_keys() -> tuple[str, ...]:
+    """The input price key of every service tier cost tracking prices. Cost tracking is imported on first use
+    because `lite codex` imports this module before the SDK is initialized, and cost tracking imports the rest
+    of the SDK."""
+    from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
+
+    return tuple(f"{TOKEN_PRICE_KEY}{suffix}" for suffix in SERVICE_TIER_COST_KEY_SUFFIXES)
+
+
 def no_priced_deployment_lacks_tier(tier_id: str, deployments: Sequence[CodexDeploymentCapabilities]) -> bool:
     """Whether every deployment that has a token price also has one for `tier_id`, the way cost tracking
     prices a request sent at that tier. A deployment with no token price at all (a subscription upstream,
     a deployment name the cost map does not know) says nothing about tiers, so it does not vote, and a tier
     cost tracking has no price key for is lacked by every deployment that prices tokens."""
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_service_tier_cost_key
+
     price_key: Final = get_service_tier_cost_key(TOKEN_PRICE_KEY, tier_id)
     return all(
         price_key in deployment.priced_service_tier_keys for deployment in deployments if deployment.prices_tokens
