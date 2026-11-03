@@ -818,6 +818,165 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
         assert payload["model"] == "MCP: deepwiki-ask_question"
         assert payload["endTime"] - payload["startTime"] >= real_datetime.timedelta(seconds=2)
 
+    @pytest.mark.asyncio
+    async def test_failed_speech_spend_row_records_the_endpoint_call_type_over_the_body(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        rejected: Final = litellm.BadRequestError(
+            message="Voice name nonexistent is not supported", model="gemini-tts", llm_provider="gemini"
+        )
+        request_data: Final = {
+            "model": "gemini-tts",
+            "input": "Hello there",
+            "voice": "nonexistent",
+            "call_type": "acompletion",
+        }
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        spend_writer: Final = SimpleNamespace(update_database=AsyncMock())
+        monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+        try:
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data=request_data,
+                    original_exception=rejected,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route="/v1/audio/speech"),
+                    dispatched_call_type="aspeech",
+                )
+        finally:
+            ProxyLogging._callback_capabilities_cache.clear()
+
+        db_call: Final = spend_writer.update_database.call_args.kwargs
+        payload: Final = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        assert payload["call_type"] == "aspeech"
+
+    @pytest.mark.asyncio
+    async def test_failed_mcp_list_tools_row_inside_a_responses_request_keeps_list_mcp_tools(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        request_data: Final = {
+            "model": "MCP: list_tools",
+            "call_type": "list_mcp_tools",
+            "input": [{"role": "system", "content": "list_tools"}],
+        }
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        spend_writer: Final = SimpleNamespace(update_database=AsyncMock())
+        monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+        try:
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data=request_data,
+                    original_exception=RuntimeError("MCP server unreachable"),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route="/v1/responses"),
+                    route="/mcp/list_tools",
+                )
+        finally:
+            ProxyLogging._callback_capabilities_cache.clear()
+
+        db_call: Final = spend_writer.update_database.call_args.kwargs
+        payload: Final = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        assert payload["call_type"] == "list_mcp_tools"
+
+    @pytest.mark.asyncio
+    async def test_failure_without_an_endpoint_call_type_does_not_guess_one_from_a_multi_method_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        spend_writer: Final = SimpleNamespace(update_database=AsyncMock())
+        monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+        try:
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data={},
+                    original_exception=RuntimeError("vector store lookup failed"),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route="/v1/vector_stores"),
+                )
+        finally:
+            ProxyLogging._callback_capabilities_cache.clear()
+
+        db_call: Final = spend_writer.update_database.call_args.kwargs
+        payload: Final = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        assert payload["call_type"] == ""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("request_data", "route", "endpoint_call_type"),
+        [
+            ({"model": "gemini-tts", "input": "Hello there", "voice": "Kore"}, "/v1/audio/speech", "aspeech"),
+            ({"model": "omni-moderation", "input": ["one", "two"]}, "/v1/moderations", "amoderation"),
+            ({"model": "gpt-transcribe"}, "/v1/audio/transcriptions", "atranscription"),
+        ],
+    )
+    async def test_request_rejected_by_the_proxy_records_the_endpoint_call_type(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        request_data: dict[str, object],
+        route: str,
+        endpoint_call_type: str,
+    ):
+        from types import SimpleNamespace
+
+        from fastapi import HTTPException
+
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        spend_writer: Final = SimpleNamespace(update_database=AsyncMock())
+        monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+        try:
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data=dict(request_data),
+                    original_exception=HTTPException(status_code=429, detail="Rate limit exceeded"),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route=route),
+                    dispatched_call_type=endpoint_call_type,
+                )
+        finally:
+            ProxyLogging._callback_capabilities_cache.clear()
+
+        db_call: Final = spend_writer.update_database.call_args.kwargs
+        payload: Final = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        assert payload["call_type"] == endpoint_call_type
+
 
 class TestPostCallFailureHookEstimatesDispatchedInputTokens:
     """A non-stream request that failed after dispatch (timeout, provider
@@ -3574,6 +3733,44 @@ def test_an_earlier_timed_out_responses_attempt_counts_its_input_from_the_newest
     )
 
     assert sent == earlier_attempt_prompt_tokens([COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION])
+
+
+@pytest.mark.asyncio
+async def test_a_billed_responses_route_failure_captures_usage_from_the_newest_compaction_item() -> None:
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.litellm_core_utils.litellm_logging import UsageCaptureObservation
+    from litellm.proxy.db.accounting_ledger import UsageWrite
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    async def persist(_: tuple[UsageWrite, ...]) -> None:
+        return None
+
+    def captured_prompt_tokens(request_input: list[dict[str, str]]) -> int:
+        logging_obj: Final = _dispatched_failure_logging_obj(FAILURE_USAGE_MODEL, get_litellm_params())
+        logging_obj.model_call_details["call_type"] = "aresponses"
+        logging_obj.model_call_details["messages"] = request_input
+        lifted: Final = _failure_fields_to_lift(
+            {"litellm_logging_obj": logging_obj}, provider_billed=True, route_call_type="aresponses"
+        )
+        snapshot: Final = lifted["_accounting_usage_snapshot"]
+        assert isinstance(snapshot, UsageCaptureObservation) and snapshot.usage_json is not None
+        return json.loads(snapshot.usage_json)["prompt_tokens"]
+
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(persist, UsageCaptureSettings())
+    try:
+        sent: Final = captured_prompt_tokens(
+            [COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
+        )
+        since_compaction: Final = captured_prompt_tokens(
+            [COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
+        )
+    finally:
+        await runtime.stop(1)
+
+    assert sent == since_compaction
 
 
 @pytest.mark.parametrize(

@@ -33,6 +33,17 @@
     "api_key",
     "additional_args"
   ],
+  "record_response": [
+    "logger",
+    "status",
+    "headers",
+    "body"
+  ],
+  "record_api_window": [
+    "logger",
+    "start",
+    "end"
+  ],
   "defers_async_logging": [
     "logger"
   ],
@@ -90,6 +101,13 @@
   "stream_opened": [
     "logger",
     "head"
+  ],
+  "stamp_stream_head": [
+    "head",
+    "logger",
+    "kwargs",
+    "start_time",
+    "end_time"
   ],
   "stream_success": [
     "logger",
