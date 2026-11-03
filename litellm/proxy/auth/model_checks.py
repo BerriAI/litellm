@@ -498,13 +498,16 @@ def get_known_models_from_wildcard(
     provider_id_prefix: Final = _custom_llm_provider_prefix(wildcard_model, litellm_params)
     if litellm_params is None or provider_id_prefix is None:
         return list(_known_models_from_wildcard(wildcard_model, litellm_params, routes_to_model))
-    return list(
-        _known_models_from_wildcard(
+    return [
+        listed_id.removeprefix(provider_id_prefix)
+        for listed_id in _known_models_from_wildcard(
             wildcard_model,
             litellm_params.model_copy(update={"model": f"{provider_id_prefix}{litellm_params.model}"}),
-            lambda listed_id, model: routes_to_model(listed_id, model.removeprefix(provider_id_prefix)),
+            lambda listed_id, model: routes_to_model(
+                listed_id.removeprefix(provider_id_prefix), model.removeprefix(provider_id_prefix)
+            ),
         )
-    )
+    ]
 
 
 def _custom_llm_provider_prefix(wildcard_model: str, litellm_params: LiteLLM_Params | None) -> str | None:

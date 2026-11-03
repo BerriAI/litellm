@@ -2240,7 +2240,18 @@ def test_only_slashless_azure_wildcards_skip_the_catalog_placeholder(
     assert model_info_names == (expected_v1_models or [model_name])
 
 
-def test_slashless_wildcard_over_a_bare_deployment_lists_its_custom_llm_provider_catalog() -> None:
+@pytest.mark.parametrize(
+    ("model_name", "deployment_model"),
+    [
+        pytest.param("gpt-*", "gpt-*", id="same-wildcards-as-its-deployment"),
+        pytest.param("*gpt-5*", "gpt-5*", id="more-wildcards-than-its-deployment"),
+    ],
+)
+def test_slashless_wildcard_over_a_bare_deployment_lists_its_custom_llm_provider_catalog(
+    model_name: str, deployment_model: str
+) -> None:
+    from fnmatch import fnmatchcase
+
     from litellm import Router
     from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
     from litellm.utils import get_valid_models
@@ -2248,8 +2259,8 @@ def test_slashless_wildcard_over_a_bare_deployment_lists_its_custom_llm_provider
     router: Final = Router(
         model_list=[
             {
-                "model_name": "gpt-*",
-                "litellm_params": {"model": "gpt-*", "custom_llm_provider": "openai", "api_key": "sk-test"},
+                "model_name": model_name,
+                "litellm_params": {"model": deployment_model, "custom_llm_provider": "openai", "api_key": "sk-test"},
             }
         ]
     )
@@ -2257,7 +2268,7 @@ def test_slashless_wildcard_over_a_bare_deployment_lists_its_custom_llm_provider
     v1_models: Final = get_complete_model_list(
         key_models=[],
         team_models=[],
-        proxy_model_list=["gpt-*"],
+        proxy_model_list=[model_name],
         user_model=None,
         infer_model_from_keys=False,
         llm_router=router,
@@ -2272,7 +2283,9 @@ def test_slashless_wildcard_over_a_bare_deployment_lists_its_custom_llm_provider
     }
 
     assert v1_models
-    assert [listed_id for listed_id in v1_models if listed_id not in openai_ids or not listed_id.startswith("gpt-")] == []
+    assert [
+        listed_id for listed_id in v1_models if listed_id not in openai_ids or not fnmatchcase(listed_id, model_name)
+    ] == []
     assert {listed_id: models for listed_id, models in routed_models.items() if models != [listed_id]} == {}
     assert sorted(str(row["model_name"]) for row in model_info_rows) == sorted(v1_models)
     assert [row for row in model_info_rows if row["litellm_params"]["model"] != row["model_name"]] == []
