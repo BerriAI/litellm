@@ -66,17 +66,10 @@ def _check_wildcard_routing(model: str) -> bool:
     return False
 
 
-def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = None) -> Sequence[str] | None:
+def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = None) -> list[str] | None:
     """
     Returns the list of known models by provider
     """
-    provider_models: Final = _provider_catalog(provider, litellm_params)
-    if provider_models is None:
-        return None
-    return tuple(model for model in provider_models if model != AZURE_MODEL_PLACEHOLDER)
-
-
-def _provider_catalog(provider: str, litellm_params: LiteLLM_Params | None) -> list[str] | None:
     if provider == "*":
         return get_valid_models(litellm_params=litellm_params)
 
@@ -502,6 +495,40 @@ def get_known_models_from_wildcard(
     litellm_params: LiteLLM_Params | None = None,
     routes_to_model: Callable[[str, str], bool] = lambda _listed_id, _model: True,
 ) -> list[str]:
+    provider_id_prefix: Final = _custom_llm_provider_prefix(wildcard_model, litellm_params)
+    if litellm_params is None or provider_id_prefix is None:
+        return list(_known_models_from_wildcard(wildcard_model, litellm_params, routes_to_model))
+    return list(
+        _known_models_from_wildcard(
+            wildcard_model,
+            litellm_params.model_copy(update={"model": f"{provider_id_prefix}{litellm_params.model}"}),
+            lambda listed_id, model: routes_to_model(listed_id, model.removeprefix(provider_id_prefix)),
+        )
+    )
+
+
+def _custom_llm_provider_prefix(wildcard_model: str, litellm_params: LiteLLM_Params | None) -> str | None:
+    if (
+        litellm_params is None
+        or not litellm_params.custom_llm_provider
+        or "/" in wildcard_model
+        or wildcard_model == "*"
+        or "/" in litellm_params.model
+        or not _check_wildcard_routing(litellm_params.model)
+    ):
+        return None
+    return f"{litellm_params.custom_llm_provider}/"
+
+
+def _without_azure_placeholder(catalog_ids: Sequence[str]) -> tuple[str, ...]:
+    return tuple(catalog_id for catalog_id in catalog_ids if catalog_id != AZURE_MODEL_PLACEHOLDER)
+
+
+def _known_models_from_wildcard(
+    wildcard_model: str,
+    litellm_params: LiteLLM_Params | None,
+    routes_to_model: Callable[[str, str], bool],
+) -> tuple[str, ...]:
     wildcard_model_to_expand: Final = (
         litellm_params.model
         if wildcard_model == "*"
@@ -517,7 +544,7 @@ def get_known_models_from_wildcard(
     )
     wildcard_provider_prefix, has_provider_prefix, wildcard_suffix = wildcard_model_to_expand.partition("/")
     if not has_provider_prefix and deployment_pattern_naming_listed_ids is None:
-        return []
+        return ()
 
     # Use provider from litellm_params when available, otherwise from wildcard prefix
     # (e.g., "openai" from "openai/*" - needed for BYOK where wildcard isn't in router)
@@ -534,16 +561,14 @@ def get_known_models_from_wildcard(
     wildcard_models = get_provider_models(provider=provider, litellm_params=litellm_params)
 
     if wildcard_models is None:
-        return []
+        return ()
     if deployment_pattern_naming_listed_ids is not None:
-        return list(
-            _ids_routing_to_catalog_models(
-                name_pattern=wildcard_model,
-                deployment_pattern=deployment_pattern_naming_listed_ids,
-                provider=provider,
-                catalog_ids=wildcard_models,
-                routes_to_model=routes_to_model,
-            )
+        return _ids_routing_to_catalog_models(
+            name_pattern=wildcard_model,
+            deployment_pattern=deployment_pattern_naming_listed_ids,
+            provider=provider,
+            catalog_ids=wildcard_models if has_provider_prefix else _without_azure_placeholder(wildcard_models),
+            routes_to_model=routes_to_model,
         )
     if wildcard_suffix != "*":
         model_prefix: Final = wildcard_suffix.replace("*", "")
@@ -559,7 +584,7 @@ def get_known_models_from_wildcard(
             # add model prefix to wildcard models
             wildcard_models = [f"{model_prefix}{model.removeprefix(provider_id_prefix)}" for model in wildcard_models]
 
-    return list(
+    return tuple(
         dict.fromkeys(_under_wildcard_prefix(model, wildcard_provider_prefix, provider) for model in wildcard_models)
     )
 

@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 from litellm import Router
+from litellm.utils import AZURE_MODEL_PLACEHOLDER
 
 
 def test_get_team_models_for_all_models_and_team_only_models():
@@ -1433,7 +1434,7 @@ def test_get_provider_models_admits_providers_without_a_static_catalog():
         ),
     )
 
-    assert result == ()
+    assert result == []
 
 
 def test_get_complete_model_list_discovers_litellm_proxy_wildcard_models(monkeypatch):
@@ -1494,7 +1495,7 @@ def test_transcribe_is_a_known_provider_for_wildcard_expansion():
 
     assert "transcribe" in litellm.models_by_provider
     assert "transcribe/StartTranscriptionJob" in litellm.models_by_provider["transcribe"]
-    assert get_provider_models("transcribe") == ("transcribe/StartTranscriptionJob",)
+    assert get_provider_models("transcribe") == ["transcribe/StartTranscriptionJob"]
     assert get_known_models_from_wildcard("transcribe/*") == ["transcribe/StartTranscriptionJob"]
 
 
@@ -2197,16 +2198,24 @@ def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
         assert listed_model_info_names == sorted(reachable)
 
 
-@pytest.mark.parametrize("model_name", ["azure/*", "my-*"])
-def test_azure_wildcard_never_lists_the_catalog_placeholder_as_a_model(model_name: str) -> None:
+@pytest.mark.parametrize(
+    ("model_name", "expected_v1_models"),
+    [
+        pytest.param("azure/*", [f"azure/{AZURE_MODEL_PLACEHOLDER}"], id="provider-wildcard-lists-as-before"),
+        pytest.param("*", [AZURE_MODEL_PLACEHOLDER], id="catch-all-lists-as-before"),
+        pytest.param("my-*", [], id="slashless-alias-skips-the-placeholder"),
+    ],
+)
+def test_only_slashless_azure_wildcards_skip_the_catalog_placeholder(
+    model_name: str, expected_v1_models: list[str]
+) -> None:
     from litellm import Router
     from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
-    from litellm.utils import AZURE_MODEL_PLACEHOLDER, get_valid_models
 
     router: Final = Router(model_list=[{"model_name": model_name, "litellm_params": {"model": "azure/*"}}])
 
     v1_models: Final = get_complete_model_list(
-        key_models=[model_name],
+        key_models=[],
         team_models=[],
         proxy_model_list=[model_name],
         user_model=None,
@@ -2220,9 +2229,46 @@ def test_azure_wildcard_never_lists_the_catalog_placeholder_as_a_model(model_nam
         )
     ]
 
-    assert AZURE_MODEL_PLACEHOLDER in get_valid_models(custom_llm_provider="azure")
-    assert [name for name in [*v1_models, *model_info_names] if AZURE_MODEL_PLACEHOLDER in name] == []
-    assert model_info_names == [model_name]
+    assert v1_models == expected_v1_models
+    assert model_info_names == (expected_v1_models or [model_name])
+
+
+def test_slashless_wildcard_over_a_bare_deployment_lists_its_custom_llm_provider_catalog() -> None:
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+    from litellm.utils import get_valid_models
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-*",
+                "litellm_params": {"model": "gpt-*", "custom_llm_provider": "openai", "api_key": "sk-test"},
+            }
+        ]
+    )
+
+    v1_models: Final = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["gpt-*"],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+    model_info_rows: Final = expand_wildcard_deployments_for_model_info(
+        [dict(deployment) for deployment in router.get_model_list() or []], router
+    )
+    openai_ids: Final = frozenset(model.removeprefix("openai/") for model in get_valid_models(custom_llm_provider="openai"))
+    routed_models: Final = {
+        listed_id: [deployment["litellm_params"]["model"] for deployment in router.wildcard_route_deployments(listed_id, None)]
+        for listed_id in v1_models
+    }
+
+    assert v1_models
+    assert [listed_id for listed_id in v1_models if listed_id not in openai_ids or not listed_id.startswith("gpt-")] == []
+    assert {listed_id: models for listed_id, models in routed_models.items() if models != [listed_id]} == {}
+    assert sorted(str(row["model_name"]) for row in model_info_rows) == sorted(v1_models)
+    assert [row for row in model_info_rows if row["litellm_params"]["model"] != row["model_name"]] == []
 
 
 def test_inference_provider_route_lists_every_id_the_plain_provider_wildcard_lists() -> None:
