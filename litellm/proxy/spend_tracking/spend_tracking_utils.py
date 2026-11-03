@@ -2084,11 +2084,17 @@ def requester_ip_address_logging_disabled() -> bool:
 def spend_log_row_with_retained_metadata(
     row: Mapping[str, object], fields: SpendLogsMetadataFields | None
 ) -> Mapping[str, object]:
+    from litellm.accounting.snapshot import ACCOUNTING_METADATA_FIELDS
+
     metadata_json: Final = row.get("metadata")
     if fields is None or not isinstance(metadata_json, str):
         return row
     metadata: Final = _SPEND_LOGS_METADATA_ADAPTER.validate_json(metadata_json)
-    retained: Final = {name: value for name, value in metadata.items() if fields.keeps(name)}
+    retained: Final = {
+        name: value
+        for name, value in metadata.items()
+        if fields.keeps(name) or (row.get("accounting_path") == "ledger" and name in ACCOUNTING_METADATA_FIELDS)
+    }
     return {**row, "metadata": safe_dumps(retained, non_finite_as_null=True)}
 
 

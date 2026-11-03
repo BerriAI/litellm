@@ -7715,3 +7715,55 @@ def test_spend_payload_preserves_unknown_completion_start(completion_start: str 
     assert payload["completionStartTime"] == (
         end if completion_start == "absent" else reported if completion_start else None
     )
+
+
+@pytest.mark.parametrize("path", ["legacy", "ledger"])
+def test_metadata_stripping_preserves_ledger_projection_inputs(path: str) -> None:
+    from litellm.accounting.projection import project
+
+    metadata: Final = {
+        "status": "success",
+        "accounting_savings": {
+            "compression": 0.4,
+            "prompt_caching": 0.1,
+            "gateway_injected_caching": 0.2,
+            "autorouter": 0.3,
+        },
+        "accounting_windows": [
+            {"entity_type": "key", "entity_id": "key", "window_duration": "1d", "window_start": "2026-11-02T00:00:00"}
+        ],
+        "accounting_model_access_groups": ["group"],
+        "user_api_key_project_id": "project",
+        "usage_object": {"prompt_tokens_details": {"cached_tokens": 2}},
+        "compression_savings": {"tokens_saved": 3},
+        "guardrail_information": [{"guardrail_id": "guard", "guardrail_usage": {"text": 2}}],
+        "internal_call_origin": "classifier",
+        "billed_retry_attempt": True,
+        "user_api_key_alias": "discard",
+    }
+    row: Final = {
+        "request_id": "retained-accounting",
+        "accounting_path": path,
+        "spend": 0.5,
+        "startTime": "2026-11-02T12:00:00",
+        "endTime": "2026-11-02T12:00:01",
+        "model": "model",
+        "model_group": "group",
+        "api_key": "key",
+        "custom_llm_provider": "openai",
+        "user": "user",
+        "team_id": "team",
+        "agent_id": "agent",
+        "request_tags": '["tag"]',
+        "metadata": json.dumps(metadata),
+    }
+    stored: Final = spend_log_row_with_retained_metadata(row, SpendLogsMetadataFields(include=("usage_object",)))
+    parsed: Final = json.loads(str(stored["metadata"]))
+    assert "user_api_key_alias" not in parsed
+    assert stored["accounting_path"] == path
+    if path == "ledger":
+        assert project(stored) == project(row)
+        assert parsed["accounting_savings"] == metadata["accounting_savings"]
+    else:
+        assert "accounting_savings" not in parsed
+        assert "accounting_windows" not in parsed

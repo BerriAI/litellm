@@ -29,6 +29,7 @@ from litellm.proxy.hooks.model_budget_shared_windows import (
     LocalTTLCache,
     SharedWindow,
     SharedWindows,
+    capture_model_windows,
 )
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting, budget_window_seconds
 from litellm.types.llms.openai import AllMessageValues
@@ -840,11 +841,13 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         clock: Callable[[], float] = time.time,
         model_access_groups: ModelAccessGroups = proxy_model_access_groups,
         shared_windows: SharedWindows = PROXY_SHARED_WINDOWS,
+        defer_window_spend: bool = False,
     ):
         self.dual_cache = dual_cache
         self._clock = clock
         self._model_access_groups = model_access_groups
         self._shared_windows = shared_windows
+        self.defer_window_spend = defer_window_spend
         self.redis_increment_operation_queue = []
         self._redis_increment_queue_lock = asyncio.Lock()
         self._redis_increment_flush_lock = asyncio.Lock()
@@ -1213,14 +1216,20 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             response_obj=response_obj,
             response_cost=response_cost,
         )
-        for entity_type, entity_id, resolved in resolved_budgets:
-            await self._charge_entity(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                resolved=resolved,
-                response_cost=response_cost,
-                batch_id=batch_id,
-            )
+        from litellm.proxy.utils import ProxyUpdateSpend
+
+        defer_windows: Final = self.defer_window_spend and not ProxyUpdateSpend.disable_spend_updates()
+        with capture_model_windows(defer_windows) as captured:
+            for entity_type, entity_id, resolved in resolved_budgets:
+                await self._charge_entity(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    resolved=resolved,
+                    response_cost=response_cost,
+                    batch_id=batch_id,
+                )
+            if defer_windows:
+                kwargs["accounting_model_windows"] = captured()  # rebind-ok: forward windows to DB callback
 
         if self.dual_cache.redis_cache is not None:
             await self._push_in_memory_increments_to_redis()

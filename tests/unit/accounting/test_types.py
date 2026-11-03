@@ -442,7 +442,6 @@ def test_subset_token_counts_round_trip_without_changing_totals() -> None:
     ("enum_name", "python_enum"),
     [
         ("AccountingDeliveryState", DeliveryState),
-        ("AccountingDeliveryTarget", DeliveryTarget),
     ],
 )
 def test_prisma_accepts_exactly_the_public_accounting_enum_values(

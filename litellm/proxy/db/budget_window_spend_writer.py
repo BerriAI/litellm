@@ -15,6 +15,7 @@ it replaces (and every other spend column) already has.
 """
 
 from collections.abc import Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final, Protocol
@@ -74,30 +75,36 @@ _OPEN_WINDOW_SPEND_SQL: Final = (
     "WHERE \"LiteLLM_BudgetWindowSpend\".window_start <= ($5::timestamptz AT TIME ZONE 'UTC')"
 )
 
+_SETTLED_SPEND_LOG_FILTER: Final = (
+    ' AND NOT EXISTS (SELECT 1 FROM "LiteLLM_AccountingDelivery" delivery '
+    'WHERE delivery.request_id = "LiteLLM_SpendLogs".request_id '
+    "AND delivery.state IN ('pending', 'parked'))"
+)
+
 _SEED_FROM_SPEND_LOGS_KEY_SQL: Final = (
     "SELECT COALESCE(SUM(spend), 0.0) AS total, "
-    "COALESCE(SUM(spend) FILTER (WHERE \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) AS before_batch "
+    "COALESCE(SUM(spend) FILTER (WHERE accounting_path = 'ledger' OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) AS before_batch "
     'FROM "LiteLLM_SpendLogs" '
-    "WHERE api_key = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')"
+    "WHERE api_key = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')" + _SETTLED_SPEND_LOG_FILTER
 )
 
 _SEED_FROM_SPEND_LOGS_TEAM_SQL: Final = (
     "SELECT COALESCE(SUM(spend), 0.0) AS total, "
-    "COALESCE(SUM(spend) FILTER (WHERE \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) AS before_batch "
+    "COALESCE(SUM(spend) FILTER (WHERE accounting_path = 'ledger' OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) AS before_batch "
     'FROM "LiteLLM_SpendLogs" '
-    "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')"
+    "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')" + _SETTLED_SPEND_LOG_FILTER
 )
 
 _SEED_FROM_SPEND_LOGS_KEY_UNBOUNDED_SQL: Final = (
     "SELECT COALESCE(SUM(spend), 0.0) AS total, COALESCE(SUM(spend), 0.0) AS before_batch "
     'FROM "LiteLLM_SpendLogs" '
-    "WHERE api_key = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')"
+    "WHERE api_key = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')" + _SETTLED_SPEND_LOG_FILTER
 )
 
 _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL: Final = (
     "SELECT COALESCE(SUM(spend), 0.0) AS total, COALESCE(SUM(spend), 0.0) AS before_batch "
     'FROM "LiteLLM_SpendLogs" '
-    "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')"
+    "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')" + _SETTLED_SPEND_LOG_FILTER
 )
 
 _UPSERT_TRANSACTION_TIMEOUT: Final = timedelta(seconds=60)
@@ -328,6 +335,7 @@ async def commit_window_spend_updates(
     prisma_client: "PrismaClient",
     transactions: Sequence[WindowSpendTransaction],
     spend_logs_aggregate: WindowSpendLogsAggregate = spend_logs_seed_totals,
+    outer_transaction: _UpsertTransaction | None = None,
 ) -> None:
     """Apply aggregated window increments to LiteLLM_BudgetWindowSpend.
 
@@ -367,7 +375,9 @@ async def commit_window_spend_updates(
     )
     async with (
         db_span("commit_window_spend_updates", "LiteLLM_BudgetWindowSpend"),
-        _upsert_transaction(prisma_client) as db_transaction,
+        (
+            nullcontext(outer_transaction) if outer_transaction is not None else _upsert_transaction(prisma_client)
+        ) as db_transaction,
         db_transaction.batch_() as batcher,
     ):
         for transaction, seed_base in zip(ordered, seed_bases):

@@ -407,9 +407,7 @@ async def test_roll_window_spend_row_is_conditional_on_the_stored_window_being_o
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("replaces_window_start", "replaced_param"), [(None, None), (WINDOW_A, datetime(2026, 8, 1))]
-)
+@pytest.mark.parametrize(("replaces_window_start", "replaced_param"), [(None, None), (WINDOW_A, datetime(2026, 8, 1))])
 async def test_open_window_spend_row_moves_only_the_window_the_caller_saw_end(replaces_window_start, replaced_param):
     db = _FakeDB()
 
@@ -425,7 +423,9 @@ async def test_open_window_spend_row_moves_only_the_window_the_caller_saw_end(re
     ((query, params),) = db.execute_raw_calls
     normalized = " ".join(query.split())
     assert "ON CONFLICT (entity_type, entity_id, window_duration) DO UPDATE" in normalized
-    assert normalized.endswith("WHERE \"LiteLLM_BudgetWindowSpend\".window_start <= ($5::timestamptz AT TIME ZONE 'UTC')")
+    assert normalized.endswith(
+        "WHERE \"LiteLLM_BudgetWindowSpend\".window_start <= ($5::timestamptz AT TIME ZONE 'UTC')"
+    )
     assert params == ("model_max_budget", "k1", "1d", datetime(2026, 8, 31), replaced_param)
 
 
@@ -561,7 +561,10 @@ async def test_seed_aggregate_sql_splits_the_window_at_the_batch_start(entity_ty
     ((query, params),) = db.query_raw_calls
     normalized = " ".join(query.split())
     assert expected_column in normalized
-    assert "FILTER (WHERE \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC'))" in normalized
+    assert (
+        "FILTER (WHERE accounting_path = 'ledger' OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC'))"
+        in normalized
+    )
     assert 'FROM "LiteLLM_SpendLogs"' in normalized
     # startTime is TIMESTAMP(3): the bound is floored to the second so the
     # batch's own earliest row cannot round under it.

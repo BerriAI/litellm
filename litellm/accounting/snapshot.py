@@ -1,3 +1,4 @@
+import copy
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
@@ -95,3 +96,28 @@ def build_accounting_payload(
         },
         "metadata": _FIELDS.validate_python(safe_json_structure(accounting_metadata, non_finite_as_null=True)),
     }
+
+def lean_accounting_payload(payload: SpendLogsPayload) -> SpendLogsPayload:
+    lean: Final = copy.deepcopy(payload)
+    metadata: Final = _FIELDS.validate_json(payload["metadata"])
+    lean["messages"] = None
+    lean["response"] = None
+    lean["proxy_server_request"] = None
+    lean["requester_ip_address"] = None
+    lean["session_id"] = None
+    lean["api_base"] = ""
+    lean["cache_key"] = ""
+    lean["metadata"] = safe_dumps(
+        {
+            **{key: value for key, value in metadata.items() if key in ACCOUNTING_METADATA_FIELDS},
+            "accounting_lean": True,
+        },
+        non_finite_as_null=True,
+    )
+    return lean
+
+
+def is_lean_accounting_payload(payload: Mapping[str, object]) -> bool:
+    metadata: Final = payload.get("metadata")
+    fields: Final = _FIELDS.validate_json(metadata) if isinstance(metadata, str) else _mapping(metadata)
+    return fields is not None and fields.get("accounting_lean") is True
