@@ -248,6 +248,7 @@ async def test_repository_queries_and_exports_seeded_daily_activity(monkeypatch:
             "tags": ["blue", "gold"],
             "cost_center": "cc-1",
             "webhook_token": "REDACTED",
+            "langfuse": {"apiKey": "REDACTED"},
         }
         assert active_key_export.user_metadata == {"department": "research", "ldap_password": "REDACTED"}
         unprivileged_exports: Final = tuple(

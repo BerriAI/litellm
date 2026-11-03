@@ -60,6 +60,7 @@ class KeyMetadata(BaseModel):
     tag: str | None = None
     guardrails: list[str] | None = None
     webhook_token: str | None = None
+    apiKey: str | None = None
 
 
 class ObjectPermission(BaseModel):

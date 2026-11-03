@@ -47,11 +47,13 @@ class UsageExportParams(BaseModel, frozen=True):
 class UsageExportKeyMetadata(BaseModel, frozen=True):
     tag: str | None = None
     webhook_token: str | None = None
+    apiKey: str | None = None
 
 
 class UsageExportUserMetadata(BaseModel, frozen=True):
     department: str | None = None
     ldap_password: str | None = None
+    clientSecret: str | None = None
 
 
 class UsageExportRow(BaseModel, frozen=True):
@@ -107,7 +109,11 @@ class TestUsageExportMetadata:
                     user_email=f"e2e-usage-export-{marker}@example.com",
                     user_role="internal_user",
                     user_id=f"e2e-usage-export-{marker}",
-                    metadata={"department": f"research-{marker}", "ldap_password": f"pw-{marker}"},
+                    metadata={
+                        "department": f"research-{marker}",
+                        "ldap_password": f"pw-{marker}",
+                        "clientSecret": f"cs-{marker}",
+                    },
                 ),
                 response_type=UserNewResponse,
             )
@@ -118,7 +124,9 @@ class TestUsageExportMetadata:
                 user_id=user_id,
                 models=[model],
                 key_alias=f"e2e-usage-export-{marker}",
-                metadata=KeyMetadata(tag=f"cost-center-{marker}", webhook_token=f"whsec-{marker}"),
+                metadata=KeyMetadata(
+                    tag=f"cost-center-{marker}", webhook_token=f"whsec-{marker}", apiKey=f"ak-{marker}"
+                ),
             )
         )
         resources.defer(lambda: client.proxy.delete_key(record.key))
@@ -160,9 +168,13 @@ class TestUsageExportMetadata:
             assert row.user_metadata.department == f"research-{marker}", (
                 f"user metadata not exported: {row.user_metadata}"
             )
-            assert (row.key_metadata.webhook_token, row.user_metadata.ldap_password) == ("REDACTED", "REDACTED"), (
-                f"credential-named metadata values reached the export unmasked: {row}"
+            masked = (
+                row.key_metadata.webhook_token,
+                row.key_metadata.apiKey,
+                row.user_metadata.ldap_password,
+                row.user_metadata.clientSecret,
             )
+            assert masked == ("REDACTED",) * 4, f"credential-named metadata values reached the export unmasked: {row}"
 
         own_view: Final = client.proxy.transport.probe(
             EXPORT_ROUTE,

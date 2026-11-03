@@ -12,9 +12,10 @@ from typing_extensions import assert_never
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import UNKNOWN_MODEL_SPEND_LOG_MODEL
-from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker, redact_credentials_in_payload
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.daily_activity_sql import (
+    EXPORT_METADATA_DROPPED_KEYS,
     ExportCursor,
     SqlQuery,
     adjust_dates_for_timezone,
@@ -142,13 +143,18 @@ def _daily_rows_table(
     raise AssertionError("unreachable")
 
 
+_EXPORT_METADATA_MASKER: Final = SensitiveDataMasker(non_sensitive_overrides=frozenset())
+
+
+def _redacted_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return redact_credentials_in_payload(metadata, _EXPORT_METADATA_MASKER, dropped_keys=EXPORT_METADATA_DROPPED_KEYS)
+
+
 def _with_redacted_metadata(row: ExportRow) -> ExportRow:
     if not row.key_metadata and not row.user_metadata:
         return row
     return replace(
-        row,
-        key_metadata=redact_credentials_in_payload(row.key_metadata),
-        user_metadata=redact_credentials_in_payload(row.user_metadata),
+        row, key_metadata=_redacted_metadata(row.key_metadata), user_metadata=_redacted_metadata(row.user_metadata)
     )
 
 

@@ -451,14 +451,14 @@ def test_export_uses_latest_deleted_key_metadata(export_type: ExportType) -> Non
     assert "COALESCE(vt.user_id, dvt.user_id)" in query.sql
 
 
+_DROPPED_KEYS: Final = (
+    "- 'callback_settings' - 'logging' - 'scim_enterprise' - 'scim_entitlements' - 'scim_roles' "
+    "- 'secret_manager_settings'"
+)
 _REDACTED_KEY_METADATA: Final = (
-    "THEN (COALESCE(vt.metadata, dvt.metadata) - 'callback_settings' - 'logging' - 'secret_manager_settings')"
-    "::text END), '{}')::jsonb AS key_metadata"
+    f"THEN (COALESCE(vt.metadata, dvt.metadata) {_DROPPED_KEYS})::text END), '{{}}')::jsonb AS key_metadata"
 )
-_REDACTED_USER_METADATA: Final = (
-    "THEN (u.metadata - 'scim_enterprise' - 'scim_entitlements' - 'scim_roles')::text END), '{}')::jsonb "
-    "AS user_metadata"
-)
+_REDACTED_USER_METADATA: Final = f"THEN (u.metadata {_DROPPED_KEYS})::text END), '{{}}')::jsonb AS user_metadata"
 _EMPTY_KEY_METADATA: Final = "'{}'::jsonb AS key_metadata"
 _EMPTY_USER_METADATA: Final = "'{}'::jsonb AS user_metadata"
 

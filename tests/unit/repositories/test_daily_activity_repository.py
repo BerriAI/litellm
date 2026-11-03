@@ -687,11 +687,19 @@ async def test_export_redacts_credential_named_values_inside_metadata_objects() 
                     **_export_row("key-1"),
                     "key_metadata": {
                         "cost_center": "cc-1",
+                        "cost_center_api_key": "sk-cost-1234567890",
                         "api_key": "sk-live-1234567890",
-                        "webhook": {"url": "https://hooks.example", "auth_token": "t0k3n"},
+                        "webhook": {"url": "https://hooks.example", "auth_token": "t0k3n", "clientSecret": "cs"},
                         "owners": [{"name": "ops", "password": "pw"}],
+                        "scim_roles": ["admin"],
+                        "langfuse": {"apiKey": "lf", "logging": [{"callback_vars": {"langfuse_secret_key": "s"}}]},
                     },
-                    "user_metadata": {"department": "research", "github_token": "ghp_secret"},
+                    "user_metadata": {
+                        "department": "research",
+                        "github_token": "ghp_secret",
+                        "logging": [{"callback_name": "langfuse"}],
+                        "profile": {"scim_enterprise": {"employeeNumber": "E-1"}, "team": "ops"},
+                    },
                 },
                 {**_export_row("key-2"), "key_metadata": {}, "user_metadata": {}},
             ),
@@ -703,11 +711,17 @@ async def test_export_redacts_credential_named_values_inside_metadata_objects() 
 
     assert rows[0].key_metadata == {
         "cost_center": "cc-1",
+        "cost_center_api_key": "REDACTED",
         "api_key": "REDACTED",
-        "webhook": {"url": "https://hooks.example", "auth_token": "REDACTED"},
+        "webhook": {"url": "https://hooks.example", "auth_token": "REDACTED", "clientSecret": "REDACTED"},
         "owners": [{"name": "ops", "password": "REDACTED"}],
+        "langfuse": {"apiKey": "REDACTED"},
     }
-    assert rows[0].user_metadata == {"department": "research", "github_token": "REDACTED"}
+    assert rows[0].user_metadata == {
+        "department": "research",
+        "github_token": "REDACTED",
+        "profile": {"team": "ops"},
+    }
     assert (rows[1].key_metadata, rows[1].user_metadata) == ({}, {})
 
 

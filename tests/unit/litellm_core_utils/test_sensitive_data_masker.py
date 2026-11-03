@@ -612,3 +612,45 @@ def test_redact_credentials_in_payload_leaves_a_realistic_tool_schema_intact():
     assert "REDACTED" not in str(result["tools"])
     assert result["tools"][0] == tool
     assert result["api_key"] == "REDACTED"
+
+
+@pytest.mark.parametrize("key", ["apiKey", "clientSecret", "accessToken", "secretAccessKey", "x-apiKey"])
+def test_is_sensitive_key_splits_camel_case_names(key: str):
+    assert SensitiveDataMasker().is_sensitive_key(key) is True
+
+
+def test_is_sensitive_key_camel_case_split_keeps_pricing_and_count_fields_clear():
+    masker = SensitiveDataMasker()
+
+    assert masker.is_sensitive_key("maxTokens") is False
+    assert masker.is_sensitive_key("inputCostPerToken") is False
+
+
+def test_empty_non_sensitive_overrides_disables_the_cost_exemption():
+    strict = SensitiveDataMasker(non_sensitive_overrides=frozenset())
+
+    assert SensitiveDataMasker().is_sensitive_key("cost_center_api_key") is False
+    assert strict.is_sensitive_key("cost_center_api_key") is True
+    assert strict.is_sensitive_key("cost_center") is False
+
+
+def test_redact_credentials_in_payload_drops_listed_keys_at_any_depth_with_the_given_masker():
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+
+    payload = {
+        "logging": [{"callback_vars": {"langfuse_secret_key": "s"}}],
+        "cost_center_api_key": "sk-cost",
+        "nested": {"scim_roles": ["r"], "keep": 1, "deeper": [{"logging": {}, "apiKey": "k"}]},
+    }
+
+    result = redact_credentials_in_payload(
+        payload,
+        SensitiveDataMasker(non_sensitive_overrides=frozenset()),
+        dropped_keys=frozenset({"logging", "scim_roles"}),
+    )
+
+    assert result == {
+        "cost_center_api_key": "REDACTED",
+        "nested": {"keep": 1, "deeper": [{"apiKey": "REDACTED"}]},
+    }
+    assert redact_credentials_in_payload(payload)["cost_center_api_key"] == "sk-cost"

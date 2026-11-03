@@ -177,6 +177,7 @@ def seed_daily_activity_fixture(connection: psycopg.Connection, *, schema: str, 
                     "team-1",
                     "user-1",
                     '{"tags": ["blue", "gold"], "cost_center": "cc-1", "webhook_token": "whsec_1", '
+                    '"scim_roles": ["r"], "langfuse": {"apiKey": "lf", "logging": [{"callback_name": "langfuse"}]}, '
                     '"logging": [{"callback_name": "langfuse", "callback_vars": {"langfuse_secret_key": "sk"}}], '
                     '"callback_settings": {"otel": {"headers": "x"}}, "secret_manager_settings": {"vault": "v"}}',
                     [],
@@ -214,7 +215,8 @@ def seed_daily_activity_fixture(connection: psycopg.Connection, *, schema: str, 
                 "user-1",
                 "user@example.com",
                 [],
-                '{"department": "research", "ldap_password": "pw", "scim_enterprise": {"employeeNumber": "E-1"}, '
+                '{"department": "research", "ldap_password": "pw", "logging": [{"callback_name": "langfuse"}], '
+                '"scim_enterprise": {"employeeNumber": "E-1"}, '
                 '"scim_entitlements": ["ent"], "scim_roles": ["role"]}',
             ),
         )

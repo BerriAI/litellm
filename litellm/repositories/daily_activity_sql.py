@@ -537,9 +537,10 @@ def _metadata_object_field(expression: str, redacted_keys: frozenset[str], alias
 _EMPTY_KEY_METADATA_FIELD: Final = "'{}'::jsonb AS key_metadata"
 _EMPTY_USER_METADATA_FIELD: Final = "'{}'::jsonb AS user_metadata"
 _EMPTY_METADATA_FIELDS: Final = f", {_EMPTY_KEY_METADATA_FIELD}, {_EMPTY_USER_METADATA_FIELD}"
-_USER_METADATA_FIELD: Final = _metadata_object_field("u.metadata", SCIM_DIRECTORY_METADATA_KEYS, "user_metadata")
+EXPORT_METADATA_DROPPED_KEYS: Final[frozenset[str]] = CALLBACK_CONFIG_METADATA_SLOTS | SCIM_DIRECTORY_METADATA_KEYS
+_USER_METADATA_FIELD: Final = _metadata_object_field("u.metadata", EXPORT_METADATA_DROPPED_KEYS, "user_metadata")
 _KEY_METADATA_FIELD: Final = _metadata_object_field(
-    "COALESCE(vt.metadata, dvt.metadata)", CALLBACK_CONFIG_METADATA_SLOTS, "key_metadata"
+    "COALESCE(vt.metadata, dvt.metadata)", EXPORT_METADATA_DROPPED_KEYS, "key_metadata"
 )
 
 
