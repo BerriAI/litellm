@@ -341,9 +341,22 @@ def repeat_poll_cost(call_type: object, response_cost: object, standard_logging_
     return max(0.0, min(finite_cost(response_cost) or 0.0, _guardrail_cost_of_poll(standard_logging_payload)))
 
 
-def pays_only_its_guardrail(call_type: object, kwargs: Mapping[str, object], response_cost: object) -> bool:
-    """A batch or video poll whose whole cost is its guardrails', charged like any other request."""
+FINISHED_BATCH_STATUSES: Final = frozenset({"completed", "complete", "failed", "cancelled", "expired"})
+
+
+def is_finished_batch_poll(call_type: object, polled_status: object) -> bool:
+    """A finished batch reports the same result on every retrieve, so its first retrieve that costs anything settles
+    it, guardrails included, and its repeats are free."""
+    return is_batch_retrieve_call_type(call_type) and polled_status in FINISHED_BATCH_STATUSES
+
+
+def pays_only_its_guardrail(
+    call_type: object, kwargs: Mapping[str, object], response_cost: object, polled_status: object
+) -> bool:
+    """A running batch's or any video's poll whose whole cost is its guardrails', charged like any other request."""
     if not is_batch_retrieve_call_type(call_type) and not is_video_status_call_type(call_type):
+        return False
+    if is_finished_batch_poll(call_type, polled_status):
         return False
     return (
         job_cost_of_poll(response_cost, kwargs.get("standard_logging_object"))
@@ -380,7 +393,12 @@ def charged_video_id(
 def _charged_batch(kwargs: Mapping[str, object], response_obj: object, response_cost: float) -> ChargeOnceJob | None:
     if not is_batch_retrieve_call_type(kwargs.get("call_type")) or not isinstance(response_obj, Batch):
         return None
-    if job_cost_of_poll(response_cost, kwargs.get("standard_logging_object")) <= 0:
+    settled_cost: Final = (
+        finite_cost(response_cost) or 0.0
+        if is_finished_batch_poll(kwargs.get("call_type"), response_obj.status)
+        else job_cost_of_poll(response_cost, kwargs.get("standard_logging_object"))
+    )
+    if settled_cost <= 0:
         return None
     return ChargeOnceJob(kind="batch", job_id=response_obj.id)
 

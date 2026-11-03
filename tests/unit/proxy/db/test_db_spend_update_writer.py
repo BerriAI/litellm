@@ -4955,6 +4955,28 @@ async def test_a_finished_job_cheaper_than_its_polls_guardrail_is_still_charged_
 
 
 @pytest.mark.asyncio
+async def test_a_finished_batch_that_cost_nothing_itself_settles_its_retrieves_guardrail_once():
+    """A batch whose every request failed costs nothing itself, and its finished retrieves must still settle under
+    the batch's charge row once, as they always have, instead of each paying the retrieve's guardrail again."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    charged = [
+        await _update_database_for_video_poll(
+            db_writer, prisma, call_id, 0.01, guardrail_cost=0.01, call_type="aretrieve_batch"
+        )
+        for call_id in ("poll-1", "poll-2", "poll-3")
+    ]
+    await _flush_queued_spend_logs(prisma)
+
+    assert charged == [True, False, False]
+    assert {request_id: row["spend"] for request_id, row in prisma.db.litellm_spendlogs.rows.items()} == {
+        "batch_abc_batch_cost": 0.01
+    }
+
+
+@pytest.mark.asyncio
 async def test_a_repeat_poll_of_a_finished_video_charges_its_guardrail_on_a_row_of_its_own():
     from litellm.proxy.hooks.proxy_track_cost_callback import _charge_request_cost
 

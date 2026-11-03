@@ -383,13 +383,17 @@ def setup_and_teardown():
     asyncio.set_event_loop(None)
 
 
-def _completed_batch():
+def _batch(status: str):
     from openai.types import Batch
 
     return Batch(
         id="job-budget", completion_window="24h", created_at=1, endpoint="/v1/chat/completions",
-        input_file_id="file-budget", object="batch", status="completed",
+        input_file_id="file-budget", object="batch", status=status,
     )
+
+
+def _completed_batch():
+    return _batch("completed")
 
 
 def _completed_video():
@@ -428,11 +432,14 @@ def test_job_charge_identity_requires_a_cost_bearing_poll(call_type: str, polled
 
 
 @pytest.mark.parametrize(
-    ("call_type", "polled", "kind", "repeat_cost"),
-    (("aretrieve_batch", _completed_batch, "batch", 0.0), ("avideo_status", _completed_video, "video", 0.01)),
+    ("call_type", "polled", "guardrail_only_poll", "kind", "repeat_cost"),
+    (
+        ("aretrieve_batch", _completed_batch, lambda: _batch("in_progress"), "batch", 0.0),
+        ("avideo_status", _completed_video, _completed_video, "video", 0.01),
+    ),
 )
 def test_only_the_jobs_own_cost_is_charged_once_since_a_guardrail_charges_every_poll(
-    call_type: str, polled, kind, repeat_cost
+    call_type: str, polled, guardrail_only_poll, kind, repeat_cost
 ) -> None:
     from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_to_charge_once
 
@@ -441,10 +448,23 @@ def test_only_the_jobs_own_cost_is_charged_once_since_a_guardrail_charges_every_
         POLLED_VIDEO_STATUS_KWARG: "completed",
         "standard_logging_object": {"guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}]},
     }
-    assert job_to_charge_once(kwargs, polled(), 0.01) is None
+    assert job_to_charge_once(kwargs, guardrail_only_poll(), 0.01) is None
     assert job_to_charge_once(kwargs, polled(), 0.43) == ChargeOnceJob(
         kind=kind, job_id="job-budget", repeat_poll_cost=repeat_cost
     )
+
+
+@pytest.mark.parametrize("status", ("completed", "failed", "cancelled", "expired"))
+def test_a_finished_batch_that_cost_nothing_itself_is_still_charged_once_for_its_retrieves_guardrail(
+    status: str,
+) -> None:
+    from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_to_charge_once
+
+    kwargs: Final = {
+        "call_type": "aretrieve_batch",
+        "standard_logging_object": {"guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}]},
+    }
+    assert job_to_charge_once(kwargs, _batch(status), 0.01) == ChargeOnceJob(kind="batch", job_id="job-budget")
 
 
 def test_a_video_is_charged_once_it_completes_under_the_id_the_client_polled() -> None:

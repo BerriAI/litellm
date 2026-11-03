@@ -383,7 +383,11 @@ def get_spend_logs_id(
     if charged_video is not None:
         return f"{charged_video}{VIDEO_COST_REQUEST_ID_SUFFIX}"
     call_id: Final = kwargs.get("litellm_call_id")
-    if pays_only_its_guardrail(call_type, kwargs, response_cost) and isinstance(call_id, str) and call_id:
+    if (
+        pays_only_its_guardrail(call_type, kwargs, response_cost, response_obj.get("status"))
+        and isinstance(call_id, str)
+        and call_id
+    ):
         return f"{call_id}{JOB_POLL_GUARDRAIL_COST_REQUEST_ID_SUFFIX}"
     return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, kwargs)}"
 

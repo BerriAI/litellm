@@ -5110,7 +5110,9 @@ def test_a_job_poll_that_pays_only_its_guardrail_gets_a_row_of_its_own(
     call_type, job_id, charged_id, response_cost, pays_the_job
 ):
     """A guardrail charges every poll, so a poll paying only that must neither land on the create row
-    nor take the row the job's own charge goes on, either of which the skip_duplicates insert drops."""
+    nor take the row the job's own charge goes on, either of which the skip_duplicates insert drops. A batch
+    settles on its first finished retrieve, so its guardrail-only poll is a running one."""
+    polled_status = "completed" if pays_the_job or call_type == "avideo_status" else "in_progress"
     kwargs = {
         "litellm_call_id": "poll-call-id",
         "response_cost": response_cost,
@@ -5121,8 +5123,23 @@ def test_a_job_poll_that_pays_only_its_guardrail_gets_a_row_of_its_own(
         },
     }
 
-    assert get_spend_logs_id(call_type, {"id": job_id, "status": "completed"}, kwargs) == (
+    assert get_spend_logs_id(call_type, {"id": job_id, "status": polled_status}, kwargs) == (
         charged_id if pays_the_job else "poll-call-id_guardrail_cost"
+    )
+
+
+def test_a_finished_batch_retrieve_paying_only_its_guardrail_settles_under_the_batch_row():
+    kwargs = {
+        "litellm_call_id": "poll-call-id",
+        "response_cost": 0.01,
+        "standard_logging_object": {
+            "response_cost": 0.01,
+            "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}],
+        },
+    }
+
+    assert get_spend_logs_id("aretrieve_batch", {"id": "batch_abc", "status": "failed"}, kwargs) == (
+        "batch_abc_batch_cost"
     )
 
 
