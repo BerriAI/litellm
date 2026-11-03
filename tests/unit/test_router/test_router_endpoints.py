@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import litellm
 import pytest
+import respx
 from litellm import Router
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
@@ -1259,3 +1260,108 @@ def test_router_model_group_encrypted_content_affinity_callback_registration():
         assert encrypted_content_callbacks[0].ctx is router._core_ctx
     finally:
         router.discard()
+
+
+@pytest.mark.respx(base_url="https://api.openai.com/v1")
+def test_sync_responses_retries_on_the_router_num_retries(
+    respx_mock: respx.MockRouter,
+) -> None:
+    """Sync router.responses should retry a 503 like router.aresponses does (#49938)."""
+    route = respx_mock.post("/responses").mock(
+        side_effect=[
+            httpx.Response(503, json={"error": {"message": "down", "type": "server_error"}}),
+            httpx.Response(
+                200,
+                json={
+                    "id": "resp_1",
+                    "object": "response",
+                    "created_at": 0,
+                    "status": "completed",
+                    "model": "gpt-4o",
+                    "output": [],
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                },
+            ),
+        ]
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "my-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "sk-test",
+                },
+            }
+        ],
+        num_retries=1,
+        retry_after=0,
+        disable_cooldowns=True,
+    )
+    try:
+        response = router.responses(model="my-model", input="hi")
+    finally:
+        router.retire()
+
+    assert route.call_count == 2
+    assert response.status == "completed"
+
+
+@pytest.mark.respx(base_url="https://api.openai.com/v1")
+def test_sync_responses_falls_back_to_the_next_group(
+    respx_mock: respx.MockRouter,
+) -> None:
+    """A 503 on the primary group should land on the backup group, asynchronously or not."""
+    primary = respx_mock.post("/primary/responses").mock(
+        return_value=httpx.Response(503, json={"error": {"message": "down", "type": "server_error"}})
+    )
+    backup = respx_mock.post("/backup/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_2",
+                "object": "response",
+                "created_at": 0,
+                "status": "completed",
+                "model": "gpt-4o",
+                "output": [],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "sk-test",
+                    "api_base": "https://api.openai.com/v1/primary",
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "sk-test",
+                    "api_base": "https://api.openai.com/v1/backup",
+                },
+            },
+        ],
+        num_retries=0,
+        retry_after=0,
+        disable_cooldowns=True,
+        fallbacks=[{"primary": ["backup"]}],
+    )
+    try:
+        response = router.responses(model="primary", input="hi")
+    finally:
+        router.retire()
+
+    assert primary.call_count == 1
+    assert backup.call_count == 1
+    assert response.status == "completed"
