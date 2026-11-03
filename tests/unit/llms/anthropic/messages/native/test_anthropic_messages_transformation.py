@@ -691,3 +691,93 @@ def test_a_first_party_messages_request_never_fetches_the_remote_beta_headers_co
 
     assert request["messages"][1] == {"role": "system", "content": "be terse"}
     assert not remote_config.called
+
+
+MESSAGE_THREADS_BETA: Final = "message-threads-2026-08-12"
+
+
+@pytest.mark.parametrize(
+    "thread",
+    ({"type": "create"}, {"type": "continue", "previous_message_id": "msg_01previous"}),
+    ids=("create", "continue"),
+)
+def test_messages_request_forwards_the_thread_field_to_anthropic(thread: dict[str, str]) -> None:
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "what did I just say"}],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "thread": dict(thread)},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert request["thread"] == thread
+    assert request["messages"] == [{"role": "user", "content": "what did I just say"}]
+
+
+def test_messages_headers_add_the_message_threads_beta_next_to_the_callers_betas() -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(
+        headers={"anthropic-beta": "context-1m-2025-08-07"},
+        optional_params={"thread": {"type": "continue", "previous_message_id": "msg_01previous"}},
+        messages=[],
+    )
+    assert sorted(headers["anthropic-beta"].split(",")) == ["context-1m-2025-08-07", MESSAGE_THREADS_BETA]
+
+
+def test_messages_headers_add_no_message_threads_beta_without_a_thread() -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(
+        headers={}, optional_params={"max_tokens": 64}, messages=[]
+    )
+    assert MESSAGE_THREADS_BETA not in headers.get("anthropic-beta", "")
+
+
+def test_the_thread_beta_is_the_same_on_the_create_and_the_continue_turn() -> None:
+    config: Final = AnthropicMessagesConfig()
+    create: Final = config._update_headers_with_anthropic_beta(
+        headers={}, optional_params={"thread": {"type": "create"}, "system": "be terse"}, messages=[]
+    )
+    cont: Final = config._update_headers_with_anthropic_beta(
+        headers={}, optional_params={"thread": {"type": "continue", "previous_message_id": "msg_01p"}}, messages=[]
+    )
+    assert create["anthropic-beta"] == cont["anthropic-beta"] == MESSAGE_THREADS_BETA
+
+
+def _advisor_turn() -> list[dict[str, object]]:
+    return [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "server_tool_use", "id": "srvtoolu_01", "name": "advisor", "input": {}},
+                {
+                    "type": "advisor_tool_result",
+                    "tool_use_id": "srvtoolu_01",
+                    "content": [{"type": "text", "text": "ok"}],
+                },
+                {"type": "text", "text": "done"},
+            ],
+        },
+        {"role": "user", "content": "and now?"},
+    ]
+
+
+def test_a_thread_continue_turn_keeps_advisor_blocks_the_stored_tools_still_explain() -> None:
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-4-8",
+        messages=_advisor_turn(),
+        anthropic_messages_optional_request_params={
+            "max_tokens": 64,
+            "thread": {"type": "continue", "previous_message_id": "msg_01previous"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert request["messages"][0]["content"] == _advisor_turn()[0]["content"]
+
+
+def test_a_request_without_a_thread_still_strips_advisor_blocks_when_the_tool_is_absent() -> None:
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-4-8",
+        messages=_advisor_turn(),
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert request["messages"][0]["content"] == [{"type": "text", "text": "done"}]

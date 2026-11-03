@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Final, cast, get_type_hints
 
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 
+from litellm.anthropic_beta_headers_manager import is_beta_header_supported_by_bundled_config
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.common_utils import (
@@ -13,7 +14,9 @@ from litellm.llms.anthropic.common_utils import (
 )
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
     AnthropicMessagesRequestOptionalParams,
+    AnthropicMessageThread,
     AnthropicStopDetails,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -276,6 +279,32 @@ def prepare_native_messages(
             tools=tools,
             api_base=api_base,
         ),
+    )
+
+
+_THREAD_ADAPTER: Final = TypeAdapter(AnthropicMessageThread)
+
+
+def continues_message_thread(thread: object) -> bool:
+    """True when ``thread`` is a well-formed ``{"type": "continue", ...}`` body field."""
+    try:
+        return _THREAD_ADAPTER.validate_python(thread)["type"] == "continue"
+    except ValidationError:
+        return False
+
+
+def supports_message_threads(custom_llm_provider: str | None, *, has_native_config: bool) -> bool:
+    """
+    Whether a ``thread`` body field can reach the upstream platform. Only a native Anthropic Messages
+    leg whose beta header column maps the message-threads beta can, since a translated leg has no
+    server-side conversation to continue and a platform whose column lacks the beta rejects the field.
+    """
+    return (
+        has_native_config
+        and custom_llm_provider is not None
+        and is_beta_header_supported_by_bundled_config(
+            ANTHROPIC_BETA_HEADER_VALUES.MESSAGE_THREADS_2026_08_12.value, custom_llm_provider
+        )
     )
 
 

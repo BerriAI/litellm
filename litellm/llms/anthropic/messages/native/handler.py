@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
     resolve_deployment_reasoning_effort,
 )
 from litellm.llms.anthropic.common_utils import (
+    AnthropicError,
     AnthropicModelInfo,
     strip_provider_specific_fields_from_anthropic_messages,
     tools_marked_for_a_tool_config_point,
@@ -58,7 +59,12 @@ from ..safeguards import (
     with_safeguard_results,
 )
 from .interceptors import get_messages_interceptors
-from .utils import AnthropicMessagesRequestUtils, mock_response, prepare_native_messages
+from .utils import (
+    AnthropicMessagesRequestUtils,
+    mock_response,
+    prepare_native_messages,
+    supports_message_threads,
+)
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
 
@@ -760,6 +766,14 @@ def anthropic_messages_handler(
     anthropic_messages_provider_config: Final = _native_messages_config(
         model, custom_llm_provider, kwargs.get("model_info"), api_base
     )
+    if kwargs.get("thread") is not None and not supports_message_threads(
+        custom_llm_provider, has_native_config=anthropic_messages_provider_config is not None
+    ):
+        raise AnthropicError(
+            status_code=400,
+            message=f"thread: message threads are not supported for provider {custom_llm_provider}. "
+            "Send the full conversation without the thread field",
+        )
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
         if kwargs.get("compaction") is None and _should_route_to_responses_api(

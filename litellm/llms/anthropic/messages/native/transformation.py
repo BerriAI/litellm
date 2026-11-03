@@ -59,6 +59,7 @@ from .mid_conversation_system import (
     convert_mid_conversation_system_turns,
     is_system_role_message,
 )
+from .utils import continues_message_thread
 
 DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
 
@@ -137,6 +138,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "output_config",
             "reasoning_effort",
             "safeguards",
+            "thread",
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
@@ -767,10 +769,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         # Auto-strip advisor blocks from history if advisor tool is absent.
         # Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
+        # A thread continue turn omits tools by contract and the stored tools still apply, so it keeps them.
         tools: Final = anthropic_messages_optional_request_params.get("tools")
         _tools: Final = tools or []
         _has_advisor: Final = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _tools)
-        if not _has_advisor:
+        if not _has_advisor and not continues_message_thread(anthropic_messages_optional_request_params.get("thread")):
             messages = strip_advisor_blocks_from_messages(messages)
 
         gated: Final = (
@@ -909,6 +912,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         if messages_carry_output_config(messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
+
+        if optional_params.get("thread") is not None:
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.MESSAGE_THREADS_2026_08_12.value)
 
         tools: Final = optional_params.get("tools")
         if any(isinstance(tool, dict) and tool.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for tool in tools or ()):

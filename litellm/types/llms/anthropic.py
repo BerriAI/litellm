@@ -416,6 +416,14 @@ class AnthropicCompaction(TypedDict, total=False):
     instructions: ReadOnly[str]
 
 
+class AnthropicMessageThread(TypedDict, total=False):
+    """``thread`` body field of the message-threads beta: ``{"type": "create"}`` opens a server-side
+    thread, ``{"type": "continue", "previous_message_id": "msg_..."}`` appends only the new messages to it."""
+
+    type: Required[ReadOnly[Literal["create", "continue"]]]
+    previous_message_id: ReadOnly[str]
+
+
 class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     max_tokens: int | None
     metadata: AnthropicMetadata | dict | None
@@ -440,6 +448,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     reasoning_effort: str | None
     safeguards: ReadOnly[list[dict[str, object]] | None]
     service_tier: ReadOnly[str | None]
+    thread: ReadOnly[AnthropicMessageThread | None]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -850,6 +859,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     PER_TURN_CONTROL_2026_07_01 = "per-turn-control-2026-07-01"
     DANGEROUS_TOOL_USE_2026_09_03 = "dangerous-tool-use-2026-09-03"
     MCP_CLIENT_2025_04_04 = "mcp-client-2025-04-04"
+    MESSAGE_THREADS_2026_08_12 = "message-threads-2026-08-12"
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)
