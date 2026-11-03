@@ -2064,7 +2064,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
             stored_request_body: Final = _sanitize_proxy_server_request_body(
                 _stored_request_body(
-                    _REQUEST_BODY_ADAPTER.validate_python(_request_body),
+                    _request_body,
                     _REQUEST_BODY_ADAPTER.validate_python(standard_payload)
                     if isinstance(standard_payload, Mapping)
                     else None,
