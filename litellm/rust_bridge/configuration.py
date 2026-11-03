@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from enum import Enum, auto
 from functools import lru_cache
 from typing import Final
@@ -8,7 +9,7 @@ from typing import Final
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
-_GLOBAL_ENV_NAME: Final = "LITELLM_RUST"
+ENV_NAME: Final = "LITELLM_RUST"
 _ENV_BOOL: Final = TypeAdapter(bool)
 
 
@@ -44,6 +45,10 @@ def _parse_env_bool(value: str | None) -> bool | None:
         return None
 
 
+def environment_switch(environ: Mapping[str, str]) -> bool | None:
+    return _parse_env_bool(environ.get(ENV_NAME))
+
+
 def decide(
     rollout: Rollout,
     *,
@@ -72,7 +77,7 @@ def decision(rollout: Rollout) -> Decision:
     return decide(
         rollout,
         process_override=_CONFIGURATION.override,
-        environment_override=_parse_env_bool(os.getenv(_GLOBAL_ENV_NAME)),
+        environment_override=environment_switch(os.environ),
     )
 
 

@@ -280,7 +280,7 @@ class TestMain:
     def test_forwarding_disabled_keeps_uvicorn_socket_options(
         self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("LITELLM_RUST_GATEWAY", "false")
+        monkeypatch.setenv("LITELLM_RUST", "false")
         monkeypatch.delenv("_LITELLM_GATEWAY_FD", raising=False)
         monkeypatch.delenv("LITELLM_PGBOUNCER_ENABLED", raising=False)
         served: Final[list[tuple[str, ...]]] = []

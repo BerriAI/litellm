@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Final
 
 import pytest
 from click.testing import CliRunner
-from pydantic import ValidationError
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 if TYPE_CHECKING:
@@ -52,28 +51,30 @@ INT: Final = signal.SIGINT
     "flag", ["--ssl_keyfile_path", "--ssl_certfile_path", "--ciphers", "--run_hypercorn", "--run_granian"]
 )
 def test_unsupported_modes_fail_before_starting_children(flag: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_RUST_GATEWAY", "true")
+    monkeypatch.setenv("LITELLM_RUST", "true")
     monkeypatch.delenv("_LITELLM_GATEWAY_FD", raising=False)
     values: Final = ["unused"] if flag.startswith("--ssl_") or flag == "--ciphers" else []
     result: Final = CliRunner().invoke(run_server, [flag, *values])
     assert result.exit_code != 0
-    assert f"LITELLM_RUST_GATEWAY does not support {flag}" in result.output
+    assert f"LITELLM_RUST does not support {flag}" in result.output
 
 
 @pytest.mark.parametrize(
     ("environ", "expected"),
     [
         ({}, Disabled()),
-        ({"LITELLM_RUST_GATEWAY": "false"}, Disabled()),
-        ({"LITELLM_RUST_GATEWAY": "off"}, Disabled()),
-        ({"LITELLM_RUST_GATEWAY": "0"}, Disabled()),
-        ({"LITELLM_RUST_GATEWAY": "true"}, Supervisor()),
-        ({"LITELLM_RUST_GATEWAY": "1"}, Supervisor()),
-        ({"LITELLM_RUST_GATEWAY": "yes"}, Supervisor()),
-        ({"LITELLM_RUST_GATEWAY": "on"}, Supervisor()),
+        ({"LITELLM_RUST": "false"}, Disabled()),
+        ({"LITELLM_RUST": "off"}, Disabled()),
+        ({"LITELLM_RUST": "0"}, Disabled()),
+        ({"LITELLM_RUST": "true"}, Supervisor()),
+        ({"LITELLM_RUST": "1"}, Supervisor()),
+        ({"LITELLM_RUST": "yes"}, Supervisor()),
+        ({"LITELLM_RUST": "on"}, Supervisor()),
+        ({"LITELLM_RUST": " 1 "}, Supervisor()),
+        ({"LITELLM_RUST": "enabled"}, Disabled()),
         (
             {
-                "LITELLM_RUST_GATEWAY": "true",
+                "LITELLM_RUST": "true",
                 "_LITELLM_GATEWAY_FD": "17",
                 "_LITELLM_GATEWAY_METRICS_HOST": "0.0.0.0",
                 "FORWARDED_ALLOW_IPS": "127.0.0.1,10.0.0.5",
@@ -84,11 +85,6 @@ def test_unsupported_modes_fail_before_starting_children(flag: str, monkeypatch:
 )
 def test_mode_is_resolved_from_environment(environ: dict[str, str], expected: object) -> None:
     assert rust_gateway_mode(environ) == expected
-
-
-def test_unrecognized_switch_value_is_rejected() -> None:
-    with pytest.raises(ValidationError):
-        rust_gateway_mode({"LITELLM_RUST_GATEWAY": "enabled"})
 
 
 @pytest.mark.parametrize(
@@ -131,7 +127,7 @@ def test_rust_child_serves_public_port_and_forwards_to_private_listener() -> Non
 
 def test_missing_binary_gives_install_instruction() -> None:
     assert startup_error(None, {}) == (
-        "LITELLM_RUST_GATEWAY requires the litellm-gateway binary. Install litellm[proxy] in this environment"
+        "LITELLM_RUST requires the litellm-gateway binary. Install litellm[proxy] in this environment"
     )
 
 

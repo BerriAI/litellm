@@ -55,7 +55,7 @@ def test_gateway_preserves_metrics_bind_and_mcp_client_ip(
         "LITELLM_MASTER_KEY": gateway.key,
         "STORE_MODEL_IN_DB": "False",
         "PYTHON_DOTENV_DISABLED": "1",
-        "LITELLM_RUST_GATEWAY": "true",
+        "LITELLM_RUST": "true",
         "FORWARDED_ALLOW_IPS": TRUSTED_BALANCER,
     }
     with (tmp_path / "proxy.log").open("wb") as output:
@@ -124,7 +124,7 @@ def test_gateway_launcher_private_hop_preserves_client_address(
     environment: Final = {
         **{key: value for key, value in os.environ.items() if not key.startswith("DATABASE_") and key != "DIRECT_URL"},
         "LITELLM_MASTER_KEY": "sk-rust-forwarding-integration-key-not-a-secret",
-        "LITELLM_RUST_GATEWAY": "true",
+        "LITELLM_RUST": "true",
         "LITELLM_PGBOUNCER_ENABLED": "false",
         "CONFIG_FILE_PATH": str(config),
         "STORE_MODEL_IN_DB": "False",

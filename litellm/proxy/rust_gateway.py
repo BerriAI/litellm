@@ -14,10 +14,11 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
+from litellm.rust_bridge.configuration import ENV_NAME, environment_switch
+
 if TYPE_CHECKING:
     from uvicorn._types import ASGI3Application, ASGIReceiveCallable, ASGISendCallable, Scope, WWWScope
 
-ENABLE: Final = "LITELLM_RUST_GATEWAY"
 GATEWAY_FD: Final = "_LITELLM_GATEWAY_FD"
 METRICS_HOST: Final = "_LITELLM_GATEWAY_METRICS_HOST"
 PROXY_HEADERS: Final = "_LITELLM_GATEWAY_PROXY_HEADERS"
@@ -61,7 +62,7 @@ def rust_gateway_mode(environ: Mapping[str, str]) -> RustGatewayMode:
             _ENABLED.validate_python(environ.get(PROXY_HEADERS, "true")),
             environ.get(TRUSTED_PROXIES, DEFAULT_TRUSTED_PROXIES),
         )
-    if _ENABLED.validate_python(environ.get(ENABLE, "false")):
+    if environment_switch(environ):
         return Supervisor()
     return Disabled()
 
@@ -109,11 +110,11 @@ def gateway_binary(scripts_dir: str) -> str | None:
 def startup_error(binary: str | None, unsupported: Mapping[str, object]) -> str | None:
     flag: Final = next((name for name, value in unsupported.items() if value), None)
     if flag is not None:
-        return f"{ENABLE} does not support {flag}"
+        return f"{ENV_NAME} does not support {flag}"
     if os.name != "posix":
-        return f"{ENABLE} requires POSIX inherited sockets and process signals"
+        return f"{ENV_NAME} requires POSIX inherited sockets and process signals"
     if binary is None:
-        return f"{ENABLE} requires the litellm-gateway binary. Install litellm[proxy] in this environment"
+        return f"{ENV_NAME} requires the litellm-gateway binary. Install litellm[proxy] in this environment"
     return None
 
 
