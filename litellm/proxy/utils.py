@@ -8640,12 +8640,12 @@ class ProxyUpdateSpend:
         return False
 
 
-def _spend_log_export_rows(rows: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
-    return [
+def _spend_log_export_rows(rows: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
         {key: value for key, value in row.items() if key not in {"accounting_payload", "accounting_log_disabled"}}
         for row in rows
         if row.get("accounting_log_disabled") is not True
-    ]
+    )
 
 
 async def _commit_export_accounting(

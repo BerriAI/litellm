@@ -1683,7 +1683,7 @@ class DBSpendUpdateWriter:
 
     async def _insert_spend_log_to_db(
         self,
-        payload: dict[str, object] | SpendLogsPayload,
+        payload: Mapping[str, object],
         prisma_client: PrismaClient | None = None,
         spend_logs_url: str | None = os.getenv("SPEND_LOGS_URL"),
         llm_router: "Router | None" = None,

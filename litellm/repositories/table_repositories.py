@@ -22,7 +22,6 @@ from typing import (
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy.db.db_span import db_span
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
@@ -138,6 +137,7 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
     async def _insert_ledger(
         transaction: LedgerTransaction, rows: Sequence[Mapping[str, object]], *, write_spend_logs: bool
     ) -> int:
+        from litellm.proxy.db.db_span import db_span
         from litellm.repositories.spend_log_insert import spend_log_insert_statement
 
         payloads: Final = tuple(
@@ -189,6 +189,7 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
         return _SPEND_LOG_FIELDS.validate_python(rows[0]["accounting_payload"]) if rows else None
 
     async def take_over_batch(self, row: Mapping[str, object]) -> BatchTakeover:
+        from litellm.proxy.db.db_span import db_span
         from litellm.repositories.spend_log_insert import spend_log_takeover_statement
 
         database: Final[LedgerDatabase] = self.prisma_client.writer_db
