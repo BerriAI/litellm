@@ -1378,7 +1378,9 @@ async def test_batch_database_updates_puts_the_virtual_key_team_on_tag_rows():
         ),
         virtual_key_team_id="team-a",
     )
-    queued: Final = await db_writer.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+    queued: Final = (
+        await db_writer.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+    )
 
     assert [cast(DailyTagSpendTransaction, txn).get("team_id") for txn in queued.values()] == ["team-a"]
 
@@ -1567,6 +1569,14 @@ def test_tag_team_comes_only_from_a_request_marked_as_a_virtual_key(
     }
 
     assert _virtual_key_team_id({"litellm_params": {bucket: metadata}}) == expected
+
+
+@pytest.mark.parametrize("client_litellm_metadata", ['{"user_api_key_team_id": "team-b"}', 5, ["team-b"]])
+def test_a_non_mapping_metadata_bucket_does_not_hide_the_virtual_key_team(client_litellm_metadata: object) -> None:
+    metadata: Final = {USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY: True, "user_api_key_team_id": "team-a"}
+    params: Final = {"litellm_metadata": client_litellm_metadata, "metadata": metadata}
+
+    assert _virtual_key_team_id({"litellm_params": params}) == "team-a"
 
 
 @pytest.mark.asyncio
@@ -4489,7 +4499,6 @@ async def test_insert_spend_log_asks_for_an_immediate_flush_only_on_rows_the_bri
 
     assert prisma.spend_log_transactions == [payload]
     assert prisma.spend_log_flush_requested.is_set() is expects_flush
-
 
 
 @pytest.mark.asyncio

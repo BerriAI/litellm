@@ -352,13 +352,15 @@ def _parse_spend_log_metadata(payload: Mapping[str, object]) -> SpendLogsMetadat
     return parsed
 
 
+def _metadata_bucket(value: object) -> Mapping[str, object]:
+    return _SPEND_METADATA_ADAPTER.validate_python(value) if isinstance(value, Mapping) else {}
+
+
 def _virtual_key_team_id(kwargs: Mapping[str, object]) -> str:
     """The team of the virtual key that authenticated the request, or "" for JWT, custom auth, OAuth2,
     UI sessions, the master key and team-less keys, whose api_key does not pin a tag row to one team."""
     params: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs.get("litellm_params") or {})
-    buckets: Final = tuple(
-        _SPEND_METADATA_ADAPTER.validate_python(params.get(bucket) or {}) for bucket in ("litellm_metadata", "metadata")
-    )
+    buckets: Final = tuple(_metadata_bucket(params.get(bucket)) for bucket in ("litellm_metadata", "metadata"))
     marked: Final = next(
         (bucket for bucket in buckets if bucket.get(USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY) is True), None
     )
