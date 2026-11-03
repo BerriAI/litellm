@@ -32,7 +32,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.rules import Rules
-from litellm.router_utils.mcp_tool_execution import mark_mcp_tools_executed
+from litellm.litellm_core_utils.mcp_tool_replay import mark_mcp_tools_executed
 from litellm.types.router import RetryPolicy
 from litellm.utils import function_setup
 

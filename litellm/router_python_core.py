@@ -155,6 +155,7 @@ from litellm.litellm_core_utils.hidden_params import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
+from litellm.litellm_core_utils.mcp_tool_replay import mcp_tools_executed
 from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
@@ -366,7 +367,6 @@ from litellm.router_utils.kubernetes_pod_discovery import (
     resolve_pods_after,
     resolve_pods_after_bound,
 )
-from litellm.router_utils.mcp_tool_execution import mcp_tools_executed
 from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_MARKER,
     RESPONSES_CONTINUATION_KWARG,

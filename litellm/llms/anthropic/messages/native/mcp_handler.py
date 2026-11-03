@@ -12,8 +12,8 @@ from types import MappingProxyType
 from typing import Any, Final, NamedTuple
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.mcp_tool_replay import MCPToolReplayGuard
 from litellm.responses.mcp.request_context import MCPRequestContext
-from litellm.router_utils.mcp_tool_execution import MCPToolReplayGuard
 from litellm.types.llms.anthropic import (
     AnthropicMessagesTool,
     AnthropicMessagesToolResultParam,

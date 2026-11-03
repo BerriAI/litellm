@@ -12,6 +12,7 @@ from typing_extensions import TypedDict, Unpack
 from litellm._internal_context import internal_sub_call
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.mcp_tool_replay import MCPToolReplayGuard
 from litellm.responses.mcp.chat_stream_round_billing import ChatStreamRoundBilling, engaged_round_billing
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
@@ -22,7 +23,6 @@ from litellm.responses.mcp.round_billing import (
     first_round_billed_on_failure,
     summed_cost_breakdown,
 )
-from litellm.router_utils.mcp_tool_execution import MCPToolReplayGuard
 from litellm.types.utils import Message, ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper
 
