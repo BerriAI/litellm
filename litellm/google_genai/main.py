@@ -253,12 +253,6 @@ def _merge_client_forwarded_headers(
     extra_headers: Mapping[str, object] | None,
     client_headers: object,
 ) -> dict[str, object] | None:  # mutable-ok: downstream handlers expect dict | None
-    """
-    Merge proxy-forwarded ``headers`` (set when ``forward_client_headers_to_llm_api``
-    is enabled or on deployment ``litellm_params``) into ``extra_headers``.
-
-    ``extra_headers`` wins on case-insensitive header-name conflicts.
-    """
     forwarded: Final = _validated_client_headers(client_headers)
     if not forwarded:
         return dict(extra_headers) if extra_headers is not None else None
