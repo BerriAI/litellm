@@ -22,7 +22,6 @@ def ready(client: httpx.Client) -> bool:
         return False
 
 
-@pytest.mark.parametrize("server_arguments", [(), ("--run_gunicorn",)])
 def client_ip(base_url: str, local_address: str, key: str, forwarded_for: str) -> httpx.Response:
     with httpx.Client(
         base_url=base_url,
@@ -36,6 +35,7 @@ def client_ip(base_url: str, local_address: str, key: str, forwarded_for: str) -
         )
 
 
+@pytest.mark.parametrize("server_arguments", [(), ("--run_gunicorn",)])
 def test_gateway_preserves_metrics_bind_and_mcp_client_ip(
     gateway: Gateway, tmp_path: Path, server_arguments: tuple[str, ...]
 ) -> None:

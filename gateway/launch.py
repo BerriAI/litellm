@@ -46,9 +46,7 @@ def uvicorn_argv(argv: Sequence[str], environ: Mapping[str, str], supervised: "S
         (
             "--fd",
             str(supervised.listener_fd),
-            "--proxy-headers",
-            "--forwarded-allow-ips",
-            ",".join(supervised.trusted_proxies),
+            "--no-proxy-headers",
         )
         if supervised is not None
         else ()
@@ -93,7 +91,7 @@ def public_listener(argv: Sequence[str], binary: str | None) -> tuple[str, str, 
     """Validate the uvicorn flags for Rust forwarding and return the binary, public address and child environment."""
     from pydantic import TypeAdapter
 
-    from litellm.proxy.rust_gateway import TRUSTED_PROXIES, startup_error
+    from litellm.proxy.rust_gateway import PROXY_HEADERS, TRUSTED_PROXIES, startup_error
 
     params: Final[Mapping[str, object]] = uvicorn_main.make_context(
         "uvicorn", list(uvicorn_argv(argv, os.environ, None))
@@ -113,7 +111,14 @@ def public_listener(argv: Sequence[str], binary: str | None) -> tuple[str, str, 
     assert binary is not None
     host, port = TypeAdapter(tuple[str, int]).validate_python((params["host"], params["port"]))
     operator_trust: Final = TypeAdapter(str | None).validate_python(params["forwarded_allow_ips"])
-    return binary, host, port, {} if operator_trust is None else {TRUSTED_PROXIES: operator_trust}
+    proxy_headers: Final = TypeAdapter(bool).validate_python(params["proxy_headers"])
+    return (
+        binary,
+        host,
+        port,
+        {PROXY_HEADERS: str(proxy_headers).lower()}
+        | ({} if operator_trust is None else {TRUSTED_PROXIES: operator_trust}),
+    )
 
 
 def configure_database() -> None:

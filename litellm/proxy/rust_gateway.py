@@ -9,16 +9,22 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
+if TYPE_CHECKING:
+    from uvicorn._types import ASGI3Application, ASGIReceiveCallable, ASGISendCallable, Scope, WWWScope
+
 ENABLE: Final = "LITELLM_RUST_GATEWAY"
 GATEWAY_FD: Final = "_LITELLM_GATEWAY_FD"
 METRICS_HOST: Final = "_LITELLM_GATEWAY_METRICS_HOST"
+PROXY_HEADERS: Final = "_LITELLM_GATEWAY_PROXY_HEADERS"
 TRUSTED_PROXIES: Final = "FORWARDED_ALLOW_IPS"
+DEFAULT_TRUSTED_PROXIES: Final = "127.0.0.1"
 RUST_HOP: Final = "127.0.0.1"
+PEER_HEADER: Final = b"x-litellm-rust-peer"
 
 _FD: Final = TypeAdapter(int)
 _ENABLED: Final = TypeAdapter(bool)
@@ -39,24 +45,60 @@ class Supervisor:
 class Supervised:
     listener_fd: int
     metrics_host: str
-    trusted_proxies: tuple[str, ...]
+    proxy_headers: bool
+    trusted_proxies: str
 
 
 RustGatewayMode: TypeAlias = Disabled | Supervisor | Supervised
 
 
-def trusted_proxies(operator_value: str | None) -> tuple[str, ...]:
-    configured: Final = tuple(host.strip() for host in (operator_value or "").split(",") if host.strip())
-    return ("*",) if "*" in configured else (RUST_HOP, *(host for host in configured if host != RUST_HOP))
-
-
 def rust_gateway_mode(environ: Mapping[str, str]) -> RustGatewayMode:
     fd: Final = environ.get(GATEWAY_FD)
     if fd is not None:
-        return Supervised(_FD.validate_python(fd), environ[METRICS_HOST], trusted_proxies(environ.get(TRUSTED_PROXIES)))
+        return Supervised(
+            _FD.validate_python(fd),
+            environ[METRICS_HOST],
+            _ENABLED.validate_python(environ.get(PROXY_HEADERS, "true")),
+            environ.get(TRUSTED_PROXIES, DEFAULT_TRUSTED_PROXIES),
+        )
     if _ENABLED.validate_python(environ.get(ENABLE, "false")):
         return Supervisor()
     return Disabled()
+
+
+def _restore_peer(scope: "WWWScope") -> None:
+    headers: Final = tuple(scope["headers"])
+    peer: Final = next((value for name, value in headers if name == PEER_HEADER), None)
+    if peer is None:
+        return
+    remaining: Final = tuple((name, value) for name, value in headers if name != PEER_HEADER)
+    scope["headers"] = remaining  # rebind-ok: the peer header is private to the Rust hop
+    client: Final = scope["client"]
+    if client is None or client[0] != RUST_HOP:
+        return
+    host, _, port = peer.decode("latin-1").rpartition(":")
+    scope["client"] = (host.strip("[]"), int(port))  # rebind-ok: uvicorn's access log reads this same scope
+
+
+class RustPeerMiddleware:
+    """Make Python see each request as if the client had connected to it directly.
+
+    Rust owns the public port, so Python's peer is always Rust on loopback. Rust passes the real
+    TCP peer in ``x-litellm-rust-peer`` and leaves every forwarding header untouched. This puts the
+    real peer back into the scope, then runs uvicorn's own ``ProxyHeadersMiddleware`` with the trust
+    settings Python would have used on the public port. The server's proxy-header handling is off in
+    this mode, since it would judge Rust's loopback address instead of the real peer.
+    """
+
+    def __init__(self, app: "ASGI3Application", mode: Supervised) -> None:
+        from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+        self.app: Final = ProxyHeadersMiddleware(app, mode.trusted_proxies) if mode.proxy_headers else app
+
+    async def __call__(self, scope: "Scope", receive: "ASGIReceiveCallable", send: "ASGISendCallable") -> None:
+        if scope["type"] != "lifespan":
+            _restore_peer(scope)
+        await self.app(scope, receive, send)
 
 
 def gateway_binary(scripts_dir: str) -> str | None:
@@ -175,7 +217,6 @@ def python_spec(
                 **environ,
                 GATEWAY_FD: str(listener_fd),
                 METRICS_HOST: public_host,
-                TRUSTED_PROXIES: ",".join(trusted_proxies(environ.get(TRUSTED_PROXIES))),
             }
         ),
         pass_fds=(listener_fd,),

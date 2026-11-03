@@ -127,12 +127,16 @@ class TestUvicornArgv:
     @pytest.mark.parametrize(
         ("argv", "trust"),
         [
-            ((), {}),
-            (("--forwarded-allow-ips", "10.0.0.5"), {"FORWARDED_ALLOW_IPS": "10.0.0.5"}),
-            (("--forwarded-allow-ips=*",), {"FORWARDED_ALLOW_IPS": "*"}),
+            ((), {"_LITELLM_GATEWAY_PROXY_HEADERS": "true"}),
+            (
+                ("--forwarded-allow-ips", "10.0.0.5"),
+                {"_LITELLM_GATEWAY_PROXY_HEADERS": "true", "FORWARDED_ALLOW_IPS": "10.0.0.5"},
+            ),
+            (("--forwarded-allow-ips=*",), {"_LITELLM_GATEWAY_PROXY_HEADERS": "true", "FORWARDED_ALLOW_IPS": "*"}),
+            (("--no-proxy-headers",), {"_LITELLM_GATEWAY_PROXY_HEADERS": "false"}),
         ],
     )
-    def test_forwarding_carries_operator_proxy_trust_to_the_child(
+    def test_forwarding_carries_operator_proxy_header_options_to_the_child(
         self, argv: tuple[str, ...], trust: dict[str, str]
     ) -> None:
         assert public_listener(("--host", "0.0.0.0", "--port", "4000", *argv), "gateway") == (
@@ -143,20 +147,15 @@ class TestUvicornArgv:
         )
 
     def test_supervised_listener_uses_the_inherited_loopback_socket(self):
-        supervised: Final = Supervised(17, "0.0.0.0", ("127.0.0.1",))
+        supervised: Final = Supervised(17, "0.0.0.0", True, "127.0.0.1")
         params: Final = _uvicorn_params(uvicorn_argv(("--workers", "2"), {}, supervised))
         assert params["fd"] == 17
         assert params["workers"] == 2
 
-    @pytest.mark.parametrize(
-        "argv",
-        [(), ("--no-proxy-headers",), ("--forwarded-allow-ips", "192.0.2.1"), ("--forwarded-allow-ips=*",)],
-    )
-    def test_private_hop_always_processes_headers_with_the_resolved_trust(self, argv: tuple[str, ...]):
-        supervised: Final = Supervised(17, "0.0.0.0", ("127.0.0.1", "10.0.0.5"))
-        params: Final = _uvicorn_params(uvicorn_argv(argv, {}, supervised))
-        assert params["proxy_headers"] is True
-        assert params["forwarded_allow_ips"] == "127.0.0.1,10.0.0.5"
+    @pytest.mark.parametrize("argv", [(), ("--proxy-headers",), ("--forwarded-allow-ips=*",)])
+    def test_private_hop_leaves_proxy_headers_to_the_app(self, argv: tuple[str, ...]):
+        params: Final = _uvicorn_params(uvicorn_argv(argv, {}, Supervised(17, "0.0.0.0", True, "*")))
+        assert params["proxy_headers"] is False
 
     def test_direct_listener_keeps_explicit_proxy_header_options(self):
         params: Final = _uvicorn_params(uvicorn_argv(("--no-proxy-headers", "--forwarded-allow-ips=*"), {}, None))

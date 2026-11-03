@@ -1,12 +1,24 @@
+import asyncio
 import functools
 import signal
 import sys
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import pytest
 from click.testing import CliRunner
 from pydantic import ValidationError
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+if TYPE_CHECKING:
+    from uvicorn._types import (
+        ASGIReceiveCallable,
+        ASGISendCallable,
+        ASGISendEvent,
+        HTTPDisconnectEvent,
+        HTTPScope,
+        Scope,
+    )
 
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 from litellm.proxy.rust_gateway import (
@@ -17,6 +29,7 @@ from litellm.proxy.rust_gateway import (
     Exited,
     Finished,
     Running,
+    RustPeerMiddleware,
     Signal,
     State,
     Stop,
@@ -29,7 +42,6 @@ from litellm.proxy.rust_gateway import (
     rust_spec,
     startup_error,
     step,
-    trusted_proxies,
 )
 
 TERM: Final = signal.SIGTERM
@@ -66,7 +78,7 @@ def test_unsupported_modes_fail_before_starting_children(flag: str, monkeypatch:
                 "_LITELLM_GATEWAY_METRICS_HOST": "0.0.0.0",
                 "FORWARDED_ALLOW_IPS": "127.0.0.1,10.0.0.5",
             },
-            Supervised(17, "0.0.0.0", ("127.0.0.1", "10.0.0.5")),
+            Supervised(17, "0.0.0.0", True, "127.0.0.1,10.0.0.5"),
         ),
     ],
 )
@@ -80,27 +92,17 @@ def test_unrecognized_switch_value_is_rejected() -> None:
 
 
 @pytest.mark.parametrize(
-    ("operator_value", "expected"),
+    ("environ", "expected"),
     [
-        (None, ("127.0.0.1",)),
-        ("", ("127.0.0.1",)),
-        ("10.0.0.5", ("127.0.0.1", "10.0.0.5")),
-        ("127.0.0.1, 10.0.0.5", ("127.0.0.1", "10.0.0.5")),
-        ("10.0.0.5,127.0.0.1", ("127.0.0.1", "10.0.0.5")),
-        ("*", ("*",)),
-        ("10.0.0.5,*", ("*",)),
+        ({}, Supervised(17, "0.0.0.0", True, "127.0.0.1")),
+        ({"FORWARDED_ALLOW_IPS": "10.0.0.5"}, Supervised(17, "0.0.0.0", True, "10.0.0.5")),
+        ({"FORWARDED_ALLOW_IPS": "*"}, Supervised(17, "0.0.0.0", True, "*")),
+        ({"_LITELLM_GATEWAY_PROXY_HEADERS": "false"}, Supervised(17, "0.0.0.0", False, "127.0.0.1")),
     ],
 )
-def test_operator_trust_is_kept_and_rust_hop_added(operator_value: str | None, expected: tuple[str, ...]) -> None:
-    assert trusted_proxies(operator_value) == expected
-
-
-@pytest.mark.parametrize("operator_value", [None, "", "10.0.0.5", "10.0.0.5, 192.0.2.0/24", "127.0.0.1"])
-def test_python_child_always_trusts_the_rust_hop(operator_value: str | None) -> None:
-    environ: Final = {} if operator_value is None else {"FORWARDED_ALLOW_IPS": operator_value}
+def test_python_child_keeps_the_trust_python_alone_would_use(environ: dict[str, str], expected: Supervised) -> None:
     spec: Final = python_spec(("python",), 17, 45555, "0.0.0.0", environ)
-    assert spec.env["FORWARDED_ALLOW_IPS"].split(",")[0] == "127.0.0.1"
-    assert rust_gateway_mode(spec.env) == Supervised(17, "0.0.0.0", trusted_proxies(operator_value))
+    assert rust_gateway_mode(spec.env) == expected
 
 
 def test_python_child_listens_privately_and_keeps_options() -> None:
@@ -152,6 +154,7 @@ def test_inherited_socket_reaches_uvicorn(listener_fd: int | None) -> None:
         "127.0.0.1", 45555, listener_fd=listener_fd
     )
     assert options.get("fd") == listener_fd
+    assert options.get("proxy_headers", True) is (listener_fd is None)
 
 
 def _fold(events: tuple[Event, ...]) -> tuple[State, tuple[Signal, ...]]:
@@ -200,3 +203,95 @@ def test_supervisor_drains_rust_before_python_and_fails_on_unasked_exit(
     events: tuple[Event, ...], signals: tuple[Signal, ...], code: ExitCode
 ) -> None:
     assert _fold(events) == (Finished(code), signals)
+
+
+Headers = tuple[tuple[bytes, bytes], ...]
+
+
+async def _receive() -> "HTTPDisconnectEvent":
+    return {"type": "http.disconnect"}
+
+
+async def _send(message: "ASGISendEvent") -> None:
+    return None
+
+
+async def _seen_by_app(
+    behind_rust: bool, client: tuple[str, int], headers: Headers, mode: Supervised
+) -> tuple[tuple[str, int] | None, str, Headers]:
+    seen: Final[asyncio.Future[tuple[tuple[str, int] | None, str, Headers]]] = (
+        asyncio.get_running_loop().create_future()
+    )
+
+    async def probe(scope: "Scope", receive: "ASGIReceiveCallable", send: "ASGISendCallable") -> None:
+        assert scope["type"] == "http"
+        seen.set_result((scope["client"], scope["scheme"], tuple(scope["headers"])))
+
+    direct: Final = ProxyHeadersMiddleware(probe, mode.trusted_proxies) if mode.proxy_headers else probe
+    app: Final = RustPeerMiddleware(probe, mode) if behind_rust else direct
+    scope: Final[HTTPScope] = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "root_path": "",
+        "headers": headers,
+        "client": client,
+        "server": ("127.0.0.1", 4000),
+    }
+    await app(scope, _receive, _send)
+    return seen.result()
+
+
+PEER: Final = ("203.0.113.7", 51234)
+TRUSTED_PEER: Final = ("10.0.12.34", 40000)
+FORWARDED: Final[Headers] = (
+    (b"x-forwarded-for", b"198.51.100.1, 203.0.113.7"),
+    (b"x-forwarded-proto", b"https"),
+)
+
+
+@pytest.mark.parametrize("peer", [PEER, TRUSTED_PEER, ("2001:db8::1", 443)])
+@pytest.mark.parametrize("headers", [(), FORWARDED, ((b"x-forwarded-for", b"10.1.2.3"), (b"host", b"public.example"))])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        Supervised(17, "0.0.0.0", True, "127.0.0.1"),
+        Supervised(17, "0.0.0.0", True, "10.0.0.0/8"),
+        Supervised(17, "0.0.0.0", True, "*"),
+        Supervised(17, "0.0.0.0", False, "10.0.0.0/8"),
+    ],
+)
+async def test_python_behind_rust_sees_what_a_direct_connection_would(
+    peer: tuple[str, int], headers: Headers, mode: Supervised
+) -> None:
+    rendered: Final = f"[{peer[0]}]:{peer[1]}" if ":" in peer[0] else f"{peer[0]}:{peer[1]}"
+    behind_rust: Final = await _seen_by_app(
+        True, ("127.0.0.1", 60000), (*headers, (b"x-litellm-rust-peer", rendered.encode())), mode
+    )
+    direct: Final = await _seen_by_app(False, peer, headers, mode)
+    assert behind_rust == direct
+
+
+async def test_untrusted_peer_cannot_set_the_scheme_behind_rust() -> None:
+    client, scheme, _ = await _seen_by_app(
+        True,
+        ("127.0.0.1", 60000),
+        ((b"x-forwarded-proto", b"https"), (b"x-litellm-rust-peer", b"203.0.113.7:51234")),
+        Supervised(17, "0.0.0.0", True, "127.0.0.1"),
+    )
+    assert (client, scheme) == (("203.0.113.7", 51234), "http")
+
+
+async def test_peer_header_from_anyone_but_the_rust_hop_is_dropped_and_ignored() -> None:
+    client, _, headers = await _seen_by_app(
+        True,
+        ("192.0.2.9", 1000),
+        ((b"x-litellm-rust-peer", b"10.0.12.34:1"),),
+        Supervised(17, "0.0.0.0", False, "127.0.0.1"),
+    )
+    assert (client, headers) == (("192.0.2.9", 1000), ())

@@ -429,7 +429,7 @@ class ProxyInitializationHelpers:
             "port": port,
             "server_header": False,
             "timeout_graceful_shutdown": GracefulShutdownManager.get_timeout(),
-            **({"fd": listener_fd} if listener_fd is not None else {}),
+            **({"fd": listener_fd, "proxy_headers": False} if listener_fd is not None else {}),
         }
         if log_config is not None:
             print_startup_message(f"Using log_config: {log_config}")
@@ -758,7 +758,9 @@ class ProxyInitializationHelpers:
         gunicorn_options: Final = {
             "bind": f"fd://{listener_fd}" if listener_fd is not None else f"{host}:{port}",
             "workers": num_workers,  # default is 1
-            "worker_class": build_graceful_shutdown_uvicorn_worker(graceful_shutdown_timeout),
+            "worker_class": build_graceful_shutdown_uvicorn_worker(
+                graceful_shutdown_timeout, proxy_headers=listener_fd is None
+            ),
             "graceful_timeout": math.ceil(graceful_shutdown_timeout) + GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
             "preload": True,  # Add the preload flag,
             "accesslog": "-",  # Log to stdout

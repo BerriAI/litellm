@@ -835,6 +835,7 @@ from litellm.proxy.plugin_routes import (
 from litellm.proxy.plugin_routes import (
     router as plugin_router,
 )
+from litellm.proxy.rust_gateway import RustPeerMiddleware, Supervised, rust_gateway_mode
 from litellm.proxy.spend_tracking.spend_event_producer import (
     CollectorSettings,
     SpendEventProducer,
@@ -21923,6 +21924,10 @@ if _server_root_paths:
             _server_root_paths,
         )
     app.add_middleware(PerRequestRootPathMiddleware, root_paths=_server_root_paths)
+
+_rust_gateway_mode: Final = rust_gateway_mode(os.environ)
+if isinstance(_rust_gateway_mode, Supervised):
+    app.add_middleware(RustPeerMiddleware, mode=_rust_gateway_mode)
 
 
 async def _stream_mcp_asgi_response(handle_fn, scope: dict, receive) -> "StreamingResponse":
