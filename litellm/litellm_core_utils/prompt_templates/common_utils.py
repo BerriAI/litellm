@@ -409,15 +409,18 @@ def _tpm_embedding_file(data_uri: str) -> tuple[Mapping[str, object], ...]:
     return ({"type": "file", "file": {"file_data": data_uri, "format": mime}},)
 
 
+_BASE64_PAYLOAD: Final = re.compile(r"[A-Za-z0-9+/]*={0,2}")
+
+
 def _is_base64_data_uri(value: str) -> bool:
     header_end: Final = value.find(",", 0, 256)
     if header_end < 0 or not value[:header_end].endswith(";base64"):
         return False
-    payload: Final = value[header_end + 1 :]
-    try:
-        return base64.b64encode(base64.b64decode(payload, validate=True)).decode("ascii") == payload
-    except ValueError:
+    payload_start: Final = header_end + 1
+    if (len(value) - payload_start) % 4 or _BASE64_PAYLOAD.fullmatch(value, payload_start) is None:
         return False
+    last_quantum: Final = value[max(payload_start, len(value) - 4) :]
+    return base64.b64encode(base64.b64decode(last_quantum)).decode("ascii") == last_quantum
 
 
 def _tpm_embedding_file_block(part: Mapping[str, object]) -> _TPMMediaProjection:

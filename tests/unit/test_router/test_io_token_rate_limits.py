@@ -3,15 +3,12 @@ Tests for separate ITPM/OTPM deployment rate limits (enforce_model_rate_limits).
 """
 
 import asyncio
-import base64
-import io
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from PIL import Image
 from fakeredis import FakeRedis, FakeServer
 from fakeredis.aioredis import FakeRedis as FakeAsyncRedis
 
@@ -191,37 +188,6 @@ class TestModelRateLimitingCheckIOTokens:
             await check.async_pre_call_check(deployment)
 
         assert "ITPM limit=5" in str(exc_info.value)
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("litellm_params", "model_info", "admitted"),
-        [
-            ({"model": "vertex_ai/gemini-embedding-2"}, {}, True),
-            ({"model": "openai/team-embedder"}, {"base_model": "vertex_ai/gemini-embedding-2"}, True),
-            ({"model": "text-embedding-3-small"}, {}, False),
-        ],
-        ids=["image-model", "image-base-model", "text-model"],
-    )
-    async def test_itpm_counts_embedding_image_as_media_only_on_image_models(
-        self, litellm_params: dict[str, str], model_info: dict[str, str], admitted: bool
-    ):
-        image = io.BytesIO()
-        Image.new("RGB", (1024, 1024)).save(image, format="PNG", compress_level=0)
-        uri = f"data:image/png;base64,{base64.b64encode(image.getvalue()).decode()}"
-        assert len(uri) // 4 > 75_000
-        check = ModelRateLimitingCheck(dual_cache=DualCache())
-        deployment = {
-            "litellm_params": {**litellm_params, "itpm": 75_000},
-            "model_info": {**model_info, "id": f"io-embedding-{litellm_params['model']}"},
-            "model_name": "embedder",
-        }
-        set_io_token_rate_limit_request_kwargs({"input": [uri], "metadata": {}}, metadata_channel="metadata")
-
-        if not admitted:
-            with pytest.raises(litellm.RateLimitError):
-                await check.async_pre_call_check(deployment)
-            return
-        assert await check.async_pre_call_check(deployment) == deployment
 
     @pytest.mark.asyncio
     async def test_otpm_atomic_reservation_no_overshoot_under_concurrency(self):

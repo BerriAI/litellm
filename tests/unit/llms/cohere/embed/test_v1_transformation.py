@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 
 import httpx
+import pytest
 
 from litellm.llms.cohere.embed.v1_transformation import CohereEmbeddingConfig
 from litellm.types.utils import EmbeddingResponse
@@ -211,11 +212,16 @@ class TestCohereEmbeddingV1Transform:
         # Verify encoding was called
         self.encoding.encode.assert_called()
 
-    def test_transform_response_counts_bedrock_billed_tokens_for_an_image_not_its_base64_text(self):
-        image_uri = "data:image/png;base64," + "iVBORw0KGgo" * 400
+    @pytest.mark.parametrize(
+        ("body_key", "item", "expected_tokens"),
+        [("images", "data:image/png;base64," + "iVBORw0KGgo" * 400, 2047), ("texts", "a short sentence", 5)],
+    )
+    def test_transform_response_counts_bedrock_billed_tokens_only_for_images(
+        self, body_key: str, item: str, expected_tokens: int
+    ):
         response = httpx.Response(
             200,
-            json={"id": "e1", "images": [{}], "embeddings": [[0.1, 0.2]], "response_type": "embeddings_floats"},
+            json={"id": "e1", body_key: [{}], "embeddings": [[0.1, 0.2]], "response_type": "embeddings_floats"},
             headers={"x-amzn-bedrock-input-token-count": "2047"},
         )
 
@@ -223,13 +229,13 @@ class TestCohereEmbeddingV1Transform:
             response=response,
             api_key=None,
             logging_obj=self.logging_obj,
-            data={"images": [image_uri], "input_type": "image"},
+            data={body_key: [item], "input_type": "image" if body_key == "images" else "search_document"},
             model_response=EmbeddingResponse(),
             model="cohere.embed-v4:0",
             encoding=self.encoding,
-            input=[image_uri],
+            input=[item],
         )
 
         assert result.usage is not None
-        assert result.usage.prompt_tokens == 2047
-        assert result.usage.total_tokens == 2047
+        assert result.usage.prompt_tokens == expected_tokens
+        assert result.usage.total_tokens == expected_tokens

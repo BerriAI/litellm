@@ -133,7 +133,7 @@ class CohereEmbeddingConfig:
             model=model,
             encoding=encoding,
             input=input,
-            billed_input_tokens=_bedrock_billed_input_tokens(response),
+            billed_input_tokens=_bedrock_billed_input_tokens(response) if "images" in data else None,
         )
 
     def transform_response(

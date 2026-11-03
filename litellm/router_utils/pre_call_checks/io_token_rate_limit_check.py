@@ -28,7 +28,6 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
-from litellm.litellm_core_utils.deployment_pricing import deployment_backend_model
 from litellm.litellm_core_utils.internal_call_metadata import (
     IO_TOKEN_RESERVATION_KEYS,
     ITPM_CACHE_KEY,
@@ -36,11 +35,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     OTPM_CACHE_KEY,
     OTPM_RESERVED_KEY,
 )
-from litellm.litellm_core_utils.token_counter import (
-    deployment_openai_model,
-    offload_token_count,
-    split_embedding_input_tokens,
-)
+from litellm.litellm_core_utils.token_counter import deployment_openai_model, offload_token_count
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
 from litellm.types.router import RouterCacheEnum, RouterErrors
@@ -163,12 +158,12 @@ def _served_model(deployment: object) -> str:
     return served if isinstance(served, str) else ""
 
 
-def _token_count_models(deployment: object) -> tuple[str, str, str]:
+def _tokenizer_and_served_models(deployment: object) -> tuple[str, str]:
     served: Final = _served_model(deployment)
-    return deployment_openai_model(deployment) or served, served, deployment_backend_model(deployment)
+    return deployment_openai_model(deployment) or served, served
 
 
-def _estimate_input_tokens(request_kwargs: dict[str, Any] | None, model: str = "", media_model: str = "") -> int:
+def _estimate_input_tokens(request_kwargs: dict[str, Any] | None, model: str = "") -> int:
     if not request_kwargs:
         return 0
     messages: Final = request_kwargs.get("messages")
@@ -180,10 +175,7 @@ def _estimate_input_tokens(request_kwargs: dict[str, Any] | None, model: str = "
     # tokenizer when available, reducing the reservation over/under-estimate window
     # between pre-call and post-call reconcile.
     with contextlib.suppress(Exception):
-        embedding_text, media_tokens = split_embedding_input_tokens(
-            input_text, lambda: (media_model or model,), model or None
-        )
-        return max(0, int(token_counter(model=model, messages=messages, text=prompt or embedding_text))) + media_tokens
+        return max(0, int(token_counter(model=model, messages=messages, text=prompt or input_text)))
     return 0
 
 
@@ -530,8 +522,8 @@ def io_token_pre_call_check(
 
     request: Final = _io_token_rate_limit_request.get()
     request_kwargs: Final = None if request is None else request.kwargs
-    _model, served_model, backend_model = _token_count_models(deployment)
-    estimated_input: Final = _estimate_input_tokens(request_kwargs, model=_model, media_model=backend_model)
+    _model, served_model = _tokenizer_and_served_models(deployment)
+    estimated_input: Final = _estimate_input_tokens(request_kwargs, model=_model)
     otpm_to_reserve: Final = (
         _otpm_reservation(request_kwargs, deployment, served_model, otpm_limit) if otpm_limit is not None else 0
     )
@@ -605,10 +597,8 @@ async def async_io_token_pre_call_check(
             await async_admit_io_token_turn(dual_cache, deployment, get_utc_datetime(), parent_otel_span),
         )
         return deployment
-    _model, served_model, backend_model = _token_count_models(deployment)
-    estimated_input: Final = await offload_token_count(_estimate_input_tokens)(
-        request_kwargs, model=_model, media_model=backend_model
-    )
+    _model, served_model = _tokenizer_and_served_models(deployment)
+    estimated_input: Final = await offload_token_count(_estimate_input_tokens)(request_kwargs, model=_model)
     otpm_to_reserve: Final = (
         _otpm_reservation(request_kwargs, deployment, served_model, otpm_limit) if otpm_limit is not None else 0
     )

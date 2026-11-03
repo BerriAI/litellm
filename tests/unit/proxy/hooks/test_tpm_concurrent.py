@@ -4202,17 +4202,32 @@ async def test_project_token_limit_admits_image_embedding_through_an_alias_of_an
 
 def _malformed_embedding_uri(shape: str) -> str:
     payload: Final = _quota_media_payload("image", False)
+    whole_quanta: Final = payload.rstrip("=")[: len(payload.rstrip("=")) // 4 * 4]
     words: Final = "word " * 100_000
     return {
         "no_comma": f"data:audio/wav;base64{words}",
         "text_payload": f"data:image/png;base64,{words}",
         "no_base64_marker": f"data:image/png,{payload}",
         "header_past_256_chars": f"data:image/png;{'x' * 300};base64,{payload}",
+        "noncanonical_padding": f"data:image/png;base64,{whole_quanta}AB==",
+        "padding_mid_payload": f"data:image/png;base64,{whole_quanta}AA==AAAA",
+        "length_not_multiple_of_4": f"data:image/png;base64,{whole_quanta}A",
     }[shape]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("shape", ["no_comma", "text_payload", "no_base64_marker", "header_past_256_chars"])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "no_comma",
+        "text_payload",
+        "no_base64_marker",
+        "header_past_256_chars",
+        "noncanonical_padding",
+        "padding_mid_payload",
+        "length_not_multiple_of_4",
+    ],
+)
 async def test_project_token_limit_counts_a_malformed_data_uri_as_text(
     rate_limiter: tuple[RateLimitHandler, DualCache], shape: str
 ) -> None:
