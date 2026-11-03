@@ -4108,6 +4108,27 @@ def test_translate_anthropic_tool_choice_none():
     assert result == "none"
 
 
+def test_translate_anthropic_to_openai_drops_anthropic_only_params() -> None:
+    adapter: Final = LiteLLMAnthropicMessagesAdapter()
+
+    new_kwargs, _ = adapter.translate_anthropic_to_openai(
+        {
+            "model": "gpt-5.4",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "Say hello."}],
+            "inference_geo": "us",
+            "mcp_servers": [{"type": "url", "url": "https://mcp.example.com/sse", "name": "example"}],
+            "speed": "fast",
+            "top_k": 7,
+        }
+    )
+
+    assert "inference_geo" not in new_kwargs
+    assert "mcp_servers" not in new_kwargs
+    assert "speed" not in new_kwargs
+    assert new_kwargs["top_k"] == 7
+
+
 # ---------------------------------------------------------------------------
 # PolyfillResult integration tests
 # ---------------------------------------------------------------------------
