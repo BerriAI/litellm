@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationEr
 from pydantic_core import to_jsonable_python
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, request_timeout
 
 # Import the adapter for fallback to completion format
@@ -61,7 +62,7 @@ _STR_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _OBJECT_SEQUENCE: Final = TypeAdapter(Sequence[object])
 _JSON_VALUE: Final = TypeAdapter[JsonValue](JsonValue)
 _GENERATE_CONTENT_PAYLOAD: Final = TypeAdapter(object)
-_FORWARDED_HEADERS: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
+_FORWARDED_HEADERS: Final = TypeAdapter[Mapping[str, str]](Mapping[str, str])
 #################################################
 
 
@@ -398,12 +399,13 @@ def _finish_custom_generate_content_response(
     return _log_custom_generate_content_response(response, logging_obj, contents, api_key)
 
 
-def _validated_client_headers(client_headers: object) -> Mapping[str, object] | None:
+def _validated_client_headers(client_headers: object) -> Mapping[str, str] | None:
     if client_headers is None:
         return None
     try:
         return _FORWARDED_HEADERS.validate_python(client_headers)
-    except ValidationError:
+    except ValidationError as exc:
+        verbose_logger.debug("Ignoring forwarded `headers` that are not a str-to-str mapping: %s", exc)
         return None
 
 
