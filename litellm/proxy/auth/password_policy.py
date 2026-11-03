@@ -24,7 +24,6 @@ from litellm.constants import HIBP_RANGE_API_BASE
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
-from litellm.proxy.common_utils.fips import openssl_enforces_fips
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 HIBP_TIMEOUT_SECONDS: Final = 5.0
@@ -145,13 +144,7 @@ async def _is_password_breached(password: str, client: AsyncHTTPHandler) -> bool
 
 
 def is_breach_check_enabled(general_settings: Mapping[str, object]) -> bool:
-    enabled: Final = (
-        not is_offline_mode() and general_settings.get("password_policy_check_breached_passwords", True) is not False
-    )
-    if enabled and openssl_enforces_fips():
-        verbose_proxy_logger.warning("FIPS mode skips the breached password check because its lookup needs SHA-1.")
-        return False
-    return enabled
+    return not is_offline_mode() and general_settings.get("password_policy_check_breached_passwords", True) is not False
 
 
 async def is_password_breached(

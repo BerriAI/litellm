@@ -361,17 +361,6 @@ async def test_validate_passwords_bulk_empty_batch_makes_no_lookups():
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fips_openssl")
-async def test_fips_mode_skips_the_breach_check_with_a_warning(caplog: pytest.LogCaptureFixture) -> None:
+async def test_fips_mode_keeps_the_breach_check() -> None:
     client_says_breached: Final = _client_returning(f"{_sha1_upper(STRONG_PASSWORD)[5:]}:1387")
-    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
-        assert await is_password_breached(STRONG_PASSWORD, {}, client_says_breached) is False
-    assert [record.levelname for record in caplog.records] == ["WARNING"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("fips_openssl")
-async def test_fips_mode_stays_quiet_when_the_breach_check_is_turned_off(caplog: pytest.LogCaptureFixture) -> None:
-    settings: Final = {"password_policy_check_breached_passwords": False}
-    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
-        assert await is_password_breached(STRONG_PASSWORD, settings, _client_never_called()) is False
-    assert caplog.records == []
+    assert await is_password_breached(STRONG_PASSWORD, {}, client_says_breached) is True
