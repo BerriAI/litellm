@@ -31,7 +31,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT, ResponsesAPIResponse
-from litellm.types.utils import ModelResponse, StandardLoggingPayload
+from litellm.types.utils import ModelResponse, StandardLoggingPayload, TextCompletionResponse
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseOutputItem
@@ -436,11 +436,9 @@ async def test_bridged_structured_output_call_is_logged_with_the_json_document_t
     assert logged.payload["response"]["choices"][0]["message"]["content"] == served_message.content
 
 
-@pytest.mark.parametrize(("caller", "call_type"), [("completion", "text_completion"), ("acompletion", "atext_completion")])
-@pytest.mark.asyncio
-async def test_bridged_text_completion_is_logged_as_the_chat_completion_it_was_served_from(
-    monkeypatch: pytest.MonkeyPatch, caller: str, call_type: str
-) -> None:
+async def _logged_text_completion(
+    monkeypatch: pytest.MonkeyPatch, caller: str
+) -> tuple[TextCompletionResponse, _LoggedSuccess, Mapping[str, object]]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     recorder: Final = _LoggedCallTypes()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
@@ -455,11 +453,34 @@ async def test_bridged_text_completion_is_logged_as_the_chat_completion_it_was_s
             await litellm.atext_completion(**request) if caller == "acompletion" else litellm.text_completion(**request)
         )
         logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
+    assert isinstance(served, TextCompletionResponse)
+    return served, logged, response_body
+
+
+@pytest.mark.parametrize(("caller", "call_type"), [("completion", "text_completion"), ("acompletion", "atext_completion")])
+@pytest.mark.asyncio
+async def test_bridged_text_completion_is_logged_and_priced_under_the_callers_call_type(
+    monkeypatch: pytest.MonkeyPatch, caller: str, call_type: str
+) -> None:
+    served, logged, response_body = await _logged_text_completion(monkeypatch, caller)
 
     assert (logged.call_type, logged.payload["call_type"]) == (call_type, call_type)
-    assert isinstance(logged.response_obj, ModelResponse)
-    assert logged.response_obj.id == served.id == response_body["id"]
-    assert logged.payload["response"]["choices"][0]["message"]["content"] == served.choices[0].text == "pong"
+    assert getattr(logged.response_obj, "id") == served.id == response_body["id"]
+    assert logged.payload["response_cost"] == litellm.completion_cost(
+        completion_response=ResponsesAPIResponse.model_validate(response_body), model="openai/gpt-5.3-codex"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bridged_async_text_completion_is_logged_as_the_text_completion_it_served(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    served, logged, _ = await _logged_text_completion(monkeypatch, "acompletion")
+
+    assert isinstance(logged.response_obj, TextCompletionResponse)
+    assert logged.response_obj.choices[0].text == served.choices[0].text == "pong"
+    assert logged.payload["response"]["object"] == served.object == "text_completion"
+    assert logged.payload["response"]["choices"][0]["text"] == "pong"
 
 
 def _served_message_start_id(events: Sequence[bytes]) -> object:

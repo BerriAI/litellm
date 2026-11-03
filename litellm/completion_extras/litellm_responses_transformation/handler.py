@@ -11,7 +11,7 @@ from typing import (
     cast,  # noqa: TID251  # optional_params reaches the bridge as an untyped dict
 )
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -20,15 +20,15 @@ if TYPE_CHECKING:
 
 
 class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
-    model: str
-    messages: list
-    optional_params: dict[str, object]
-    litellm_params: dict[str, object]
-    headers: dict
-    model_response: "ModelResponse"
-    logging_obj: "LiteLLMLoggingObj"
-    custom_llm_provider: str
-    encoding: object
+    model: ReadOnly[str]
+    messages: ReadOnly[list]
+    optional_params: ReadOnly[dict[str, object]]
+    litellm_params: ReadOnly[dict[str, object]]
+    headers: ReadOnly[dict]
+    model_response: ReadOnly["ModelResponse"]
+    logging_obj: ReadOnly["LiteLLMLoggingObj"]
+    custom_llm_provider: ReadOnly[str]
+    encoding: ReadOnly[object]
 
 
 def _restore_routing_prefix(model: str, custom_llm_provider: str) -> str:

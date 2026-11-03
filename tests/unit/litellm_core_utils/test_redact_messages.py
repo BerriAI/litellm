@@ -112,6 +112,43 @@ def test_redaction_reuses_message_rules_for_request_body_and_provider_fields(sha
     assert result == original_result and params == original_params
 
 
+def _reasoning_items() -> list[dict[str, object]]:
+    return [{"type": "reasoning", "id": "rs_redaction", "summary": [{"type": "summary_text", "text": SECRET}]}]
+
+
+def _message_response() -> ModelResponse:
+    return ModelResponse(
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "answer", "reasoning_items": _reasoning_items()}}]
+    )
+
+
+def _delta_choices() -> dict[str, object]:
+    return {"choices": [{"index": 0, "delta": {"content": "answer", "reasoning_items": _reasoning_items()}}]}
+
+
+@pytest.mark.parametrize(
+    ("details", "result"),
+    [
+        pytest.param({}, _message_response(), id="message_object"),
+        pytest.param({}, _message_response().model_dump(), id="message_dict"),
+        pytest.param({}, _delta_choices(), id="delta_dict"),
+        pytest.param(
+            {"stream": True, "complete_streaming_response": ModelResponseStream(**_delta_choices())},
+            None,
+            id="stream_chunk",
+        ),
+        pytest.param({"standard_logging_object": {"response": _message_response().model_dump()}}, None, id="logged"),
+        pytest.param({"standard_logging_object": {"response": _delta_choices()}}, None, id="logged_delta"),
+    ],
+)
+def test_redaction_hides_reasoning_item_summaries(details: dict[str, object], result: object) -> None:
+    assert SECRET in str(details) + str(result)
+
+    redacted: Final = perform_redaction(details, result)
+
+    assert SECRET not in str(redacted) and SECRET not in str(details), (redacted, details)
+
+
 def test_redaction_redacts_reasoning_copied_into_hidden_params_in_place() -> None:
     hidden_params: Final = {"model_id": "deployment", "provider_specific_fields": _provider_fields()}
     original_hidden_params: Final = copy.deepcopy(hidden_params)

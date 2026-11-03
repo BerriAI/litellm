@@ -123,6 +123,7 @@ from litellm.litellm_core_utils.llm_cost_calc.zero_cost_diagnostic import (
     diagnose_zero_cost,
     zero_cost_warning,
 )
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import LiteLLMResponseObjectHandler
 from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages,
     truncate_base64_in_messages_async,
@@ -3244,6 +3245,24 @@ class Logging(LiteLLMLoggingBaseClass):
             return response
         return self._bridged_chat_response(response, request)
 
+    def _as_served_response(
+        self, response: _LoggedResponse
+    ) -> _LoggedResponse | ModelResponse | TextCompletionResponse:
+        request: Final = self.bridged_chat_request
+        if request is None or not isinstance(response, ResponsesAPIResponse):
+            return response
+        served: Final = self._bridged_chat_response(response, request)
+        if self.call_type not in (CallTypes.text_completion.value, CallTypes.atext_completion.value):  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
+            return served
+        return self._as_text_completion_priced_as_chat(served)
+
+    def _as_text_completion_priced_as_chat(self, served: ModelResponse) -> TextCompletionResponse:
+        text_completion: Final = LiteLLMResponseObjectHandler.convert_chat_to_text_completion(
+            served, TextCompletionResponse()
+        )
+        set_hidden_params(text_completion, dict(get_hidden_params(served) or {}))
+        return text_completion
+
     def _bridged_chat_response(self, response: ResponsesAPIResponse, request: BridgedChatRequest) -> ModelResponse:
         translated: Final = self._translate_responses_api_response_to_model_response(response, request)
         served: Final = translated.model_copy(
@@ -3336,7 +3355,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             result = self.normalize_endpoint_logging_result(result)
             if self.stream is not True:
-                result = self._as_served_chat_response(result)  # rebind-ok: bridged chat calls log the chat response
+                result = self._as_served_response(result)  # rebind-ok: bridged chat calls log the served response
 
             logging_result: Final = self.normalize_logging_result(result=result)
             if cache_hit is None and _served_from_cache_at_no_charge(logging_result):

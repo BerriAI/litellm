@@ -10,7 +10,7 @@
 import asyncio
 import copy
 import inspect
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
@@ -206,6 +206,7 @@ def _redact_choice_content(choice):
             choice.message.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
+        _drop_field_when_present(choice.message, "reasoning_items")
         _redact_provider_specific_fields(choice.message)
         _redact_tool_calls(getattr(choice.message, "tool_calls", None))
         _redact_function_call(getattr(choice.message, "function_call", None))
@@ -216,6 +217,7 @@ def _redact_choice_content(choice):
             choice.delta.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
+        _drop_field_when_present(choice.delta, "reasoning_items")
         _redact_provider_specific_fields(choice.delta)
         _redact_tool_calls(getattr(choice.delta, "tool_calls", None))
         _redact_function_call(getattr(choice.delta, "function_call", None))
@@ -280,6 +282,11 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
 def _redact_field_when_present(item: object, field: str) -> None:
     if getattr(item, field, None) is not None:
         setattr(item, field, REDACTED_BY_LITELLM)
+
+
+def _drop_field_when_present(item: object, field: str) -> None:
+    if getattr(item, field, None) is not None:
+        setattr(item, field, None)
 
 
 def _redact_responses_api_output(output_items):
@@ -438,32 +445,22 @@ def _redact_tool_calls_dict(message: Mapping[str, object]) -> None:
         function_call["arguments"] = REDACTED_BY_LITELLM
 
 
-def _redact_model_response_dict_choices(choices, redacted_str: str):
+def _redact_model_response_dict_choices(choices: Iterable[object], redacted_str: str) -> None:
     for choice in choices:
         if isinstance(choice, dict):
             _redact_provider_specific_fields_dict(choice)
             if choice.get("token_ids") is not None:
                 choice["token_ids"] = None
-            if "message" in choice and isinstance(choice["message"], dict):
-                if choice["message"].get("content") is not None:
-                    choice["message"]["content"] = redacted_str
-                if choice["message"].get("reasoning_content") is not None:
-                    choice["message"]["reasoning_content"] = redacted_str
-                if "thinking_blocks" in choice["message"]:
-                    choice["message"]["thinking_blocks"] = None
-                if "audio" in choice["message"]:
-                    choice["message"]["audio"] = None
-                _redact_tool_calls_dict(choice["message"])
-            elif "delta" in choice and isinstance(choice["delta"], dict):
-                if choice["delta"].get("content") is not None:
-                    choice["delta"]["content"] = redacted_str
-                if choice["delta"].get("reasoning_content") is not None:
-                    choice["delta"]["reasoning_content"] = redacted_str
-                if "thinking_blocks" in choice["delta"]:
-                    choice["delta"]["thinking_blocks"] = None
-                if "audio" in choice["delta"]:
-                    choice["delta"]["audio"] = None
-                _redact_tool_calls_dict(choice["delta"])
+            if (
+                body := next((choice[key] for key in ("message", "delta") if isinstance(choice.get(key), dict)), None)
+            ) is not None:
+                for field in ("content", "reasoning_content"):
+                    if body.get(field) is not None:
+                        body[field] = redacted_str
+                for field in ("thinking_blocks", "reasoning_items", "audio"):
+                    if field in body:
+                        body[field] = None
+                _redact_tool_calls_dict(body)
             elif choice.get("text") is not None:
                 choice["text"] = redacted_str
         else:
